@@ -87,6 +87,13 @@ export class EasyTransport {
     return result
   }
 
+  /** 文件查询和期限监控在这套原网站上经常超过 15 秒。测试传入的短超时仍然生效。 */
+  private waitMs(operation: EasyOperation): number {
+    if (this.timeoutMs < 15_000) return this.timeoutMs
+    if (operation === 'fileSearch' || operation === 'limitMonitor') return 60_000
+    return this.timeoutMs
+  }
+
   /** Handler、Call、方法和目标 Origin 由内部白名单固定，页面消息不能提供 URL。 */
   private async postOnce(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal): Promise<ApiResult<unknown>> {
     if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
@@ -103,7 +110,7 @@ export class EasyTransport {
     const timer = setTimeout(() => {
       timedOut = true
       controller.abort()
-    }, this.timeoutMs)
+    }, this.waitMs(operation))
     try {
       const response = await this.fetcher(this.origin + route.path, {
         method: 'POST',
