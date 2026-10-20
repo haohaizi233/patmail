@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { DOC_GROUPS, type DocEntry } from '../docs'
-import { renderAgentMarkdown } from '../../agent/markdown'
+import DocsMarkdown from './DocsMarkdown.vue'
 
 const open = ref(false)
 const active = ref<DocEntry | null>(null)
-const html = ref('')
+const source = ref('')
 const loading = ref(false)
 const body = ref<HTMLElement | null>(null)
 const openSections = ref<DocEntry[]>([])
@@ -16,17 +16,17 @@ async function show(entry: DocEntry): Promise<void> {
   if (!loader) return
   active.value = entry
   loading.value = true
-  html.value = ''
+  source.value = ''
   const token = ++loadToken
   void nextTick(() => body.value?.scrollTo({ top: 0 }))
   try {
     const text = await loader()
     if (token !== loadToken) return
-    html.value = renderAgentMarkdown(text.trim()
+    source.value = text.trim()
       ? text
-      : '# 这一篇是空的\n\n文件没有内容，或文件被移走、改名了。重新构建扩展后再试。')
+      : '# 这一篇是空的\n\n文件没有内容，或文件被移走、改名了。重新构建扩展后再试。'
   } catch {
-    if (token === loadToken) html.value = renderAgentMarkdown('# 这一篇没有读到\n\n文件可能被移走或改名了。重新构建扩展后再试。')
+    if (token === loadToken) source.value = '# 这一篇没有读到\n\n文件可能被移走或改名了。重新构建扩展后再试。'
   } finally {
     if (token === loadToken) loading.value = false
   }
@@ -34,6 +34,11 @@ async function show(entry: DocEntry): Promise<void> {
 
 function sectionOpen(entry: DocEntry): boolean {
   return openSections.value.includes(entry)
+}
+
+function navigate(file: string): void {
+  const entry = DOC_GROUPS.find(group => group.name === '工作流')?.entries.find(item => item.file === file)
+  if (entry) void show(entry)
 }
 
 function toggleSection(entry: DocEntry): void {
@@ -109,7 +114,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           </nav>
           <div ref="body" class="docs-body">
             <p v-if="loading" class="docs-loading">正在读取这一篇…</p>
-            <div class="docs-md" v-html="html"></div>
+            <DocsMarkdown :key="active?.title" :source="source" @navigate="navigate" />
           </div>
         </div>
       </section>

@@ -3,6 +3,7 @@ import { apiDocFiles, apiDocRawText } from '../../agent/api-docs'
 export interface DocEntry {
   /** 树里的显示名。 */
   title: string
+  file?: string
   /** 点开这一篇时才加载 Markdown 原文。没有 load 的是目录节点。 */
   load?: () => Promise<string>
   /** 有 children 时是二级目录节点，点开收起。 */
@@ -28,6 +29,24 @@ function usageTitle(path: string): string {
 const usageEntries: DocEntry[] = Object.keys(usageFiles)
   .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
   .map(path => ({ title: usageTitle(path), load: usageFiles[path] }))
+
+/** 三个内置工作流各一篇；索引固定排第一，源文件随扩展离线打包。 */
+const workflowFiles = import.meta.glob('../../../docs/workflows/*.md', {
+  query: '?raw',
+  import: 'default'
+}) as Record<string, () => Promise<string>>
+
+const workflowEntries: DocEntry[] = Object.keys(workflowFiles)
+  .sort((a, b) => {
+    const aIndex = a.endsWith('/README.md')
+    const bIndex = b.endsWith('/README.md')
+    return aIndex !== bIndex ? (aIndex ? -1 : 1) : a.localeCompare(b, 'zh-Hans-CN')
+  })
+  .map(path => ({
+    title: path.endsWith('/README.md') ? 'README（工作流索引）' : usageTitle(path),
+    file: path.split('/').pop(),
+    load: workflowFiles[path]
+  }))
 
 /** 接口文档直接用仓库 API 目录里的原文，不另抄一份。README 当目录排最前。 */
 function apiTitle(file: string): string {
@@ -90,6 +109,7 @@ const agentEntries: DocEntry[] = [...agentRoots, ...agentSections]
 /** 文档浮窗左侧的文件树。前两组是平铺文章，agent学习按子目录展开二级树。 */
 export const DOC_GROUPS: DocGroup[] = [
   { name: '使用文档', entries: usageEntries },
+  { name: '工作流', entries: workflowEntries },
   { name: '接口文档', entries: apiEntries },
   { name: 'agent学习', entries: agentEntries }
 ]

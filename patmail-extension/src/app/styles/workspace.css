@@ -473,3 +473,39 @@
   .flow-head .page-art { display: none; }
 }
 .docs-loading { margin: 0 0 12px; font-size: 13px; color: #b78aa2; }
+.mermaid-figure { margin: 14px 0 24px; border: 1px solid #eed1e3; border-radius: 18px; overflow: hidden; background: #fffafd; box-shadow: 0 4px 16px #dba4c312; }
+.mermaid-figure figcaption { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 14px; background: linear-gradient(110deg, #fff0f7, #f5efff); color: #975b8a; font-size: 13px; }
+.mermaid-figure button, .mermaid-dialog button { border: 1px solid #e4c9e4; border-radius: 999px; padding: 6px 12px; background: #fffafd; color: #9a5b9a; font: inherit; cursor: pointer; }
+.mermaid-figure button:hover, .mermaid-dialog button:hover { background: #fff0f7; border-color: #e8a1c2; }
+.mermaid-figure button:disabled { opacity: .5; cursor: wait; }
+.mermaid-canvas { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
+.mermaid-viewport { position: relative; overflow: hidden; background: #fffafd; }
+.mermaid-viewport.interactive { height: auto; flex: 1; min-height: 120px; cursor: grab; touch-action: none; background: radial-gradient(#e8ccdf 1px, transparent 1px) 0 0 / 20px 20px #fffafd; }
+.mermaid-viewport.dragging { cursor: grabbing; }
+.mermaid-content { position: absolute; top: 0; left: 0; transform-origin: 0 0; user-select: none; pointer-events: none; }
+.mermaid-content > svg { display: block; }
+.mermaid-source { padding: 8px 14px; border-top: 1px solid #eed1e3; font-size: 12px; }
+.mermaid-source summary { cursor: pointer; color: #7a6f94; }
+.mermaid-error, .mermaid-figure > .docs-loading { padding: 16px; margin: 0; }
+.mermaid-error { color: #b4476c; }
+.mermaid-dialog { position: fixed; inset: 0; margin: auto; padding: 0; width: calc(100vw - 32px); height: calc(100dvh - 32px); max-width: none; max-height: none; border: 1px solid #d9d5f0; border-radius: 16px; background: #fff; color: #35415e; box-shadow: 0 20px 80px #1c234066; overflow: hidden; }
+.mermaid-dialog[open] { display: flex; flex-direction: column; }
+.mermaid-dialog::backdrop { background: #1c2340aa; }
+.mermaid-dialog-head { display: flex; align-items: center; gap: 16px; padding: 12px 18px; border-bottom: 1px solid #eed1e3; background: linear-gradient(110deg, #fff0f7, #f5efff); color: #975b8a; }
+.mermaid-dialog-head h3 { flex: 1; margin: 0; font-size: 16px; }
+.mermaid-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #eadff0; font-size: 13px; }
+.mermaid-tools label { display: inline-flex; align-items: center; gap: 4px; }
+.mermaid-presets { display: inline-flex; flex-wrap: wrap; gap: 6px; padding: 4px; border: 1px solid #f0dfef; border-radius: 22px; background: #fff7fc; }
+.mermaid-presets button { display: inline-flex; align-items: center; gap: 5px; transition: background .15s, box-shadow .15s; }
+.mermaid-presets button::before { content: '♡'; font-size: 12px; color: #c9a5c6; }
+.mermaid-presets button[aria-pressed="true"] { color: #9d4381; border-color: #df9bc6; background: linear-gradient(120deg, #ffdcea, #eadfff); box-shadow: 0 2px 7px #d598c337, inset 0 0 0 1px #fff9; font-weight: 600; }
+.mermaid-presets button[aria-pressed="true"]::before { content: '♥'; color: #d75c9c; }
+.mermaid-tools input { width: 90px; padding: 6px; border: 1px solid #d9d5f0; border-radius: 8px; font: inherit; }
+.mermaid-tools span { margin-left: auto; color: #8592ad; font-size: 12px; }
+.mermaid-viewport:focus-visible, .mermaid-dialog button:focus-visible { outline: 2px solid #9a8fe8; outline-offset: -3px; }
+@media (max-width: 720px) {
+  .mermaid-dialog { width: calc(100vw - 12px); height: calc(100dvh - 12px); }
+  .mermaid-tools span { width: 100%; margin: 0; }
+  .docs-tree { width: 170px; }
+  .docs-body { min-width: 0; padding: 14px; }
+}

@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:e2e": "node tests/extension.e2e.mjs && node tests/limit-query.e2e.mjs",
     "test:e2e:limits": "node tests/limit-query.e2e.mjs",
+    "test:e2e:docs": "node tests/docs.e2e.mjs",
     "pack:source": "node scripts/pack-source.mjs",
     "pack:delivery": "node scripts/pack-delivery.mjs",
     "verify:archive": "node scripts/verify-archive.mjs",
@@ -20,6 +21,7 @@
   "dependencies": {
     "dompurify": "^3.4.16",
     "marked": "^18.1.0",
+    "mermaid": "^11",
     "sql.js": "^1.14.2",
     "vue": "^3.5.13"
   },
