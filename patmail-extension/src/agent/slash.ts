@@ -137,7 +137,7 @@ const ACTIONS: SlashCommand[] = [
     argumentHint: '要记的那句话',
     args: 'required',
     guide: args => told(
-      '这是点名技能「记住」。没有原句时调用 ask_user。有原句就调用 remember，原句记进长期记忆。不要改写成另一件事，不要记密码。记完用一句话确认。',
+      '这是点名技能「记住」。没有原句时调用 ask_user。有原句就调用 remember，source逐字填原句，text写要记住的意图。系统保存source原话，不要把改写当证据，不要记密码。校验拒绝只允许补正确原话纠正一次，仍失败就说明没记住。记完用一句话确认。',
       args,
       ''
     )

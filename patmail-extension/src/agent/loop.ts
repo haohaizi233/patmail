@@ -6,7 +6,7 @@ import { readArbitrationDecisions } from '../customer/pct-workbook'
 import { planFromCalls, remainingWork, type WorkStep } from './plan'
 import { resolveSlash } from './slash'
 import { agentToolSchemas, executeAgentTool, type ToolContext } from './tools'
-import { DIGEST_MISS_LIMIT, MAX_NUDGES, RATE_LIMIT_BACKOFF_MS, STEP_LIMIT_REPLY, UNKNOWN_STOP_AT, WRAP_NOTE, asksToSubmit, canonicalArgs, factIsGrounded, failedQueryText, groupToolCalls, isUnknownTool, previousTrace, repeatNote, requiredTools, reviewReply, sameResultAgain, shouldStopFailures, shouldStopRepeat, skippedToolText, stepLimit, stuckQueryText, unknownStopNote, type ToolTrace } from './turn-policy'
+import { DIGEST_MISS_LIMIT, MAX_NUDGES, RATE_LIMIT_BACKOFF_MS, STEP_LIMIT_REPLY, UNKNOWN_STOP_AT, WRAP_NOTE, asksToSubmit, canonicalArgs, groundedMemoryText, failedQueryText, groupToolCalls, isUnknownTool, previousTrace, repeatNote, requiredTools, reviewReply, sameResultAgain, shouldStopFailures, shouldStopRepeat, skippedToolText, stepLimit, stuckQueryText, unknownStopNote, type ToolTrace } from './turn-policy'
 
 const THOUGHT_MARK = '\u001e'
 
@@ -121,7 +121,7 @@ const SYSTEM_PROMPT = [
   '2. 查案件、期限、客户和接口，是为了把工作流或任务做对。不要编造文号、客户或日期。查文件和文件查询页一样，默认每页 20 条，也可以 50 或 100。没看完就用同样的条件把页码加 1。查期限和期限页一样，每页 10 条；一次给出多个文号时会全部查完。查到的文件和期限会留在这段对话里，下一句还能接着用。',
   '3. 查 EASY 之前先看连接状态。没连上就告诉用户打开已经登录的 EASY 页面，然后重新打开工作台。',
   '4. 用户要提交到 EASY 或提交审核时调用 submit_easy。它和页面上的「提交到 EASY」一样，创建发文并交给当前登录人。写开关关着、事项还在审核里、或还没有发文类型时，按工具原文说明，不要说已经提交。create_task 只记计划。起草、对信、合成一封调用 draft_mail，占位符由这一轮查到的文件填写。看任务、查询记录、客户资料分别调用 list_tasks、list_history、read_customer。',
-  '5. 长期记忆里的偏好优先遵守。用户明确的偏好用 remember 记下。文号、客户、日期只有用户亲口说过，或这次工具返回了，才能记住，不要把推断写进去。',
+  '5. 长期记忆里的偏好优先遵守。用户明确的偏好（包括给助手起名）用 remember 记下，同时提供 source：从用户消息或本次成功工具结果中逐字复制的原句（最多240字）。text可以概括意图，但系统实际保存source原话，不能把概括、猜测或思考独白当成证据。文号、客户、日期也必须有这样的原话依据。若校验拒绝，只能补正确原话纠正一次；仍失败就说明没有记住并停下，不要反复换措辞调用。',
   '6. 用简体中文，先说做成了什么，再列依据。',
   '7. 不确定接口、字段或 Call 时，先用 lookup_api 查文档。用户要看实时响应时调用 call_easy。页面上已经固定的组合用 recipe，只填 case_id：biology 是生物材料，case-info 是案件信息，case-flow 是案件流程，case-demand 是案件要求。其它接口用 steps 按顺序调用，下一步字段用 @{1.路径} 取第 1 步响应里的值。查案件、查期限给出的案件编号和事项编号原样填进去。不要只调一个就停，回答里不要念这些编号。它使用当前登录会话，只发不会改数据的请求。不要说无法调用 HTTP。问一共有多少接口时，检索词用「多少接口」，只报工具给出的个数。文档篇数不是接口数，不要再写一段分类介绍。会改数据的动作仍用现有工具。',
   '8. 以 /技能名 开头的是用户点名的技能。说明附在这句后面，只办这一件。',
@@ -392,7 +392,8 @@ function mergeCut(partial: string, next: string): string {
 
 function groundSources(state: AgentMemoryState, traces: ToolTrace[], userText: string): string[] {
   const said = state.turns.filter(turn => turn.role === 'user' && !turn.hidden).map(turn => turn.content)
-  const found = traces.filter(trace => trace.ok).map(trace => trace.text)
+  // Memory acknowledgements and recalls are not independent evidence for new facts.
+  const found = traces.filter(trace => trace.ok && trace.name !== 'remember' && trace.name !== 'recall').map(trace => trace.text)
   return [userText, ...said, ...found]
 }
 
@@ -471,7 +472,23 @@ async function runToolBatch(state: AgentMemoryState, calls: AssistantToolCall[],
     if (fresh.length > 0) {
       const batch = await Promise.all(fresh.map(async call => {
         if (ctx.signal?.aborted) throw new LlmError('REQUEST_TIMEOUT', '已停下。')
-        const result = await executeAgentTool(call.function.name, call.function.arguments, ctx, base)
+        let verifiedArgs = call.function.arguments
+        if (call.function.name === 'remember') {
+          let requested: Record<string, unknown> | undefined
+          try {
+            const parsed: unknown = JSON.parse(verifiedArgs)
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) requested = parsed as Record<string, unknown>
+          } catch { /* Let the tool report malformed JSON in its usual way. */ }
+          if (requested) {
+            const original = groundedMemoryText(requested.text, requested.source, groundSources(base, seen, userText))
+            if (!original) return [call.id, {
+              text: '没有写入长期记忆：未能核对到原话。请在source中逐字复制用户消息或本次成功工具结果中的原句，不能提供改写；只允许纠正一次。',
+              memory: base, ok: false
+            }] as const
+            verifiedArgs = JSON.stringify({ text: original })
+          }
+        }
+        const result = await executeAgentTool(call.function.name, verifiedArgs, ctx, base)
         return [call.id, result] as const
       }))
       for (const [id, result] of batch) executed.set(id, result)
@@ -481,21 +498,9 @@ async function runToolBatch(state: AgentMemoryState, calls: AssistantToolCall[],
       const prior = reused.get(call.id)
       const result = prior ? { text: prior.text, memory: base, ok: prior.ok } : executed.get(call.id)
       if (!result) continue
-      let text = result.text
-      let memory = prior ? next : absorbWork(next, result.memory, call.function.name)
-      let ok = result.ok
-      if (!prior && call.function.name === 'remember') {
-        const before = new Set(base.facts.map(fact => fact.id))
-        const added = result.memory.facts.filter(fact => !before.has(fact.id))
-        const freshFacts = added.filter(fact => factIsGrounded(fact.text, groundSources(base, seen, userText)))
-        if (added.length > 0 && freshFacts.length !== added.length) {
-          memory = { ...memory, facts: [...base.facts, ...freshFacts] }
-          text = freshFacts.length > 0
-            ? `已记住：${freshFacts.map(fact => fact.text).join('；')}`
-            : '这句话不是用户亲口说的，也不是这次工具返回的，没有写入长期记忆。'
-          ok = freshFacts.length > 0
-        }
-      }
+      const text = result.text
+      const memory = prior ? next : absorbWork(next, result.memory, call.function.name)
+      const ok = result.ok
       const note = isUnknownTool(text) ? '' : repeatNote(seen, call.function.name, args, text)
       if (isUnknownTool(text)) unknown += 1
       else unknown = 0
@@ -505,6 +510,12 @@ async function runToolBatch(state: AgentMemoryState, calls: AssistantToolCall[],
       seen.push({ name: call.function.name, args, text, ok })
       onActivity?.(toolActivity(call.function.name), undefined, activityDetail(stored))
       next = { ...memory, turns: [...next.turns, { role: 'tool', content: stored, toolCallId: call.id }] }
+      if (call.function.name === 'remember' && shouldStopFailures(seen, 'remember', args)) {
+        onActivity?.('记忆写入已停下', undefined, activityDetail(failedQueryText('remember')))
+        next = sealSkipped(next, calls.slice(calls.indexOf(call) + 1))
+        halt = true
+        break
+      }
       if (again) {
         const lastIndex = calls.indexOf(call)
         next = sealSkipped(next, calls.slice(lastIndex + 1))
@@ -739,6 +750,7 @@ export async function runAgentTurn(config: AgentConfig, memory: AgentMemoryState
         }
       }
       await persistTranscript()
+      if (halt && traces.at(-1)?.name === 'remember' && !traces.at(-1)?.ok) return finish(failedQueryText('remember'), steps)
       if (halt) break
       continue
     }

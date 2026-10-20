@@ -274,11 +274,14 @@ const SCHEMAS: ToolSchema[] = [
     type: 'function',
     function: {
       name: 'remember',
-      description: '把用户明确说过、以后还要用的偏好或事实写进长期记忆。不要记密码，不要记一次性的查询结果。',
+      description: '记住用户明确说过、以后还要用的偏好或事实，包括给助手起名。必须提供可核对的source原句；实际保存原句，不保存未经核对的概括。不要记密码或一次性查询结果。',
       parameters: {
         type: 'object',
-        properties: { text: { type: 'string', description: '一句完整的事实，例如：用户习惯先看法律期限' } },
-        required: ['text'],
+        properties: {
+          text: { type: 'string', description: '要记住的意图，也可直接复制原句' },
+          source: { type: 'string', minLength: 2, maxLength: 240, description: '逐字复制用户消息或本次成功工具结果中的原句。例如用户说“你以后就叫小桃了”，这里就填“你以后就叫小桃了”，不要改写成“助手名字是小桃”' }
+        },
+        required: ['text', 'source'],
         additionalProperties: false
       }
     }

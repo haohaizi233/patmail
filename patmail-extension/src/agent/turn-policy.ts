@@ -154,14 +154,15 @@ export function stuckQueryText(name: string, args: string): string {
   return `同一查询重复了 ${STALL_STOP_AT} 次，结果没有变化。卡在 ${name}${shown}。`
 }
 
-/** 同一参数最近两次都失败，第三次不再发。 */
+/** 查询按相同参数计数；记忆校验不能靠换措辞重置失败次数。 */
 export function shouldStopFailures(traces: ToolTrace[], name: string, args: string): boolean {
-  const same = sameTraces(traces, name, args)
+  const same = name === 'remember' ? traces.filter(trace => trace.name === name) : sameTraces(traces, name, args)
   if (same.length < 2) return false
   return same.slice(-2).every(item => !item.ok)
 }
 
 export function failedQueryText(name: string): string {
+  if (name === 'remember') return '这条记忆没有写入：连续两次未能核对到原话，已停止重试。不会继续更换措辞尝试。'
   return `同一查询已经连着失败 2 次，先停在 ${name}。换个条件，或说明卡在这里。`
 }
 
@@ -197,7 +198,9 @@ export function reviewReply(input: { answer: string; required: string[]; traces:
   if (input.submitAsked && CLAIMS_SUBMIT.test(input.answer) && !input.traces.some(trace => trace.name === 'submit_easy' && trace.ok)) {
     return { action: 'nudge', note: '去调用 submit_easy。写开关开着才会真正提交到 EASY。没有成功之前，不要说已经提交。' }
   }
-  if (input.traces.some(trace => !trace.ok) && !ADMITS_FAILURE.test(input.answer)) {
+  const memoryRecovered = input.traces.filter(trace => trace.name === 'remember').at(-1)?.ok === true
+  const unresolved = input.traces.some(trace => !trace.ok && (trace.name !== 'remember' || !memoryRecovered))
+  if (unresolved && !ADMITS_FAILURE.test(input.answer)) {
     return { action: 'nudge', note: '这一轮有工具没有办成。先说哪一步没成，不要说已经办成。' }
   }
   if (input.required.length > 0 && !requirementsMet(input.required, input.traces)) {
@@ -215,4 +218,15 @@ export function factIsGrounded(fact: string, sources: string[]): boolean {
   const needle = fact.replace(/\s+/g, '')
   if (needle.length < 2) return false
   return sources.some(source => source.replace(/\s+/g, '').includes(needle))
+}
+
+/** Store verified source text, never a model paraphrase whose meaning we cannot validate. */
+export function groundedMemoryText(text: unknown, source: unknown, sources: string[]): string | null {
+  if (typeof text !== 'string' || !text.trim()) return null
+  // Older callers may omit source, but their text must still match real evidence.
+  const original = source === undefined ? text : source
+  if (typeof original !== 'string') return null
+  const quoted = original.trim()
+  if (quoted.length > 240 || !factIsGrounded(quoted, sources)) return null
+  return quoted
 }

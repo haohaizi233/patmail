@@ -652,6 +652,88 @@ describe('agent loop', () => {
     expect(dropped.reply).toContain('没有记下')
   })
 
+  it('remembers a paraphrased preference using its verified original user quote', async () => {
+    let calls = 0
+    const persisted: string[][] = []
+    const complete: Complete = async (_config, options) => {
+      calls += 1
+      if (calls > 1) return outcome('已记住，以后我就叫雷琳玥。')
+      const schema = options.tools?.find(tool => tool.function.name === 'remember')
+      expect(schema?.function.parameters.required).toContain('source')
+      const result = outcome('', 'remember')
+      result.choices[0].toolCalls[0].function.arguments = JSON.stringify({ text: '用户希望助手以后叫雷琳玥', source: '你以后就叫雷琳玥了' })
+      return result
+    }
+    const turn = await runAgentTurn(config, EMPTY_MEMORY, '你以后就叫雷琳玥了', idleContext, complete, async state => {
+      persisted.push(state.facts.map(fact => fact.text))
+    })
+    expect(turn.memory.facts.map(fact => fact.text)).toEqual(['你以后就叫雷琳玥了'])
+    expect(persisted.at(-1)).toEqual(['你以后就叫雷琳玥了'])
+    expect(calls).toBe(2)
+  })
+
+  it('preserves the source meaning rather than saving an unsupported interpretation', async () => {
+    let calls = 0
+    const complete: Complete = async () => {
+      if (++calls > 1) return outcome('已记住，不叫你王总。')
+      const result = outcome('', 'remember')
+      result.choices[0].toolCalls[0].function.arguments = JSON.stringify({ text: '用户喜欢被叫王总，客户编号是P999', source: '不要叫我王总' })
+      return result
+    }
+    const turn = await runAgentTurn(config, EMPTY_MEMORY, '不要叫我王总', idleContext, complete)
+    expect(turn.memory.facts.map(fact => fact.text)).toEqual(['不要叫我王总'])
+    expect(JSON.stringify(turn.memory.facts)).not.toContain('P999')
+  })
+
+  it('allows one correction with original evidence and accepts the recovered result', async () => {
+    let calls = 0
+    const complete: Complete = async () => {
+      calls += 1
+      if (calls > 2) return outcome('已记住，以后我就叫雷琳玥。')
+      const result = outcome('', 'remember')
+      result.choices[0].toolCalls[0].id = `remember-${calls}`
+      result.choices[0].toolCalls[0].function.arguments = JSON.stringify(calls === 1
+        ? { text: '助手名字是雷琳玥' }
+        : { text: '用户希望助手叫雷琳玥', source: '你以后就叫雷琳玥了' })
+      return result
+    }
+    const turn = await runAgentTurn(config, EMPTY_MEMORY, '你以后就叫雷琳玥了', idleContext, complete)
+    expect(turn.memory.facts.map(fact => fact.text)).toEqual(['你以后就叫雷琳玥了'])
+    expect(calls).toBe(3)
+    expect(turn.reply).toContain('已记住')
+  })
+
+  it('stops rejected memory writes after two attempts even when wording changes', async () => {
+    let calls = 0
+    const variants = ['凭空客户甲', '用户常用凭空客户甲', '用户偏好客户甲']
+    const saved: string[][] = []
+    const complete: Complete = async () => {
+      calls += 1
+      const result = outcome('', 'remember')
+      result.choices[0].toolCalls[0].id = `remember-${calls}`
+      result.choices[0].toolCalls[0].function.arguments = JSON.stringify({ text: variants[(calls - 1) % variants.length], source: '凭空的来源' })
+      return result
+    }
+    const turn = await runAgentTurn(config, EMPTY_MEMORY, '你好', idleContext, complete, async state => { saved.push(state.facts.map(fact => fact.text)) })
+    expect(calls).toBe(2)
+    expect(turn.memory.facts).toEqual([])
+    expect(saved.every(facts => facts.length === 0)).toBe(true)
+    expect(turn.reply).toContain('停止')
+    expect(turn.reply).not.toContain('已记住')
+  })
+
+  it('does not accept a source quote that only appeared in assistant output', async () => {
+    let calls = 0
+    const complete: Complete = async () => {
+      if (++calls > 1) return outcome('没有成功记下。')
+      const result = outcome('', 'remember')
+      result.choices[0].toolCalls[0].function.arguments = JSON.stringify({ text: '用户偏好客户甲', source: '用户偏好客户甲' })
+      return result
+    }
+    const turn = await runAgentTurn(config, { ...EMPTY_MEMORY, turns: [{ role: 'assistant', content: '用户偏好客户甲' }] }, '你好', idleContext, complete)
+    expect(turn.memory.facts).toEqual([])
+  })
+
   it('retries a rate limit once, trims on overflow, and does not retry auth', async () => {
     let limited = 0
     const retry: Complete = async () => {

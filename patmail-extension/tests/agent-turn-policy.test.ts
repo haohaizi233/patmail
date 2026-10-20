@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { groundedMemoryText } from '../src/agent/turn-policy'
 import { asksToSubmit, canonicalArgs, factIsGrounded, failedQueryText, repeatNote, requiredTools, reviewReply, sameResultAgain, shouldStopFailures, shouldStopRepeat, stepLimit, stuckQueryText, toolSucceeded, type ToolTrace } from '../src/agent/turn-policy'
 
 function trace(name: string, args: string, text: string, ok = true): ToolTrace {
@@ -6,6 +7,32 @@ function trace(name: string, args: string, text: string, ok = true): ToolTrace {
 }
 
 describe('turn policy', () => {
+  it.each([
+    { text: '先看法律期限', source: undefined, sources: ['记住我先看法律期限'], want: '先看法律期限' },
+    { text: '助手名字是小桃', source: undefined, sources: ['你以后就叫小桃了'], want: null },
+    { text: '用户喜欢王总', source: '不要叫我王总', sources: ['以后不要叫我王总。'], want: '不要叫我王总' },
+    { text: '用户喜欢王总', source: '用户喜欢王总', sources: ['不要叫我王总'], want: null },
+    { text: '先看法律期限', source: '伪造的来源', sources: ['先看法律期限'], want: null },
+    { text: '偏好', source: '', sources: ['用户偏好'], want: null },
+    { text: '偏好', source: null, sources: ['用户偏好'], want: null },
+    { text: '偏好', source: '甲'.repeat(241), sources: ['甲'.repeat(241)], want: null }
+  ])('only returns verified original memory text: $text / $source', ({ text, source, sources, want }) => {
+    expect(groundedMemoryText(text, source, sources)).toBe(want)
+  })
+
+  it('bounds failed remember attempts across changed arguments without blocking a successful correction', () => {
+    const failed = [trace('remember', '{"text":"改写一"}', '没有依据', false), trace('remember', '{"text":"改写二"}', '没有依据', false)]
+    expect(shouldStopFailures(failed, 'remember', '{"text":"改写三"}')).toBe(true)
+    expect(shouldStopFailures(failed.slice(0, 1), 'remember', '{"text":"原话"}')).toBe(false)
+    expect(shouldStopFailures([...failed, trace('remember', '{"text":"原话"}', '已记住')], 'remember', '{}')).toBe(false)
+  })
+
+  it('does not nudge a successful remember correction back into the old failure', () => {
+    const traces = [trace('remember', '{"text":"改写"}', '没有依据', false), trace('remember', '{"text":"原话"}', '已记住：原话')]
+    expect(reviewReply({ answer: '已记住。', required: [], traces, submitAsked: false }).action).toBe('accept')
+    expect(reviewReply({ answer: '已记住。', required: [], traces: [...traces, trace('search_cases', '{}', '尚未连接', false)], submitAsked: false }).action).toBe('nudge')
+  })
+
   it('canonicalizes object keys and names the tools a build request must hit', () => {
     expect(canonicalArgs('{"b":1,"a":2}')).toBe('{"a":2,"b":1}')
     expect(requiredTools('帮我建一个工作流')).toEqual(['create_workflow'])
