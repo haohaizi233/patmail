@@ -1,6 +1,6 @@
 # PatMail Chrome Extension
 
-PatMail 是 Manifest V3、Vue 3、TypeScript、Vite 插件。它绑在已经登录的 EASY 标签页上：只读查询走原站会话，发文任务在写开关打开时创建发文并提交给当前登录人审核。
+PatMail 是 Manifest V3、Vue 3、TypeScript、Vite 插件。它绑在已经登录的 EASY 标签页上：只读查询走原站会话，发文任务在写开关打开时创建发文并提交给发文映射配置的默认审核人审核。
 
 工作台是 `app.html`。浮窗用来看连接状态和打开工作台。请求路径是 `app.html → Service Worker → 已绑定的 EASY 标签页 → EASY 接口`。HTTP 由内容脚本发出，插件自己不保存 EASY 登录态。
 
@@ -71,7 +71,7 @@ Manifest 对 `http://183.36.43.66:88/*`、`https://ip.pcl.ac.cn:81/*`、`http://
 
 写入前去掉原站预填的 `chenjch02@pcl.ac.cn`。对不上邮箱、对上多个邮箱、没有商务邮箱，或发明人没有可用邮箱时，这一封不提交。回传后这些事项的审核状态是「异常」。同一次回传里的状态刷新不会把「异常」改掉。换一张表或换一条工作流会清掉。
 
-提交给当前登录人。审核人 GUID 必须就是当前用户，不能改选别人。下一节点是结束、并行审核或需要全部审核时不提交。`NeedConfirmFillAgency` 不代为确认。响应无法确认时不自动再创建、不自动再提交。不调用 `EndEmailFlowd`，所以插件提交不等于审核通过。
+提交给默认审核人。审核人 GUID 来自发文映射的默认审核人，不要求等于当前登录人。未配置时在创建前阻止提交；配置人员不在下一节点或不能唯一匹配时保留草稿，不回退到当前登录人。下一节点是结束、并行审核或需要全部审核时不提交。`NeedConfirmFillAgency` 不代为确认。响应无法确认时不自动再创建、不自动再提交。不调用 `EndEmailFlowd`，所以插件提交不等于审核通过。
 
 进度弹窗：
 
@@ -88,6 +88,10 @@ Manifest 对 `http://183.36.43.66:88/*`、`https://ip.pcl.ac.cn:81/*`、`http://
 提交账本在当前标签页的 `sessionStorage`（`patmail.limitMailSubmit.v1`），只留最近 500 条。还在审核里的事项会跳过。已经创建但没提交的草稿会沿用，不会再 `LimitMailCustomer` 一次。流程回到「还没提交审核」或「已经审核通过」后，不再沿用上一次的发文编号。
 
 ## 目录
+
+工作流详细文档在 [docs/workflows/README.md](docs/workflows/README.md)：PCT 提醒、PCT 鹏城专案、文件管理各一篇 Markdown。工作台“文档 → 工作流”可直接阅读并渲染 Mermaid；每张图支持“放大查看”、滚轮缩放、拖拽、百分比输入、适应宽度、适应窗口和键盘操作；正文图按宽度展开、高度自适应，并采用粉紫圆角主题。
+
+构建后运行 `pnpm test:e2e:docs`，可用独立 Chromium 验证三篇文档的全部流程图、索引跳转及图表交互；测试拦截外部网络请求。
 
 ```text
 patmail-extension/
