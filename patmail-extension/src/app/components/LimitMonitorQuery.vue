@@ -35,6 +35,8 @@ const props = defineProps<{
   flowChecking?: boolean
   /** 「已发文，事项未管制完成日」的行是否允许勾选提交。默认允许，提交前会弹警示框。 */
   allowMailedUnfinished?: boolean
+  /** 发文映射或这一页选中的默认发件人。草稿没有发件邮箱时写入。 */
+  senderId?: string
 }>()
 
 const { open: writesOpen, ready: writesReady } = useWriteSwitch()
@@ -149,7 +151,7 @@ function applyQueryDesk(payload: unknown): void {
   publish()
 }
 
-const { connection } = useWorkspace()
+const { connection, rules } = useWorkspace()
 let queryScope = systemScope(connection.value.easyOrigin, 'workflow')
 let parkingQuery = false
 
@@ -522,7 +524,7 @@ function onConfirm(ids: string[]): void {
   confirmedIds.value = procIds
   const stored = readWorkflowTask()
   if (stored) writeWorkflowTask(clonePctTask({ ...stored, confirmedProcIds: procIds }))
-  message.value = `已确认勾选 ${procIds.length} 件。再点「提交到 EASY」会创建发文并交给当前登录人。`
+  message.value = `已确认勾选 ${procIds.length} 件。再点「提交到 EASY」会创建发文并交给发文映射的默认审核人。`
   emit('confirm', procIds)
 }
 
@@ -579,19 +581,26 @@ async function onSubmitAsk(address?: string): Promise<void> {
   confirmedIds.value = procIds
   if (task) writeWorkflowTask(clonePctTask({ ...task, confirmedProcIds: procIds }))
   emit('confirm', procIds)
+  const reviewerId = rules.value?.defaultReviewer?.userId ?? ''
+  if (!isQueryGuid(reviewerId)) {
+    message.value = '还没有默认审核人。请到发文映射里设置。'
+    return
+  }
   const planned = limitMailItems({
+    reviewerId,
     procIds,
     rows: rows.value,
     sheetRows: props.sheetRows?.length ? props.sheetRows : (task?.rows ?? []),
     mode: props.recipientMode ?? (task?.recipientMode === 'lead' || task?.recipientMode === 'ipr' ? task.recipientMode : 'ipr'),
     specials: new Set(props.inventorCustomers ?? []),
-    address: address === 'auto' || address === 'trust' ? 'auto' : address === 'all' ? 'all' : address === 'checked' ? 'checked' : 'named'
+    address: address === 'auto' || address === 'trust' ? 'auto' : address === 'all' ? 'all' : address === 'checked' ? 'checked' : 'named',
+    ...(props.senderId && isQueryGuid(props.senderId) ? { senderId: props.senderId } : {})
   })
   if (!planned.ok) {
     message.value = planned.message
     return
   }
-  message.value = '正在创建发文并提交给当前登录人。'
+  message.value = `正在创建发文并提交给默认审核人${rules.value?.defaultReviewer?.name ?? ''}。`
   const involved = rows.value.filter(row => planned.items.some(item => limitMailProcIds(item).includes(row.procId)))
   beginProgress(submitTitle(address), planned.items.length + 1)
   const abnormal: Array<{ caseVolume: string; procLabel: string }> = []

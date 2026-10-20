@@ -1231,9 +1231,6 @@ function profileFor(name: string): CustomerQueryProfile {
 }
 
 function reviewerOf(): { userId: string; name: string } | null {
-  const userId = connection.value.operatorId.trim()
-  const name = connection.value.displayName.trim()
-  if (userId && name) return { userId, name }
   return props.rules?.defaultReviewer ?? null
 }
 
@@ -1484,7 +1481,7 @@ function onSheetConfirm(procIds: string[]): void {
   if (step && task) {
     progress.value[3] = {
       ...step,
-      detail: `${summarizePctTask(task)}查询表已经展开在下面。再点「提交到 EASY」会创建发文并交给当前登录人。`
+      detail: `${summarizePctTask(task)}查询表已经展开在下面。再点「提交到 EASY」会创建发文并交给发文映射的默认审核人。`
     }
   }
   void rememberConfirmed(procIds)
@@ -1876,6 +1873,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
         :flow-by-key="flowByKey"
         :flow-checking="icPhase === 'run'"
         :allow-mailed-unfinished="allowMailedUnfinished"
+        :sender-id="resolvedSender?.mailsetId ?? ''"
         @result="onLimitResult"
         @confirm="onSheetConfirm"
         @refresh-status="onRefreshStatus"

@@ -62,7 +62,7 @@ export const WORKFLOWS: PackagedWorkflow[] = [
       { id: 'to', label: '收件人', decidedBy: '表格「客户联系人(IPR)」。' },
       { id: 'cc', label: '抄送', decidedBy: '发文页的商务。' },
       { id: 'from', label: '发件人', decidedBy: '从原网站的发件邮箱列表热加载，在这里或创建任务时选择。' },
-      { id: 'review', label: '审核', options: [{ value: 'self', label: '提交给当前登录人' }] }
+      { id: 'review', label: '审核', options: [{ value: 'default', label: '发文映射配置的默认审核人' }] }
     ]
   },
   {
@@ -74,7 +74,7 @@ export const WORKFLOWS: PackagedWorkflow[] = [
       { id: 'our_volume', label: '我方文号', decidedBy: '表格「我方文号」。' },
       { id: 'to', label: '收件人', decidedBy: '表格「技术负责人」。括号里的拼音会去掉再对联系人。' },
       { id: 'cc', label: '抄送', decidedBy: '表格「客户联系人(IPR)」，再加上发文页的商务。邮箱那一列不读。' },
-      { id: 'review', label: '审核', options: [{ value: 'self', label: '提交给当前登录人' }] }
+      { id: 'review', label: '审核', options: [{ value: 'default', label: '发文映射配置的默认审核人' }] }
     ]
   },
   {

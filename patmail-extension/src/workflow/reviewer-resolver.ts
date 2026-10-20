@@ -11,6 +11,15 @@ export type ReviewerResolution =
   | { status: 'matched'; reviewer: WorkflowReviewer }
   | { status: 'blocked'; reason: string }
 
+/** 发文映射配置的人选按 GUID 匹配；操作账号不参与审核人兜底。 */
+export function resolveConfiguredReviewer(reviewerId: string | null | undefined, node: WorkflowNode): ReviewerResolution {
+  if (!reviewerId || !isQueryGuid(reviewerId)) return { status: 'blocked', reason: '还没有默认审核人。请到发文映射里设置。' }
+  if (node.reviewerFormat === 'unknown') return { status: 'blocked', reason: '下一节点没有已确认的审核人，没有提交。' }
+  const matches = node.reviewers.filter(person => person.id.toLowerCase() === reviewerId.toLowerCase())
+  if (matches.length !== 1 || !matches[0].name.trim()) return { status: 'blocked', reason: '默认审核人未在下一节点唯一匹配，没有提交。' }
+  return { status: 'matched', reviewer: { ...matches[0], name: matches[0].name.trim() } }
+}
+
 /**
  * 只接受当前用户 GUID 与候选 GUID 相同。
  * 姓名相同、缺少 GUID、或候选人里没有当前用户，都保持阻塞。

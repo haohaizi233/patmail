@@ -112,12 +112,12 @@ export const SKILLS: SkillTemplate[] = [
   {
     id: 'review',
     title: '谁来看一眼',
-    blurb: '写好后交给当前登录的人看',
+    blurb: '写好后交给默认审核人看',
     tint: 'lilac',
-    detail: '从人员名单里点一个。现在登录的人会标出来。',
+    detail: '审核人统一读取发文映射里的默认审核人，不跟随当前登录人。',
     params: [
-      field('review_label', '交给谁', '提交给当前登录人', '点开名单选一个人。'),
-      field('review_value', '交给谁的记号', 'self', '程序用来记住交给当前登录人。', true)
+      field('review_label', '交给谁', '发文映射配置的默认审核人', '请在发文映射里设置默认审核人。'),
+      field('review_value', '交给谁的记号', 'default', '读取发文映射的默认审核人。', true)
     ]
   },
   {

@@ -140,7 +140,7 @@ describe('PCT 工作流目录', () => {
     expect(style?.params.find(param => param.id === 'style_2_value')).toMatchObject({ value: '2', hidden: true })
     expect(style?.params.find(param => param.id === 'style_3_label')).toMatchObject({ hidden: true })
     expect(style?.params.find(param => param.id === 'style_3_value')).toMatchObject({ value: '3', hidden: true })
-    expect(flow.steps.find(step => step.id === 'review')?.params.find(param => param.id === 'review_value')).toMatchObject({ value: 'self', hidden: true })
+    expect(flow.steps.find(step => step.id === 'review')?.params.find(param => param.id === 'review_value')).toMatchObject({ value: 'default', hidden: true })
     const visible = [
       flow.label,
       flow.summary,

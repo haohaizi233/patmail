@@ -28,16 +28,13 @@ import {
   mailStyleChoiceOptions,
   mailTypeTreeOptions,
   procTreeOptions,
-  reviewerChoiceOptions,
   selectedStyleValue,
   senderChoiceOptions,
-  shownReviewerId,
   styleLabelFor,
   styleValueParamId,
   type ChoiceOption
 } from '../../workflow/choices'
 import { matchPctMailTypes, QUERY_SURFACES } from '../../customer/mail-flow'
-import { useWorkspace } from '../composables/useWorkspace'
 import type { TreeOption } from '../../query/option-tree'
 import { workflowPreview } from '../../workflow/preview-chart'
 import { SKILLS, skillTint, stepCaption } from '../../workflow/skills'
@@ -57,8 +54,7 @@ const oceanNotice = ref('')
 const newName = ref('')
 const picked = ref<string[]>([])
 const creating = ref(false)
-const { rules, mailTypes, senders, procs, reviewers, notice: choiceNotice, load: loadChoices } = useWorkflowChoices()
-const { connection } = useWorkspace()
+const { rules, mailTypes, senders, procs, notice: choiceNotice, load: loadChoices } = useWorkflowChoices()
 const WORD_PARAMS = new Set(['type_keyword', 'customer_keyword', 'our_keyword', 'city_keyword', 'other_city_keyword'])
 const LISTED_CHOICES = new Set(['sender_mailset', 'surface_label'])
 let silence = false
@@ -382,41 +378,6 @@ function chooseStyle(param: WorkflowParam, code: string): void {
   if (hidden) hidden.value = code
 }
 
-function reviewerOptions(): ChoiceOption[] {
-  const stored = hiddenReview()
-  const selectedId = shownReviewerId({
-    stored,
-    currentId: connection.value.operatorId,
-    reviewers: reviewers.value
-  })
-  const selectedName = stored && stored !== 'self'
-    ? reviewers.value.find(item => item.id.toLowerCase() === stored.toLowerCase())?.name || reviewLabel()
-    : connection.value.displayName
-  return reviewerChoiceOptions({
-    reviewers: reviewers.value,
-    currentId: connection.value.operatorId,
-    currentName: connection.value.displayName,
-    selectedId,
-    selectedName
-  })
-}
-
-function hiddenReview(): string {
-  return selected.value?.params.find(item => item.id === 'review_value')?.value ?? ''
-}
-
-function reviewLabel(): string {
-  return selected.value?.params.find(item => item.id === 'review_label')?.value ?? ''
-}
-
-function shownReviewer(): string {
-  return shownReviewerId({
-    stored: hiddenReview(),
-    currentId: connection.value.operatorId,
-    reviewers: reviewers.value
-  })
-}
-
 function optionsFor(param: WorkflowParam): ChoiceOption[] {
   if (isMailTypeParam(param.id) || param.id === 'proc_label' || isStyleLabelParam(param.id) || param.id === 'review_label') return []
   if (param.id === 'surface_label') return surfaceOptions(param.value)
@@ -468,17 +429,6 @@ function chooseProc(param: WorkflowParam, id: string): void {
   param.value = node.label
 }
 
-function chooseReviewer(param: WorkflowParam, id: string): void {
-  const person = reviewers.value.find(item => item.id.toLowerCase() === id.toLowerCase())
-  const name = person?.name.trim()
-    || (id.toLowerCase() === connection.value.operatorId.trim().toLowerCase() ? connection.value.displayName.trim() : '')
-  if (!name || !selected.value) return
-  param.value = name
-  const hidden = selected.value.params.find(item => item.id === 'review_value')
-  if (!hidden) return
-  const self = connection.value.operatorId.trim()
-  hidden.value = self && id.toLowerCase() === self.toLowerCase() ? 'self' : id
-}
 </script>
 
 <template>
@@ -627,14 +577,11 @@ function chooseReviewer(param: WorkflowParam, id: string): void {
                 empty-text="发文方式还没读到。"
                 @update:model-value="chooseStyle(param, String($event))"
               />
-              <ThemeSelect
+              <input
                 v-else-if="param.id === 'review_label'"
-                :model-value="shownReviewer()"
-                :options="reviewerOptions()"
-                :disabled="locked"
-                placeholder="点一个审核人"
-                empty-text="审核人还没读到。点上面重新读取。"
-                @update:model-value="chooseReviewer(param, String($event))"
+                :value="rules?.defaultReviewer?.name ? '发文映射默认审核人：' + rules.defaultReviewer.name : '请先在发文映射中配置默认审核人'"
+                readonly
+                aria-label="默认审核人来源"
               />
               <ThemeSelect
                 v-else-if="isListedChoice(param.id)"

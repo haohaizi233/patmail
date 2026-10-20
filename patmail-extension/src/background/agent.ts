@@ -496,6 +496,8 @@ async function submitEasy(
   if (picked.length === 0) return '这一轮期限结果里没有这些文号。先按文号查期限。'
   const account = await loadAccount(host.area, session.origin, session.operatorId)
   const sheets = account.customers.flatMap(profile => profile.pctTask?.rows ?? [])
+  const reviewerId = account.rules?.defaultReviewer?.userId ?? ''
+  if (!isQueryGuid(reviewerId)) return '还没有默认审核人。请到发文映射里设置。'
   const openIds: string[] = []
   const held: string[] = []
   for (const row of picked) {
@@ -514,12 +516,15 @@ async function submitEasy(
     const owner = account.customers.find(profile => profile.pctTask?.rows.some(item => item.ourVolume === sheet?.ourVolume && item.customerName === sheet?.customerName))
     return owner?.pctTask?.recipientMode === 'lead'
   })
+  const senderId = account.rules?.defaultSender?.mailsetId ?? ''
   const planned = limitMailItems({
+    reviewerId,
     procIds: openIds,
     rows: picked.map(row => ({ procId: row.procId, caseVolume: row.caseVolume, ctrlProc: row.ctrlProc })),
     sheetRows: sheets,
     mode: lead ? 'lead' : 'ipr',
-    address: 'auto'
+    address: 'auto',
+    ...(isQueryGuid(senderId) ? { senderId } : {})
   })
   if (!planned.ok) return planned.message
   const found = await forward({ type: MessageType.SubmitLimitMail, payload: { userId: session.operatorId, items: planned.items } })

@@ -61,6 +61,7 @@ function draft(extra: Partial<LimitMailSubmitItem> = {}): LimitMailSubmitItem {
     contactName: '',
     iprName: '雷工',
     leadName: '',
+    reviewerId: user,
     ...extra
   }
 }
@@ -150,7 +151,7 @@ describe('limit mail submit', () => {
     if (!rejected.ok) expect(rejected.kind).toBe('rejected')
   })
 
-  it('submits the new mail to the logged-in reviewer and leaves score and dates empty', async () => {
+  it('submits to the configured default reviewer even when different from the logged-in user', async () => {
     const calls: string[] = []
     const sent: { params: URLSearchParams | null } = { params: null }
     const saved: { params: URLSearchParams | null } = { params: null }
@@ -169,7 +170,7 @@ describe('limit mail submit', () => {
         sent.params = params
         return { ClientInfo: client({ Result: true }) }
       }
-    }, calls), user, [draft()])
+    }, calls), user, [draft({ reviewerId: other })])
     expect(result.stopped).toBe(false)
     expect(result.results[0]?.state).toBe('submitted')
     expect(result.results[0]?.message).toContain('抄送已含商务')
@@ -189,7 +190,7 @@ describe('limit mail submit', () => {
     expect(saved.params?.get('Call')).toBe('SaveMailInfo')
     expect(sent.params?.get('Call')).toBe('MailSubmit')
     expect(sent.params?.get('handler')).toBe('Mail.ashx')
-    expect(sent.params?.get('f_next_user_id')).toBe(user)
+    expect(sent.params?.get('f_next_user_id')).toBe(other)
     expect(sent.params?.get('f_status')).toBe('1000')
     expect(sent.params?.get('f_next_node_code')).toBe('')
     expect(sent.params?.get('f_score')).toBe('')
@@ -211,6 +212,32 @@ describe('limit mail submit', () => {
     }, calls), user, [draft()])
     expect(result.results[0]?.state).toBe('created')
     expect(calls.some(item => item.startsWith('mailSubmit'))).toBe(false)
+  })
+
+  it('blocks before creating a draft when no default reviewer is configured', async () => {
+    const calls: string[] = []
+    const item = { ...draft(), reviewerId: undefined }
+    const result = await submitLimitMailBatch(transport({}, calls), user, [item])
+    expect(calls).toEqual([])
+    expect(result.results[0]?.state).toBe('failed')
+    expect(result.results[0]?.message).toContain('默认审核人')
+  })
+
+  it('does not fall back to the operator if the configured reviewer is absent from the next node', async () => {
+    const calls: string[] = []
+    const result = await submitLimitMailBatch(transport({
+      limitMailCustomer: () => ({ ClientInfo: client(), objid: mail }),
+      ...contacts(),
+      saveMailInfo: () => ({ ClientInfo: client({ Status: true }) }),
+      getFlowInfo: () => flowInfo(),
+      getFlowSubmit: () => nodes([user]),
+      getUrgencyList: () => ({ ClientInfo: client(), UrgencyList: [{ urgency_id: urgency, seq: 1 }] }),
+      getFlowLastStatus: () => ({ ClientInfo: client(), last_status: null }),
+      mailSubmit: () => ({ ClientInfo: client({ Result: true }) })
+    }, calls), user, [draft({ reviewerId: other })])
+    expect(result.results[0]?.state).toBe('created')
+    expect(result.results[0]?.message).toContain('默认审核人')
+    expect(calls.some(call => call.startsWith('mailSubmit'))).toBe(false)
   })
 
   it('一件提交响应未确认只算这一件，同批第二件继续做', async () => {
@@ -286,6 +313,70 @@ describe('limit mail submit', () => {
     expect(saved.params?.get('mail_cc')).toContain('商务甲(sales@example.com);')
   })
 
+  it('writes the mapped default sender when the draft mailbox is empty', async () => {
+    const calls: string[] = []
+    const saved: { params: URLSearchParams | null } = { params: null }
+    const chosen = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa33'
+    const result = await submitLimitMailBatch(transport({
+      limitMailCustomer: () => ({ ClientInfo: client(), objid: mail }),
+      ...contacts(),
+      getMailInfo: () => {
+        const body = mailInfo()
+        body.MailInfo[0].mailset_id = ''
+        return body
+      },
+      saveMailInfo: params => {
+        saved.params = params
+        return { ClientInfo: client({ Result: false, Status: true }) }
+      },
+      getFlowInfo: () => flowInfo(),
+      getFlowSubmit: () => nodes([user]),
+      getUrgencyList: () => ({ ClientInfo: client(), UrgencyList: [{ urgency_id: urgency, urgency_code: 'CM', urgency_name: '普通', seq: 1 }] }),
+      getFlowLastStatus: () => ({ ClientInfo: client(), last_status: null }),
+      mailSubmit: () => ({ ClientInfo: client({ Result: true }) })
+    }, calls), user, [draft({ senderId: chosen })])
+    expect(result.results[0]?.state).toBe('submitted')
+    expect(result.results[0]?.message).toContain('发件邮箱已写入发文映射里的默认发件人')
+    expect(saved.params?.get('mailset_id')).toBe(chosen)
+  })
+
+  it('keeps the draft mailbox when the site already filled one', async () => {
+    const calls: string[] = []
+    const saved: { params: URLSearchParams | null } = { params: null }
+    const result = await submitLimitMailBatch(transport({
+      limitMailCustomer: () => ({ ClientInfo: client(), objid: mail }),
+      ...contacts(),
+      saveMailInfo: params => {
+        saved.params = params
+        return { ClientInfo: client({ Result: false, Status: true }) }
+      },
+      getFlowInfo: () => flowInfo(),
+      getFlowSubmit: () => nodes([user]),
+      getUrgencyList: () => ({ ClientInfo: client(), UrgencyList: [{ urgency_id: urgency, urgency_code: 'CM', urgency_name: '普通', seq: 1 }] }),
+      getFlowLastStatus: () => ({ ClientInfo: client(), last_status: null }),
+      mailSubmit: () => ({ ClientInfo: client({ Result: true }) })
+    }, calls), user, [draft({ senderId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa33' })])
+    expect(result.results[0]?.state).toBe('submitted')
+    expect(result.results[0]?.message).not.toContain('默认发件人')
+    expect(saved.params?.get('mailset_id')).toBe(mailset)
+  })
+
+  it('does not save addresses when the draft mailbox and the default sender are both empty', async () => {
+    const calls: string[] = []
+    const result = await submitLimitMailBatch(transport({
+      limitMailCustomer: () => ({ ClientInfo: client(), objid: mail }),
+      ...contacts(),
+      getMailInfo: () => {
+        const body = mailInfo()
+        body.MailInfo[0].mailset_id = ''
+        return body
+      }
+    }, calls), user, [draft()])
+    expect(result.results[0]?.state).toBe('created')
+    expect(result.results[0]?.message).toContain('发文映射里也没有默认发件人')
+    expect(calls.some(item => item.startsWith('saveMailInfo'))).toBe(false)
+  })
+
   it('does not submit when the mail page has no sales address', async () => {
     const calls: string[] = []
     const result = await submitLimitMailBatch(transport({
@@ -347,6 +438,7 @@ describe('limit mail submit', () => {
 
   it('同客户同收件人的勾选并成一封，_file_ids 只列勾上的', async () => {
     const planned = limitMailItems({
+      reviewerId: user,
       procIds: [proc, proc2],
       rows: [{ procId: proc, caseVolume: 'PA1' }, { procId: proc2, caseVolume: 'PA2' }],
       sheetRows: [
@@ -489,7 +581,7 @@ describe('limit mail submit', () => {
     expect(limitMailSubmitShouldHalt('EASY 登录已失效，请在原网站重新登录。')).toBe(true)
     const heldSummary = summarizeLimitMailSubmit([{ procId: proc, mailId: '', state: 'failed', message: '客户要求这封提醒不用发，没有创建发文。' }], true)
     expect(heldSummary).toBe('客户要求这封提醒不用发，没有创建发文。')
-    expect(summarizeLimitMailSubmit([{ procId: proc, mailId: mail, state: 'submitted', message: '已提交给当前登录人审核。' }], false)).toBe('已提交 1 件给当前登录人审核。')
+    expect(summarizeLimitMailSubmit([{ procId: proc, mailId: mail, state: 'submitted', message: '已提交给当前登录人审核。' }], false)).toBe('已提交 1 件给默认审核人审核。')
     expect(summarizeLimitMailSubmit([{ procId: proc, mailId: mail, state: 'created', message: '请求超时，请重试。再点「提交到 EASY」会沿用这封发文，不会重新创建。' }], false)).toBe('没有提交到审核人。请求超时，请重试。再点「提交到 EASY」会沿用这封发文，不会重新创建。')
   })
 

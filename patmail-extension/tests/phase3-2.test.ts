@@ -77,6 +77,45 @@ async function bind(runtime: WorkspaceHost) {
 }
 
 describe('Phase 3.2 写入入口、账号隔离与只读契约', () => {
+  it('期限发文使用该账号发文映射的默认审核人，不信任页面传来的审核人，操作账号保持不变', async () => {
+    const runtime = host()
+    const scope = await bind(runtime)
+    const bundle = { ...rules(), defaultReviewer: { userId: userB, name: '审核员乙' } }
+    await handleWorkspaceMessage({ type: MessageType.Workspace, payload: { action: 'saveRules', bundle, expectedScope: scope } }, runtime)
+    const forwarded: unknown[] = []
+    runtime.sendToTab = async (_tab, message) => {
+      if (message.type === MessageType.CheckSession) return session(userA)
+      forwarded.push(message)
+      return { type: MessageType.SubmitLimitMailResult, payload: { stopped: false, results: [] } }
+    }
+    const result = await handleWorkspaceMessage({
+      type: MessageType.Workspace,
+      payload: { action: 'forward', message: { type: MessageType.SubmitLimitMail, payload: {
+        userId: userB,
+        items: [{ procId: guid('cccccccc'), mailTypeId: guid('dddddddd'), mailStyle: '1', mode: 'ipr', customerName: '客户A', contactName: '', iprName: '雷工', leadName: '', reviewerId: userA }]
+      } } }
+    }, runtime)
+    expect(result.type === MessageType.WorkspaceResult && result.payload.ok).toBe(true)
+    expect(forwarded).toMatchObject([{ payload: { userId: userA, items: [{ reviewerId: userB }] } }])
+  })
+
+  it('期限发文未配置默认审核人时不向 EASY 转发创建请求', async () => {
+    const runtime = host()
+    await bind(runtime)
+    const forwarded: unknown[] = []
+    runtime.sendToTab = async (_tab, message) => {
+      if (message.type === MessageType.CheckSession) return session(userA)
+      forwarded.push(message)
+      return { type: MessageType.SubmitLimitMailResult, payload: { stopped: false, results: [] } }
+    }
+    const result = await handleWorkspaceMessage({ type: MessageType.Workspace, payload: { action: 'forward', message: {
+      type: MessageType.SubmitLimitMail, payload: { userId: userA, items: [{ procId: guid('cccccccc'), mailTypeId: guid('dddddddd'), mailStyle: '1', mode: 'ipr', customerName: '客户A', contactName: '', iprName: '雷工', leadName: '', reviewerId: userA }] }
+    } } }, runtime)
+    expect(result.type === MessageType.WorkspaceResult && result.payload.ok).toBe(false)
+    expect(result.type === MessageType.WorkspaceResult && result.payload.message).toContain('默认审核人')
+    expect(forwarded).toEqual([])
+  })
+
   it('rejects a late account response and a stale form save', async () => {
     expect(canCommitWorkspaceResponse({
       requestId: 1, latestRequestId: 2, expectedOrigin: origin, responseOrigin: origin, responseOperatorId: userA, responseAuthenticated: true

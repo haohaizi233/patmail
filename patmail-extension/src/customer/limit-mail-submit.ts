@@ -15,7 +15,7 @@ import {
   flowInfoParams, flowSubmitQuery, lastStatusParams, readFlowInfo, readFlowSubmit, readLastStatus, readUrgency,
   urgencyParams, versionAgrees, type FlowInfoFields
 } from '../workflow/contracts'
-import { resolveReviewer } from '../workflow/reviewer-resolver'
+import { resolveConfiguredReviewer } from '../workflow/reviewer-resolver'
 import type { WorkflowNode, WorkflowReviewer, WorkflowUrgency } from '../workflow/types'
 
 /** 原站创建发文时预填的来文通知。每次写入前去掉，不留给收件人或抄送。 */
@@ -24,6 +24,8 @@ const FLOW_PAGE = 'IhgFlow.aspx'
 const LEDGER_KEY = 'patmail.limitMailSubmit.v1'
 
 export interface LimitMailSubmitItem {
+  /** 发文映射中的默认审核人 GUID，与执行操作的登录人分别传递。 */
+  reviewerId?: string
   procId: string
   /** 同一封信里的全部处理事项。全部来自这一次的勾选，没有勾的不带。 */
   procIds?: string[]
@@ -48,6 +50,8 @@ export interface LimitMailSubmitItem {
   arbitrated?: true
   /** 客户要求这封提醒不用发。不创建发文，也不改走全选联系人。 */
   hold?: 'skip'
+  /** 发文映射里的默认发件人。草稿没有发件邮箱时写入这一条。 */
+  senderId?: string
 }
 
 export interface LimitMailSubmitResult {
@@ -209,6 +213,10 @@ export function limitMailItems(input: {
   specials?: ReadonlySet<string>
   /** auto：有名字的行按写回的收件人提交，空着的行按发文规则勾选客户联系人兜底。all：不采用仲裁写回的结论，原表有名字的行照表格提交，空行和仲行按发文规则勾选。checked：空着的行按发文规则勾选。named：只提交有名字的行。 */
   address?: 'named' | 'checked' | 'auto' | 'all'
+  /** 发文映射或这一页选中的默认发件人。 */
+  senderId?: string
+  /** 发文映射中的默认审核人。 */
+  reviewerId?: string
 }): { ok: true; items: LimitMailSubmitItem[] } | { ok: false; message: string } {
   if (!input.procIds.length) return { ok: false, message: '还没有勾选。先勾选还没提交审核的事项。' }
   const specials = input.specials ?? new Set<string>()
@@ -253,6 +261,7 @@ export function limitMailItems(input: {
     /** 直接全选里清掉仲裁结论的行：收件人、抄送、仲裁标记都置空。其他模式的兜底行保留表格里的抄送。 */
     const bare = input.address === 'all' && checked
     const ccName = lookupName(source?.mailCc ?? '')
+    const senderId = input.senderId && isQueryGuid(input.senderId) ? input.senderId : ''
     const item: LimitMailSubmitItem = {
       procId,
       mailTypeId: types[0],
@@ -266,7 +275,9 @@ export function limitMailItems(input: {
       ...(checked ? { contacts: 'all' as const } : {}),
       ...(!bare && ccName ? { ccName } : {}),
       ...(!bare && source?.iprArbitrated ? { arbitrated: true as const } : {}),
-      ...(!bare && iprName === '不用发' ? { hold: 'skip' as const } : {})
+      ...(!bare && iprName === '不用发' ? { hold: 'skip' as const } : {}),
+      ...(senderId ? { senderId } : {}),
+      ...(input.reviewerId && isQueryGuid(input.reviewerId) ? { reviewerId: input.reviewerId } : {})
     }
     flat.push(item)
   }
@@ -538,14 +549,15 @@ function zipText(row: Record<string, unknown>): string | null {
   return null
 }
 
-function saveFields(row: Record<string, unknown>, mailId: string, to: string, cc: string, bcc: string, finishCtrlProc: string): Record<(typeof SAVE_KEYS)[number], string> | null {
+function saveFields(row: Record<string, unknown>, mailId: string, to: string, cc: string, bcc: string, finishCtrlProc: string, senderId = ''): Record<(typeof SAVE_KEYS)[number], string> | null {
   const mailType = cellText(row, 'mail_type_id', true)
   const customerId = cellText(row, 'customer_id', true)
-  const mailsetId = cellText(row, 'mailset_id', true)
+  const draftedSet = cellText(row, 'mailset_id', true)
+  const mailsetId = draftedSet && isQueryGuid(draftedSet) ? draftedSet : (isQueryGuid(senderId) ? senderId : '')
   const subject = cellText(row, 'mail_subject', true)
   const body = cellText(row, 'mail_body', true)
   const isZip = zipText(row)
-  if (mailType === null || customerId === null || mailsetId === null || subject === null || body === null || isZip === null) return null
+  if (mailType === null || customerId === null || draftedSet === null || subject === null || body === null || isZip === null) return null
   if (!isQueryGuid(mailType) || !isQueryGuid(customerId) || !isQueryGuid(mailsetId)) return null
   const optional = {
     zip_pwd: cellText(row, 'zip_pwd', false),
@@ -663,8 +675,16 @@ async function writeRecipients(transport: EasyTransport, mailId: string, item: L
   if (!finish.ok) return finish
   const draftedFinish = cellText(info.row, 'finish_ctrl_proc', false)
   if (draftedFinish === null) return { ok: false, message: '发文草稿的完成事项读不全，没有改地址。' }
-  const fields = saveFields(info.row, mailId, plan.to, plan.cc, bcc, finish.value || draftedFinish)
-  if (!fields) return { ok: false, message: '发文草稿的主题、正文或发件邮箱读不全，没有改地址。' }
+  const draftedSet = cellText(info.row, 'mailset_id', true)
+  const fields = saveFields(info.row, mailId, plan.to, plan.cc, bcc, finish.value || draftedFinish, item.senderId ?? '')
+  if (!fields) {
+    const fallback = isQueryGuid(item.senderId ?? '')
+    if (draftedSet !== null && !isQueryGuid(draftedSet) && !fallback) {
+      return { ok: false, message: '发文草稿没有发件邮箱，发文映射里也没有默认发件人，没有改地址。' }
+    }
+    return { ok: false, message: '发文草稿的主题、正文或发件邮箱读不全，没有改地址。' }
+  }
+  const senderNote = draftedSet !== null && !isQueryGuid(draftedSet) ? '发件邮箱已写入发文映射里的默认发件人。' : ''
   const saved = await transport.post('saveMailInfo', saveParams(fields))
   if (!saved.ok) return { ok: false, message: '保存收件人的响应无法确认，没有提交。再点一次会沿用这封发文，不会重新创建。' }
   const status = readSaveMailInfo(saved.data)
@@ -672,19 +692,22 @@ async function writeRecipients(transport: EasyTransport, mailId: string, item: L
   const finished = finish.value ? '完成事项已勾上本封的处理事项。' : ''
   if (item.contacts === 'all') {
     const head = caution || '收件人已按发文规则勾上客户联系人，抄送已含业务人员。'
-    return { ok: true, note: `${head}${skippedRule}${finished}`, to: plan.to, cc: plan.cc }
+    return { ok: true, note: `${head}${skippedRule}${finished}${senderNote}`, to: plan.to, cc: plan.cc }
   }
-  if (item.arbitrated && sheetDisplayName(item.iprName) === '只发业务') return { ok: true, note: `收件人和抄送只写了发文页上的业务人员。${finished}`, to: plan.to, cc: plan.cc }
-  return { ok: true, note: `${item.mode === 'lead' ? '收件人已写入技术负责人，抄送已含 IPR 和商务。' : '收件人已写入 IPR，抄送已含商务。'}${finished}`, to: plan.to, cc: plan.cc }
+  if (item.arbitrated && sheetDisplayName(item.iprName) === '只发业务') return { ok: true, note: `收件人和抄送只写了发文页上的业务人员。${finished}${senderNote}`, to: plan.to, cc: plan.cc }
+  return { ok: true, note: `${item.mode === 'lead' ? '收件人已写入技术负责人，抄送已含 IPR 和商务。' : '收件人已写入 IPR，抄送已含商务。'}${finished}${senderNote}`, to: plan.to, cc: plan.cc }
 }
 
 function spread(item: LimitMailSubmitItem, result: LimitMailSubmitResult): LimitMailSubmitResult[] {
   return limitMailProcIds(item).map(procId => ({ ...result, procId }))
 }
 
-async function submitOne(transport: EasyTransport, userId: string, item: LimitMailSubmitItem): Promise<LimitMailSubmitResult[]> {
+async function submitOne(transport: EasyTransport, item: LimitMailSubmitItem): Promise<LimitMailSubmitResult[]> {
   if (item.hold === 'skip') {
     return spread(item, { procId: item.procId, mailId: '', state: 'failed', message: '客户要求这封提醒不用发，没有创建发文。' })
+  }
+  if (!isQueryGuid(item.reviewerId ?? '')) {
+    return spread(item, failed(item.procId, '还没有默认审核人。请到发文映射里设置，没有创建或提交。'))
   }
   let mailId = item.mailId ?? ''
   if (!mailId) {
@@ -730,7 +753,7 @@ async function submitOne(transport: EasyTransport, userId: string, item: LimitMa
   if (!nodes.ok) return held(nodes.message)
   const picked = pickMailSubmitNodes(nodes.nodes)
   if (!picked.ok) return held(picked.message)
-  const reviewer = resolveReviewer(userId, picked.next)
+  const reviewer = resolveConfiguredReviewer(item.reviewerId, picked.next)
   if (reviewer.status === 'blocked') return held(`发文已创建。${reviewer.reason}`)
 
   const urgencyResult = await transport.post('getUrgencyList', urgencyParams())
@@ -756,7 +779,7 @@ async function submitOne(transport: EasyTransport, userId: string, item: LimitMa
   const outcome = readMailSubmit(submitted.data)
   if (!outcome.ok) return held(outcome.message, outcome.kind === 'unknown' ? 'unknown' : 'created')
   const count = limitMailProcIds(item).length
-  const head = count > 1 ? `已把 ${count} 件合成一封，提交给当前登录人审核。` : '已提交给当前登录人审核。'
+  const head = count > 1 ? `已把 ${count} 件合成一封，提交给默认审核人${reviewer.reviewer.name}审核。` : `已提交给默认审核人${reviewer.reviewer.name}审核。`
   return held(`${head}${addressed.note}`, 'submitted')
 }
 
@@ -775,7 +798,7 @@ export async function submitLimitMailBatch(transport: EasyTransport, userId: str
     return { stopped, results }
   }
   for (const item of items) {
-    const letter = await submitOne(transport, userId, item)
+    const letter = await submitOne(transport, item)
     results.push(...letter.map(result => result.message.length > 8000 ? { ...result, message: result.message.slice(0, 8000) } : result))
     /** 一件失败只算这一件，后面的件继续。不用发是明确结论；登录失效、写开关是会话级故障，停批。 */
     const trouble = letter.find(result => result.state !== 'submitted')
@@ -791,8 +814,8 @@ export function summarizeLimitMailSubmit(results: LimitMailSubmitResult[], stopp
   const head = !submitted.length
     ? '没有提交到审核人。'
     : letters > 0 && submitted.length !== letters
-      ? `已提交 ${letters} 封，共 ${submitted.length} 件，给当前登录人审核。`
-      : `已提交 ${submitted.length} 件给当前登录人审核。`
+      ? `已提交 ${letters} 封，共 ${submitted.length} 件，给默认审核人审核。`
+      : `已提交 ${submitted.length} 件给默认审核人审核。`
   if (!last) return head
   /** 整批只有不用发时，这是仲裁的明确结论，不说成「没有提交到审核人」的失败。 */
   if (!submitted.length && /客户要求这封提醒不用发，没有创建发文/.test(last.message)) return last.message

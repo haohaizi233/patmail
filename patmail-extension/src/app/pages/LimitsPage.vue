@@ -24,7 +24,7 @@ import { useWriteSwitch } from '../../settings/use-write-switch'
 const { open: writesOpen, ready: writesReady } = useWriteSwitch()
 const { concurrency } = useMailConcurrency()
 const bridge = inject<MessageBridge>('bridge')
-const { connection, customers, call } = useWorkspace()
+const { connection, customers, call, rules } = useWorkspace()
 const { catalog } = useWorkflowCatalog()
 const pctDefinition = computed(() => catalog.value.workflows.find(item => item.id === 'pct-reminder') ?? null)
 const connected = computed(() => connection.value.sessionStatus === 'authenticated')
@@ -297,13 +297,20 @@ async function onSubmitAsk(address?: string): Promise<void> {
     return
   }
   confirmedIds.value = procIds
+  const reviewerId = rules.value?.defaultReviewer?.userId ?? ''
+  if (!isQueryGuid(reviewerId)) {
+    message.value = '还没有默认审核人。请到发文映射里设置。'
+    return
+  }
   const planned = limitMailItems({
+    reviewerId,
     procIds,
     rows: rows.value,
     sheetRows: task?.rows ?? [],
     mode: recipientModeForTask(task, catalog.value.workflows),
     specials: inventorCustomerNames(flow),
-    address: address === 'auto' || address === 'trust' ? 'auto' : address === 'all' ? 'all' : undefined
+    address: address === 'auto' || address === 'trust' ? 'auto' : address === 'all' ? 'all' : undefined,
+    ...(rules.value?.defaultSender?.mailsetId && isQueryGuid(rules.value.defaultSender.mailsetId) ? { senderId: rules.value.defaultSender.mailsetId } : {})
   })
   if (!planned.ok) {
     message.value = planned.message

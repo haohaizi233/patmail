@@ -36,7 +36,7 @@ function stepLines(step: WorkflowStep, index: number): string[] {
       : [title, 'IPR 收', '商务抄送'].map(clip)
   }
   if (step.skillId === 'sender') return [title, field(step, 'sender_mailset_label') || '沿用规则或客户上的邮箱'].map(clip)
-  if (step.skillId === 'review') return [title, field(step, 'review_label') || '提交给当前登录人'].map(clip)
+  if (step.skillId === 'review') return [title, '发文映射配置的默认审核人'].map(clip)
   if (step.skillId === 'lookup') return [title, '勾选后先记下，这一步不发出'].map(clip)
   return [title].map(clip)
 }

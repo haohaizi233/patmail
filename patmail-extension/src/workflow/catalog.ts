@@ -294,7 +294,7 @@ export function workflowSender(definition: WorkflowDefinition | null | undefined
 export function packagedPctWorkflow(definition: WorkflowDefinition): Omit<PackagedWorkflow, 'id'> & { id: string } {
   const runtime = pctRuntimeFrom(definition)
   const column = runtime.columns
-  const reviewLabel = textOf(definition, 'review', 'review_label', '提交给当前登录人')
+  const reviewLabel = '发文映射配置的默认审核人'
   return {
     id: definition.id,
     label: definition.label.trim() || definition.id,
@@ -317,7 +317,7 @@ export function packagedPctWorkflow(definition: WorkflowDefinition): Omit<Packag
         ? `表格「${column.iprName}」，再加上发文页的${textOf(definition, 'recipients', 'cc_business_role', '商务')}。`
         : `发文页的${textOf(definition, 'recipients', 'cc_business_role', '商务')}。` },
       { id: 'from', label: '发件人', decidedBy: senderDecidedBy(definition) },
-      { id: 'review', label: '审核', options: [{ value: 'self', label: reviewLabel }] }
+      { id: 'review', label: '审核', options: [{ value: 'default', label: reviewLabel }] }
     ]
   }
 }
@@ -412,7 +412,7 @@ function mergePct(saved: unknown): WorkflowDefinition {
     label: base.label,
     summary: base.summary,
     system: true,
-    steps: base.steps.map(step => step.id === 'recipients' ? structuredClone(step) : applySavedValues(step, savedSteps.get(step.id)))
+    steps: base.steps.map(step => step.id === 'recipients' || step.id === 'review' ? structuredClone(step) : applySavedValues(step, savedSteps.get(step.id)))
   }
 }
 

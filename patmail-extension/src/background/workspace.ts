@@ -516,7 +516,13 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
         return workspaceResult({ ok: false, message: '当前登录人还没确认，没有提交。', connection: host.connection.context })
       }
       if (outbound.type === MessageType.SubmitLimitMail) {
-        outbound = { ...outbound, payload: { ...outbound.payload, userId: operatorId } }
+        const account = await readAccount(host)
+        if (!account) return staleResult(host)
+        const reviewerId = account.rules?.defaultReviewer?.userId ?? ''
+        if (!isConfirmedOperator(reviewerId)) {
+          return workspaceResult({ ok: false, message: '还没有默认审核人。请到发文映射里设置。', connection: host.connection.context })
+        }
+        outbound = { ...outbound, payload: { ...outbound.payload, userId: operatorId, items: outbound.payload.items.map(item => ({ ...item, reviewerId })) } }
       } else {
         outbound = { ...outbound, payload: { ...outbound.payload, userId: operatorId } }
       }
