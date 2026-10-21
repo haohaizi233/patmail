@@ -1,5 +1,5 @@
 import {
-  adaptBussType, adaptDictionaryValue, adaptFileTemp, adaptNodeTree
+  adaptBussType, adaptCaseType, adaptDictionaryValue, adaptFileTemp, adaptNodeTree
 } from './adapters'
 import type { DictionaryOption, NormalizedDictionary } from './types'
 
@@ -61,12 +61,12 @@ export const LIMIT_PICKER_FIELDS: Record<string, string> = {
   apply_tags_id: 'applyTags'
 }
 
-/** 递交管理下拉。流程节点来自 GetFilingFlowNode 的 ApplyFlowNode，签约单位来自 InitContractStatus 的 contractbase。 */
+/** 递交管理下拉。对齐 FilingList.js 的 FinishedInit：流程节点来自 GetFilingFlowNode 的 ApplyFlowNode，签约单位来自 InitContractStatus 的 table5。 */
 export const FILING_PICKER_FIELDS: Record<string, string> = {
   ctrl_proc: 'limitCtrlProc',
   activity: 'filingFlowNode',
-  flow_direction: 'limitDirection',
-  case_type: 'limitCaseType',
+  history: 'filingFlowNode',
+  case_type: 'filingCaseType',
   audit_user_id: 'user',
   create_user_id: 'user',
   sales_user_id: 'user',
@@ -137,6 +137,16 @@ function caseStatusRows(raw: unknown): unknown {
   })
 }
 
+/** 递交页的案件类型下拉不放 case_type_code 为 O、S 的项。来源：FilingList.js 的 FinishedInit。 */
+function filingCaseTypeRows(raw: unknown): unknown {
+  if (!Array.isArray(raw)) return raw
+  return raw.filter(row => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+    const code = (row as Record<string, unknown>).case_type_code
+    return code !== 'O' && code !== 'S'
+  })
+}
+
 /** 事项类型的提交值是 dictionary_id，不是 OM / IM。 */
 function procTypeRows(raw: unknown): unknown {
   if (!Array.isArray(raw)) return raw
@@ -172,7 +182,8 @@ export function buildPickerCatalog(sources: Record<string, unknown>): { dictiona
     limitProcType: adaptDictionaryValue('limitProcType', procTypeRows(arrayOf(sources.limitInit, 'procType'))),
     limitCtrlProc: adaptNodeTree('limitCtrlProc', arrayOf(sources.limitCtrl, 'CtrlProc')),
     filingFlowNode: adaptDictionaryValue('filingFlowNode', arrayOf(sources.filingInit, 'ApplyFlowNode')),
-    filingContract: adaptDictionaryValue('filingContract', arrayOf(sources.contractInit, 'contractbase'))
+    filingCaseType: adaptCaseType(filingCaseTypeRows(arrayOf(sources.filingInit, 'CaseType'))),
+    filingContract: adaptDictionaryValue('filingContract', arrayOf(sources.contractInit, 'table5'))
   }
   for (const [name, dictionary] of Object.entries(dictionaries)) {
     if (dictionary.status === 'invalid') warnings.push(`${name} 的选项没有读全。`)

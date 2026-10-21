@@ -2,10 +2,9 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary, describePickerReceipt, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
-import { FILING_OPTION_KEYS, FILING_BLOCKS, filingCellKeys, filingDraftFields, type FilingCell } from '../../api/filing-form'
+import { FILING_OPTION_KEYS, FILING_BLOCKS, FILING_SELECTS, filingCellKeys, filingDraftFields, type FilingCell } from '../../api/filing-form'
 import { splitFilingCtrlProcIds, type FilingSearchQuery } from '../../api/filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from '../../api/filing-search-types'
-import { LIMIT_SELECTS } from '../../api/limit-form'
 import { hasOptionTree } from '../../query/option-tree'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
@@ -66,9 +65,16 @@ function onText(key: string, event: Event): void {
 function choices(key: string): { value: string; label: string; parent?: string }[] {
   const source = FILING_OPTION_KEYS[key]
   const dictionary = source ? pickers.value[source] : undefined
-  const live = dictionary && dictionary.options.length > 0 ? choicesFromDictionary(dictionary) : null
-  const saved = LIMIT_SELECTS[key] ?? []
+  const live = dictionary && dictionary.options.length > 0
+    ? choicesFromDictionary(dictionary, valueOf('case_type'))
+    : null
+  const saved = FILING_SELECTS[key] ?? []
   return (live ?? saved).filter(item => item.value)
+}
+
+/** 页面写死的下拉，选项照抄原站 option，空项就是原站的「请选择 / ALL」。 */
+function selectOptions(key: string): { value: string; label: string }[] {
+  return FILING_SELECTS[key] ?? []
 }
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
   const options = choices(key)
@@ -230,6 +236,10 @@ onBeforeUnmount(() => {
             <TreeOptionSelect v-if="treeChoices(cell.key).length" :model-value="valueOf(cell.key)" :options="treeChoices(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
             <ThemeSelect v-else-if="choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setValue(cell.key, String($event))" />
             <input v-else :value="valueOf(cell.key)" type="text" :placeholder="cell.key === 'business_coop' ? '签约单位下拉未读到，可直接填值' : ''" @input="onText(cell.key, $event)" />
+          </label>
+          <label v-else-if="cell.kind === 'select'" class="query-cell">
+            <span>{{ cell.label }}</span>
+            <ThemeSelect :model-value="valueOf(cell.key)" :options="selectOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
           </label>
           <div v-else-if="cell.kind === 'dates'" class="query-cell">
             <span>{{ cell.label }}</span>

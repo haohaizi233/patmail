@@ -1,6 +1,7 @@
 import { FILING_INPUT_FIELDS, type FilingInputField } from './filing-search-params'
+import { FILING_PICKER_FIELDS } from './dictionaries/picker-catalog'
 
-/** 递交管理查询条件的排版。来源：`Forms/NewFiling/Filing.aspx` 的「查询条件」区，一排两个条件。 */
+/** 递交管理查询条件的排版。来源：`Forms/NewFiling/Finished.aspx` 的查询条件区，一排两个条件。控件形态对齐 FilingList.js。 */
 
 export interface FilingTextCell { kind: 'text'; key: string; label: string; hint?: string }
 export interface FilingNamedCell { kind: 'named'; key: string; label: string }
@@ -42,26 +43,41 @@ export const FILING_FIELD_LABELS: Record<string, string> = {
   audit_type: '办理类型'
 }
 
-/** 递交条件下拉对应的字典名。字典由 loadPicker 从原站实时拉，键名见 dictionaries/picker-catalog。 */
-export const FILING_OPTION_KEYS: Record<string, string> = {
-  ctrl_proc: 'limitCtrlProc',
-  activity: 'filingFlowNode',
-  flow_direction: 'limitDirection',
-  case_type: 'limitCaseType',
-  audit_user_id: 'user',
-  create_user_id: 'user',
-  sales_user_id: 'user',
-  business_coop: 'filingContract',
-  apply_type: 'limitApplyType',
-  branch_dept: 'branch'
+/** 递交条件下拉对应的字典名，与原站 FilingList.js 的填充来源一致。字典由 loadPicker 从原站实时拉。 */
+export const FILING_OPTION_KEYS: Record<string, string> = FILING_PICKER_FIELDS
+
+/**
+ * 页面上写死的下拉，取值照抄 `Finished.aspx` 的 option。
+ * flow_direction 是 select，is_paper_notice、audit_type 的文案由页面 JS 再替换一次，值不变。
+ */
+export const FILING_SELECTS: Record<string, { value: string; label: string }[]> = {
+  flow_direction: [
+    { value: '', label: '请选择' },
+    { value: 'II', label: '内-内' },
+    { value: 'IO', label: '内-外' },
+    { value: 'OI', label: '外-内' },
+    { value: 'OO', label: '外-外' }
+  ],
+  is_paper_notice: [
+    { value: '', label: 'ALL' },
+    { value: '1', label: '是' },
+    { value: '0', label: '否' }
+  ],
+  audit_type: [
+    { value: '', label: 'ALL' },
+    { value: 'submit', label: '提交' },
+    { value: 'handover', label: '移交' },
+    { value: 'reject', label: '退回' },
+    { value: 'withdraw', label: '撤回' }
+  ]
 }
 
 const dates = (label: string, start: string, end: string): FilingDateCell => ({ kind: 'dates', label, start, end })
 
 /**
- * 查询条件按页面左右两列排。原站页面上的下拉里，
- * 「是否需要纸质通知书」「历史审核记录」「办理类型」的取值没有抓包样本，
- * 这三项先按文本提交，页面显示值本身就是提交值。
+ * 查询条件按页面左右两列排。select 是页面写死的选项；
+ * named 的选项从原站接口实时读：处理事项、当前流程阶段、历史审核记录、申请类型、案件类型、签约单位、分部和人员。
+ * 历史审核记录在原站复用流程节点做选项（FilingList.js 把 ApplyFlowNode 挂进 `#history`），这里一样。
  */
 export const FILING_BLOCKS: FilingCell[] = [
   { kind: 'text', key: 'case_volume', label: '我方文号' },
@@ -69,7 +85,7 @@ export const FILING_BLOCKS: FilingCell[] = [
   { kind: 'text', key: 'customer_volume', label: '客户文号' },
   { kind: 'text', key: 'customer', label: '客户' },
   { kind: 'text', key: 'customer_code', label: '客户代码' },
-  { kind: 'named', key: 'flow_direction', label: '案件流向' },
+  { kind: 'select', key: 'flow_direction', label: '案件流向' },
   { kind: 'text', key: 'case_name', label: '案件名称' },
   { kind: 'named', key: 'case_type', label: '案件类型' },
   { kind: 'named', key: 'audit_user_id', label: '办理人' },
@@ -80,17 +96,17 @@ export const FILING_BLOCKS: FilingCell[] = [
   dates('完成日', 'finish_date_start', 'finish_date_end'),
   { kind: 'text', key: 'contract_no', label: '合同编号' },
   { kind: 'named', key: 'business_coop', label: '签约单位' },
-  { kind: 'text', key: 'is_paper_notice', label: '是否需要纸质通知书', hint: '原站是下拉，取值未核对，先按文本提交' },
+  { kind: 'select', key: 'is_paper_notice', label: '是否需要纸质通知书' },
   { kind: 'text', key: 'agent_name', label: '代理人' },
   { kind: 'text', key: 'applicant', label: '申请人' },
   { kind: 'text', key: 'app_no', label: '申请号' },
   { kind: 'named', key: 'apply_type', label: '申请类型' },
   dates('申请日', 'app_date_start', 'app_date_end'),
-  { kind: 'text', key: 'history', label: '历史审核记录', hint: '原站是下拉，取值未核对，先按文本提交' },
+  { kind: 'named', key: 'history', label: '历史审核记录' },
   { kind: 'named', key: 'sales_user_id', label: '业务员' },
   { kind: 'named', key: 'branch_dept', label: '案件所属分部' },
   { kind: 'text', key: 'history_remark', label: '流程审核备注' },
-  { kind: 'text', key: 'audit_type', label: '办理类型', hint: '原站是下拉，取值未核对，先按文本提交' }
+  { kind: 'select', key: 'audit_type', label: '办理类型' }
 ]
 
 export function filingCellKeys(cell: FilingCell): string[] {

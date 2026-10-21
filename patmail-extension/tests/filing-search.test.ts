@@ -3,7 +3,7 @@ import {
   buildFilingSearchElement, buildFilingSearchParams, FILING_ELEMENT_NODES, splitFilingCtrlProcIds
 } from '../src/api/filing-search-params'
 import { normalizeFilingSearch } from '../src/api/filing-search-normalizer'
-import { FILING_BLOCKS, filingCellKeys, filingDraftFields } from '../src/api/filing-form'
+import { FILING_BLOCKS, FILING_OPTION_KEYS, FILING_SELECTS, filingCellKeys, filingDraftFields } from '../src/api/filing-form'
 import { isMessage, MessageType } from '../src/shared/message'
 
 function paramsOf(result: ReturnType<typeof buildFilingSearchParams>): URLSearchParams {
@@ -104,8 +104,19 @@ describe('递交管理表单', () => {
     expect(new Set(keys).size).toBe(keys.length)
   })
 
-  it('草稿只收有值的主条件，显示文本另存', () => {
-    const draft = filingDraftFields({
+  it('下拉取值照抄原站：签约单位走 table5，历史审核记录走流程节点，办理类型和纸质通知是固定码', () => {
+    expect(FILING_SELECTS.is_paper_notice).toEqual([
+      { value: '', label: 'ALL' }, { value: '1', label: '是' }, { value: '0', label: '否' }
+    ])
+    expect(FILING_SELECTS.audit_type.map(item => item.value)).toEqual(['', 'submit', 'handover', 'reject', 'withdraw'])
+    expect(FILING_SELECTS.flow_direction.map(item => item.value)).toEqual(['', 'II', 'IO', 'OI', 'OO'])
+    expect(FILING_OPTION_KEYS.business_coop).toBe('filingContract')
+    expect(FILING_OPTION_KEYS.history).toBe('filingFlowNode')
+    expect(FILING_OPTION_KEYS.apply_type).toBe('limitApplyType')
+    expect(FILING_OPTION_KEYS.case_type).toBe('filingCaseType')
+  })
+
+  it('草稿只收有值的主条件，显示文本另存', () => {    const draft = filingDraftFields({
       case_volume: ' PA2619787CND-YS ',
       ctrl_proc: '6dd56b2b-1e1a-4e8b-9ac0-760cd305506a',
       ctrl_proc_text: '新申请',
