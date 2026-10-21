@@ -10,6 +10,7 @@ import { hasOptionTree } from '../../query/option-tree'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
+import WDatePicker from '../../shell/components/WDatePicker.vue'
 
 const props = defineProps<{ bridge?: MessageBridge; userId: string; canSearch: boolean }>()
 const emit = defineEmits<{ searched: [query: FilingSearchQuery] }>()
@@ -233,9 +234,9 @@ onBeforeUnmount(() => {
           <div v-else-if="cell.kind === 'dates'" class="query-cell">
             <span>{{ cell.label }}</span>
             <span class="date-pair">
-              <input :value="valueOf(cell.start)" type="text" placeholder="起 2026-10-01" @input="onText(cell.start, $event)" />
+              <WDatePicker :id="cell.start" :model-value="valueOf(cell.start)" :max="valueOf(cell.end)" placeholder="起" @update:model-value="setValue(cell.start, String($event))" />
               <em>到</em>
-              <input :value="valueOf(cell.end)" type="text" placeholder="止 2026-10-21" @input="onText(cell.end, $event)" />
+              <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :min="valueOf(cell.start)" placeholder="止" @update:model-value="setValue(cell.end, String($event))" />
             </span>
           </div>
         </template>

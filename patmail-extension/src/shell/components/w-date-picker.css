@@ -1,0 +1,104 @@
+/* 复刻原站 My97 DatePicker 的观感：蓝色表头、红周末、底部「清空 今天 确定」。 */
+.w-date-picker { display: inline-flex; align-items: center; min-width: 0; }
+
+.w-date-picker .Wdate {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 24px 5px 8px;
+  border: 1px solid #d5dceb;
+  border-radius: 6px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Crect x='1.5' y='2.5' width='11' height='10' rx='1.5' fill='none' stroke='%2366758f' stroke-width='1.2'/%3E%3Cpath d='M1.5 5.5h11M4.5 1v2.5M9.5 1v2.5' stroke='%2366758f' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 6px center;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #2c3550;
+  outline: none;
+}
+
+.w-date-picker .Wdate:focus { border-color: #0b79e6; box-shadow: 0 0 0 2px rgba(11, 121, 230, 0.12); }
+.w-date-picker .Wdate:disabled { background-color: #f4f6fa; color: #98a2b8; cursor: not-allowed; }
+
+.wdate-panel {
+  position: fixed;
+  z-index: 1200;
+  width: 210px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #7f9db9;
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(31, 41, 61, 0.18);
+  font-size: 12px;
+  color: #2c3550;
+  user-select: none;
+}
+
+.wdate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 4px 6px;
+  background: #e8f1fb;
+  border-bottom: 1px solid #c8d9ee;
+}
+
+.wdate-title { flex: 1; text-align: center; font-weight: 600; color: #1c4b8f; }
+
+.wdate-btn {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: #1c4b8f;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.wdate-btn:hover { background: #cfe2f7; }
+
+.wdate-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.wdate-grid th {
+  padding: 3px 0;
+  font-weight: 600;
+  color: #1c4b8f;
+  background: #f2f7fd;
+  border-bottom: 1px solid #dce8f6;
+}
+.wdate-grid td { padding: 0; text-align: center; }
+.wdate-grid td a {
+  display: block;
+  margin: 1px;
+  padding: 3px 0;
+  border-radius: 3px;
+  color: #2c3550;
+  cursor: pointer;
+  text-decoration: none;
+}
+.wdate-grid td a:hover { background: #e2edfa; }
+.wdate-grid td a.is-weekend { color: #d0402c; }
+.wdate-grid td a.is-other { color: #b3bcc9; }
+.wdate-grid td a.is-today { text-decoration: underline; }
+.wdate-grid td a.is-selected { background: #3b8ff0; color: #fff; }
+.wdate-grid td a.is-disabled { color: #d3d9e2; cursor: not-allowed; background: none; }
+
+.wdate-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #f2f7fd;
+  border-top: 1px solid #dce8f6;
+}
+
+.wdate-foot a {
+  padding: 2px 8px;
+  border: 1px solid #c8d9ee;
+  border-radius: 3px;
+  background: #fff;
+  color: #1c4b8f;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.wdate-foot a:hover { background: #e2edfa; }

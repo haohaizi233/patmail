@@ -53,6 +53,21 @@ export const FILING_DISPLAY_NODES: Record<string, string[]> = {
 export const FILING_SEARCH_COLSEL =
   ';undefined;case_volume;case_name;customer_name;customer_code;apply_type;ctrl_proc;int_due_date;filing_date;case_type;branch_dept;create_user;create_time;flow_status;'
 
+/** 日期条件。原站 WdatePicker 提交 `yyyy-MM-dd`，多一位少一位都查不出来，这里只认这个格式。 */
+export const FILING_DATE_FIELDS = new Set<string>([
+  'create_time_start', 'create_time_end', 'create_date_start', 'create_date_end',
+  'finish_date_start', 'finish_date_end', 'app_date_start', 'app_date_end'
+])
+
+const DATE_TEXT = /^\d{4}-\d{2}-\d{2}$/
+
+export function isFilingDateText(value: string): boolean {
+  if (!DATE_TEXT.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+}
+
 export interface FilingSearchQuery {
   /** 主条件。键只收 FILING_INPUT_FIELDS，值统一按字符串收。 */
   fields?: Record<string, string>
@@ -143,6 +158,9 @@ export function buildFilingSearchParams(
     }
     const text = value.trim()
     if (text.length > filingSearchValueLimit(key)) return apiError('INVALID_QUERY', '条件太长，没有查询。')
+    if (FILING_DATE_FIELDS.has(key) && text && !isFilingDateText(text)) {
+      return apiError('INVALID_QUERY', '日期要写成 yyyy-MM-dd，和原站 WdatePicker 提交的一致。')
+    }
     fields[key] = text
   }
   const displayValues: Record<string, string> = {}

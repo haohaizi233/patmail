@@ -1,4 +1,5 @@
 @import './components/theme-select.css';
+@import './components/w-date-picker.css';
 :root {
   --pink: #ff4f93;
   --focus: #9b3060;

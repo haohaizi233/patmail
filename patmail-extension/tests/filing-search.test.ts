@@ -71,6 +71,20 @@ describe('递交管理查询参数', () => {
     expect(buildFilingSearchParams({ fields: { activity: '新申请' }, pageIndex: 1, pageSize: 10 }).ok).toBe(false)
   })
 
+  it('日期条件只收 yyyy-MM-dd，和原站 WdatePicker 的提交值一致', () => {
+    const ok = paramsOf(buildFilingSearchParams({
+      fields: { create_date_start: '2026-10-01', create_date_end: '2026-10-21' },
+      pageIndex: 1,
+      pageSize: 10
+    }))
+    expect(ok.get('Element')).toContain('&lt;create_date_start&gt;2026-10-01&lt;/create_date_start&gt;')
+    expect(ok.get('Element')).toContain('&lt;create_date_end&gt;2026-10-21&lt;/create_date_end&gt;')
+    expect(buildFilingSearchParams({ fields: { create_date_start: '2026/10/01' }, pageIndex: 1, pageSize: 10 }).ok).toBe(false)
+    expect(buildFilingSearchParams({ fields: { create_date_start: '2026-10-1' }, pageIndex: 1, pageSize: 10 }).ok).toBe(false)
+    expect(buildFilingSearchParams({ fields: { create_date_start: '2026-13-01' }, pageIndex: 1, pageSize: 10 }).ok).toBe(false)
+    expect(buildFilingSearchParams({ fields: { create_date_start: '' }, pageIndex: 1, pageSize: 10 }).ok).toBe(true)
+  })
+
   it('处理事项多选拆成内部 ID', () => {
     expect(splitFilingCtrlProcIds('6dd56b2b-1e1a-4e8b-9ac0-760cd305506a, 7cfa95b5-19b6-4fa2-bf8a-70af0992b1dd'))
       .toHaveLength(2)
