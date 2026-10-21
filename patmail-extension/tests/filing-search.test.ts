@@ -90,6 +90,21 @@ describe('递交管理查询参数', () => {
       .toHaveLength(2)
     expect(splitFilingCtrlProcIds('新申请')).toEqual([])
   })
+
+  it('申请类型和分部多选走逗号 GUID，历史审核记录是流程节点 ID', () => {
+    const params = paramsOf(buildFilingSearchParams({
+      fields: {
+        apply_type: '6a637b44-8dbc-462b-9b6a-09b19b94bc42,31993036-df8e-4a30-bbbd-b24e2f8bc31f',
+        history: '5a0f9abf-0816-4fbb-a682-212fddbe5224'
+      },
+      pageIndex: 1,
+      pageSize: 10
+    }))
+    expect(params.get('Element')).toContain('&lt;apply_type&gt;6a637b44-8dbc-462b-9b6a-09b19b94bc42,31993036-df8e-4a30-bbbd-b24e2f8bc31f&lt;/apply_type&gt;')
+    expect(buildFilingSearchParams({ fields: { apply_type: '发明' }, pageIndex: 1, pageSize: 10 }).ok).toBe(false)
+    expect(buildFilingSearchParams({ fields: { branch_dept: '深圳分部' }, pageIndex: 1, pageSize: 10 }).ok).toBe(false)
+    expect(buildFilingSearchParams({ fields: { history: '结束' }, pageIndex: 1, pageSize: 10 }).ok).toBe(false)
+  })
 })
 
 describe('递交管理表单', () => {

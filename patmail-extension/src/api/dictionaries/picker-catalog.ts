@@ -1,5 +1,5 @@
 import {
-  adaptBussType, adaptCaseType, adaptDictionaryValue, adaptFileTemp, adaptNodeTree
+  adaptBussType, adaptCaseType, adaptDictionaryValue, adaptFileTemp, adaptFlowNode, adaptNodeTree
 } from './adapters'
 import type { DictionaryOption, NormalizedDictionary } from './types'
 
@@ -181,7 +181,7 @@ export function buildPickerCatalog(sources: Record<string, unknown>): { dictiona
     limitBussType: adaptBussType(arrayOf(sources.limitInit, 'BussType')),
     limitProcType: adaptDictionaryValue('limitProcType', procTypeRows(arrayOf(sources.limitInit, 'procType'))),
     limitCtrlProc: adaptNodeTree('limitCtrlProc', arrayOf(sources.limitCtrl, 'CtrlProc')),
-    filingFlowNode: adaptDictionaryValue('filingFlowNode', arrayOf(sources.filingInit, 'ApplyFlowNode')),
+    filingFlowNode: adaptFlowNode('filingFlowNode', arrayOf(sources.filingInit, 'ApplyFlowNode')),
     filingCaseType: adaptCaseType(filingCaseTypeRows(arrayOf(sources.filingInit, 'CaseType'))),
     filingContract: adaptDictionaryValue('filingContract', arrayOf(sources.contractInit, 'table5'))
   }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
+import { CURRENT_ENVIRONMENT } from '../../api/config'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary, describePickerReceipt, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
 import { FILING_OPTION_KEYS, FILING_BLOCKS, FILING_SELECTS, filingCellKeys, filingDraftFields, type FilingCell } from '../../api/filing-form'
@@ -58,6 +59,23 @@ function valueOf(key: string): string {
 function setValue(key: string, value: string): void {
   values.value = { ...values.value, [key]: value }
 }
+
+/** 原站 TreeUser 多选（处理事项、申请类型、当前流程阶段、案件所属分部）：值逗号拼 GUID，显示文本另存 `{字段}_text`。 */
+const MULTI_KEYS = new Set(['ctrl_proc', 'apply_type', 'activity', 'branch_dept'])
+
+function setNamed(key: string, value: string): void {
+  const ids = value.split(',').map(item => item.trim()).filter(Boolean)
+  const labels = ids.map(id => choices(key).find(item => item.value === id)?.label ?? '').filter(Boolean)
+  values.value = {
+    ...values.value,
+    [key]: ids.join(','),
+    [`${key}_text`]: labels.join('，')
+  }
+}
+
+function isMulti(key: string): boolean {
+  return MULTI_KEYS.has(key)
+}
 function onText(key: string, event: Event): void {
   setValue(key, (event.target as HTMLInputElement).value)
 }
@@ -65,9 +83,9 @@ function onText(key: string, event: Event): void {
 function choices(key: string): { value: string; label: string; parent?: string }[] {
   const source = FILING_OPTION_KEYS[key]
   const dictionary = source ? pickers.value[source] : undefined
-  const live = dictionary && dictionary.options.length > 0
-    ? choicesFromDictionary(dictionary, valueOf('case_type'))
-    : null
+  // 原站 ChangeForApplyType 按当前案件类型收申请类型；没选案件类型时按本环境默认的专利收。
+  const caseTypeId = valueOf('case_type') || CURRENT_ENVIRONMENT.caseTypeId
+  const live = dictionary && dictionary.options.length > 0 ? choicesFromDictionary(dictionary, caseTypeId) : null
   const saved = FILING_SELECTS[key] ?? []
   return (live ?? saved).filter(item => item.value)
 }
@@ -233,8 +251,8 @@ onBeforeUnmount(() => {
           </label>
           <label v-else-if="cell.kind === 'named'" class="query-cell">
             <span>{{ cell.label }}</span>
-            <TreeOptionSelect v-if="treeChoices(cell.key).length" :model-value="valueOf(cell.key)" :options="treeChoices(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
-            <ThemeSelect v-else-if="choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setValue(cell.key, String($event))" />
+            <TreeOptionSelect v-if="isMulti(cell.key) || treeChoices(cell.key).length" :model-value="valueOf(cell.key)" :options="choices(cell.key)" @update:model-value="setNamed(cell.key, String($event))" />
+            <ThemeSelect v-else-if="choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
             <input v-else :value="valueOf(cell.key)" type="text" :placeholder="cell.key === 'business_coop' ? '签约单位下拉未读到，可直接填值' : ''" @input="onText(cell.key, $event)" />
           </label>
           <label v-else-if="cell.kind === 'select'" class="query-cell">

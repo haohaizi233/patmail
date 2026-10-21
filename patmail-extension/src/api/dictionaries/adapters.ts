@@ -60,8 +60,17 @@ export function adaptCaseType(raw: unknown): NormalizedDictionary {
   })
 }
 
-export function adaptCountry(raw: unknown): NormalizedDictionary {
-  return adaptRows('country', raw, row => {
+/** 递交页的流程节点。键名是 node_id / node_name_zh_cn，不是 value / text_zh_cn。 */
+export function adaptFlowNode(key: string, raw: unknown): NormalizedDictionary {
+  return adaptRows(key, raw, row => {
+    const value = text(row.node_id)
+    const label = text(row.node_name_zh_cn)
+    if (!isQueryGuid(value) || !label) return null
+    return option(value, label, { metadata: meta({ code: text(row.node_code) }) })
+  })
+}
+
+export function adaptCountry(raw: unknown): NormalizedDictionary {  return adaptRows('country', raw, row => {
     const value = text(row.value)
     const label = text(row.text_zh_cn)
     if (!value || !label || value.length > 64) return null

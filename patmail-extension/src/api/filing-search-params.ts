@@ -176,6 +176,15 @@ export function buildFilingSearchParams(
   if (fields.activity && !guidList(fields.activity)) {
     return apiError('INVALID_QUERY', '当前流程阶段必须使用内部 ID。')
   }
+  if (fields.apply_type && !guidList(fields.apply_type)) {
+    return apiError('INVALID_QUERY', '申请类型必须使用内部 ID。')
+  }
+  if (fields.history && !GUID.test(fields.history)) {
+    return apiError('INVALID_QUERY', '历史审核记录必须使用流程节点 ID。')
+  }
+  if (fields.branch_dept && !guidList(fields.branch_dept)) {
+    return apiError('INVALID_QUERY', '案件所属分部必须使用内部 ID。')
+  }
   const params = new URLSearchParams()
   params.append('pageIndex', String(query.pageIndex))
   params.append('pageSize', String(query.pageSize))
