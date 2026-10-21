@@ -22,6 +22,7 @@ import RecordsPage from './pages/RecordsPage.vue'
 import AcceptancePage from './pages/AcceptancePage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 import LimitsPage from './pages/LimitsPage.vue'
+import FilingsPage from './pages/FilingsPage.vue'
 import CaseContactsPage from './pages/CaseContactsPage.vue'
 import SnapshotProbe from './pages/SnapshotProbe.vue'
 import { CASE_CONTACT_CUSTOMER_NAME } from '../customer/skills'
@@ -32,6 +33,7 @@ const nav = [
   { name: '首页', path: 'home', hash: '/' },
   { name: '文件管理', path: 'file', hash: '/files' },
   { name: '期限监控', path: 'limit', hash: '/limits' },
+  { name: '递交管理', path: 'filing', hash: '/filings' },
   { name: '客户管理', path: 'users', hash: '/customers' },
   { name: '发文映射', path: 'rule', hash: '/rules' },
   { name: '发文任务', path: 'task', hash: '/tasks' },
@@ -41,7 +43,7 @@ const nav = [
   { name: '工作流', path: 'rule', hash: '/workflow' }
 ]
 const hiddenRoutes = new Set(['/acceptance', '/settings', '/contacts', '/probe'])
-const pages = { '/': HomePage, '/files': FilesPage, '/limits': LimitsPage, '/customers': CustomersPage, '/contacts': CaseContactsPage, '/templates': TemplatesPage, '/rules': RulesPage, '/tasks': TasksPage, '/drafts': DraftsPage, '/workflow': WorkflowPage, '/records': RecordsPage, '/acceptance': AcceptancePage, '/settings': SettingsPage, '/probe': SnapshotProbe }
+const pages = { '/': HomePage, '/files': FilesPage, '/limits': LimitsPage, '/filings': FilingsPage, '/customers': CustomersPage, '/contacts': CaseContactsPage, '/templates': TemplatesPage, '/rules': RulesPage, '/tasks': TasksPage, '/drafts': DraftsPage, '/workflow': WorkflowPage, '/records': RecordsPage, '/acceptance': AcceptancePage, '/settings': SettingsPage, '/probe': SnapshotProbe }
 
 function readRoute(): string {
   const path = location.hash.replace(/^#/, '') || '/'

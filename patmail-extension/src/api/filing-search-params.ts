@@ -27,7 +27,7 @@ export const FILING_ELEMENT_NODES = [
 
 export type FilingElementNode = (typeof FILING_ELEMENT_NODES)[number]
 
-/** 主条件字段。可以填进表单、可以存模板的只有这些。 */
+/** 主条件字段。可以填进表单的只有这些。原站的递交列表没有查询模板，插件这页也不做模板保存。 */
 export const FILING_INPUT_FIELDS = [
   'case_volume', 'ctrl_proc', 'customer_volume', 'customer', 'customer_code', 'flow_direction',
   'case_name', 'case_type', 'audit_user_id', 'create_time_start', 'create_time_end',
