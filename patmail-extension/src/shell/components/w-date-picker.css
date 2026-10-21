@@ -1,34 +1,38 @@
-/* 复刻原站 My97 DatePicker 的观感：蓝色表头、红周末、底部「清空 今天 确定」。 */
+/* 复刻原站 WdatePicker 的行为，观感换成本工作台的粉色可爱风。 */
 .w-date-picker { display: inline-flex; align-items: center; min-width: 0; }
 
 .w-date-picker .Wdate {
   width: 100%;
   min-width: 0;
-  padding: 5px 24px 5px 8px;
-  border: 1px solid #d5dceb;
-  border-radius: 6px;
-  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Crect x='1.5' y='2.5' width='11' height='10' rx='1.5' fill='none' stroke='%2366758f' stroke-width='1.2'/%3E%3Cpath d='M1.5 5.5h11M4.5 1v2.5M9.5 1v2.5' stroke='%2366758f' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 6px center;
+  padding: 5px 26px 5px 10px;
+  border: 1px solid #ffd0e4;
+  border-radius: 10px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Crect x='2' y='3.2' width='12' height='11' rx='3.2' fill='%23fff0f6' stroke='%23ff7fb0' stroke-width='1.3'/%3E%3Cpath d='M2.4 6.6h11.2' stroke='%23ff7fb0' stroke-width='1.3' stroke-linecap='round'/%3E%3Cpath d='M5.4 1.8v2.4M10.6 1.8v2.4' stroke='%23ff7fb0' stroke-width='1.3' stroke-linecap='round'/%3E%3Ccircle cx='5.6' cy='9.6' r='1' fill='%23ff7fb0'/%3E%3Ccircle cx='8.2' cy='9.6' r='1' fill='%23ff7fb0'/%3E%3Ccircle cx='10.8' cy='9.6' r='1' fill='%23ff7fb0'/%3E%3Ccircle cx='5.6' cy='12' r='1' fill='%23ffc0da'/%3E%3Ccircle cx='8.2' cy='12' r='1' fill='%23ffc0da'/%3E%3C/svg%3E") no-repeat right 8px center;
   font-size: 12.5px;
   line-height: 1.6;
-  color: #2c3550;
+  color: #4a3346;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.w-date-picker .Wdate:focus { border-color: #0b79e6; box-shadow: 0 0 0 2px rgba(11, 121, 230, 0.12); }
-.w-date-picker .Wdate:disabled { background-color: #f4f6fa; color: #98a2b8; cursor: not-allowed; }
+.w-date-picker .Wdate::placeholder { color: #e792b4; }
+.w-date-picker .Wdate:hover { border-color: #ffb3d1; }
+.w-date-picker .Wdate:focus { border-color: #ff7fb0; box-shadow: 0 0 0 3px rgba(255, 127, 176, 0.16); }
+.w-date-picker .Wdate:disabled { background-color: #fff5f9; color: #e7a9c2; cursor: not-allowed; }
 
 .wdate-panel {
   position: fixed;
   z-index: 1200;
-  width: 210px;
+  width: 224px;
   box-sizing: border-box;
   background: #fff;
-  border: 1px solid #7f9db9;
-  border-radius: 4px;
-  box-shadow: 0 6px 18px rgba(31, 41, 61, 0.18);
+  border: 1px solid #ffd0e4;
+  border-radius: 14px;
+  box-shadow: 0 10px 26px rgba(255, 105, 168, 0.22);
   font-size: 12px;
-  color: #2c3550;
+  color: #4a3346;
   user-select: none;
+  overflow: hidden;
 }
 
 .wdate-head {
@@ -36,69 +40,81 @@
   align-items: center;
   justify-content: space-between;
   gap: 2px;
-  padding: 4px 6px;
-  background: #e8f1fb;
-  border-bottom: 1px solid #c8d9ee;
+  padding: 7px 8px;
+  background: linear-gradient(180deg, #fff0f6, #ffe4ef);
+  border-bottom: 1px solid #ffd6e8;
 }
 
-.wdate-title { flex: 1; text-align: center; font-weight: 600; color: #1c4b8f; }
+.wdate-title { flex: 1; text-align: center; font-weight: 700; color: #e24b84; letter-spacing: 0.5px; }
 
 .wdate-btn {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 3px;
-  color: #1c4b8f;
+  border-radius: 999px;
+  color: #e24b84;
   cursor: pointer;
   text-decoration: none;
+  font-weight: 700;
+  transition: background 0.15s ease;
 }
 
-.wdate-btn:hover { background: #cfe2f7; }
+.wdate-btn:hover { background: #ffd6e8; }
 
-.wdate-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.wdate-grid { width: 100%; border-collapse: collapse; table-layout: fixed; padding: 2px 6px 4px; }
 .wdate-grid th {
-  padding: 3px 0;
+  padding: 5px 0 3px;
   font-weight: 600;
-  color: #1c4b8f;
-  background: #f2f7fd;
-  border-bottom: 1px solid #dce8f6;
+  color: #e792b4;
+  background: transparent;
+  border-bottom: none;
 }
-.wdate-grid td { padding: 0; text-align: center; }
+.wdate-grid td { padding: 1px 0; text-align: center; }
 .wdate-grid td a {
   display: block;
-  margin: 1px;
-  padding: 3px 0;
-  border-radius: 3px;
-  color: #2c3550;
+  margin: 1px 3px;
+  padding: 4px 0;
+  border-radius: 999px;
+  color: #4a3346;
   cursor: pointer;
   text-decoration: none;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.wdate-grid td a:hover { background: #e2edfa; }
-.wdate-grid td a.is-weekend { color: #d0402c; }
-.wdate-grid td a.is-other { color: #b3bcc9; }
-.wdate-grid td a.is-today { text-decoration: underline; }
-.wdate-grid td a.is-selected { background: #3b8ff0; color: #fff; }
-.wdate-grid td a.is-disabled { color: #d3d9e2; cursor: not-allowed; background: none; }
+.wdate-grid td a:hover { background: #fff0f6; color: #e24b84; }
+.wdate-grid td a.is-weekend { color: #ff8fb6; }
+.wdate-grid td a.is-other { color: #e9c3d3; }
+.wdate-grid td a.is-today {
+  color: #e24b84;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: inset 0 0 0 1px #ffb3d1;
+}
+.wdate-grid td a.is-selected { background: #ff7fb0; color: #fff; box-shadow: 0 3px 8px rgba(255, 127, 176, 0.4); }
+.wdate-grid td a.is-disabled { color: #ecd7e1; cursor: not-allowed; background: none; box-shadow: none; }
 
 .wdate-foot {
   display: flex;
   justify-content: space-between;
-  gap: 4px;
-  padding: 4px 8px;
-  background: #f2f7fd;
-  border-top: 1px solid #dce8f6;
+  gap: 6px;
+  padding: 7px 10px 9px;
+  background: #fff7fa;
+  border-top: 1px solid #ffe4ef;
 }
 
 .wdate-foot a {
-  padding: 2px 8px;
-  border: 1px solid #c8d9ee;
-  border-radius: 3px;
+  padding: 3px 12px;
+  border: 1px solid #ffd0e4;
+  border-radius: 999px;
   background: #fff;
-  color: #1c4b8f;
+  color: #e24b84;
   cursor: pointer;
   text-decoration: none;
+  font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.wdate-foot a:hover { background: #e2edfa; }
+.wdate-foot a:hover { background: #fff0f6; }
+.wdate-foot a:last-child { background: #ff7fb0; border-color: #ff7fb0; color: #fff; }
+.wdate-foot a:last-child:hover { background: #ff5c9a; }

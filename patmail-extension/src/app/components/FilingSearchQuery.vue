@@ -244,9 +244,9 @@ onBeforeUnmount(() => {
           <div v-else-if="cell.kind === 'dates'" class="query-cell">
             <span>{{ cell.label }}</span>
             <span class="date-pair">
-              <WDatePicker :id="cell.start" :model-value="valueOf(cell.start)" :max="valueOf(cell.end)" placeholder="起" @update:model-value="setValue(cell.start, String($event))" />
+              <WDatePicker :id="cell.start" :model-value="valueOf(cell.start)" :max="valueOf(cell.end)" placeholder="开始" @update:model-value="setValue(cell.start, String($event))" />
               <em>到</em>
-              <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :min="valueOf(cell.start)" placeholder="止" @update:model-value="setValue(cell.end, String($event))" />
+              <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :min="valueOf(cell.start)" placeholder="结束" @update:model-value="setValue(cell.end, String($event))" />
             </span>
           </div>
         </template>
