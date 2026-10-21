@@ -1,12 +1,12 @@
 export const nav = [
-  { name: '首页', path: 'home' },
-  { name: '发文任务', path: 'task' },
-  { name: '发文规则与映射配置', path: 'rule' },
-  { name: '客户管理', path: 'users' },
-  { name: '文件管理', path: 'file' },
-  { name: '期限监控', path: 'limit' },
-  { name: '发文记录', path: 'record' },
-  { name: '统计报表', path: 'chart' }
+  { name: '首页', path: 'home', icon: 43 },
+  { name: '发文任务', path: 'task', icon: 34 },
+  { name: '发文规则与映射配置', path: 'rule', icon: 32 },
+  { name: '客户管理', path: 'users', icon: 40 },
+  { name: '文件管理', path: 'file', icon: 41 },
+  { name: '期限监控', path: 'limit', icon: 42 },
+  { name: '发文记录', path: 'record', icon: 35 },
+  { name: '统计报表', path: 'chart', icon: 36 }
 ]
 
 export const customers = [

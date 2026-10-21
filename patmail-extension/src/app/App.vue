@@ -30,17 +30,17 @@ import Shell from '../shell/components/Shell.vue'
 import AppDialog from './components/AppDialog.vue'
 
 const nav = [
-  { name: '首页', path: 'home', hash: '/' },
-  { name: '文件管理', path: 'file', hash: '/files' },
-  { name: '期限监控', path: 'limit', hash: '/limits' },
-  { name: '递交管理', path: 'filing', hash: '/filings' },
-  { name: '客户管理', path: 'users', hash: '/customers' },
-  { name: '发文映射', path: 'rule', hash: '/rules' },
-  { name: '发文任务', path: 'task', hash: '/tasks' },
-  { name: '发文记录', path: 'record', hash: '/records' },
-  { name: '查询模板', path: 'chart', hash: '/templates' },
-  { name: '邮件草稿', path: 'task', hash: '/drafts' },
-  { name: '工作流', path: 'rule', hash: '/workflow' }
+  { name: '首页', path: 'home', hash: '/', icon: 43 },
+  { name: '文件管理', path: 'file', hash: '/files', icon: 41 },
+  { name: '期限监控', path: 'limit', hash: '/limits', icon: 42 },
+  { name: '递交管理', path: 'filing', hash: '/filings', icon: 33 },
+  { name: '客户管理', path: 'users', hash: '/customers', icon: 40 },
+  { name: '发文映射', path: 'rule', hash: '/rules', icon: 32 },
+  { name: '发文任务', path: 'task', hash: '/tasks', icon: 34 },
+  { name: '发文记录', path: 'record', hash: '/records', icon: 35 },
+  { name: '查询模板', path: 'chart', hash: '/templates', icon: 36 },
+  { name: '邮件草稿', path: 'task', hash: '/drafts', icon: 37 },
+  { name: '工作流', path: 'rule', hash: '/workflow', icon: 38 }
 ]
 const hiddenRoutes = new Set(['/acceptance', '/settings', '/contacts', '/probe'])
 const pages = { '/': HomePage, '/files': FilesPage, '/limits': LimitsPage, '/filings': FilingsPage, '/customers': CustomersPage, '/contacts': CaseContactsPage, '/templates': TemplatesPage, '/rules': RulesPage, '/tasks': TasksPage, '/drafts': DraftsPage, '/workflow': WorkflowPage, '/records': RecordsPage, '/acceptance': AcceptancePage, '/settings': SettingsPage, '/probe': SnapshotProbe }
