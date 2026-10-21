@@ -8,6 +8,9 @@ import { DictionaryService } from './dictionaries'
 import type { DictionaryLoadRequest, DictionarySnapshot } from './dictionaries'
 import { buildGetSearchFilesFromFields, buildGetSearchFilesParams, type FileSearchQuery } from './file-search-params'
 import { buildLimitMonitorParams, type LimitMonitorQuery } from './limit-monitor-params'
+import { buildFilingSearchParams, type FilingSearchQuery } from './filing-search-params'
+import { normalizeFilingSearch } from './filing-search-normalizer'
+import type { FilingSearchResult } from './filing-search-types'
 import { buildMailProcessParams, buildProcessListParams, filingNeedsCpcFlag, normalizeMailProcess, normalizeProcessList, processFormPath, type ProcessKind, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from './mail-process'
 import { isRecord } from './response-guards'
 import { normalizeLimitMonitor } from './limit-monitor-normalizer'
@@ -126,6 +129,8 @@ export class EasyRuntime {
   private searchSequence = 0
   private limitController: AbortController | null = null
   private limitSequence = 0
+  private filingController: AbortController | null = null
+  private filingSequence = 0
   private activeSearch: { signature: string; promise: Promise<ApiResult<FileSearchResult>> } | null = null
   private readonly history: HistoryQueryService
   private readonly dictionaries: DictionaryService
@@ -661,6 +666,34 @@ export class EasyRuntime {
     this.limitController = null
   }
 
+  searchFiling(query: FilingSearchQuery, timeoutMs?: number): Promise<ApiResult<FilingSearchResult>> {
+    this.cancelFiling()
+    const controller = new AbortController()
+    this.filingController = controller
+    const requestNumber = ++this.filingSequence
+    return (async (): Promise<ApiResult<FilingSearchResult>> => {
+      if (!(await this.confirmAccountRead())) {
+        return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      }
+      const params = buildFilingSearchParams(query)
+      if (!params.ok) return params
+      const response = await this.transport.post('filingSearch', params.data, controller.signal, timeoutMs)
+      if (requestNumber !== this.filingSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
+      const result = response.ok ? normalizeFilingSearch(response.data, query) : response
+      if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
+        this.session.expire()
+        this.cancelFiling()
+      }
+      return result
+    })()
+  }
+
+  cancelFiling(): void {
+    this.filingSequence++
+    this.filingController?.abort()
+    this.filingController = null
+  }
+
   cancelFileSearch(): void {
     this.searchSequence++
     this.searchController?.abort()
@@ -672,6 +705,7 @@ export class EasyRuntime {
     this.cancelSessionCheck()
     this.cancelFileSearch()
     this.cancelLimitMonitor()
+    this.cancelFiling()
     this.history.invalidate()
     this.dictionaries.invalidate(this.historyUserKey)
     this.historyUserKey = ''

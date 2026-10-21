@@ -61,6 +61,20 @@ export const LIMIT_PICKER_FIELDS: Record<string, string> = {
   apply_tags_id: 'applyTags'
 }
 
+/** 递交管理下拉。流程节点来自 GetFilingFlowNode 的 ApplyFlowNode，签约单位来自 InitContractStatus 的 contractbase。 */
+export const FILING_PICKER_FIELDS: Record<string, string> = {
+  ctrl_proc: 'limitCtrlProc',
+  activity: 'filingFlowNode',
+  flow_direction: 'limitDirection',
+  case_type: 'limitCaseType',
+  audit_user_id: 'user',
+  create_user_id: 'user',
+  sales_user_id: 'user',
+  business_coop: 'filingContract',
+  apply_type: 'limitApplyType',
+  branch_dept: 'branch'
+}
+
 function arrayOf(body: unknown, key: string): unknown {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null
   const value = (body as Record<string, unknown>)[key]
@@ -156,7 +170,9 @@ export function buildPickerCatalog(sources: Record<string, unknown>): { dictiona
     limitDirection: adaptDictionaryValue('limitDirection', arrayOf(sources.limitInit, 'Case_direction')),
     limitBussType: adaptBussType(arrayOf(sources.limitInit, 'BussType')),
     limitProcType: adaptDictionaryValue('limitProcType', procTypeRows(arrayOf(sources.limitInit, 'procType'))),
-    limitCtrlProc: adaptNodeTree('limitCtrlProc', arrayOf(sources.limitCtrl, 'CtrlProc'))
+    limitCtrlProc: adaptNodeTree('limitCtrlProc', arrayOf(sources.limitCtrl, 'CtrlProc')),
+    filingFlowNode: adaptDictionaryValue('filingFlowNode', arrayOf(sources.filingInit, 'ApplyFlowNode')),
+    filingContract: adaptDictionaryValue('filingContract', arrayOf(sources.contractInit, 'contractbase'))
   }
   for (const [name, dictionary] of Object.entries(dictionaries)) {
     if (dictionary.status === 'invalid') warnings.push(`${name} 的选项没有读全。`)
@@ -175,7 +191,9 @@ const PICKER_RECEIPT: Record<string, string> = {
   limitBussType: '业务类型',
   limitApplyType: '申请类型',
   limitCtrlProc: '处理事项',
-  limitProcType: '事项类型'
+  limitProcType: '事项类型',
+  filingFlowNode: '流程阶段',
+  filingContract: '签约单位'
 }
 
 /** 给页面一行回执，确认哪些下拉已经换成原网站返回的数量。 */

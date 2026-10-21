@@ -6,6 +6,8 @@ import type { HistoryQueryDetail, HistoryQueryOption } from './query-history'
 import type { FileSearchResult, PatentFile } from './file-search-types'
 import { isLimitMonitorInputField, isLimitMonitorType, type LimitMonitorQuery } from './limit-monitor-params'
 import type { LimitMonitorResult, LimitMonitorRow } from './limit-monitor-types'
+import { filingSearchValueLimit, isFilingSearchInputField, type FilingSearchQuery } from './filing-search-params'
+import type { FilingSearchResult, FilingSearchRow } from './filing-search-types'
 import { isProcessKind, isProcessOpenTarget, PROCESS_SPECS, type ProcessListQuery, type ProcessListResult, type ProcessListRow } from './mail-process'
 import type { SessionSummary } from './session'
 import type { CaseContactExport } from '../case-contact/query'
@@ -165,6 +167,43 @@ function isLimitResult(value: unknown): value is LimitMonitorResult {
 
 export function isLimitMonitorApiResult(value: unknown): value is ApiResult<LimitMonitorResult> {
   return isApiResult(value, isLimitResult)
+}
+
+const FILING_QUERY_KEYS = new Set(['fields', 'displayValues', 'pageIndex', 'pageSize'])
+
+function isFilingFieldMap(value: unknown, limit: (key: string) => number): boolean {
+  return isRecord(value) && Object.keys(value).length <= 60 &&
+    Object.entries(value).every(([key, item]) => isFilingSearchInputField(key) && typeof item === 'string' && item.length <= limit(key))
+}
+
+export function isFilingSearchQuery(value: unknown): value is FilingSearchQuery {
+  if (!isRecord(value) || Object.keys(value).some(key => !FILING_QUERY_KEYS.has(key))) return false
+  if (value.fields !== undefined && !isFilingFieldMap(value.fields, filingSearchValueLimit)) return false
+  if (value.displayValues !== undefined && !isFilingFieldMap(value.displayValues, () => 200)) return false
+  return Number.isSafeInteger(value.pageIndex) && Number(value.pageIndex) >= 1 &&
+    Number.isSafeInteger(value.pageSize) && Number(value.pageSize) >= 1 && Number(value.pageSize) <= 100
+}
+
+const FILING_ROW_KEYS = [
+  'filingId', 'caseId', 'procId', 'caseVolume', 'caseName', 'customerName',
+  'customerCode', 'applyType', 'ctrlProc', 'intDueDate', 'filingDate', 'caseType',
+  'branchDept', 'createUser', 'createTime', 'flowStatus', 'appNo', 'customerVolume'
+] as const
+
+function isFilingRow(value: unknown): value is FilingSearchRow {
+  return isRecord(value) && FILING_ROW_KEYS.every(key => typeof value[key] === 'string')
+}
+
+function isFilingResult(value: unknown): value is FilingSearchResult {
+  return isRecord(value) && Array.isArray(value.items) && value.items.every(isFilingRow) &&
+    Number.isSafeInteger(value.total) && Number(value.total) >= 0 &&
+    Number.isSafeInteger(value.pageIndex) && Number(value.pageIndex) >= 1 &&
+    Number.isSafeInteger(value.pageSize) && Number(value.pageSize) >= 1 &&
+    Number.isSafeInteger(value.totalPages) && Number(value.totalPages) >= 0
+}
+
+export function isFilingSearchApiResult(value: unknown): value is ApiResult<FilingSearchResult> {
+  return isApiResult(value, isFilingResult)
 }
 
 const MAIL_PROCESS_KEYS = new Set(['kind', 'searchKey', 'pageIndex', 'pageSize'])

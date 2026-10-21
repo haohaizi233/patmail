@@ -267,7 +267,9 @@ export class DictionaryService {
         ['limitInit', 'limitInit', { Call: 'LimitMonitorInit', log_pagename: 'LimitMonitor.aspx' }],
         ['limitCtrl', 'limitCtrlProc', {
           Call: 'LimitMonitorGetCtrlproc', case_type: caseType, country, proc_type: procType, log_pagename: 'LimitMonitor.aspx'
-        }]
+        }],
+        ['filingInit', 'filingFlowNode', { Call: 'GetFilingFlowNode', log_pagename: 'Finished.aspx' }],
+        ['contractInit', 'contractInit', { Call: 'InitContractStatus', log_pagename: 'Finished.aspx' }]
       ] as const
       const settled = await Promise.all(jobs.map(async ([name, operation, fields]) => {
         const response = await this.transport.post(operation, params(fields), signal)

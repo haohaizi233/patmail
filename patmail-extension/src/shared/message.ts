@@ -9,8 +9,9 @@ import type { MailRuleBundle } from '../mail/types'
 import { isQueryGuid, isQueryTemplate } from '../query/query-validator'
 import type { QueryTemplate } from '../query/query-types'
 import { isEasyConnection, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope } from './connection'
-import { isCaseContactResult, isDictionaryResult, isFileSearchApiResult, isFileSearchQuery, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
+import { isCaseContactResult, isDictionaryResult, isFileSearchApiResult, isFileSearchQuery, isFilingSearchApiResult, isFilingSearchQuery, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
 import type { LimitMonitorQuery } from '../api/limit-monitor-params'
+import type { FilingSearchQuery } from '../api/filing-search-params'
 import { isProcessOpenTarget, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from '../api/mail-process'
 import type { CaseContactExport } from '../case-contact/query'
 import type { CaseDemandAsset } from '../mail/easy/case-demand'
@@ -18,6 +19,7 @@ import type { CustomerDemandAsset, CustomerDirectoryAsset } from '../customer/cu
 import type { MailContactAsset } from '../mail/easy/mail-contacts'
 import type { AccountReviewerList } from '../workflow/contracts'
 import type { LimitMonitorResult } from '../api/limit-monitor-types'
+import type { FilingSearchResult } from '../api/filing-search-types'
 import type { DictionaryLoadRequest, DictionarySnapshot } from '../api/dictionaries'
 import type { FileSearchQuery } from '../api/file-search-params'
 import { fileSearchTimeoutMs } from '../api/file-search-params'
@@ -58,6 +60,8 @@ export const MessageType = {
   SearchFilesResult: 'SEARCH_FILES_RESULT',
   SearchLimitMonitor: 'SEARCH_LIMIT_MONITOR',
   SearchLimitMonitorResult: 'SEARCH_LIMIT_MONITOR_RESULT',
+  SearchFiling: 'SEARCH_FILING',
+  SearchFilingResult: 'SEARCH_FILING_RESULT',
   SubmitLimitMail: 'SUBMIT_LIMIT_MAIL',
   SubmitLimitMailResult: 'SUBMIT_LIMIT_MAIL_RESULT',
   SubmitFileManage: 'SUBMIT_FILE_MANAGE',
@@ -156,6 +160,7 @@ export type ContentRequest =
   | Request<'CHECK_SESSION'> | Request<'CANCEL_SESSION_CHECK'>
   | Request<'CANCEL_FILE_SEARCH'> | Request<'CANCEL_LIMIT_MONITOR'> | Response<'SEARCH_FILES', { query: FileSearchQuery; continuation?: { querySessionId: string }; timeoutMs?: number }>
   | Response<'SEARCH_LIMIT_MONITOR', { query: LimitMonitorQuery; timeoutMs?: number }>
+  | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number }>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
@@ -328,6 +333,7 @@ export type ContentResponse =
   | Response<'SESSION_CHECK_CANCELLED', { ok: true }>
   | Response<'SEARCH_FILES_RESULT', ApiResult<FileSearchResult>>
   | Response<'SEARCH_LIMIT_MONITOR_RESULT', ApiResult<LimitMonitorResult>>
+  | Response<'SEARCH_FILING_RESULT', ApiResult<FilingSearchResult>>
   | Response<'SUBMIT_LIMIT_MAIL_RESULT', { stopped: boolean; results: Array<{ procId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string; to?: string; cc?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE_RESULT', { stopped: boolean; results: Array<{ fileId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES_RESULT', ApiResult<{ names: string[] }>>
@@ -735,6 +741,13 @@ export function isMessage(value: unknown): value is AppMessage {
       return keys.every(key => key === 'query' || key === 'timeoutMs') &&
         (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs)
     }
+    case MessageType.SearchFiling: {
+      if (!isRecord(value.payload) || !isFilingSearchQuery(value.payload.query)) return false
+      const keys = Object.keys(value.payload)
+      if (!keys.includes('query')) return false
+      return keys.every(key => key === 'query' || key === 'timeoutMs') &&
+        (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs)
+    }
     case MessageType.SubmitLimitMail:
       return isLimitMailSubmitRequest(value.payload)
     case MessageType.SubmitLimitMailResult:
@@ -771,6 +784,8 @@ export function isMessage(value: unknown): value is AppMessage {
       return isFileSearchApiResult(value.payload)
     case MessageType.SearchLimitMonitorResult:
       return isLimitMonitorApiResult(value.payload)
+    case MessageType.SearchFilingResult:
+      return isFilingSearchApiResult(value.payload)
     case MessageType.ExportCaseContactsResult:
       return isCaseContactResult(value.payload)
     case MessageType.ListMailProcessesResult:
@@ -892,7 +907,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.CheckSession || value.type === MessageType.CancelSessionCheck ||
     value.type === MessageType.SearchFiles || value.type === MessageType.CancelFileSearch ||
     value.type === MessageType.CancelLimitMonitor ||
-    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.ListMailProcesses ||
+    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.ListMailProcesses ||
     value.type === MessageType.SubmitLimitMail ||
     value.type === MessageType.SubmitFileManage ||
     value.type === MessageType.ResolveDownloadNames ||

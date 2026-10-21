@@ -13,6 +13,7 @@ export type EasyOperation =
   | 'limitMonitor' | 'limitMailCustomer' | 'mailSubmit' | 'mailProcess' | 'processAP' | 'processEF' | 'getIsNewCpc'
   | 'agencySearchCase' | 'agencyCaseInfo' | 'patentCaseData' | 'icSearch' | 'customerList'
   | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName'
+  | 'filingSearch' | 'filingFlowNode' | 'contractInit'
 
 export interface TransportOptions {
   fetcher?: typeof fetch
@@ -83,7 +84,10 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   patentCaseData: { path: '/AjaxServers/PatentAction.ashx', call: 'GetPatentData' },
   icSearch: { path: '/AjaxServers/CaseInfo.ashx', call: 'ICSearchList' },
   customerList: { path: '/AjaxServers/Customer.ashx', call: 'GetCustomerlist' },
-  getFileName: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetFileName' }
+  getFileName: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetFileName' },
+  filingSearch: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFinished' },
+  filingFlowNode: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFilingFlowNode' },
+  contractInit: { path: '/AjaxServers/Customer.ashx', call: 'InitContractStatus' }
 }
 
 function loginRedirect(response: Response, origin: string): boolean {
