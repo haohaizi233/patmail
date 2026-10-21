@@ -24,8 +24,8 @@ describe('api docs', () => {
 
   it('counts interfaces from the index instead of counting markdown files', () => {
     const brief = apiCatalogBrief()
-    expect(brief).toContain('一共 350 个接口')
-    expect(brief).toContain('CaseInfo.ashx 79')
+    expect(brief).toContain('一共 389 个接口')
+    expect(brief).toContain('CaseInfo.ashx 87')
     expect(brief).toContain('不是文档篇数')
     expect(searchApiDocs('一共有多少接口')).toBe(brief)
     expect(searchApiDocs('一共有多少接口')).not.toContain('00-通用约定.md')

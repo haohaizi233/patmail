@@ -9,9 +9,9 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 业务动作由参数 `Call` 分发。公共约定见 [00-通用约定.md](00-通用约定.md)。
 
-按「入口 + Call」去重后，本索引共 **350** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
+按「入口 + Call」去重后，本索引共 **389** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
 
-表里的「骨架」链到 14–40 的响应字段，「01」到「13」链到页面怎么读这些字段。两边都有的 Call，字段骨架看抓包文档，页面含义看专题文档。
+表里的「骨架」链到 14–43 的响应字段，「01」到「13」链到页面怎么读这些字段。两边都有的 Call，字段骨架看抓包文档，页面含义看专题文档。
 
 ## 文档
 
@@ -58,8 +58,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [38-发文列表.md](38-发文列表.md) | Mail.ashx 发文列表、草稿、待办、收件。7 个 Call |
 | [39-外部邮件.md](39-外部邮件.md) | MailAction.ashx。3 个 Call |
 | [40-报表.md](40-报表.md) | Report.ashx 自定义报表、点数、项目费用。12 个 Call |
+| [41-发文页读取.md](41-发文页读取.md) | 发文页 Filing.aspx 打开时的读取。24 个 Call |
+| [42-案件页读取.md](42-案件页读取.md) | 案件页 CaseManage.aspx 的权限、读取和留痕。9 个 Call |
+| [43-首页与待办.md](43-首页与待办.md) | 首页与流程待办页 ProcessNew.aspx。6 个 Call |
 
-14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。下面的入口表才是去重后的 350。
+14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。下面的入口表才是去重后的 389。
 
 ## 抓包里需要单独看的几条
 
@@ -71,30 +74,39 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 - 批量核稿被拼到 `/Forms/Patent/undefined/api/DataPush/BatchEflowList`，HTTP 404。
 - 不少接口 `ClientInfo.Result=false` 且 `Status=true`，数组里仍有数据。各文档按样本原样记录。
 
+第三段 `183.36.43.66.har`（06:55–06:57 UTC）628 条请求，219 条 POST，另有 FAQ 跨域 JSONP 3 条全部 HTTP 502。这一段里已经写过的 Call 没有重复建条目。
+
+- 发文页的 `Genetic_Registered` 被拼到 `/AjaxServers/undefined`，HTTP 404。和第二段的 BatchEflowList 一样是前端拼错路径。
+- `GetFilingTypeInfo` 的业务键名随 `type_code` 变，`type_code=100108` 时键名是空字符串。
+- `GetIPProcessListCount` 的 `where` 是 base64，解码后是 `new_todo`、`center_todo` 这类范围名。
+- `GetUnReadPageMessCount` 的 `MessCount`、`RemindCount` 是 DataRow 的序列化形态，不是普通对象。
+- `GetResearchGroupInfo` 由页面提交字符串 `undefined` 当 `group_id`，响应 `ResearchGroupInfo` 为 null。
+
 ## 入口一览
 
 | 入口 | 接口数 |
 |---|---:|
-| [CaseInfo.ashx](#caseinfoashx) | 79 |
-| [Common.ashx](#commonashx) | 53 |
-| [Customer.ashx](#customerashx) | 39 |
+| [CaseInfo.ashx](#caseinfoashx) | 87 |
+| [Common.ashx](#commonashx) | 56 |
+| [Customer.ashx](#customerashx) | 42 |
 | [Mail.ashx](#mailashx) | 27 |
 | [Bill.ashx](#billashx) | 23 |
-| [PatentAction.ashx](#patentactionashx) | 21 |
+| [PatentAction.ashx](#patentactionashx) | 22 |
 | [Report.ashx](#reportashx) | 20 |
-| [BaseInfo.ashx](#baseinfoashx) | 17 |
+| [BaseInfo.ashx](#baseinfoashx) | 19 |
 | [Notice.ashx](#noticeashx) | 12 |
-| [Login.ashx](#loginashx) | 8 |
+| [Login.ashx](#loginashx) | 9 |
 | [Eflow.ashx](#eflowashx) | 6 |
-| [FilingAction.ashx](#filingactionashx) | 6 |
+| [FilingAction.ashx](#filingactionashx) | 23 |
 | [Batch.ashx](#batchashx) | 5 |
-| [CRMAction.ashx](#crmactionashx) | 5 |
+| [CRMAction.ashx](#crmactionashx) | 6 |
 | [WadeButtAction.ashx](#wadebuttactionashx) | 5 |
 | [UDAction.ashx](#udactionashx) | 4 |
-| [FilingApiAction.ashx](#filingapiactionashx) | 3 |
+| [FilingApiAction.ashx](#filingapiactionashx) | 5 |
 | [FilingTradeAction.ashx](#filingtradeactionashx) | 3 |
 | [MailAction.ashx](#mailactionashx) | 3 |
 | [AgencyEpEflow.aspx](#agencyepeflowaspx) | 2 |
+| [AjaxServers/undefined](#ajaxserversundefined) | 1 |
 | [BatchEflowList](#batcheflowlist) | 1 |
 | [CFInvoice.ashx](#cfinvoiceashx) | 1 |
 | [controller.ashx](#controllerashx) | 1 |
@@ -104,7 +116,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [Rule.ashx](#ruleashx) | 1 |
 | [TNotice.ashx](#tnoticeashx) | 1 |
 | [UploadFile.aspx](#uploadfileaspx) | 1 |
-| 合计 | 350 |
+| 合计 | 389 |
 
 ## 全部接口
 
@@ -112,7 +124,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### CaseInfo.ashx
 
-79 个。
+87 个。
 
 | Call | 文档 |
 |---|---|
@@ -121,6 +133,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `BatchDelFile` | [06](06-文件操作.md#删除)。确认后删除，未调用 |
 | `BusinessCaseSearch` | [骨架](14-案件信息-基础与详情.md#businesscasesearch) |
 | `CaseButtonConfig` | [骨架](14-案件信息-基础与详情.md#casebuttonconfig) |
+| `CheckCaseAuthority` | [骨架](42-案件页读取.md#caseinfoashx-checkcaseauthority) |
 | `DeptCaseInit` | [骨架](14-案件信息-基础与详情.md#deptcaseinit) |
 | `GetAencyList` | [骨架](14-案件信息-基础与详情.md#getaencylist) · [10](10-邮件签名.md#getaencylist) |
 | `GetAgentBusinessLevel` | [骨架](14-案件信息-基础与详情.md#getagentbusinesslevel) |
@@ -141,6 +154,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetCaseMailAndPackage` | [骨架](14-案件信息-基础与详情.md#getcasemailandpackage) |
 | `GetCasePriority` | [骨架](14-案件信息-基础与详情.md#getcasepriority) |
 | `GetCaseSales` | [01](01-案件信息.md#getcasesales) |
+| `GetCaseSalesAssistant` | [骨架](42-案件页读取.md#caseinfoashx-getcasesalesassistant) |
 | `GetCaseSendList` | [骨架](15-案件信息-费用流程与文件.md#getcasesendlist) |
 | `GetColorConfig` | [骨架](15-案件信息-费用流程与文件.md#getcolorconfig) |
 | `GetDefaultApplicantTree` | [骨架](15-案件信息-费用流程与文件.md#getdefaultapplicanttree) |
@@ -157,13 +171,17 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetFlowNodeInfo` | [12](12-案件流程图.md#getflownodeinfo)。只描述已办节点的这一步 |
 | `GetFlowUser` | [01](01-案件信息.md#getflowuser) |
 | `GetFormPath` | [骨架](15-案件信息-费用流程与文件.md#getformpath) |
+| `GetIPFile` | [骨架](41-发文页读取.md#caseinfoashx-getipfile) |
 | `GetIPProcessClaseCount` | [骨架](15-案件信息-费用流程与文件.md#getipprocessclasecount) |
 | `GetIPProcessList` | [骨架](15-案件信息-费用流程与文件.md#getipprocesslist) |
+| `GetIPProcessListCount` | [骨架](43-首页与待办.md#caseinfoashx-getipprocesslistcount) |
 | `GetKyxAencyList` | [骨架](35-案件客户与专利费用.md#caseinfoashx-getkyxaencylist) |
 | `GetMyFavoriteCase` | [骨架](14-案件信息-基础与详情.md#未带-call-的请求)。参数名是小写 call，没有大写 Call |
 | `GetMyTsFavoriteCase` | [骨架](15-案件信息-费用流程与文件.md#getmytsfavoritecase) |
 | `GetOfficeInfoForCase` | [骨架](15-案件信息-费用流程与文件.md#getofficeinfoforcase) |
+| `GetPatentFamily` | [骨架](42-案件页读取.md#caseinfoashx-getpatentfamily) |
 | `GetProcList` | [12](12-案件流程图.md#getproclist)。处理事项表，没有子流程节点 |
+| `GetProcStage` | [骨架](42-案件页读取.md#caseinfoashx-getprocstage) |
 | `GetRecentCase` | [骨架](15-案件信息-费用流程与文件.md#getrecentcase) |
 | `GetRelateUser` | [骨架](15-案件信息-费用流程与文件.md#getrelateuser) |
 | `GetRightClickMenuPermissionsSjhc` | [骨架](15-案件信息-费用流程与文件.md#getrightclickmenupermissionssjhc) |
@@ -181,6 +199,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetTsProcessList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-gettsprocesslist) |
 | `GetUnFinishProc` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-getunfinishproc) |
 | `GetVoiceFile` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-getvoicefile) |
+| `HasFavorite` | [骨架](42-案件页读取.md#caseinfoashx-hasfavorite) |
 | `ICSearchList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-icsearchlist) · [13](13-案件查询.md#2-icsearchlist) |
 | `ICSearchList1` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-icsearchlist1) |
 | `IPCaseSearch` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-ipcasesearch) |
@@ -191,6 +210,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `LawCaseSearch` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-lawcasesearch) |
 | `LawGetBasicData` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-lawgetbasicdata) |
 | `LoadAgency` | [09](09-期限监控.md#1-打开列表)。期限页代理机构框 |
+| `LoadTipCaseStatus` | [骨架](42-案件页读取.md#caseinfoashx-loadtipcasestatus) |
 | `SaveFileReceiveInfo` | [06](06-文件操作.md#savefilereceiveinfo)。页面参数已核对，未调用 |
 | `SearchQueryHisDelete` | [03](03-历史查询条件.md#searchqueryhisdelete) |
 | `SearchQueryHisList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-searchqueryhislist) · [03](03-历史查询条件.md#searchqueryhislist) |
@@ -200,10 +220,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Common.ashx
 
-53 个。
+56 个。
 
 | Call | 文档 |
 |---|---|
+| `AddUserReadLog` | [骨架](42-案件页读取.md#commonashx-adduserreadlog) |
 | `CheckCaseCustomerAuthority` | [骨架](17-公共-流程配置与树.md#checkcasecustomerauthority) |
 | `FlowSubmit` | [08](08-流程审批.md#mailsubmit)。通用提交。这次发文没有调用 |
 | `GetAccepttype` | [06](06-文件操作.md#上传)。允许的上传扩展名 |
@@ -232,12 +253,14 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetProcessByType_RE` | [骨架](17-公共-流程配置与树.md#getprocessbytype_re) |
 | `GetProcessByTypeAC` | [骨架](36-公共补充.md#commonashx-getprocessbytypeac)。与 GetProcessByType_AC 不是同一个 Call |
 | `GetProcessByTypeCO` | [骨架](17-公共-流程配置与树.md#getprocessbytypeco) |
+| `GetProcessByTypeEF` | [骨架](43-首页与待办.md#commonashx-getprocessbytypeef)。与 GetProcessByType_EF 不是同一个 Call |
 | `GetProcessNew` | [骨架](17-公共-流程配置与树.md#getprocessnew) |
 | `GetPublishConfig` | [骨架](17-公共-流程配置与树.md#getpublishconfig)。参数名是 cfg_type。与 BaseInfo.ashx、Bill.ashx 的同名 Call 不是一个接口 |
 | `GetTreeAgent` | [骨架](17-公共-流程配置与树.md#gettreeagent) · [02](02-公共数据.md#gettreeagent) |
 | `GetTreeAgentCN` | [骨架](36-公共补充.md#commonashx-gettreeagentcn) |
 | `GetTreeAgentUser` | [骨架](17-公共-流程配置与树.md#gettreeagentuser) |
 | `GetTreeUser` | [02](02-公共数据.md#gettreeuser)。与 WadeButtAction.ashx 的同名 Call 不是一个接口 |
+| `GetUnReadPageMessCount` | [骨架](43-首页与待办.md#commonashx-getunreadpagemesscount) |
 | `GetUrgencyList` | [08](08-流程审批.md#geturgencylist) |
 | `GetWayMode` | [骨架](36-公共补充.md#commonashx-getwaymode) |
 | `GetWebConfigValue` | [骨架](17-公共-流程配置与树.md#getwebconfigvalue) |
@@ -262,11 +285,12 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Customer.ashx
 
-39 个。
+42 个。
 
 | Call | 文档 |
 |---|---|
 | `AllowShowCustomer` | [11](11-客户要求.md#allowshowcustomer)。响应正文未保存 |
+| `CheckAbutmentCustomer` | [骨架](43-首页与待办.md#customerashx-checkabutmentcustomer) |
 | `ContactInit` | [骨架](19-客户-资料与合同.md#contactinit) |
 | `ContractDraftList` | [骨架](19-客户-资料与合同.md#contractdraftlist) |
 | `ContractFinished` | [骨架](19-客户-资料与合同.md#contractfinished) |
@@ -300,11 +324,13 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetRelationship` | [骨架](20-客户-跟进.md#customerashx-getrelationship) |
 | `GetRemidList` | [骨架](20-客户-跟进.md#customerashx-getremidlist) |
 | `GetRequestList` | [骨架](20-客户-跟进.md#customerashx-getrequestlist) |
+| `GetResearchGroupInfo` | [骨架](42-案件页读取.md#customerashx-getresearchgroupinfo) |
 | `GetTrControl` | [骨架](20-客户-跟进.md#customerashx-gettrcontrol) |
 | `GetUrgemaillist` | [骨架](20-客户-跟进.md#customerashx-geturgemaillist) |
 | `InitContractStatus` | [骨架](20-客户-跟进.md#customerashx-initcontractstatus) |
 | `InitFollowStatus` | [骨架](20-客户-跟进.md#customerashx-initfollowstatus) |
 | `LoadFollowList` | [骨架](20-客户-跟进.md#customerashx-loadfollowlist) |
+| `SkipFAQ` | [骨架](41-发文页读取.md#customerashx-skipfaq) |
 
 <a id="mailashx"></a>
 
@@ -378,7 +404,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### PatentAction.ashx
 
-21 个。
+22 个。
 
 | Call | 文档 |
 |---|---|
@@ -386,6 +412,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `ApplyEntrustList` | [骨架](21-专利动作.md#patentactionashx-applyentrustlist) |
 | `GetApplyFlowNode` | [骨架](21-专利动作.md#patentactionashx-getapplyflownode) |
 | `GetApplyTags` | [骨架](21-专利动作.md#patentactionashx-getapplytags) |
+| `GetCaseApplicant` | [骨架](41-发文页读取.md#patentactionashx-getcaseapplicant) |
 | `GetCaseContact` | [骨架](21-专利动作.md#patentactionashx-getcasecontact) |
 | `GetCaseInventor` | [骨架](21-专利动作.md#patentactionashx-getcaseinventor) |
 | `GetCasePriority` | [骨架](21-专利动作.md#patentactionashx-getcasepriority) |
@@ -437,7 +464,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### BaseInfo.ashx
 
-17 个。
+19 个。
 
 | Call | 文档 |
 |---|---|
@@ -452,9 +479,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetFileTempNameList` | [骨架](22-基础信息.md#baseinfoashx-getfiletempnamelist) · [06](06-文件操作.md#getfiletempnamelist) |
 | `GetFileTempZipNameList` | [骨架](22-基础信息.md#baseinfoashx-getfiletempzipnamelist) · [06](06-文件操作.md#getfiletempnamelist) |
 | `GetHideApplyType` | [骨架](22-基础信息.md#baseinfoashx-gethideapplytype) |
+| `GetMenuPermit` | [骨架](43-首页与待办.md#baseinfoashx-getmenupermit) |
 | `GetProjectMenu` | [骨架](31-基础信息补充.md#baseinfoashx-getprojectmenu) |
 | `GetProjectTypeDic` | [骨架](22-基础信息.md#baseinfoashx-getprojecttypedic) |
 | `GetPublishConfig` | [骨架](22-基础信息.md#baseinfoashx-getpublishconfig)。参数是成对的 type 和 key |
+| `GetSet` | [骨架](43-首页与待办.md#baseinfoashx-getset) |
 | `GetStageByProjectTypeID` | [骨架](22-基础信息.md#baseinfoashx-getstagebyprojecttypeid) |
 | `GetUserDetail` | [骨架](31-基础信息补充.md#baseinfoashx-getuserdetail) |
 | `SaveFileTepmName` | [06](06-文件操作.md#getfiletempnamelist)。Call 名里的 Tepm 是页面原文 |
@@ -484,13 +513,14 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Login.ashx
 
-8 个。
+9 个。
 
 | Call | 文档 |
 |---|---|
 | `DeletSignatureset` | [10](10-邮件签名.md#保存和删除)。Call 的拼写是 Delet。未调用 |
 | `GetAgentSignature` | [骨架](37-登录邮箱与官文通知.md#loginashx-getagentsignature) |
 | `GetBankList` | [骨架](37-登录邮箱与官文通知.md#loginashx-getbanklist) |
+| `GetCompanyInfo` | [骨架](41-发文页读取.md#loginashx-getcompanyinfo) |
 | `Getmailset` | [10](10-邮件签名.md#getmailset)。第二段抓包有 2 次。页面仍只读 mailsetinfo[0].Signature |
 | `GetMailSettingList` | [骨架](37-登录邮箱与官文通知.md#loginashx-getmailsettinglist) |
 | `GetMailSignatureSettingList` | [10](10-邮件签名.md#getmailsignaturesettinglist)。第二段抓包 TableRows 为 null，TableRowsCount 为字符串 0 |
@@ -516,16 +546,33 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### FilingAction.ashx
 
-6 个。
+23 个。
 
 | Call | 文档 |
 |---|---|
+| `GetApplicantFeeReduce` | [骨架](41-发文页读取.md#filingactionashx-getapplicantfeereduce) |
+| `GetAttachFiles` | [骨架](41-发文页读取.md#filingactionashx-getattachfiles) |
+| `GetAttached` | [骨架](41-发文页读取.md#filingactionashx-getattached) |
+| `GetCaseByFiling` | [骨架](41-发文页读取.md#filingactionashx-getcasebyfiling) |
+| `GetCaseConMail` | [骨架](41-发文页读取.md#filingactionashx-getcaseconmail)。数据在 `TableRowsS`，`TableRows` 为 null |
+| `GetCaseExpandInfo` | [骨架](41-发文页读取.md#filingactionashx-getcaseexpandinfo) |
+| `GetConvertStatus` | [骨架](41-发文页读取.md#filingactionashx-getconvertstatus) |
+| `GetConvertedFile` | [骨架](41-发文页读取.md#filingactionashx-getconvertedfile) |
 | `GetFilingFlowNode` | [骨架](23-递交.md#filingactionashx-getfilingflownode) |
+| `GetFilingInfo` | [骨架](41-发文页读取.md#filingactionashx-getfilinginfo)。顶层键随 `Code` 变 |
+| `GetFilingInfoBase` | [骨架](41-发文页读取.md#filingactionashx-getfilinginfobase) |
+| `GetFilingTypeInfo` | [骨架](41-发文页读取.md#filingactionashx-getfilingtypeinfo)。业务键名随 `type_code` 变 |
 | `GetFinished` | [骨架](23-递交.md#filingactionashx-getfinished) |
+| `GetGeneralEntrustFileList` | [骨架](41-发文页读取.md#filingactionashx-getgeneralentrustfilelist) |
+| `GetHasPriority` | [骨架](41-发文页读取.md#filingactionashx-gethaspriority) |
 | `GetProcess` | [骨架](23-递交.md#filingactionashx-getprocess) |
 | `GetProcessDraft` | [骨架](23-递交.md#filingactionashx-getprocessdraft) |
 | `GetProcessing` | [骨架](23-递交.md#filingactionashx-getprocessing) |
+| `GetRecFileList` | [骨架](41-发文页读取.md#filingactionashx-getrecfilelist) |
 | `GetRespInfoCaseList` | [骨架](23-递交.md#filingactionashx-getrespinfocaselist) |
+| `GetRespInfoList` | [骨架](41-发文页读取.md#filingactionashx-getrespinfolist) |
+| `GetSelecteFile` | [骨架](41-发文页读取.md#filingactionashx-getselectefile) |
+| `InitFilingContact` | [骨架](41-发文页读取.md#filingactionashx-initfilingcontact) |
 
 <a id="batchashx"></a>
 
@@ -545,13 +592,14 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### CRMAction.ashx
 
-5 个。
+6 个。
 
 | Call | 文档 |
 |---|---|
 | `GetContractEditFeeAuth` | [骨架](29-合同CRM.md#crmactionashx-getcontracteditfeeauth) |
 | `GetContractInfo` | [骨架](29-合同CRM.md#crmactionashx-getcontractinfo) |
 | `GetContractVoidEditAuth` | [骨架](29-合同CRM.md#crmactionashx-getcontractvoideditauth) |
+| `GetHeadUserId` | [骨架](42-案件页读取.md#crmactionashx-getheaduserid) |
 | `GetPerFlag` | [骨架](29-合同CRM.md#crmactionashx-getperflag) |
 | `LoadFileType` | [骨架](29-合同CRM.md#crmactionashx-loadfiletype) |
 
@@ -586,11 +634,13 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### FilingApiAction.ashx
 
-3 个。
+5 个。
 
 | Call | 文档 |
 |---|---|
 | `GetAccountList` | [骨架](23-递交.md#filingapiactionashx-getaccountlist) |
+| `GetCheckInfo` | [骨架](41-发文页读取.md#filingapiactionashx-getcheckinfo) |
+| `GetCPCBusineeType` | [骨架](41-发文页读取.md#filingapiactionashx-getcpcbusineetype) |
 | `GetCpcNoticeAccount` | [骨架](23-递交.md#filingapiactionashx-getcpcnoticeaccount) |
 | `GetSubmitList` | [骨架](23-递交.md#filingapiactionashx-getsubmitlist) |
 
@@ -628,6 +678,16 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 |---|---|
 | `Geteflowcheck` | [骨架](26-核稿.md#agencyepeflowaspx-geteflowcheck)。打到页面自身，响应是 HTML。与 Eflow.ashx 的同名 Call 不是一个接口 |
 | `（无 Call）` | [骨架](26-核稿.md#agencyepeflowaspx-未带-call)。打到页面自身，响应是 HTML |
+
+<a id="ajaxserversundefined"></a>
+
+### AjaxServers/undefined
+
+1 个。
+
+| Call | 文档 |
+|---|---|
+| `Genetic_Registered` | [骨架](41-发文页读取.md#undefined-genetic_registered)。前端把入口拼成 `/AjaxServers/undefined`，HTTP 404 |
 
 <a id="batcheflowlist"></a>
 
