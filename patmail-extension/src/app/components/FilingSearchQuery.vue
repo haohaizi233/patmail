@@ -3,11 +3,11 @@ import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import { CURRENT_ENVIRONMENT } from '../../api/config'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary, describePickerReceipt, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
-import { FILING_OPTION_KEYS, FILING_BLOCKS, FILING_SELECTS, filingCellKeys, filingDraftFields, type FilingCell } from '../../api/filing-form'
-import { splitFilingCtrlProcIds, type FilingSearchQuery } from '../../api/filing-search-params'
+import { FILING_OPTION_KEYS, FILING_BLOCKS, filingCellKeys, filingDraftFields, type FilingCell } from '../../api/filing-form'
+import type { FilingSearchQuery } from '../../api/filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from '../../api/filing-search-types'
 import { hasOptionTree } from '../../query/option-tree'
-import { MessageType, type MessageBridge } from '../../shared/message'
+import { MessageType, type FileSearchFormField, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../../shell/components/WDatePicker.vue'
@@ -20,6 +20,7 @@ const bridge = inject<MessageBridge>('bridge')
 const values = ref<Record<string, string>>({})
 const pickers = ref<Record<string, NormalizedDictionary>>({})
 const pickersReady = ref(false)
+const pageFields = ref<FileSearchFormField[]>([])
 const loadingPickers = ref(false)
 const pickerMessage = ref('')
 const searchState = ref<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle')
@@ -86,13 +87,13 @@ function choices(key: string): { value: string; label: string; parent?: string }
   // 原站 ChangeForApplyType 按当前案件类型收申请类型；没选案件类型时按本环境默认的专利收。
   const caseTypeId = valueOf('case_type') || CURRENT_ENVIRONMENT.caseTypeId
   const live = dictionary && dictionary.options.length > 0 ? choicesFromDictionary(dictionary, caseTypeId) : null
-  const saved = FILING_SELECTS[key] ?? []
-  return (live ?? saved).filter(item => item.value)
+  return (live ?? []).filter(item => item.value)
 }
 
-/** 页面写死的下拉，选项照抄原站 option，空项就是原站的「请选择 / ALL」。 */
+/** select 的选项从原站 Finished.aspx 的页面实时扫（ScanFilingForm），不写死在代码里。 */
 function selectOptions(key: string): { value: string; label: string }[] {
-  return FILING_SELECTS[key] ?? []
+  const field = pageFields.value.find(item => item.id === key && item.control === 'select')
+  return (field?.options ?? []).map(item => ({ value: item.value, label: item.label }))
 }
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
   const options = choices(key)
@@ -112,18 +113,28 @@ async function loadPickers(force: boolean): Promise<void> {
   loadingPickers.value = true
   pickerMessage.value = force ? '' : '正在向原网站读取递交查询下拉…'
   try {
-    const response = await props.bridge.request({
-      type: MessageType.LoadDictionary, payload: { kind: 'picker', force }
-    })
-    if (response.type !== MessageType.DictionaryResult || !response.payload.ok || response.payload.data.kind !== 'picker') {
-      pickerMessage.value = response.type === MessageType.DictionaryResult && !response.payload.ok
-        ? response.payload.error.message
-        : response.type === MessageType.Error ? response.payload.message : '下拉选项没有读到，文本条件仍可查询。'
-      return
+    const [dict, form] = await Promise.all([
+      props.bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'picker', force } }),
+      props.bridge.request({ type: MessageType.ScanFilingForm })
+    ])
+    const notes: string[] = []
+    if (dict.type === MessageType.DictionaryResult && dict.payload.ok && dict.payload.data.kind === 'picker') {
+      pickers.value = dict.payload.data.dictionaries
+      pickersReady.value = true
+      notes.push(describePickerReceipt(dict.payload.data.dictionaries, dict.payload.data.warnings))
+    } else {
+      notes.push(dict.type === MessageType.DictionaryResult && !dict.payload.ok
+        ? dict.payload.error.message
+        : '接口下拉没有读到，文本条件仍可查询。')
     }
-    pickers.value = response.payload.data.dictionaries
-    pickersReady.value = true
-    pickerMessage.value = describePickerReceipt(response.payload.data.dictionaries, response.payload.data.warnings)
+    if (form.type === MessageType.FilingFormResult) {
+      pageFields.value = form.payload.fields
+      const selects = form.payload.fields.filter(item => item.control === 'select' && item.options.length > 0)
+      notes.push(selects.length > 0
+        ? `原站页面下拉：${selects.map(item => `${item.label} ${item.options.length}`).join('、')}。`
+        : '原站递交列表页的下拉没有扫到。请先在 EASY 打开递交管理的查询页（如「已完成」），再点校对最新字段。')
+    }
+    pickerMessage.value = notes.filter(Boolean).join(' ')
   } catch {
     pickerMessage.value = '下拉选项没有读到，文本条件仍可查询。'
   } finally {

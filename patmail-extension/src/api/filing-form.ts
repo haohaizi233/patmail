@@ -46,36 +46,10 @@ export const FILING_FIELD_LABELS: Record<string, string> = {
 /** 递交条件下拉对应的字典名，与原站 FilingList.js 的填充来源一致。字典由 loadPicker 从原站实时拉。 */
 export const FILING_OPTION_KEYS: Record<string, string> = FILING_PICKER_FIELDS
 
-/**
- * 页面上写死的下拉，取值照抄 `Finished.aspx` 的 option。
- * flow_direction 是 select，is_paper_notice、audit_type 的文案由页面 JS 再替换一次，值不变。
- */
-export const FILING_SELECTS: Record<string, { value: string; label: string }[]> = {
-  flow_direction: [
-    { value: '', label: '请选择' },
-    { value: 'II', label: '内-内' },
-    { value: 'IO', label: '内-外' },
-    { value: 'OI', label: '外-内' },
-    { value: 'OO', label: '外-外' }
-  ],
-  is_paper_notice: [
-    { value: '', label: 'ALL' },
-    { value: '1', label: '是' },
-    { value: '0', label: '否' }
-  ],
-  audit_type: [
-    { value: '', label: 'ALL' },
-    { value: 'submit', label: '提交' },
-    { value: 'handover', label: '移交' },
-    { value: 'reject', label: '退回' },
-    { value: 'withdraw', label: '撤回' }
-  ]
-}
-
 const dates = (label: string, start: string, end: string): FilingDateCell => ({ kind: 'dates', label, start, end })
 
 /**
- * 查询条件按页面左右两列排。select 是页面写死的选项；
+ * 查询条件按页面左右两列排。select 的选项在校对字段时从原站页面实时扫（ScanFilingForm），代码里不写死；
  * named 的选项从原站接口实时读：处理事项、当前流程阶段、历史审核记录、申请类型、案件类型、签约单位、分部和人员。
  * 历史审核记录在原站复用流程节点做选项（FilingList.js 把 ApplyFlowNode 挂进 `#history`），这里一样。
  */

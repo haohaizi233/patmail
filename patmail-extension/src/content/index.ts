@@ -5,6 +5,7 @@ import { injectPanel } from './injector'
 import { readPageInfo, scanPage } from './scanner'
 import { EasyRuntime } from '../api/client'
 import { scanFileSearchForm } from '../query/scan-file-search-form.mjs'
+import { scanFilingForm, waitFilingFormOptions } from '../query/scan-filing-form.mjs'
 import { LiveEasyAcceptanceRunner } from '../automation/acceptance-runner'
 import { hydrateCustomerMode, watchCustomerMode } from '../settings/customer-mode'
 import { hydrateWriteSwitch, watchWriteSwitch } from '../settings/write-switch'
@@ -123,6 +124,27 @@ async function readFileSearchForm(): Promise<FileSearchFormField[]> {
   return scanFileSearchForm(document).fields
 }
 
+/** 递交查询条件在 `Forms/NewFiling/Finished.aspx`，可能开在同源 iframe 里。没打开就返回空，不改用户的页面。 */
+async function readFilingForm(): Promise<FileSearchFormField[]> {
+  const candidates: Document[] = [document]
+  for (const frame of Array.from(document.querySelectorAll('iframe, frame'))) {
+    if (!(frame instanceof HTMLIFrameElement || frame instanceof HTMLFrameElement)) continue
+    if (frame.closest('patmail-root')) continue
+    try {
+      const doc = frame.contentDocument
+      if (doc) candidates.push(doc)
+    } catch {
+      // 跨域 iframe 不读
+    }
+  }
+  for (const doc of candidates) {
+    if (!doc.querySelector('#audit_type, #is_paper_notice, #flow_direction')) continue
+    await waitFilingFormOptions(doc)
+    return scanFilingForm(doc).fields
+  }
+  return []
+}
+
 const bridge: MessageBridge = {
   async request(message, signal): Promise<ContentResponse> {
     switch (message.type) {
@@ -213,6 +235,8 @@ const bridge: MessageBridge = {
           payload: await easyRuntime.deleteHistoryQuery(message.payload.queryId, signal, message.payload.surface === 'limit' ? 'limit' : 'file') }
       case MessageType.ScanFileSearchForm:
         return { type: MessageType.FileSearchFormResult, payload: { fields: await readFileSearchForm() } }
+      case MessageType.ScanFilingForm:
+        return { type: MessageType.FilingFormResult, payload: { fields: await readFilingForm() } }
       case MessageType.LoadDictionary:
         return { type: MessageType.DictionaryResult,
           payload: await easyRuntime.loadDictionary(message.payload, signal) }

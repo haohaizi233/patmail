@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildFilingSearchElement, buildFilingSearchParams, FILING_ELEMENT_NODES, splitFilingCtrlProcIds
+  buildFilingSearchElement, buildFilingSearchParams, FILING_ELEMENT_NODES, FILING_INPUT_FIELDS, splitFilingCtrlProcIds
 } from '../src/api/filing-search-params'
 import { normalizeFilingSearch } from '../src/api/filing-search-normalizer'
-import { FILING_BLOCKS, FILING_OPTION_KEYS, FILING_SELECTS, filingCellKeys, filingDraftFields } from '../src/api/filing-form'
+import { FILING_BLOCKS, FILING_OPTION_KEYS, filingCellKeys, filingDraftFields } from '../src/api/filing-form'
+import { FILING_FORM_FIELDS, scanFilingForm } from '../src/query/scan-filing-form.mjs'
 import { isMessage, MessageType } from '../src/shared/message'
 
 function paramsOf(result: ReturnType<typeof buildFilingSearchParams>): URLSearchParams {
@@ -119,16 +120,12 @@ describe('递交管理表单', () => {
     expect(new Set(keys).size).toBe(keys.length)
   })
 
-  it('下拉取值照抄原站：签约单位走 table5，历史审核记录走流程节点，办理类型和纸质通知是固定码', () => {
-    expect(FILING_SELECTS.is_paper_notice).toEqual([
-      { value: '', label: 'ALL' }, { value: '1', label: '是' }, { value: '0', label: '否' }
-    ])
-    expect(FILING_SELECTS.audit_type.map(item => item.value)).toEqual(['', 'submit', 'handover', 'reject', 'withdraw'])
-    expect(FILING_SELECTS.flow_direction.map(item => item.value)).toEqual(['', 'II', 'IO', 'OI', 'OO'])
+  it('下拉映射对齐原站填充来源：签约单位走 table5，历史审核记录走流程节点', () => {
     expect(FILING_OPTION_KEYS.business_coop).toBe('filingContract')
     expect(FILING_OPTION_KEYS.history).toBe('filingFlowNode')
     expect(FILING_OPTION_KEYS.apply_type).toBe('limitApplyType')
     expect(FILING_OPTION_KEYS.case_type).toBe('filingCaseType')
+    expect(FILING_OPTION_KEYS.flow_direction).toBeUndefined()
   })
 
   it('草稿只收有值的主条件，显示文本另存', () => {    const draft = filingDraftFields({
@@ -224,5 +221,42 @@ describe('递交查询消息', () => {
     expect(isMessage({ type: MessageType.SearchFiling, payload: { query: { ...payload.query, pageIndex: 0 } } })).toBe(false)
     expect(isMessage({ type: MessageType.SearchFiling, payload: { query: { ...payload.query, fields: { Call: 'x' } } } })).toBe(false)
     expect(isMessage({ type: MessageType.SearchFilingResult, payload: { ok: true, data: { items: [], total: 0, pageIndex: 1, pageSize: 10, totalPages: 0 } } })).toBe(true)
+    expect(isMessage({ type: MessageType.ScanFilingForm })).toBe(true)
+  })
+})
+
+describe('递交查询表单扫描', () => {
+  it('下拉选项从原站页面读，不写死在代码里', () => {
+    document.body.innerHTML = `
+      <table><tr>
+        <td><span name="Dictionary">办理类型：</span></td>
+        <td><select id="audit_type"><option value="">ALL</option><option value="submit">提交</option><option value="reject">退回</option></select></td>
+        <td><span name="Dictionary">是否需要纸质通知书：</span></td>
+        <td><select id="is_paper_notice"><option value="">ALL</option><option value="1">是</option><option value="0">否</option></select></td>
+      </tr><tr>
+        <td><span name="Dictionary">案件流向：</span></td>
+        <td><select id="flow_direction"><option value="">请选择</option><option value="II">内-内</option></select></td>
+        <td><span name="Dictionary">我方文号：</span></td>
+        <td><input type="text" id="case_volume" /></td>
+      </tr></table>`
+    const { page, fields } = scanFilingForm(document)
+    expect(page).toBe('Finished.aspx')
+    const audit = fields.find(item => item.id === 'audit_type')
+    expect(audit?.control).toBe('select')
+    expect(audit?.label).toBe('办理类型')
+    expect(audit?.options.map(item => item.value)).toEqual(['', 'submit', 'reject'])
+    expect(audit?.options.map(item => item.label)).toEqual(['ALL', '提交', '退回'])
+    expect(fields.find(item => item.id === 'is_paper_notice')?.options).toHaveLength(3)
+    expect(fields.find(item => item.id === 'flow_direction')?.options.map(item => item.value)).toEqual(['', 'II'])
+    const volume = fields.find(item => item.id === 'case_volume')
+    expect(volume?.control).toBe('text')
+    expect(volume?.label).toBe('我方文号')
+  })
+
+  it('扫描的字段清单与 Element 字段一致，别的控件不进来', () => {
+    document.body.innerHTML = `<select id="audit_type"><option value="">ALL</option></select><select id="not_a_field"><option>忽略</option></select>`
+    const { fields } = scanFilingForm(document)
+    expect(fields.map(item => item.id)).toEqual(['audit_type'])
+    expect([...FILING_FORM_FIELDS].sort()).toEqual([...FILING_INPUT_FIELDS].sort())
   })
 })

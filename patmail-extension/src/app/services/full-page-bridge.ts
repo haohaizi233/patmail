@@ -18,7 +18,7 @@ export function createFullPageBridge(): MessageBridge {
         || message.type === MessageType.ReadCustomerDirectory
         || message.type === MessageType.ReadMailContacts
         || message.type === MessageType.DiagnoseExistingMail
-        || message.type === MessageType.LoadDictionary || message.type === MessageType.ScanFileSearchForm
+        || message.type === MessageType.LoadDictionary || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm
       const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor
         ? fileSearchTimeoutMs(message.payload.timeoutMs) + 15_000 : 0
       const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || searchWait || (slow ? 70_000 : 30_000))
