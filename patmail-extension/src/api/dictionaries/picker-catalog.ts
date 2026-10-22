@@ -61,7 +61,7 @@ export const LIMIT_PICKER_FIELDS: Record<string, string> = {
   apply_tags_id: 'applyTags'
 }
 
-/** 递交管理下拉。对齐 FilingList.js 的 FinishedInit：流程节点来自 GetFilingFlowNode 的 ApplyFlowNode，签约单位来自 InitContractStatus 的 table5。 */
+/** 递交管理下拉。对齐 FilingList.js 的 FinishedInit：流程节点来自 GetFilingFlowNode 的 ApplyFlowNode，签约单位来自 InitContractStatus 的 table5。案件流向在原站页面是写死的 select，这里额外接期限页的 Case_direction 字典做实时来源。 */
 export const FILING_PICKER_FIELDS: Record<string, string> = {
   ctrl_proc: 'limitCtrlProc',
   activity: 'filingFlowNode',
@@ -72,7 +72,8 @@ export const FILING_PICKER_FIELDS: Record<string, string> = {
   sales_user_id: 'user',
   business_coop: 'filingContract',
   apply_type: 'limitApplyType',
-  branch_dept: 'branch'
+  branch_dept: 'branch',
+  flow_direction: 'limitDirection'
 }
 
 function arrayOf(body: unknown, key: string): unknown {

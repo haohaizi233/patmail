@@ -62,12 +62,15 @@
 .error { margin: 0 0 12px; padding: 9px 11px; border-radius: 9px; background: #fff0f2; color: #b94d66; overflow-wrap: anywhere; }
 .results, .dom { padding: 13px; margin-top: 12px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.file-results > .section-heading .page-size {
+.file-results > .section-heading .page-size,
+.filing-results > .section-heading .page-size {
   margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
   color: #99879d; font-size: 12px; font-weight: 400; flex: none;
 }
-.file-results > .section-heading .page-size > .theme-select { display: inline-block; width: 72px; }
-.file-results > .section-heading .page-size .theme-select-trigger {
+.file-results > .section-heading .page-size > .theme-select,
+.filing-results > .section-heading .page-size > .theme-select { display: inline-block; width: 72px; }
+.file-results > .section-heading .page-size .theme-select-trigger,
+.filing-results > .section-heading .page-size .theme-select-trigger {
   min-width: 0; height: 31px; border-radius: 8px; font-size: 12px;
 }
 .file-results > button.solid {
@@ -121,6 +124,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .panel-tabs button.active { background: #fff; color: #b75c93; box-shadow: 0 1px 5px rgba(90, 54, 99, .09); }
 .panel-tabs button:disabled { opacity: .5; cursor: not-allowed; }
 .file-search { display: grid; gap: 11px; }
+.filing-search-query { display: grid; gap: 12px; }
 .session-card, .search-form, .file-results { padding: 12px 13px; }
 .session-card strong, .search-form strong, .file-results strong { font-size: 12px; color: #725577; }
 .text-button { padding: 1px 2px; border: 0; background: transparent; color: #ae6099; font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }

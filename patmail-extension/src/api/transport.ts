@@ -153,11 +153,11 @@ export class EasyTransport {
     return result
   }
 
-  /** 文件查询和期限监控在这套原网站上经常超过 15 秒。测试传入的短超时仍然生效。文件查询可以按页面选择拉长。
+  /** 文件查询、期限监控和递交查询在这套原网站上经常超过 15 秒。测试传入的短超时仍然生效。文件查询可以按页面选择拉长。
  * 发文提交这一串（建单、联系人、规则、保存、提交流程）在原站高峰期实测 20 到 30 秒才回，全部放宽到 60 秒， 15 秒会把还 能成功的请求掐成「结果无法确认」。 */
   private waitMs(operation: EasyOperation, timeoutMs?: number): number {
     if (this.timeoutMs < 15_000) return this.timeoutMs
-    if (operation === 'fileSearch' || operation === 'limitMonitor') return fileSearchTimeoutMs(timeoutMs)
+    if (operation === 'fileSearch' || operation === 'limitMonitor' || operation === 'filingSearch') return fileSearchTimeoutMs(timeoutMs)
     if (SLOW_OPERATIONS.has(operation)) return 60_000
     return this.timeoutMs
   }

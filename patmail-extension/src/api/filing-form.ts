@@ -46,6 +46,31 @@ export const FILING_FIELD_LABELS: Record<string, string> = {
 /** 递交条件下拉对应的字典名，与原站 FilingList.js 的填充来源一致。字典由 loadPicker 从原站实时拉。 */
 export const FILING_OPTION_KEYS: Record<string, string> = FILING_PICKER_FIELDS
 
+/**
+ * 页面里写死的 select 选项。来源：`183.36.43.66.har` 里 `Forms/NewFiling/Finished.aspx` 的 HTML 原文。
+ * 这三个 select 原站没有任何接口填充（FilingList.js 的 FinishedInit 只填 case_type、history、activity、
+ * branch_dept、business_coop 和人员树，从不碰这三个），选项直接渲染在页面上。
+ * 扫到原站页面时用页面的实时结果覆盖；扫不到时用这份抓包快照兜底，空值项统一显示「不限」。
+ */
+export const FILING_SELECTS: Record<string, { value: string; label: string }[]> = {
+  flow_direction: [
+    { value: 'II', label: '内-内' },
+    { value: 'IO', label: '内-外' },
+    { value: 'OI', label: '外-内' },
+    { value: 'OO', label: '外-外' }
+  ],
+  is_paper_notice: [
+    { value: '1', label: '是' },
+    { value: '0', label: '否' }
+  ],
+  audit_type: [
+    { value: 'submit', label: '提交' },
+    { value: 'handover', label: '移交' },
+    { value: 'reject', label: '退回' },
+    { value: 'withdraw', label: '撤回' }
+  ]
+}
+
 const dates = (label: string, start: string, end: string): FilingDateCell => ({ kind: 'dates', label, start, end })
 
 /**

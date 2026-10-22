@@ -124,23 +124,50 @@ async function readFileSearchForm(): Promise<FileSearchFormField[]> {
   return scanFileSearchForm(document).fields
 }
 
-/** 递交查询条件在 `Forms/NewFiling/Finished.aspx`，可能开在同源 iframe 里。没打开就返回空，不改用户的页面。 */
-async function readFilingForm(): Promise<FileSearchFormField[]> {
-  const candidates: Document[] = [document]
-  for (const frame of Array.from(document.querySelectorAll('iframe, frame'))) {
+/** 递交查询条件在 `Forms/NewFiling/Finished.aspx`，可能开在同源 iframe 里，个别入口还套一层。 */
+function hasFilingForm(doc: Document): boolean {
+  return Boolean(doc.querySelector('#audit_type, #is_paper_notice, #flow_direction'))
+}
+
+function findFilingDoc(doc: Document, depth: number): Document | null {
+  if (hasFilingForm(doc)) return doc
+  if (depth >= 3) return null
+  for (const frame of Array.from(doc.querySelectorAll('iframe, frame'))) {
     if (!(frame instanceof HTMLIFrameElement || frame instanceof HTMLFrameElement)) continue
     if (frame.closest('patmail-root')) continue
     try {
-      const doc = frame.contentDocument
-      if (doc) candidates.push(doc)
+      const inner = frame.contentDocument
+      const hit = inner ? findFilingDoc(inner, depth + 1) : null
+      if (hit) return hit
     } catch {
       // 跨域 iframe 不读
     }
   }
-  for (const doc of candidates) {
-    if (!doc.querySelector('#audit_type, #is_paper_notice, #flow_direction')) continue
-    await waitFilingFormOptions(doc)
-    return scanFilingForm(doc).fields
+  return null
+}
+
+/** 递交查询页没开时把它载进主框架再扫，和文件查询一致；这样下拉能实时读到，不依赖用户先开页面。 */
+async function readFilingForm(): Promise<FileSearchFormField[]> {
+  const found = findFilingDoc(document, 0)
+  if (found) {
+    await waitFilingFormOptions(found)
+    return scanFilingForm(found).fields
+  }
+  const frame = document.querySelector('iframe#mframe')
+  if (frame instanceof HTMLIFrameElement) {
+    const current = frame.contentDocument
+    if (!current || !hasFilingForm(current)) {
+      await new Promise<void>(resolve => {
+        const timer = window.setTimeout(() => resolve(), 20000)
+        frame.addEventListener('load', () => { window.clearTimeout(timer); resolve() }, { once: true })
+        frame.src = '/Forms/NewFiling/Finished.aspx'
+      })
+    }
+    const doc = frame.contentDocument
+    if (doc && hasFilingForm(doc)) {
+      await waitFilingFormOptions(doc)
+      return scanFilingForm(doc).fields
+    }
   }
   return []
 }
