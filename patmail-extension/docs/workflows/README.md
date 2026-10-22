@@ -78,9 +78,8 @@ flowchart TD
 | `pmWarning` | 提醒、跳过和待补齐 | 奶油杏色 |
 | `pmStop` | 阻塞、停止、结果未知 | 柔和莓红 |
 
-每张流程图在 Markdown 中显式写 `class 节点ID 类名`，渲染器为流程图和状态图补齐上述 `classDef`；不会根据中文标签在运行时猜测业务含义。作者已写明的同名 `classDef` 优先保留。时序图使用独立主题变量，不混入流程图类语法。下面是可以独立复制到其他 Mermaid 编辑器的完整例子：
+每张流程图在 Markdown 中显式写 `class 节点ID 类名`，渲染器为流程图和状态图补齐上述 `classDef`；不会根据中文标签在运行时猜测业务含义。作者已写明的同名 `classDef` 优先保留。时序图使用独立主题变量，不混入流程图类语法。下面是可以独立复制到其他 Mermaid 编辑器的完整例子（图下「Mermaid 原文」展开就是源码，可整段复制）：
 
-````md
 ```mermaid
 flowchart LR
   A[读取配置]:::pmStep --> B{校验通过}:::pmDecision
@@ -93,6 +92,5 @@ flowchart LR
   classDef pmWarning fill:#fff3df,stroke:#e7c28f,color:#7a6047
   classDef pmStop fill:#ffedf0,stroke:#e9a0b2,color:#96546b
 ```
-````
 
 参考：[Mermaid 主题配置](https://mermaid.js.org/config/theming.html)、[原生 classDef 节点样式](https://mermaid.js.org/syntax/flowchart.html#classes)。官方最新文档还介绍 `look` 外观选项；本项目保留当前依赖版本和可控的粉紫圆角主题，不为样式升级依赖或改动流程布局。

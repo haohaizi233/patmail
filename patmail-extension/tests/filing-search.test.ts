@@ -3,9 +3,9 @@ import {
   buildFilingSearchElement, buildFilingSearchParams, FILING_ELEMENT_NODES, FILING_INPUT_FIELDS, splitFilingCtrlProcIds
 } from '../src/api/filing-search-params'
 import { normalizeFilingSearch } from '../src/api/filing-search-normalizer'
-import { FILING_BLOCKS, FILING_OPTION_KEYS, filingCellKeys, filingDraftFields } from '../src/api/filing-form'
+import { FILING_BLOCKS, FILING_OPTION_KEYS, FILING_SELECTS, filingCellKeys, filingDraftFields } from '../src/api/filing-form'
 import { FILING_FORM_FIELDS, scanFilingForm } from '../src/query/scan-filing-form.mjs'
-import { isMessage, MessageType } from '../src/shared/message'
+import { isMessage, isWorkspaceForwardRequest, MessageType } from '../src/shared/message'
 
 function paramsOf(result: ReturnType<typeof buildFilingSearchParams>): URLSearchParams {
   if (!result.ok) throw new Error(result.error.message)
@@ -125,7 +125,21 @@ describe('递交管理表单', () => {
     expect(FILING_OPTION_KEYS.history).toBe('filingFlowNode')
     expect(FILING_OPTION_KEYS.apply_type).toBe('limitApplyType')
     expect(FILING_OPTION_KEYS.case_type).toBe('filingCaseType')
-    expect(FILING_OPTION_KEYS.flow_direction).toBeUndefined()
+    // 原站页面的案件流向是写死的 select，这里的 Case_direction 字典和页面是同一套枚举，做实时来源。
+    expect(FILING_OPTION_KEYS.flow_direction).toBe('limitDirection')
+  })
+
+  it('页面写死的 select 用抓包快照兜底，值对齐原站 Finished.aspx', () => {
+    expect(FILING_SELECTS.flow_direction.map(item => item.value)).toEqual(['II', 'IO', 'OI', 'OO'])
+    expect(FILING_SELECTS.is_paper_notice.map(item => item.value)).toEqual(['1', '0'])
+    expect(FILING_SELECTS.audit_type.map(item => item.value)).toEqual(['submit', 'handover', 'reject', 'withdraw'])
+    expect(FILING_SELECTS.audit_type.map(item => item.label)).toEqual(['提交', '移交', '退回', '撤回'])
+    for (const rows of Object.values(FILING_SELECTS)) {
+      for (const item of rows) {
+        expect(item.value.length).toBeGreaterThan(0)
+        expect(item.label.length).toBeGreaterThan(0)
+      }
+    }
   })
 
   it('草稿只收有值的主条件，显示文本另存', () => {    const draft = filingDraftFields({
@@ -222,6 +236,17 @@ describe('递交查询消息', () => {
     expect(isMessage({ type: MessageType.SearchFiling, payload: { query: { ...payload.query, fields: { Call: 'x' } } } })).toBe(false)
     expect(isMessage({ type: MessageType.SearchFilingResult, payload: { ok: true, data: { items: [], total: 0, pageIndex: 1, pageSize: 10, totalPages: 0 } } })).toBe(true)
     expect(isMessage({ type: MessageType.ScanFilingForm })).toBe(true)
+  })
+
+  it('递交查询可以从前端工作台转发到原网站标签页', () => {
+    const search = {
+      type: MessageType.SearchFiling,
+      payload: { query: { fields: { case_volume: 'PA2619787CND-YS' }, pageIndex: 1, pageSize: 20 } }
+    }
+    expect(isWorkspaceForwardRequest(search)).toBe(true)
+    const wrapped = { type: MessageType.Workspace, payload: { action: 'forward', message: search } }
+    expect(isMessage(wrapped)).toBe(true)
+    expect(isWorkspaceForwardRequest({ type: MessageType.SearchFiling, payload: { query: { pageIndex: 0, pageSize: 20 } } })).toBe(false)
   })
 })
 
