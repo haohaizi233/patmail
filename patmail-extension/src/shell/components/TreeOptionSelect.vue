@@ -8,8 +8,10 @@ const props = withDefaults(defineProps<{
   modelValue?: string
   options: TreeOption[]
   disabled?: boolean
-}>(), { modelValue: '', disabled: false })
-const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
+  /** 多选（checkbox，带「全选」）或单选（radio，选中即收起）。对应原站 TreeUser 的 SelectType。 */
+  multiple?: boolean
+}>(), { modelValue: '', disabled: false, multiple: true })
+const emit = defineEmits<{ 'update:modelValue': [value: string]; open: [] }>()
 
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
@@ -22,6 +24,7 @@ const draft = ref('')
 const applied = ref('')
 const manualExpanded = ref<Record<string, boolean>>({})
 const owner = Symbol('tree-option-select')
+const radioName = `tree-option-${Math.random().toString(36).slice(2, 9)}`
 const tree = computed(() => buildOptionTree(props.options.filter(item => item.value)))
 const selected = computed(() => props.modelValue.split(',').map(item => item.trim()).filter(Boolean))
 const found = computed(() => applied.value.trim() ? searchOptionTree(tree.value, applied.value) : null)
@@ -64,6 +67,7 @@ function show(): void {
   if (props.disabled || opened.value) return
   portal.value = resolvePortal()
   opened.value = true
+  emit('open')
   window.dispatchEvent(new CustomEvent('theme-select-open', { detail: owner }))
   void nextTick(() => {
     updatePosition()
@@ -83,7 +87,29 @@ function clearSelection(): void {
   emit('update:modelValue', '')
 }
 
+/** 全选只勾当前可见的项：搜索时就是命中的那批，没搜索就是整棵树。 */
+function selectAll(): void {
+  if (!props.multiple) return
+  const next = new Set(selected.value)
+  const ids = found.value ? found.value.visible : tree.value.byId.keys()
+  for (const id of ids) {
+    if (tree.value.byId.has(id)) next.add(id)
+  }
+  emit('update:modelValue', [...next].join(','))
+}
+
+function confirm(): void {
+  close()
+  trigger.value?.focus()
+}
+
 function toggle(id: string): void {
+  if (!props.multiple) {
+    emit('update:modelValue', id)
+    close()
+    trigger.value?.focus()
+    return
+  }
   const next = new Set(selected.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
@@ -149,10 +175,14 @@ onBeforeUnmount(() => {
           <button type="button" class="theme-tree-query" @click="search">查询</button>
         </div>
         <div class="theme-tree-list">
-          <TreeOptionNode v-for="id in tree.roots" :key="id" :node-id="id" :by-id="tree.byId" :selected="selected" :expanded="expanded" :visible="found ? found.visible : null" :trail="[]" @toggle="toggle" @expand="expand" />
+          <TreeOptionNode v-for="id in tree.roots" :key="id" :node-id="id" :by-id="tree.byId" :selected="selected" :expanded="expanded" :visible="found ? found.visible : null" :trail="[]" :multiple="multiple" :input-name="radioName" @toggle="toggle" @expand="expand" />
           <p v-if="found && found.visible.size === 0" class="theme-select-empty">没有匹配的选项。</p>
         </div>
-        <button type="button" class="theme-tree-clear" @click="clearSelection">清除</button>
+        <div class="theme-tree-actions">
+          <button type="button" class="theme-tree-clear" @click="clearSelection">清除</button>
+          <button type="button" class="theme-tree-confirm" @click="confirm">确定</button>
+          <button v-if="multiple" type="button" class="theme-tree-all" @click="selectAll">全选</button>
+        </div>
       </div>
     </Teleport>
   </span>

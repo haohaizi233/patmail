@@ -29,6 +29,7 @@ import { selectionFromControls, type FileDownloadSelection } from '../mail/downl
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import { sameOptionValue } from '../shell/components/theme-select'
 import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
+import { isMultiPickerKey } from '../shared/picker-modes'
 
 const props = withDefaults(defineProps<{
   bridge?: MessageBridge
@@ -337,6 +338,15 @@ function optionsFor(key: string): { value: string; label: string; parent?: strin
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
   const options = optionsFor(key).filter(item => item.value)
   return hasOptionTree(options) ? options : []
+}
+/** 树形字段给整棵树；平铺的多选字段直接给完整选项列表，同样走树形框的勾选。 */
+function pickerOptions(key: string): { value: string; label: string; parent?: string }[] {
+  const tree = treeChoices(key)
+  return tree.length ? tree : optionsFor(key)
+}
+/** 原站 TreeUser 的字段（多选或层级树）都换成树形框；平铺单选仍用原生下拉。 */
+function showPicker(key: string): boolean {
+  return isMultiPickerKey(key) || treeChoices(key).length > 0
 }
 function onText(key: string, event: Event): void {
   setOverride(key, (event.target as HTMLInputElement).value)
@@ -1241,13 +1251,13 @@ watch(selectedCustomerId, () => {
             </label>
             <label v-else-if="cell.kind === 'named'" :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="treeChoices(cell.key).length" :model-value="formValue(cell.key)" :options="treeChoices(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="formValue(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
               <ThemeSelect v-else-if="optionsFor(cell.key).length > 1" :model-value="formValue(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
               <input v-else :value="namedShown(cell.key)" type="text" @input="onText(cell.key, $event)" />
             </label>
             <label v-else-if="cell.kind === 'select'" :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="treeChoices(cell.key).length" :model-value="formValue(cell.key)" :options="treeChoices(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="formValue(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
               <ThemeSelect v-else :model-value="formValue(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
             </label>
             <div v-else-if="cell.kind === 'dates'" :class="cellClass(cell)">

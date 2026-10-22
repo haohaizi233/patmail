@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
+import { isMultiPickerKey } from '../shared/picker-modes'
 import type { HistoryQueryOption } from '../api/query-history'
 import { CURRENT_ENVIRONMENT } from '../api/config'
 import { LIMIT_BLOCKS, LIMIT_OPTION_KEYS, LIMIT_SELECTS, buildLimitQueryXml, readLimitQueryXml } from '../api/limit-form'
@@ -135,6 +136,15 @@ function choices(key: string): { value: string; label: string; parent?: string }
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
   const options = choices(key)
   return hasOptionTree(options) ? options : []
+}
+/** 树形字段给整棵树；平铺的多选字段直接给完整选项列表，同样走树形框的勾选。 */
+function pickerOptions(key: string): { value: string; label: string; parent?: string }[] {
+  const tree = treeChoices(key)
+  return tree.length ? tree : choices(key)
+}
+/** 原站 TreeUser 的字段（多选或层级树）都换成树形框；平铺单选仍用原生下拉。 */
+function showPicker(key: string): boolean {
+  return isMultiPickerKey(key) || treeChoices(key).length > 0
 }
 function optionsFor(key: string): { value: string; label: string; parent?: string }[] {
   return [{ value: '', label: '不限' }, ...choices(key)]
@@ -508,20 +518,21 @@ watch(() => [valueOf('case_type'), valueOf('proc_type'), valueOf('country')].joi
             </label>
             <label v-else-if="cell.kind === 'named' && cell.key === 'ctrl_proc'" class="query-cell">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="treeChoices(cell.key).length" :model-value="valueOf(cell.key)" :options="treeChoices(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
               <ThemeSelect v-else-if="choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="namedLabel(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
               <span v-else class="hint">先校对字段，再选择处理事项</span>
               <span v-if="splitCtrlProcIds(valueOf(cell.key)).length > 1" class="hint proc-note">选中的事项会一起放进同一次查询。一行只会命中其中一项。</span>
             </label>
             <label v-else-if="cell.kind === 'named'" class="query-cell">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="treeChoices(cell.key).length" :model-value="valueOf(cell.key)" :options="treeChoices(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
               <ThemeSelect v-else-if="cell.key === 'case_status_id' || choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="fieldLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
               <input v-else :value="namedShown(cell.key)" type="text" @input="onText(cell.key, $event)" />
             </label>
             <label v-else-if="cell.kind === 'select'" class="query-cell">
               <span>{{ cell.label }}</span>
-              <ThemeSelect :model-value="valueOf(cell.key)" :value-label="fieldLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+              <ThemeSelect v-else :model-value="valueOf(cell.key)" :value-label="fieldLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
             </label>
             <div v-else class="query-cell">
               <span>{{ cell.label }}</span>

@@ -5,8 +5,10 @@ import type { CustomFieldColumn, DictionaryOption, FileTypeTreeSnapshot, Normali
 import type { FileSearchQuery } from '../api/file-search-params'
 import { optionsForCaseType, resolveFileDescriptionDisplay, resolveInternalIdDisplay, formHasQueryScope, formValuesToFields, FILE_SEARCH_SCHEMA } from '../schema'
 import { MessageType, type MessageBridge } from '../shared/message'
+import { isMultiPickerKey } from '../shared/picker-modes'
 import FileTypePicker from './FileTypePicker.vue'
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
+import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
 
 const props = defineProps<{ bridge?: MessageBridge; canSearch: boolean; pageSize: number }>()
 const emit = defineEmits<{ search: [query: FileSearchQuery] }>()
@@ -138,8 +140,9 @@ function search(): void {
         <input :value="fieldText(field.key)" type="text" autocomplete="off" @input="setField(field.key, ($event.target as HTMLInputElement).value)" />
       </label>
       <label v-else-if="field.controlType === 'select'">{{ field.label }}
-        <ThemeSelect :model-value="fieldText(field.key)" placeholder="请选择" :options="selectOptions(field.dictionaryKey, field.dependsOn)" @open="ensureCore" @update:model-value="setField(field.key, String($event))" />
-        <span v-if="fieldText(field.key) && displayOf(field.key) === '未识别的历史 ID'" class="hint">未识别的历史 ID</span>
+        <TreeOptionSelect v-if="isMultiPickerKey(field.key)" :model-value="fieldText(field.key)" :multiple="true" :options="selectOptions(field.dictionaryKey, field.dependsOn)" @open="ensureCore" @update:model-value="setField(field.key, String($event))" />
+        <ThemeSelect v-else :model-value="fieldText(field.key)" placeholder="请选择" :options="selectOptions(field.dictionaryKey, field.dependsOn)" @open="ensureCore" @update:model-value="setField(field.key, String($event))" />
+        <span v-if="fieldText(field.key) && displayOf(field.key, isMultiPickerKey(field.key)) === '未识别的历史 ID'" class="hint">未识别的历史 ID</span>
       </label>
       <div v-else-if="field.controlType === 'tree'">
         <span class="hint">{{ field.label }}：{{ fieldText(field.key) ? displayOf(field.key, true) : '未设置' }}</span>
