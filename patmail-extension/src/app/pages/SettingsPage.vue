@@ -19,6 +19,15 @@ const { config: agentConfig, ready: agentReady, setThinking } = useAgentConfig()
 const file = ref<HTMLInputElement | null>(null)
 const presets = AVATAR_PRESET_IDS.map(id => ({ id, src: presetAvatarUrl(id) }))
 const concurrencyOptions = [1, 2, 3, 4].map(count => ({ value: count, label: String(count) }))
+/** 右侧大图预览：鼠标停在某张上就先看这张，移开回到当前头像。 */
+const previewSrc = ref('')
+const bigSrc = computed(() => previewSrc.value || src.value)
+const previewCaption = computed(() => {
+  if (previewSrc.value) return '鼠标停的这张 · 点一下放大，单击选用'
+  if (uploadId.value) return '当前头像 · 上传的图 · 点一下放大'
+  if (presetId.value) return '当前头像 · 系统预存的 · 点一下放大'
+  return '当前头像 · 这台浏览器抽到的默认 · 点一下放大'
+})
 
 const PROBE_KEY = 'patmail.agent.probe.v1'
 
@@ -136,28 +145,33 @@ async function run(action: () => Promise<void>): Promise<void> {
   <section class="card avatar-panel">
     <h2>头像</h2>
     <p class="hint">还没单独设过头像时，用这台浏览器从 20 张里抽到的一张。上传的图片会按画面自动居中裁成正方形，留在这台浏览器里，出现在下面，之后还能再选。单击选用，双击放大。上传的可以删，系统预存的 20 张不能删。</p>
-    <div class="avatar-current">
-      <button type="button" class="avatar-zoom-open" :disabled="!src" aria-label="放大头像" @click="openZoom()">
-        <img v-if="src" class="avatar-face" :src="src" alt="" />
-      </button>
-      <div class="avatar-actions">
-        <button type="button" class="primary" :disabled="!signedIn" @click="file?.click()">上传图片</button>
-        <button type="button" :disabled="!signedIn || !uploadId" @click="run(() => onRemove(uploadId))">删除</button>
-        <button type="button" :disabled="!signedIn || !custom" @click="run(clear)">恢复默认</button>
-        <input ref="file" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden @change="onFile" />
-        <p>{{ signedIn ? (note || '可以从下面挑一张，也可以上传自己的图片。当前是上传的图时，可以点「删除」。双击任意一张可以放大。') : '先连上 EASY 并确认登录人，才能换成这个账号自己的头像。双击下面的头像仍可以放大。' }}</p>
+    <div class="avatar-layout">
+      <div class="avatar-main">
+        <div class="avatar-actions">
+          <button type="button" class="primary" :disabled="!signedIn" @click="file?.click()">上传图片</button>
+          <button type="button" :disabled="!signedIn || !uploadId" @click="run(() => onRemove(uploadId))">删除</button>
+          <button type="button" :disabled="!signedIn || !custom" @click="run(clear)">恢复默认</button>
+          <input ref="file" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden @change="onFile" />
+          <p>{{ signedIn ? (note || '可以从下面挑一张，也可以上传自己的图片。当前是上传的图时，可以点「删除」。单击选用，点右边大图放大。') : '先连上 EASY 并确认登录人，才能换成这个账号自己的头像。右边大图仍可以点开放大。' }}</p>
+        </div>
+        <div class="avatar-grid" @mouseleave="previewSrc = ''">
+          <div v-for="item in uploads" :key="item.id" class="upload-slot">
+            <button type="button" class="uploaded" :class="{ on: uploadId === item.id }" :aria-label="`上传的头像 ${item.id}`" @mouseenter="previewSrc = item.image" @click="signedIn && run(() => chooseUpload(item.id))" @dblclick.stop="openZoom(item.image)">
+              <img :src="item.image" alt="" />
+            </button>
+            <button type="button" class="upload-remove" :disabled="!signedIn" aria-label="删除这张上传的头像" @click.stop="run(() => onRemove(item.id))" @dblclick.stop>×</button>
+          </div>
+          <button v-for="(item, index) in presets" :key="item.id" type="button" :class="{ on: presetId === item.id }" :aria-label="`头像 ${index + 1}`" @mouseenter="previewSrc = item.src" @click="signedIn && run(() => choosePreset(item.id))" @dblclick.stop="openZoom(item.src)">
+            <img :src="item.src" alt="" />
+          </button>
+        </div>
       </div>
-    </div>
-    <div class="avatar-grid">
-      <div v-for="item in uploads" :key="item.id" class="upload-slot">
-        <button type="button" class="uploaded" :class="{ on: uploadId === item.id }" :aria-label="`上传的头像 ${item.id}`" @click="signedIn && run(() => chooseUpload(item.id))" @dblclick.stop="openZoom(item.image)">
-          <img :src="item.image" alt="" />
+      <aside class="avatar-preview">
+        <button type="button" class="avatar-preview-open" :disabled="!bigSrc" aria-label="放大头像" @click="openZoom(previewSrc || undefined)">
+          <img v-if="bigSrc" class="avatar-face" :src="bigSrc" alt="" />
         </button>
-        <button type="button" class="upload-remove" :disabled="!signedIn" aria-label="删除这张上传的头像" @click.stop="run(() => onRemove(item.id))" @dblclick.stop>×</button>
-      </div>
-      <button v-for="(item, index) in presets" :key="item.id" type="button" :class="{ on: presetId === item.id }" :aria-label="`头像 ${index + 1}`" @click="signedIn && run(() => choosePreset(item.id))" @dblclick.stop="openZoom(item.src)">
-        <img :src="item.src" alt="" />
-      </button>
+        <p class="hint">{{ previewCaption }}</p>
+      </aside>
     </div>
   </section>
   <section class="card">

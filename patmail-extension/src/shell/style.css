@@ -72,7 +72,7 @@ img { max-width: 100%; }
 .avatar-actions button { height: 34px; border-radius: 17px; border: 1px solid #f3b7d0; background: #fff; color: #c45b86; padding: 0 14px; }
 .avatar-actions button.primary { border-color: #ff7aaa; background: #ff7aaa; color: #fff; }
 .avatar-actions button:disabled { opacity: .45; }
-.avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 10px; max-width: 760px; }
+.avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 10px; margin-top: 12px; }
 .avatar-grid button { width: 72px; height: 72px; padding: 0; border-radius: 50%; border: 2px solid transparent; background: transparent; }
 .avatar-grid button.on { border-color: #ff4f93; }
 .avatar-grid button.uploaded { box-shadow: inset 0 0 0 1px #ffd0e2; }
@@ -81,6 +81,13 @@ img { max-width: 100%; }
 .avatar-grid .upload-remove { position: absolute; top: -6px; right: -6px; z-index: 2; width: 24px; height: 24px; border: 2px solid #fff; border-radius: 50%; background: #ff2d78; color: #fff; padding: 0; font-size: 14px; line-height: 20px; box-shadow: 0 1px 4px rgba(36, 48, 86, .18); }
 .avatar-grid button:disabled { cursor: not-allowed; }
 .avatar-grid img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+.avatar-layout { display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap; }
+.avatar-main { flex: 1 1 420px; min-width: 0; }
+.avatar-preview { flex: 0 1 260px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.avatar-preview .avatar-face { width: 220px; height: 220px; border-radius: 50%; object-fit: cover; object-position: center; background: #fff; }
+.avatar-preview .hint { margin: 0; }
+.avatar-preview-open { width: 220px; height: 220px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: zoom-in; }
+.avatar-preview-open:disabled { cursor: default; }
 .profile b, .profile small { display: block; text-align: left; }
 .profile b { font-size: 14px; }
 .profile small { color: var(--sub); font-size: 11px; }
@@ -128,9 +135,9 @@ img { max-width: 100%; }
 .page-copy span { color: #ff6b9d; }
 .page-art { margin-left: auto; width: 280px; height: 92px; object-fit: contain; object-position: right center; background: transparent; }
 .page-art.page-art-lg { width: auto; height: 92px; transform: scale(2.15); transform-origin: right center; }
-.page-head:has(.page-contact) .page-copy { flex: 1 1 auto; min-width: 0; }
+.page-head:has(.page-contact) .page-copy { flex: 0 1 auto; min-width: 0; }
 .page-head:has(.page-contact) .page-art { flex: 0 1 200px; width: auto; max-width: 240px; margin-left: 0; }
-.page-contact { flex: 1 1 auto; min-width: max-content; display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 0 12px 0 20px; min-height: 72px; padding: 10px 22px; border: 1px solid #f6e5ee; border-radius: 16px; background: linear-gradient(180deg, #fff, #fff7fb); box-shadow: 0 8px 24px #f6d7e530; font-style: normal; }
+.page-contact { flex: 0 0 auto; min-width: max-content; display: flex; align-items: center; justify-content: center; gap: 28px; margin: 0 auto; min-height: 72px; padding: 10px 22px; border: 1px solid #f6e5ee; border-radius: 16px; background: linear-gradient(180deg, #fff, #fff7fb); box-shadow: 0 8px 24px #f6d7e530; font-style: normal; }
 .page-contact p { margin: 0; }
 .page-contact span { display: block; color: #8d97b0; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
 .page-contact b, .page-contact a { display: block; margin-top: 2px; color: #4e4056; font-size: 14px; font-weight: 700; text-decoration: none; white-space: nowrap; }
@@ -204,15 +211,19 @@ img { max-width: 100%; }
 .fit-table table.grid .clip { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fit-table .theme-select { display: block; width: 100%; max-width: 100%; min-width: 0; }
 .fit-table .theme-select-trigger { min-width: 0; height: 31px; }
-/* 期限表、工作表列宽由 column-fit 按文字测量后写到 col 上。这里只负责放不下时省略。 */
+/* 期限表、工作表、递交表列宽由 column-fit 按文字测量后写到 col 上。这里只负责放不下时省略。 */
 .fit-table.limit-cols,
-.fit-table.sheet-cols { overflow-x: auto; }
+.fit-table.sheet-cols,
+.fit-table.filing-cols { overflow-x: auto; }
 .fit-table.limit-cols table.grid,
-.fit-table.sheet-cols table.grid { table-layout: fixed; }
+.fit-table.sheet-cols table.grid,
+.fit-table.filing-cols table.grid { table-layout: fixed; }
 .fit-table.limit-cols th,
 .fit-table.limit-cols td,
 .fit-table.sheet-cols th,
-.fit-table.sheet-cols td { display: table-cell; min-width: 0; max-width: none; }
+.fit-table.sheet-cols td,
+.fit-table.filing-cols th,
+.fit-table.filing-cols td { display: table-cell; min-width: 0; max-width: none; }
 .fit-table.limit-cols td.limit-empty {
   overflow: visible;
   text-overflow: clip;
