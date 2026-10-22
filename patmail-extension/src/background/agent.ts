@@ -132,6 +132,12 @@ async function clearConversation(area: LocalArea, model: string): Promise<ApiRes
   return { ok: true, data: await viewOf(area, '这段对话已清空。其它对话和长期记忆还在。', model, 0) }
 }
 
+/** 没有归类的失败也带上真实原因，免得只剩一句「没有完成」没法排查。 */
+function describeAgentFailure(error: unknown): string {
+  const detail = error instanceof Error ? error.message.trim() : ''
+  return detail ? `AI 助手调用没有完成。${detail}` : 'AI 助手调用没有完成。'
+}
+
 async function compactConversation(area: LocalArea, config: AgentConfig): Promise<ApiResult<AgentTurnView>> {
   try {
     const current = await loadMemory(area)
@@ -140,7 +146,7 @@ async function compactConversation(area: LocalArea, config: AgentConfig): Promis
     return { ok: true, data: await viewOf(area, compacted.reply, config.model, 0) }
   } catch (error) {
     if (error instanceof LlmError) return apiError(error.code, error.message, error.status)
-    return apiError('NETWORK_ERROR', 'AI 助手调用没有完成。')
+    return apiError('NETWORK_ERROR', describeAgentFailure(error))
   }
 }
 
@@ -647,7 +653,7 @@ export async function handleAgentChat(payload: { action?: unknown; message?: unk
     } catch (error) {
       const name = requested.model
       if (error instanceof LlmError) return apiError(error.code, `${name}：${error.message}`, error.status)
-      return apiError('NETWORK_ERROR', `${name}：AI 助手调用没有完成。`)
+      return apiError('NETWORK_ERROR', `${name}：${describeAgentFailure(error)}`)
     }
   }
   const resolved = resolveSlash(message)
@@ -676,7 +682,7 @@ export async function handleAgentChat(payload: { action?: unknown; message?: unk
     return { ok: true, data: await viewOf(area, turn.reply, config.model, turn.steps, turn.memory) }
   } catch (error) {
     if (error instanceof LlmError) return apiError(error.code, error.message, error.status)
-    return apiError('NETWORK_ERROR', 'AI 助手调用没有完成。')
+    return apiError('NETWORK_ERROR', describeAgentFailure(error))
   } finally {
     if (turnAbort === abort) turnAbort = null
   }

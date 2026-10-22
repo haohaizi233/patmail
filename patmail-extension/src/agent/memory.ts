@@ -110,6 +110,7 @@ const MAX_FACT_TEXT = 240
 export interface MemoryStorage {
   get(key: string): Promise<Record<string, unknown>>
   set(items: Record<string, unknown>): Promise<void>
+  remove?(keys: string | string[]): Promise<void>
 }
 
 function isToolCall(value: unknown): value is AssistantToolCall {
@@ -364,11 +365,13 @@ async function ensureIndex(area: MemoryStorage): Promise<SessionIndex> {
     facts: legacy.facts,
     items: [{ id, title: sessionTitleFrom(legacy.turns), updatedAt: now }]
   }
-  await area.set({
-    [AGENT_SESSIONS_KEY]: index,
-    [sessionKey(id)]: sessionBody(legacy),
-    [AGENT_MEMORY_KEY]: null
-  })
+  try {
+    await area.set({
+      [AGENT_SESSIONS_KEY]: index,
+      [sessionKey(id)]: sessionBody(legacy),
+      [AGENT_MEMORY_KEY]: null
+    })
+  } catch { /* 存不下也先用这份索引顶着，回答不能丢 */ }
   return index
 }
 
@@ -389,6 +392,15 @@ export async function loadMemory(area: MemoryStorage): Promise<AgentMemoryState>
   return (await readAgentSessions(area)).memory
 }
 
+/** 写不下时先把这段对话收短：更早的原话丢掉，只留最近一小段，工作清单也不存。 */
+function shrunkBody(state: AgentMemoryState): AgentMemoryState {
+  const { recent } = splitForCompression(state, 60_000)
+  const tight: AgentMemoryState = { ...state, turns: recent }
+  delete tight.work
+  return tight
+}
+
+/** 存不下就先腾地方再试，最后宁可不存，也不能把这一轮回答丢掉。 */
 export async function saveMemory(area: MemoryStorage, state: AgentMemoryState): Promise<void> {
   const index = await ensureIndex(area)
   const now = new Date().toISOString()
@@ -401,10 +413,24 @@ export async function saveMemory(area: MemoryStorage, state: AgentMemoryState): 
       return { id: item.id, title, updatedAt: now, ...(item.named ? { named: true as const } : {}) }
     })
   }
-  await area.set({
+  const write = (body: AgentMemoryState): Promise<void> => area.set({
     [AGENT_SESSIONS_KEY]: next,
-    [sessionKey(index.activeId)]: sessionBody(state)
+    [sessionKey(index.activeId)]: sessionBody(body)
   })
+  try {
+    await write(state)
+    return
+  } catch { /* 按缓存满处理，先收短再试 */ }
+  const tight = shrunkBody(state)
+  try {
+    await write(tight)
+    return
+  } catch { /* 还是满就清掉其它对话的原文 */ }
+  try {
+    const ids = index.items.map(item => item.id).filter(id => id !== index.activeId)
+    if (ids.length > 0 && area.remove) await area.remove(ids.map(sessionKey))
+    await write(tight)
+  } catch { /* 存不下就先不存 */ }
 }
 
 /** 当前这段还没有内容时不另开。满了就停，避免把更早的对话悄悄丢掉。有名字就固定下来，不再被第一句话替换。 */
@@ -513,6 +539,13 @@ export function splitForCompression(state: AgentMemoryState, keepChars = KEEP_RE
 function capStoredTurns(turns: MemoryTurn[]): MemoryTurn[] {
   if (contextChars({ summary: '', turns, facts: [] }) <= STORAGE_TURN_CHARS) return turns
   return splitForCompression({ summary: '', turns, facts: [] }, STORAGE_TURN_CHARS).recent
+}
+
+/** 模型嫌上下文太长时先丢更早的原话，把最近这一段留下。工具调用和它的返回留在同一边。 */
+export function dropOldTurns(state: AgentMemoryState, keepChars = KEEP_RECENT_CHARS): AgentMemoryState {
+  const { older, recent } = splitForCompression(state, keepChars)
+  if (older.length === 0) return state
+  return { ...state, turns: recent }
 }
 
 const DIGEST_NOTE = '以下是更早对话的原文摘录，不是查证结论。摘录里没有的文号、客户、日期和数量都不能当成已经查到。'

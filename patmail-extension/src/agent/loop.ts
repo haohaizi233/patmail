@@ -1,7 +1,7 @@
 import { activityDetail } from './trace'
 import type { AgentConfig } from './config'
 import { chatCompletion, LlmError, llmFailureKind, type AssistantToolCall, type ChatChoice, type ChatMessage, type ChatOutcome } from './llm'
-import { applySummary, contextChars, factsForPrompt, foldDigest, modelAnswer, needsCompression, OVERFLOW_RETRY_CHARS, projectOldToolText, splitForCompression, trimToolResults, visibleHistory, type AgentMemoryState, type AgentWork, type MemoryTurn } from './memory'
+import { applySummary, contextChars, dropOldTurns, factsForPrompt, foldDigest, modelAnswer, needsCompression, OVERFLOW_RETRY_CHARS, projectOldToolText, splitForCompression, trimToolResults, visibleHistory, type AgentMemoryState, type AgentWork, type MemoryTurn } from './memory'
 import { readArbitrationDecisions } from '../customer/pct-workbook'
 import { planFromCalls, remainingWork, type WorkStep } from './plan'
 import { resolveSlash } from './slash'
@@ -651,13 +651,18 @@ export async function runAgentTurn(config: AgentConfig, memory: AgentMemoryState
           await wait(RATE_LIMIT_BACKOFF_MS)
           continue
         }
-        if (kind === 'overflow' && overflowTries < 1) {
+        if (kind === 'overflow' && overflowTries < 2) {
           overflowTries += 1
-          const next = trimToolResults(state, OVERFLOW_RETRY_CHARS)
-          if (contextChars(next) >= contextChars(state)) throw error
-          onActivity?.('正在缩短查询结果')
-          state = next
-          continue
+          let next = overflowTries === 1 ? trimToolResults(state, OVERFLOW_RETRY_CHARS) : dropOldTurns(state)
+          if (contextChars(next) >= contextChars(state) && overflowTries === 1) {
+            overflowTries = 2
+            next = dropOldTurns(state)
+          }
+          if (contextChars(next) < contextChars(state)) {
+            onActivity?.(overflowTries === 1 ? '正在缩短查询结果' : '正在整理更早的对话')
+            state = next
+            continue
+          }
         }
         throw error
       }
