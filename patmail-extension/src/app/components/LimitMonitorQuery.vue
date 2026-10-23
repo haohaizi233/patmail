@@ -19,7 +19,7 @@ import { useWorkspace } from '../composables/useWorkspace'
 import { isWriteSwitchOpen, isWriteSwitchReady } from '../../settings/write-switch'
 import { useWriteSwitch } from '../../settings/use-write-switch'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   bridge?: MessageBridge
   userId: string
   connected: boolean
@@ -37,7 +37,7 @@ const props = defineProps<{
   allowMailedUnfinished?: boolean
   /** 发文映射或这一页选中的默认发件人。草稿没有发件邮箱时写入。 */
   senderId?: string
-}>()
+}>(), { flowChecking: false, allowMailedUnfinished: true })
 
 const { open: writesOpen, ready: writesReady } = useWriteSwitch()
 const { concurrency } = useMailConcurrency()
@@ -479,7 +479,7 @@ function goPage(page: number): void {
 function rowCanConfirm(procId: string): boolean {
   if (closedIds.value.has(procId.toLowerCase())) return false
   const flow = flowByProc.value[procId]
-  if (flow === MAILED_UNFINISHED_REVIEW) return props.allowMailedUnfinished !== false
+  if (flow === MAILED_UNFINISHED_REVIEW) return props.allowMailedUnfinished
   if (flow === '已提交审核' || flow === SKIP_SEND_REVIEW) return false
   const gate = gates.value[procId]
   if (gate === 'pending') return false
@@ -493,7 +493,7 @@ function blockMessage(ids: string[], verb: '提交' | '勾选'): string {
   const reasons = ids.filter(id => isQueryGuid(id) && !rowCanConfirm(id)).map(id => {
     if (closedIds.value.has(id.toLowerCase())) return 'closed'
     const flow = flowByProc.value[id]
-    if (flow === MAILED_UNFINISHED_REVIEW && props.allowMailedUnfinished === false) return 'mailed'
+    if (flow === MAILED_UNFINISHED_REVIEW && !props.allowMailedUnfinished) return 'mailed'
     if (flow === SKIP_SEND_REVIEW) return 'skip'
     return 'review'
   })
@@ -510,7 +510,7 @@ function blockMessage(ids: string[], verb: '提交' | '勾选'): string {
 }
 
 watch(() => props.allowMailedUnfinished, allow => {
-  if (allow !== false) return
+  if (allow) return
   const next = selected.value.filter(id => flowByProc.value[id] !== MAILED_UNFINISHED_REVIEW)
   if (next.length !== selected.value.length) selected.value = next
 })
@@ -865,7 +865,7 @@ watch(() => props.seedToken, () => {
     :writes-open="writesOpen"
     :writes-ready="writesReady"
     :ipr-gap="hasIprGap"
-    :allow-mailed-unfinished="allowMailedUnfinished !== false"
+    :allow-mailed-unfinished="allowMailedUnfinished"
     @page="goPage"
     @select="selected = $event"
     @confirm="onConfirm"

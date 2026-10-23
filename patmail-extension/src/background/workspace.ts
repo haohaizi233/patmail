@@ -391,7 +391,9 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
       const frozen = frozenNow()
       await saveQueryTemplateAccount(host.area, frozen.easyOrigin, frozen.operatorId, action.template, action.expectedVersion)
       await recheckTasks(host, frozen)
-      return await finishWrite('本地模板已保存。原网站历史模板没有被写入。')
+      return await finishWrite(action.template.queryType === 'FilingSearch'
+        ? '递交查询模板已保存在本机。原网站没有模板功能，不会写入。'
+        : '本地模板已保存。原网站历史模板没有被写入。')
     } catch (error) {
       if (error instanceof StaleContextError) return staleResult(host)
       return failWrite(error instanceof Error ? error.message : '模板没有保存。')

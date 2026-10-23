@@ -21,7 +21,8 @@ export const READ_ONLY_AUTO_CALLS = [
   'GetMailFile',
   'GetMailCase',
   'GetFlowInfo',
-  'GetFlowHistory'
+  'GetFlowHistory',
+  'ShowUserInfo'
 ] as const
 
 const WRITES = new Set<string>(LIVE_WRITE_CALLS)

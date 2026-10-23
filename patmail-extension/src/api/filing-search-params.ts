@@ -3,12 +3,13 @@ import { apiError, type ApiResult } from './types'
 
 /**
  * 递交管理列表 `FilingAction.ashx Call=GetFinished` 的请求封装。
- * 来源：`183.36.43.66.har`（第三段）里 `Forms/NewFiling/Filing.aspx`、`Forms/Filing/Finished.aspx` 的 6 次 GetFinished。
+ * 来源：`183.36.43.66.har`（第三段）里 `Forms/NewFiling/Filing.aspx`、`Forms/Filing/Finished.aspx` 的 6 次 GetFinished，
+ * 另用 `111.har`（插件）和 `222.har`（原站）对过一次：原站每次都带 `filing_new=1`，少了它查的是旧递交数据，一条都出不来。
  * 条件不在表单里平铺，全部塞进 `Element`：每个条件一个标签，先写 `&lt;标签&gt;值&lt;/标签&gt;`，再交表单编码。
- * 空条件也要交空标签。少交标签会不会「系统繁忙」没有对照，按原站的 43 个标签全交。
+ * 空条件也要交空标签。少交标签会不会「系统繁忙」没有对照，按原站的 44 个标签全交。
  */
 
-/** Element 的 43 个标签，按抓包顺序。`*_text`、`*txtSearch` 是树形框的显示文本，不是查询参数。 */
+/** Element 的 44 个标签，按抓包顺序。`*_text`、`*txtSearch` 是树形框的显示文本，不是查询参数。 */
 export const FILING_ELEMENT_NODES = [
   'case_volume', 'ctrl_proc', 'ctrl_proc_text', 'ctrl_proc_idtxtSearch',
   'customer_volume', 'customer', 'customer_code', 'flow_direction', 'case_name', 'case_type',
@@ -16,7 +17,7 @@ export const FILING_ELEMENT_NODES = [
   'create_time_start', 'create_time_end',
   'create_user_id', 'create_user_id_text', 'create_usertxtSearch',
   'create_date_start', 'create_date_end',
-  'activity', 'activity_treetxtSearch',
+  'activity', 'activity_text', 'activity_treetxtSearch',
   'finish_date_start', 'finish_date_end',
   'contract_no', 'business_coop', 'is_paper_notice', 'agent_name', 'applicant', 'app_no',
   'apply_type', 'apply_type_text', 'apply_type_treetxtSearch',
@@ -27,7 +28,7 @@ export const FILING_ELEMENT_NODES = [
 
 export type FilingElementNode = (typeof FILING_ELEMENT_NODES)[number]
 
-/** 主条件字段。可以填进表单的只有这些。原站的递交列表没有查询模板，插件这页也不做模板保存。 */
+/** 主条件字段。可以填进表单的只有这些。原站的递交列表没有查询模板；插件的递交模板只存本机（queryType 'FilingSearch'），不写原网站。 */
 export const FILING_INPUT_FIELDS = [
   'case_volume', 'ctrl_proc', 'customer_volume', 'customer', 'customer_code', 'flow_direction',
   'case_name', 'case_type', 'audit_user_id', 'create_time_start', 'create_time_end',
@@ -44,7 +45,7 @@ export const FILING_DISPLAY_NODES: Record<string, string[]> = {
   ctrl_proc: ['ctrl_proc_text', 'ctrl_proc_idtxtSearch'],
   audit_user_id: ['audit_user_id_text', 'audituseridtxtSearch'],
   create_user_id: ['create_user_id_text', 'create_usertxtSearch'],
-  activity: ['activity_treetxtSearch'],
+  activity: ['activity_text', 'activity_treetxtSearch'],
   apply_type: ['apply_type_text', 'apply_type_treetxtSearch'],
   sales_user_id: ['sales_user_id_text', 'sales_user_treetxtSearch'],
   branch_dept: ['branch_dept_text']
@@ -193,8 +194,12 @@ export function buildFilingSearchParams(
     ...fields,
     case_type: fields.case_type || CURRENT_ENVIRONMENT.caseTypeId
   }, displayValues))
+  // 原站每次都带 filing_new=1：这是「新递交」数据的范围开关，少了它查的是旧递交表，列表永远是空的。
+  params.append('filing_new', '1')
   params.append('colsel', FILING_SEARCH_COLSEL)
   params.append('_t', String(now()))
+  // 第 2 页起原站多带一个 pageIsFirstRequest=false（layui 翻页），照抄。
+  if (query.pageIndex > 1) params.append('pageIsFirstRequest', 'false')
   params.append('log_pagename', 'Finished.aspx')
   return { ok: true, data: params }
 }

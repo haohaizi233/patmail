@@ -35,7 +35,8 @@ export function buildQueryDependencies(profiles: CustomerQueryProfile[], templat
   return wanted.map(profileId => {
     const profile = profiles.find(item => item.id === profileId)
     const template = profile
-      ? templates.find(item => item.id === profile.baseTemplateId && item.source === 'local') ?? templates.find(item => item.id === profile.baseTemplateId)
+      ? templates.find(item => item.id === profile.baseTemplateId && item.source === 'local' && item.queryType === 'FileSearch') ??
+        templates.find(item => item.id === profile.baseTemplateId && item.queryType === 'FileSearch')
       : undefined
     return {
       customerProfileId: profileId,

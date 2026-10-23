@@ -8,6 +8,7 @@ import { isLimitMonitorInputField, isLimitMonitorType, type LimitMonitorQuery } 
 import type { LimitMonitorResult, LimitMonitorRow } from './limit-monitor-types'
 import { filingSearchValueLimit, isFilingSearchInputField, type FilingSearchQuery } from './filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from './filing-search-types'
+import type { FilingFlowRow, FilingUser } from './filing-export'
 import { isProcessKind, isProcessOpenTarget, PROCESS_SPECS, type ProcessListQuery, type ProcessListResult, type ProcessListRow } from './mail-process'
 import type { SessionSummary } from './session'
 import type { CaseContactExport } from '../case-contact/query'
@@ -187,7 +188,8 @@ export function isFilingSearchQuery(value: unknown): value is FilingSearchQuery 
 const FILING_ROW_KEYS = [
   'filingId', 'caseId', 'procId', 'caseVolume', 'caseName', 'customerName',
   'customerCode', 'applyType', 'ctrlProc', 'intDueDate', 'filingDate', 'caseType',
-  'branchDept', 'createUser', 'createTime', 'flowStatus', 'appNo', 'customerVolume'
+  'branchDept', 'createUser', 'createTime', 'flowStatus', 'flowDirection', 'appNo', 'customerVolume',
+  'appDate', 'caseStatus'
 ] as const
 
 function isFilingRow(value: unknown): value is FilingSearchRow {
@@ -204,6 +206,27 @@ function isFilingResult(value: unknown): value is FilingSearchResult {
 
 export function isFilingSearchApiResult(value: unknown): value is ApiResult<FilingSearchResult> {
   return isApiResult(value, isFilingResult)
+}
+
+const FILING_FLOW_ROW_KEYS = ['nodeName', 'auditUserId', 'auditUserName', 'auditType', 'auditTime', 'remark'] as const
+
+function isFilingFlowRow(value: unknown): value is FilingFlowRow {
+  return isRecord(value) && FILING_FLOW_ROW_KEYS.every(key => typeof value[key] === 'string' && value[key].length <= 500)
+}
+
+export function isFilingFlowApiResult(value: unknown): value is ApiResult<FilingFlowRow[]> {
+  return isApiResult(value, (data): data is FilingFlowRow[] =>
+    Array.isArray(data) && data.length <= 500 && data.every(isFilingFlowRow))
+}
+
+const FILING_USER_KEYS = ['userId', 'cnName', 'deptFullName', 'email', 'tel'] as const
+
+function isFilingUser(value: unknown): value is FilingUser {
+  return isRecord(value) && FILING_USER_KEYS.every(key => typeof value[key] === 'string' && value[key].length <= 300)
+}
+
+export function isFilingUserApiResult(value: unknown): value is ApiResult<FilingUser> {
+  return isApiResult(value, isFilingUser)
 }
 
 const MAIL_PROCESS_KEYS = new Set(['kind', 'searchKey', 'pageIndex', 'pageSize'])

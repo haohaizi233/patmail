@@ -38,7 +38,9 @@ export interface WorkflowCatalog {
 const PCT_ID = 'pct-reminder'
 const PENGCHENG_ID = 'pct-pengcheng'
 export const FILE_MANAGE_ID = 'file-manage'
-const SYSTEM_IDS = new Set([PCT_ID, PENGCHENG_ID, FILE_MANAGE_ID])
+/** 递交管理的导出工作流。入口在递交管理的查询结果上，不在发文。 */
+export const FILING_EXPORT_ID = 'filing-export'
+const SYSTEM_IDS = new Set([PCT_ID, PENGCHENG_ID, FILE_MANAGE_ID, FILING_EXPORT_ID])
 
 const PCT_SKILLS: Array<[string, string]> = [
   ['entry', 'start'],
@@ -139,8 +141,25 @@ export function defaultFileManageWorkflow(): WorkflowDefinition {
   }
 }
 
+/** 递交管理的导出工作流：不发文，把查出的递交整理成带退回脉络的 Excel。递交管理和「按工作流发文」里都是同一张查询表单，现场查现场导。 */
+export function defaultFilingExportWorkflow(): WorkflowDefinition {
+  return {
+    id: FILING_EXPORT_ID,
+    label: '递交管理-已完成导出',
+    summary: '现场查出递交记录并勾选，整理成导出表：谁退回、退回原因、谁接手、接手人部门。',
+    system: true,
+    steps: [
+      { id: 'export-pick', title: '勾选递交记录', detail: '在查询表单里现场查出递交记录再勾选：逐行勾、全选本页、全选所有都行。结果超过 1000 条会先提醒加条件。', params: [] },
+      { id: 'export-flow', title: '读流程历史', detail: '每件递交读一次流程历史（obj_id 传递交编号），把办理结果是「退回」的行挑出来：退回的人是流程专员，退回这一行的办理意见是退回原因。', params: [] },
+      { id: 'export-people', title: '对上接手人和部门', detail: '退回后下面第一个「启动流程」的人是代理师（接受者）；没有这样的行就取再下面一位办理人。所属部门按人去重读人员浮窗。', params: [] },
+      { id: 'export-preview', title: '导出预览', detail: '上表是查询结果，下表是导出预览，都是分页行级刷新。一次退回一行，同一份的第二行起我方文号留空。', params: [] },
+      { id: 'export-file', title: '下载 Excel', detail: '八列：我方文号、申请日、案件流向、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。首行冻结，取完数自动下载。', params: [] }
+    ]
+  }
+}
+
 export function defaultWorkflowCatalog(): WorkflowCatalog {
-  return { workflows: [defaultPctWorkflow(), defaultPengchengWorkflow(), defaultFileManageWorkflow()] }
+  return { workflows: [defaultPctWorkflow(), defaultPengchengWorkflow(), defaultFileManageWorkflow(), defaultFilingExportWorkflow()] }
 }
 
 function cloneData<T>(value: T): T {
@@ -442,13 +461,13 @@ export function normalizeWorkflowCatalog(input: unknown): WorkflowCatalog {
   for (const item of rawList) {
     if (!isRecord(item)) continue
     if (item.id === PCT_ID) pct = mergePct(item)
-    else if (item.id === PENGCHENG_ID || item.id === FILE_MANAGE_ID) continue
+    else if (item.id === PENGCHENG_ID || item.id === FILE_MANAGE_ID || item.id === FILING_EXPORT_ID) continue
     else {
       const extra = parseExtraWorkflow(item)
       if (extra && !extras.some(flow => flow.id === extra.id)) extras.push(extra)
     }
   }
-  return { workflows: [pct ?? defaultPctWorkflow(), defaultPengchengWorkflow(), defaultFileManageWorkflow(), ...extras] }
+  return { workflows: [pct ?? defaultPctWorkflow(), defaultPengchengWorkflow(), defaultFileManageWorkflow(), defaultFilingExportWorkflow(), ...extras] }
 }
 
 const FILLED_ON_SAVE = new Set([

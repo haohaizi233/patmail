@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildFilingSearchElement, buildFilingSearchParams, FILING_ELEMENT_NODES, FILING_INPUT_FIELDS, splitFilingCtrlProcIds
+  buildFilingSearchElement, buildFilingSearchParams, FILING_ELEMENT_NODES, FILING_INPUT_FIELDS, isFilingDateText, splitFilingCtrlProcIds
 } from '../src/api/filing-search-params'
 import { normalizeFilingSearch } from '../src/api/filing-search-normalizer'
-import { FILING_BLOCKS, FILING_OPTION_KEYS, FILING_SELECTS, filingCellKeys, filingDraftFields } from '../src/api/filing-form'
+import { FILING_BLOCKS, FILING_DATE_CELLS, FILING_OPTION_KEYS, FILING_SELECTS, filingCellKeys, filingDateDefaults, filingDraftFields } from '../src/api/filing-form'
 import { FILING_FORM_FIELDS, scanFilingForm } from '../src/query/scan-filing-form.mjs'
 import { isMessage, isWorkspaceForwardRequest, MessageType } from '../src/shared/message'
 
@@ -22,9 +22,9 @@ function clientInfo(extra: Record<string, unknown> = {}): Record<string, unknown
 }
 
 describe('递交管理查询参数', () => {
-  it('组 Element 时把 43 个标签全写出来，空条件是空标签', () => {
+  it('组 Element 时把 44 个标签全写出来，空条件是空标签', () => {
     const element = buildFilingSearchElement({ case_volume: 'PA2619787CND-YS' })
-    expect(FILING_ELEMENT_NODES).toHaveLength(43)
+    expect(FILING_ELEMENT_NODES).toHaveLength(44)
     for (const node of FILING_ELEMENT_NODES) {
       expect(element).toContain(`&lt;${node}&gt;`)
     }
@@ -40,6 +40,7 @@ describe('递交管理查询参数', () => {
     expect(element).toContain('&lt;ctrl_proc_text&gt;新申请&lt;/ctrl_proc_text&gt;')
     expect(element).toContain('&lt;ctrl_proc_idtxtSearch&gt;新申请&lt;/ctrl_proc_idtxtSearch&gt;')
     expect(element).toContain('&lt;audituseridtxtSearch&gt;&lt;/audituseridtxtSearch&gt;')
+    expect(element).toContain('&lt;activity_text&gt;&lt;/activity_text&gt;')
     expect(element).toContain('&lt;case_name&gt;A&lt;B&amp;C&lt;/case_name&gt;')
   })
 
@@ -52,9 +53,14 @@ describe('递交管理查询参数', () => {
     expect(params.get('Call')).toBe('GetFinished')
     expect(params.get('pageIndex')).toBe('1')
     expect(params.get('pageSize')).toBe('10')
+    // 原站每次都带 filing_new=1。少了它就是查旧递交数据，列表永远是空的（111.har / 222.har 对过）。
+    expect(params.get('filing_new')).toBe('1')
     expect(params.get('log_pagename')).toBe('Finished.aspx')
     expect(params.get('_t')).toBe('1792565725605')
     expect(params.get('colsel')).toContain(';undefined;case_volume;')
+    expect(params.has('pageIsFirstRequest')).toBe(false)
+    const turned = paramsOf(buildFilingSearchParams({ fields: {}, pageIndex: 2, pageSize: 10 }, () => 1792565725605))
+    expect(turned.get('pageIsFirstRequest')).toBe('false')
     expect(params.get('Element')).toContain('&lt;case_volume&gt;PA2619787CND-YS&lt;/case_volume&gt;')
     expect(params.get('Element')).toContain('&lt;case_type&gt;31D1A147-2931-43B5-94AE-B72B1525BA8A&lt;/case_type&gt;')
   })
@@ -118,6 +124,18 @@ describe('递交管理表单', () => {
       for (const key of filingCellKeys(cell)) expect(key.length).toBeGreaterThan(0)
     }
     expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it('结束日默认填今天，格式和 WdatePicker 提交值一致', () => {
+    const fields = filingDateDefaults(new Date(2026, 9, 23, 8, 30))
+    expect(fields).toEqual({
+      create_time_end: '2026-10-23',
+      create_date_end: '2026-10-23',
+      finish_date_end: '2026-10-23',
+      app_date_end: '2026-10-23'
+    })
+    expect(Object.keys(fields).sort()).toEqual(FILING_DATE_CELLS.map(cell => cell.end).sort())
+    for (const value of Object.values(fields)) expect(isFilingDateText(value)).toBe(true)
   })
 
   it('下拉映射对齐原站填充来源：签约单位走 table5，历史审核记录走流程节点', () => {

@@ -2,7 +2,7 @@
 import { computed, inject } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
-import FilingSearchQuery from '../components/FilingSearchQuery.vue'
+import FilingExportPanel from '../components/FilingExportPanel.vue'
 import type { MessageBridge } from '../../shared/message'
 import { useWorkspace } from '../composables/useWorkspace'
 
@@ -17,5 +17,5 @@ const ready = computed(() => connection.value.sessionStatus === 'authenticated')
     <h2>递交查询</h2>
     <p class="empty">尚未连接 EASY。递交查询会通过已绑定的原网站标签页读取会话，不会使用本页地址。</p>
   </section>
-  <FilingSearchQuery v-else :bridge="bridge" :user-id="connection.operatorId" :can-search="true" />
+  <FilingExportPanel v-else :bridge="bridge" :user-id="connection.operatorId" />
 </template>

@@ -151,7 +151,12 @@ const FILE_CAPTIONS: Record<string, string> = {
   'file-sender': '用默认发件人',
   'file-review': '用默认审核人',
   'file-subject': '标题用模板，正文用下拉里的签名',
-  'file-inventor': '研发本部在文件描述右侧写全部发明人'
+  'file-inventor': '研发本部在文件描述右侧写全部发明人',
+  'export-pick': '勾选要导出的递交记录',
+  'export-flow': '读流程历史，挑出退回行',
+  'export-people': '接手人是退回后第一个启动流程的人',
+  'export-preview': '下表逐件出行级刷新的预览',
+  'export-file': '七列 Excel，冻结首行'
 }
 
 /** 流程图节点上的一句说明。鹏城专案的收件人跟默认技能不同，不能沿用「发给 IPR」。 */

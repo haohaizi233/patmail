@@ -66,7 +66,7 @@ const modeBusy = ref(false)
 const profileDept = computed(() => workspace.connection.value.sessionStatus === 'authenticated' ? 'EASY 已连接' : '尚未连接')
 watchCustomerMode(() => { mode.value = customerMode() })
 const { src: avatarSrc, zoomed, zoomSrc, openZoom, closeZoom } = useAccountAvatar()
-const taskPageOn = computed(() => route.value === '/tasks')
+const taskPageOn = computed(() => route.value === '/tasks' || route.value === '/filings')
 
 function go(name: string): void {
   const item = nav.find(entry => entry.name === name)
@@ -145,7 +145,7 @@ onUnmounted(() => window.removeEventListener('hashchange', onHash))
 <template>
   <Shell :page="pageName" :items="nav" :profile-name="profileName" :profile-dept="profileDept" :avatar-src="avatarSrc" :show-demo="false" :show-settings="true" :show-mode="true" :mode="mode" :mode-busy="modeBusy" @navigate="go" @settings="onShellSettings" @mode="onMode" @preview="openZoom()">
     <template #top-actions>
-      <CheckRainbow :page-on="taskPageOn" />
+      <CheckRainbow :page-on="taskPageOn" :label="route === '/filings' ? '取数' : '核对'" />
       <AgentDock />
       <DocsDock />
     </template>

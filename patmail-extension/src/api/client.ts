@@ -11,6 +11,7 @@ import { buildLimitMonitorParams, type LimitMonitorQuery } from './limit-monitor
 import { buildFilingSearchParams, type FilingSearchQuery } from './filing-search-params'
 import { normalizeFilingSearch } from './filing-search-normalizer'
 import type { FilingSearchResult } from './filing-search-types'
+import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
 import { buildMailProcessParams, buildProcessListParams, filingNeedsCpcFlag, normalizeMailProcess, normalizeProcessList, processFormPath, type ProcessKind, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from './mail-process'
 import { isRecord } from './response-guards'
 import { normalizeLimitMonitor } from './limit-monitor-normalizer'
@@ -692,6 +693,42 @@ export class EasyRuntime {
     this.filingSequence++
     this.filingController?.abort()
     this.filingController = null
+  }
+
+  private readonly userInfoCache = new Map<string, FilingUser>()
+
+  /** 递交导出用：一件递交的流程历史。Common.ashx GetFlowHistory，obj_id 传 filing_id。 */
+  async filingFlowHistory(filingId: string): Promise<ApiResult<FilingFlowRow[]>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const params = filingFlowHistoryParams(filingId)
+    if (!params) return apiError('INVALID_QUERY', '递交编号无效。')
+    const response = await this.transport.post('getFlowHistory', params)
+    if (!response.ok) {
+      if (response.error.code === 'SESSION_EXPIRED') this.session.expire()
+      return response
+    }
+    return readFilingFlowHistory(response.data)
+  }
+
+  /** 递交导出用：办理人浮窗里的部门。同一个人只查一次。 */
+  async filingUserInfo(userId: string): Promise<ApiResult<FilingUser>> {
+    const cached = this.userInfoCache.get(userId)
+    if (cached) return { ok: true, data: cached }
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const params = userInfoParams(userId)
+    if (!params) return apiError('INVALID_QUERY', '人员编号无效。')
+    const response = await this.transport.post('showUserInfo', params)
+    if (!response.ok) {
+      if (response.error.code === 'SESSION_EXPIRED') this.session.expire()
+      return response
+    }
+    const result = readUserInfo(response.data, userId)
+    if (result.ok) this.userInfoCache.set(userId, result.data)
+    return result
   }
 
   cancelFileSearch(): void {

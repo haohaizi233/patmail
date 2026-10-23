@@ -176,13 +176,17 @@ function columnRef(index: number): string {
   return letters
 }
 
-function sheetXml(rows: string[][]): string {
+function sheetXml(rows: string[][], freezeHeader: boolean): string {
   const body = rows.map((line, index) => {
     const cells = line.map((value, column) => `<c r="${columnRef(column)}${index + 1}" t="inlineStr"><is><t>${xmlText(value)}</t></is></c>`).join('')
     return `<row r="${index + 1}">${cells}</row>`
   }).join('')
+  // 冻结首行：表头钉住，往下滚数据时表头不动。
+  const views = freezeHeader
+    ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>`
+    : ''
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${body}</sheetData></worksheet>`
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${views}<sheetData>${body}</sheetData></worksheet>`
 }
 
 function storedZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
@@ -241,8 +245,8 @@ function zipFile(name: string, text: string): { name: string; data: Uint8Array }
   return { name, data: new TextEncoder().encode(text) }
 }
 
-/** 多张表。单元格都是文本，表头就是每一张的第一行。 */
-export function xlsxBookBytes(sheets: Array<{ name: string; rows: string[][] }>): ArrayBuffer {
+/** 多张表。单元格都是文本，表头就是每一张的第一行；freezeHeader 会把首行冻结。 */
+export function xlsxBookBytes(sheets: Array<{ name: string; rows: string[][]; freezeHeader?: boolean }>): ArrayBuffer {
   const used = sheets.filter(sheet => sheet.rows.length).slice(0, 8)
   const list = used.length ? used : [{ name: 'Sheet1', rows: [] as string[][] }]
   const names = list.map((sheet, index) => {
@@ -269,7 +273,7 @@ export function xlsxBookBytes(sheets: Array<{ name: string; rows: string[][] }>)
       `<sheets>${sheetTags}</sheets></workbook>`),
     zipFile('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`),
-    ...list.map((sheet, index) => zipFile(`xl/worksheets/sheet${index + 1}.xml`, sheetXml(sheet.rows)))
+    ...list.map((sheet, index) => zipFile(`xl/worksheets/sheet${index + 1}.xml`, sheetXml(sheet.rows, sheet.freezeHeader === true)))
   ]
   const bytes = storedZip(files)
   const copy = new ArrayBuffer(bytes.byteLength)
@@ -282,7 +286,7 @@ export function xlsxBytes(rows: string[][], sheetName = 'Sheet1'): ArrayBuffer {
   return xlsxBookBytes([{ name: sheetName, rows }])
 }
 
-export function downloadXlsxSheets(sheets: Array<{ name: string; rows: string[][] }>, filename: string): void {
+export function downloadXlsxSheets(sheets: Array<{ name: string; rows: string[][]; freezeHeader?: boolean }>, filename: string): void {
   const blob = new Blob([xlsxBookBytes(sheets)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')

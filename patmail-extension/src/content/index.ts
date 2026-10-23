@@ -236,6 +236,12 @@ const bridge: MessageBridge = {
       case MessageType.ReadCaseFields:
         return { type: MessageType.ReadCaseFieldsResult,
           payload: { text: await easyRuntime.readCaseFields(message.payload.caseVolume) } }
+      case MessageType.ReadFilingFlow:
+        return { type: MessageType.ReadFilingFlowResult,
+          payload: await easyRuntime.filingFlowHistory(message.payload.filingId) }
+      case MessageType.ReadUserInfo:
+        return { type: MessageType.ReadUserInfoResult,
+          payload: await easyRuntime.filingUserInfo(message.payload.userId) }
       case MessageType.ReadCustomerDemands:
         return { type: MessageType.CustomerDemandResult,
           payload: await easyRuntime.readCustomerDemands(message.payload.customerId, signal) }

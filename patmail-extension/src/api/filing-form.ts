@@ -112,6 +112,19 @@ export function filingCellKeys(cell: FilingCell): string[] {
   return cell.kind === 'dates' ? [cell.start, cell.end] : [cell.key]
 }
 
+/** 日期区间格子的键。 */
+export const FILING_DATE_CELLS: FilingDateCell[] = FILING_BLOCKS.filter((cell): cell is FilingDateCell => cell.kind === 'dates')
+
+/**
+ * 打开页面和点「重置」时的默认条件：每个日期区间的结束日填今天。
+ * 值按 `yyyy-MM-dd` 写，和 WdatePicker、原站提交的日期格式一致；开始日留空，想收窄再自己填。
+ */
+export function filingDateDefaults(now: Date = new Date()): Record<string, string> {
+  const pad = (part: number): string => String(part).padStart(2, '0')
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return Object.fromEntries(FILING_DATE_CELLS.map(cell => [cell.end, today]))
+}
+
 export function filingFieldLabel(name: string): string {
   return FILING_FIELD_LABELS[name] ?? name
 }

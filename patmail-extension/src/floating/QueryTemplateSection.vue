@@ -383,7 +383,7 @@ async function reloadLocal(): Promise<void> {
     if (payload?.connection.sessionStatus === 'authenticated') storageMessage.value = '账号已变化，已清除上一账号的模板和客户。'
     return
   }
-  localTemplates.value = payload.templates.filter(item => item.source === 'local')
+  localTemplates.value = payload.templates.filter(item => item.source === 'local' && item.queryType === 'FileSearch')
   customers.value = payload.customers
   storageMessage.value = scopedUser.value ? '' : '当前没有稳定用户 ID。查询模板不会写入未分区空间。'
 }

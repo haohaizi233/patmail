@@ -9,7 +9,7 @@ export type EasyOperation =
   | 'deptTree' | 'treeUser' | 'treeAgent' | 'fileTempList' | 'deptBranch' | 'applyTags' | 'limitInit' | 'limitCtrlProc'
   | 'mailCustomer' | 'mailInfoInit' | 'getMailInfo' | 'getMailFile' | 'getMailCase'
   | 'getMailRule' | 'getCustomerContact' | 'getRecentContact' | 'getCaseContact' | 'getSalesContact' | 'getPicsContact' | 'getCaseAgentContact' | 'getSignature' | 'getMailSet' | 'mailSignatureList' | 'signatureSet' | 'caseDemand' | 'customerPageDemand' | 'customerPageContact' | 'saveMailInfo' | 'saveMailRelatedFiles'
-  | 'getFlowInfo' | 'getFlowHistory' | 'getUrgencyList' | 'getFlowSubmit' | 'getFlowLastStatus' | 'caseBusFlow'
+  | 'getFlowInfo' | 'getFlowHistory' | 'getUrgencyList' | 'getFlowSubmit' | 'getFlowLastStatus' | 'caseBusFlow' | 'showUserInfo'
   | 'limitMonitor' | 'limitMailCustomer' | 'mailSubmit' | 'mailProcess' | 'processAP' | 'processEF' | 'getIsNewCpc'
   | 'agencySearchCase' | 'agencyCaseInfo' | 'patentCaseData' | 'icSearch' | 'customerList'
   | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName'
@@ -63,6 +63,7 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   saveMailRelatedFiles: { path: '/AjaxServers/Mail.ashx', call: 'SaveMailRalteCaseFile' },
   getFlowInfo: { path: '/AjaxServers/Common.ashx', call: 'GetFlowInfo' },
   getFlowHistory: { path: '/AjaxServers/Common.ashx', call: 'GetFlowHistory' },
+  showUserInfo: { path: '/AjaxServers/Common.ashx', call: 'ShowUserInfo' },
   getUrgencyList: { path: '/AjaxServers/Common.ashx', call: 'GetUrgencyList' },
   getFlowSubmit: { path: '/AjaxServers/Common.ashx', call: 'GetFlowSubmit' },
   getFlowLastStatus: { path: '/AjaxServers/Common.ashx', call: 'GetFlowLastStatus' },

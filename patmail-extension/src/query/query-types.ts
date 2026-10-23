@@ -10,7 +10,8 @@ export interface QueryTemplate {
   name: string
   source: 'easy' | 'local'
   sourceQueryId?: string
-  queryType: 'FileSearch'
+  /** 文件查询模板记 FileSearch；递交查询原站没有模板，记 FilingSearch，只存本机。 */
+  queryType: 'FileSearch' | 'FilingSearch'
   fields: Record<string, string>
   displayValues?: Record<string, string>
   unknownFields?: Record<string, string>

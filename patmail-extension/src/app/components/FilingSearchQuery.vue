@@ -4,25 +4,202 @@ import { CURRENT_ENVIRONMENT } from '../../api/config'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary, describePickerReceipt, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
-import { FILING_OPTION_KEYS, FILING_SELECTS, FILING_BLOCKS, filingCellKeys, filingDraftFields, type FilingCell } from '../../api/filing-form'
+import { FILING_OPTION_KEYS, FILING_SELECTS, FILING_BLOCKS, filingCellKeys, filingDateDefaults, filingDraftFields, filingFieldLabel, type FilingCell } from '../../api/filing-form'
 import type { FilingSearchQuery } from '../../api/filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from '../../api/filing-search-types'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
+import { filingTemplateValues, filingTemplatesOf, applyFilingBuiltin, FILING_BUILTIN_TEMPLATES, FILING_TEMPLATE_TYPE, type FilingBuiltinTemplate } from '../../query/filing-templates'
+import type { QueryTemplate } from '../../query/query-types'
 import { hasOptionTree } from '../../query/option-tree'
 import { activateOptionFallback, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
 import { assignColumnWidths, type ColumnFit } from '../../shell/column-fit'
 import { isMultiPickerKey } from '../../shared/picker-modes'
+import { scopeFromConnection, type ExpectedAccountScope } from '../../shared/connection'
 import { MessageType, type FileSearchFormField, type MessageBridge } from '../../shared/message'
+import { confirmDialog } from '../dialog'
+import { useWorkspace } from '../composables/useWorkspace'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../../shell/components/WDatePicker.vue'
 
-const props = defineProps<{ bridge?: MessageBridge; userId: string; canSearch: boolean }>()
-const emit = defineEmits<{ searched: [query: FilingSearchQuery] }>()
+const props = defineProps<{ bridge?: MessageBridge; userId: string; canSearch: boolean; manage?: boolean }>()
+const emit = defineEmits<{
+  searched: [query: FilingSearchQuery]
+  export: [rows: FilingSearchRow[]]
+}>()
 
-const bridge = inject<MessageBridge>('bridge')
+/** 通道优先用外层传进来的，缺了再用注入的。两处都没有时查询要报错，不能一声不吭不响应。 */
+const injectedBridge = inject<MessageBridge>('bridge')
 
-const values = ref<Record<string, string>>({})
+function activeBridge(): MessageBridge | undefined {
+  return props.bridge ?? injectedBridge
+}
+
+/** 打开页面时结束日先填今天，想查别的区间自己改或清掉。 */
+const values = ref<Record<string, string>>({ ...filingDateDefaults() })
+
+/**
+ * 递交查询模板只存本机：原站的递交列表没有模板功能，保存和删除都不写原网站。
+ * 模板走和文件查询同一套本地配置包（saveQueryTemplate / deleteQueryTemplate），只是 queryType 记 FilingSearch。
+ */
+const workspace = useWorkspace()
+const templates = ref<QueryTemplate[]>([])
+const selectedTemplateId = ref('')
+const saveName = ref('')
+const saveNameDirty = ref(false)
+const templateMessage = ref('')
+const savingTemplate = ref(false)
+const deletingTemplate = ref(false)
+
+const selectedTemplate = computed(() => templates.value.find(item => item.id === selectedTemplateId.value) ?? null)
+/** 内置模板排在前面：随扩展带来，谁登录都能点，不能改也不能删。 */
+const selectedBuiltin = computed(() => FILING_BUILTIN_TEMPLATES.find(item => item.id === selectedTemplateId.value) ?? null)
+const templateCards = computed(() => [
+  ...FILING_BUILTIN_TEMPLATES.map(item => ({ id: item.id, name: item.name, builtin: true })),
+  ...templates.value.map(item => ({ id: item.id, name: item.name, builtin: false }))
+])
+
+function liveScope(): ExpectedAccountScope | null {
+  const scope = scopeFromConnection(workspace.connection.value)
+  if (!scope || scope.operatorId !== props.userId) {
+    templateMessage.value = '当前页面账号与已绑定会话不一致，未保存。'
+    return null
+  }
+  return scope
+}
+
+async function reloadTemplates(): Promise<void> {
+  const payload = await workspace.call({ action: 'load' })
+  if (!payload || payload.connection.operatorId !== props.userId) {
+    templates.value = []
+    return
+  }
+  templates.value = filingTemplatesOf(payload.templates)
+}
+
+/** 内置模板只覆盖它自己那几项条件，其余条件（含结束日的默认值）留在表单上。 */
+function applyBuiltin(template: FilingBuiltinTemplate): void {
+  const resolved = applyFilingBuiltin(template, key => selectOptions(key), values.value)
+  if (resolved.missing.length) {
+    const names = resolved.missing.map(item => `${filingFieldLabel(item.key)}「${item.label}」`).join('、')
+    templateMessage.value = `内置模板「${template.name}」里这些条件还没对上下拉：${names}。等下拉读完或点「校对最新字段」再套用。`
+    return
+  }
+  values.value = resolved.values
+  templateMessage.value = `已套用内置模板「${template.name}」。内置模板不能改，改完条件点「保存到本地」存成自己的。`
+}
+
+function applyTemplate(id: string): void {
+  const builtin = selectedBuiltin.value && selectedBuiltin.value.id === id
+    ? selectedBuiltin.value
+    : FILING_BUILTIN_TEMPLATES.find(item => item.id === id) ?? null
+  if (builtin) {
+    selectedTemplateId.value = id
+    applyBuiltin(builtin)
+    return
+  }
+  const template = templates.value.find(item => item.id === id)
+  selectedTemplateId.value = id
+  if (!template) {
+    templateMessage.value = ''
+    return
+  }
+  values.value = filingTemplateValues(template)
+  templateMessage.value = `已套用模板「${template.name}」。改完条件可以更新回去。`
+}
+
+/** 点卡片直接套用，再点一下取消选中：条件留在表单上，可以继续改或另存。 */
+function toggleTemplate(id: string): void {
+  if (selectedTemplateId.value === id) {
+    selectedTemplateId.value = ''
+    templateMessage.value = ''
+    return
+  }
+  applyTemplate(id)
+}
+
+async function saveTemplate(): Promise<void> {
+  if (savingTemplate.value) return
+  const name = saveName.value.trim()
+  if (!name) {
+    templateMessage.value = '请填写模板名称。'
+    return
+  }
+  const draft = filingDraftFields(values.value)
+  if (!Object.keys(draft.fields).length) {
+    templateMessage.value = '先填写至少一项查询条件，再保存。'
+    return
+  }
+  const scope = liveScope()
+  if (!scope) return
+  const current = selectedTemplate.value
+  const now = new Date().toISOString()
+  const template: QueryTemplate = current ? {
+    ...current,
+    name,
+    fields: draft.fields,
+    displayValues: draft.displayValues,
+    updatedAt: now
+  } : {
+    id: `local-${crypto.randomUUID()}`,
+    name,
+    source: 'local',
+    queryType: FILING_TEMPLATE_TYPE,
+    fields: draft.fields,
+    displayValues: draft.displayValues,
+    version: 1,
+    createdAt: now,
+    updatedAt: now
+  }
+  savingTemplate.value = true
+  templateMessage.value = '正在保存…'
+  try {
+    const result = await workspace.call({
+      action: 'saveQueryTemplate',
+      template,
+      expectedScope: scope,
+      expectedVersion: current ? current.version : null
+    })
+    if (!result?.ok) {
+      templateMessage.value = result?.message || '模板没有保存。'
+      return
+    }
+    templateMessage.value = current ? `模板「${name}」已更新。` : `模板「${name}」已保存在本机。`
+    await reloadTemplates()
+    selectedTemplateId.value = template.id
+  } finally {
+    savingTemplate.value = false
+  }
+}
+
+async function deleteTemplate(): Promise<void> {
+  const current = selectedTemplate.value
+  if (!current || deletingTemplate.value) return
+  const scope = liveScope()
+  if (!scope) return
+  const agreed = await confirmDialog({
+    title: '删除递交查询模板',
+    message: `会从本机删掉「${current.name}」。原网站没有模板功能，不受影响。`,
+    confirmLabel: '删除'
+  })
+  if (!agreed) return
+  deletingTemplate.value = true
+  templateMessage.value = '正在删除…'
+  try {
+    const result = await workspace.call({ action: 'deleteQueryTemplate', id: current.id, expectedScope: scope })
+    if (!result?.ok) {
+      templateMessage.value = result?.message || '模板没有删除。'
+      return
+    }
+    selectedTemplateId.value = ''
+    saveName.value = ''
+    saveNameDirty.value = false
+    templateMessage.value = `模板「${current.name}」已从本机删除。`
+    await reloadTemplates()
+  } finally {
+    deletingTemplate.value = false
+  }
+}
 const pickers = ref<Record<string, NormalizedDictionary>>({})
 const pickersReady = ref(false)
 const pageFields = ref<FileSearchFormField[]>([])
@@ -159,14 +336,15 @@ function optionLabel(key: string, value: string): string {
 }
 
 async function loadPickers(force: boolean): Promise<void> {
-  if (!props.bridge || !props.canSearch || loadingPickers.value) return
+  const bridge = activeBridge()
+  if (!bridge || (!props.canSearch && !props.manage) || loadingPickers.value) return
   if (!force && pickersReady.value) return
   loadingPickers.value = true
   pickerMessage.value = force ? '' : '正在向原网站读取递交查询下拉…'
   try {
     const [dict, form] = await Promise.all([
-      props.bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'picker', force } }),
-      props.bridge.request({ type: MessageType.ScanFilingForm })
+      bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'picker', force } }),
+      bridge.request({ type: MessageType.ScanFilingForm })
     ])
     const notes: string[] = []
     const cached = new Set(cachedOptionKeys())
@@ -223,7 +401,14 @@ async function showResults(): Promise<void> {
 }
 
 async function executeSearch(query: FilingSearchQuery): Promise<void> {
-  if (!bridge || !props.canSearch) return
+  const bridge = activeBridge()
+  if (!bridge) {
+    searchState.value = 'error'
+    searchMessage.value = '页面通信不可用，查询没有发出。请重新打开这一页再试。'
+    void showResults()
+    return
+  }
+  if (!props.canSearch) return
   const current = ++generation
   lastQuery.value = query
   emit('searched', query)
@@ -267,6 +452,7 @@ function search(): void {
     void showResults()
     return
   }
+  selected.value = {}
   void executeSearch({ ...draft, pageIndex: 1, pageSize: pageSize.value })
 }
 function refresh(): void {
@@ -286,12 +472,17 @@ function page(delta: number): void {
 }
 function reset(): void {
   generation += 1
-  values.value = {}
+  values.value = { ...filingDateDefaults() }
   result.value = null
   lastQuery.value = null
   pageIndex.value = 1
   searchState.value = 'idle'
   searchMessage.value = ''
+  selected.value = {}
+  selectedTemplateId.value = ''
+  saveName.value = ''
+  saveNameDirty.value = false
+  templateMessage.value = ''
 }
 function rowNo(index: number): number {
   return (pageIndex.value - 1) * pageSize.value + index + 1
@@ -301,6 +492,83 @@ function cellText(row: FilingSearchRow, key: ResultColumnKey): string {
 }
 
 const resultsTableHost = ref<HTMLElement | null>(null)
+
+/** 已勾选的递交。键用 filingId，导出工作流就按这批记录取数。 */
+const selected = ref<Record<string, FilingSearchRow>>({})
+const selectingAll = ref(false)
+const selectedRows = computed(() => Object.values(selected.value))
+
+function rowKey(row: FilingSearchRow): string {
+  return row.filingId || `${row.caseVolume}|${row.procId}|${row.createTime}`
+}
+function isSelected(row: FilingSearchRow): boolean {
+  return Boolean(selected.value[rowKey(row)])
+}
+function toggleRow(row: FilingSearchRow, on: boolean): void {
+  const next = { ...selected.value }
+  const key = rowKey(row)
+  if (on) next[key] = row
+  else delete next[key]
+  selected.value = next
+}
+function selectPage(on: boolean): void {
+  const next = { ...selected.value }
+  for (const row of result.value?.items ?? []) {
+    const key = rowKey(row)
+    if (on) next[key] = row
+    else delete next[key]
+  }
+  selected.value = next
+}
+function clearSelected(): void {
+  selected.value = {}
+}
+
+/** 查询结果特别大时先劝一句再继续，避免不加条件就全选导致取数和导出拖很久。 */
+async function confirmHuge(count: number): Promise<boolean> {
+  if (count <= 1000) return true
+  return confirmDialog({
+    title: '查询结果超过 1000 条',
+    message: `这次有 ${count} 条递交记录，超过 1000 条。建议加查询条件缩小范围后再全选和导出；也可以继续，但取数会很久。`,
+    confirmLabel: '继续'
+  })
+}
+
+/** 全选所有页：按上次的条件把每一页都拉一遍收进来。 */
+async function selectAllPages(): Promise<void> {
+  const total = result.value?.total ?? 0
+  const bridge = activeBridge()
+  if (!bridge || !props.canSearch || selectingAll.value || !lastQuery.value || !total) return
+  if (!(await confirmHuge(total))) return
+  selectingAll.value = true
+  try {
+    const picked: Record<string, FilingSearchRow> = {}
+    const size = 100
+    const pages = Math.ceil(total / size)
+    for (let page = 1; page <= pages; page += 1) {
+      const response = await bridge.request({
+        type: MessageType.SearchFiling,
+        payload: { query: { ...lastQuery.value, pageIndex: page, pageSize: size }, timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value) }
+      })
+      if (response.type !== MessageType.SearchFilingResult || !response.payload.ok) {
+        searchState.value = 'error'
+        searchMessage.value = '全选所有时有一页没有读到，先按已读到的页继续。'
+        break
+      }
+      for (const row of response.payload.data.items) picked[rowKey(row)] = row
+    }
+    selected.value = picked
+  } finally {
+    selectingAll.value = false
+  }
+}
+
+async function exportSelected(): Promise<void> {
+  const rows = selectedRows.value
+  if (!rows.length) return
+  if (!(await confirmHuge(rows.length))) return
+  emit('export', rows)
+}
 const colWidths = ref<number[]>([])
 const tableStyle = computed(() => {
   const total = colWidths.value.reduce((sum, width) => sum + width, 0)
@@ -326,6 +594,8 @@ function columnSpecs(header: Element | null, body: Element | null): ColumnFit[] 
     for (const value of values) content = Math.max(content, textWidth(value, body) + 16)
     specs.push({ min, content, lock: mode === 'lock', grow: mode === 'grow' })
   }
+  // 勾选列固定一格宽，不参与文字测量。
+  specs.push({ min: 36, content: 36, lock: true })
   add('序号', rows.map((_, index) => String(rowNo(index))), 'lock')
   for (const column of resultColumns) {
     add(column.label, rows.map(row => cellText(row, column.key)), column.mode)
@@ -361,11 +631,22 @@ watch(() => props.userId, () => {
   pageFields.value = []
   pickerMessage.value = ''
   loadingPickers.value = false
+  templates.value = []
+  selectedTemplateId.value = ''
+  saveName.value = ''
+  saveNameDirty.value = false
+  templateMessage.value = ''
   if (!props.userId) return
   activateOptionFallback(props.userId)
   void hydrateOptionFallback(props.userId)
   void loadPickers(false)
+  void reloadTemplates()
 }, { immediate: true })
+
+watch(selectedTemplateId, () => {
+  saveNameDirty.value = false
+  saveName.value = selectedTemplate.value?.name ?? selectedBuiltin.value?.name ?? ''
+})
 
 onMounted(() => {
   void readFilingTimeout().then(value => {
@@ -397,9 +678,24 @@ onBeforeUnmount(() => {
           <label class="query-timeout">超时时间
             <ThemeSelect v-model="queryTimeoutMs" :options="timeoutOptions" />
           </label>
-          <button type="button" class="text-button" :disabled="!canSearch || loadingPickers" @click="loadPickers(true)">校对最新字段</button>
+          <button type="button" class="text-button" :disabled="(!canSearch && !manage) || loadingPickers" @click="loadPickers(true)">校对最新字段</button>
         </span>
       </div>
+      <ul v-if="templateCards.length" class="template-picks" aria-label="递交查询模板">
+        <li v-for="item in templateCards" :key="item.id">
+          <button type="button" :class="{ on: selectedTemplateId === item.id }" :title="item.name" @click="toggleTemplate(item.id)">
+            <b v-hint.clip="item.name">{{ item.name }}</b>
+            <small>{{ item.builtin ? '内置' : '本地' }}</small>
+          </button>
+        </li>
+      </ul>
+      <div class="template-save-row" aria-label="递交模板操作">
+        <label>模板名称<input v-model="saveName" type="text" maxlength="80" @input="saveNameDirty = true" /></label>
+        <button type="button" class="text-button" :disabled="savingTemplate" @click="saveTemplate">{{ savingTemplate ? '正在保存…' : selectedTemplate ? '更新模板' : '保存到本地' }}</button>
+        <button type="button" class="text-button" :disabled="!selectedTemplate || deletingTemplate" @click="deleteTemplate">{{ deletingTemplate ? '正在删除…' : '删除模板' }}</button>
+      </div>
+      <p v-if="templateMessage" class="hint">{{ templateMessage }}</p>
+      <p class="hint">递交查询模板只存在本机：原站没有模板功能，保存和删除都不会写原网站。</p>
       <p v-if="loadingPickers && !pickersReady" class="hint">正在向原网站读取递交查询下拉…</p>
       <p v-else-if="pickerMessage" class="hint">{{ pickerMessage }}</p>
       <div class="query-grid">
@@ -433,11 +729,11 @@ onBeforeUnmount(() => {
       <div class="form-actions">
         <span class="hint">已填 {{ filledCount }} 项条件。处理事项可多选时一次只带一项。</span>
         <button class="ghost" type="button" @click="reset">重置</button>
-        <button class="solid" type="button" :disabled="!canSearch || searchState === 'loading'" @click="search">查询</button>
+        <button v-if="!manage" class="solid" type="button" :disabled="!canSearch || searchState === 'loading'" @click="search">查询</button>
       </div>
     </section>
 
-    <section ref="resultsSection" class="card filing-results" aria-label="递交查询结果">
+    <section v-if="!manage" ref="resultsSection" class="card filing-results" aria-label="递交查询结果">
       <div class="section-heading">
         <strong>查询结果</strong>
         <label class="page-size">每页数量
@@ -445,8 +741,14 @@ onBeforeUnmount(() => {
         </label>
         <button type="button" class="text-button" :disabled="!canSearch || !lastQuery || searchState === 'loading'" @click="refresh">刷新</button>
       </div>
-      <div v-if="result" class="result-toolbar">
-        <span>共 {{ result.total }} 条递交记录</span>
+      <div v-if="result" class="toolbar limit-bar">
+        <span class="sheet-count">共 {{ result.total }} 条递交记录</span>
+        <button type="button" class="ghost" :disabled="searchState === 'loading'" @click="selectPage(true)">全选本页</button>
+        <button type="button" class="ghost" :disabled="searchState === 'loading'" @click="selectPage(false)">取消本页</button>
+        <button type="button" class="ghost" :disabled="searchState === 'loading' || selectingAll" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
+        <button type="button" class="ghost" :disabled="searchState === 'loading' || selectedRows.length === 0" @click="clearSelected">取消所有</button>
+        <span class="hint">已选 {{ selectedRows.length }} 件</span>
+        <button type="button" class="solid tiny" :disabled="selectedRows.length === 0" @click="exportSelected">导出 Excel</button>
       </div>
       <p v-if="searchState === 'idle'" class="hint">输入条件后查询递交记录。</p>
       <p v-else-if="searchState === 'loading'" class="hint" role="status">正在查询…</p>
@@ -460,12 +762,18 @@ onBeforeUnmount(() => {
             </colgroup>
             <thead>
               <tr>
+                <th class="check">
+                  <input type="checkbox" aria-label="全选本页" :checked="result.items.length > 0 && result.items.every(isSelected)" @change="selectPage(($event.target as HTMLInputElement).checked)" />
+                </th>
                 <th class="seq">序号</th>
                 <th v-for="column in resultColumns" :key="column.key">{{ column.label }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(row, index) in result.items" :key="row.filingId || `${row.caseVolume}-${index}`">
+                <td class="check">
+                  <input type="checkbox" :aria-label="row.caseVolume || row.caseName" :checked="isSelected(row)" @change="toggleRow(row, ($event.target as HTMLInputElement).checked)" />
+                </td>
                 <td class="seq">{{ rowNo(index) }}</td>
                 <td v-for="column in resultColumns" :key="column.key">
                   <span class="clip" v-hint.clip="cellText(row, column.key)">{{ cellText(row, column.key) }}</span>

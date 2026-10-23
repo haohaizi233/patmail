@@ -3,10 +3,12 @@ import { matchPctMailTypes, pctVolumeSlot } from '../src/customer/mail-flow'
 import { pctRowsFromTable } from '../src/customer/pct-sheet'
 import {
   defaultFileManageWorkflow,
+  defaultFilingExportWorkflow,
   defaultPctWorkflow,
   defaultPengchengWorkflow,
   defaultWorkflowCatalog,
   duplicateWorkflow,
+  FILING_EXPORT_ID,
   isRunnableWorkflow,
   normalizeWorkflowCatalog,
   packagedPctWorkflow,
@@ -40,7 +42,7 @@ const nodes = [
 describe('PCT 工作流目录', () => {
   it('PCT提醒是第一条默认工作流', () => {
     const catalog = defaultWorkflowCatalog()
-    expect(catalog.workflows.map(item => item.id)).toEqual(['pct-reminder', 'pct-pengcheng', 'file-manage'])
+    expect(catalog.workflows.map(item => item.id)).toEqual(['pct-reminder', 'pct-pengcheng', 'file-manage', 'filing-export'])
     expect(catalog.workflows[0]?.system).toBe(true)
     expect(catalog.workflows[0]?.label).toBe('PCT提醒')
     expect(catalog.workflows[1]?.label).toBe('PCT鹏城专案')
@@ -55,6 +57,14 @@ describe('PCT 工作流目录', () => {
     expect(files.label).toBe('文件管理')
     expect(isRunnableWorkflow(files)).toBe(false)
     expect(stepCaption(files.steps[0] ?? {})).toBe('先选客户，读他的配置')
+    const exported = defaultFilingExportWorkflow()
+    expect(exported.id).toBe(FILING_EXPORT_ID)
+    expect(exported.label).toBe('递交管理-已完成导出')
+    expect(exported.system).toBe(true)
+    // 导出工作流不发文，走递交管理页自己的入口。
+    expect(isRunnableWorkflow(exported)).toBe(false)
+    expect(exported.steps.map(step => step.id)).toEqual(['export-pick', 'export-flow', 'export-people', 'export-preview', 'export-file'])
+    expect(stepCaption(exported.steps[1] ?? {})).toBe('读流程历史，挑出退回行')
     expect(catalog.workflows[0]?.steps.map(step => step.id)).toEqual([
       'entry', 'sheet', 'proc', 'mail-type', 'mail-style', 'recipients', 'sender', 'review', 'query'
     ])
@@ -72,7 +82,7 @@ describe('PCT 工作流目录', () => {
         edited
       ]
     })
-    expect(normalized.workflows.map(item => item.id)).toEqual(['pct-reminder', 'pct-pengcheng', 'file-manage', 'later'])
+    expect(normalized.workflows.map(item => item.id)).toEqual(['pct-reminder', 'pct-pengcheng', 'file-manage', 'filing-export', 'later'])
     const savedSheet = normalized.workflows[0]?.steps.find(step => step.id === 'sheet')
     expect(savedSheet?.params.find(param => param.id === 'col_our')?.value).toBe('内部编号')
     expect(normalized.workflows[0]?.steps.some(step => step.id === 'proc')).toBe(true)
@@ -157,8 +167,8 @@ describe('PCT 工作流目录', () => {
     expect(created.label).toBe('周末提醒')
     expect(created.steps.map(step => step.skillId)).toEqual(['read-sheet', 'match-letter'])
     const normalized = normalizeWorkflowCatalog({ workflows: [created, defaultPctWorkflow()] })
-    expect(normalized.workflows.map(item => item.id)).toEqual(['pct-reminder', 'pct-pengcheng', 'file-manage', 'flow-1'])
-    expect(normalized.workflows[3]?.steps[0]?.params.find(param => param.id === 'col_our')?.value).toBe('我方文号')
+    expect(normalized.workflows.map(item => item.id)).toEqual(['pct-reminder', 'pct-pengcheng', 'file-manage', 'filing-export', 'flow-1'])
+    expect(normalized.workflows[4]?.steps[0]?.params.find(param => param.id === 'col_our')?.value).toBe('我方文号')
   })
 
   it('默认 PCT 的谁来收只是发给 IPR、抄送商务', () => {
@@ -221,7 +231,7 @@ describe('PCT 工作流目录', () => {
       steps: []
     }))
     const normalized = normalizeWorkflowCatalog({ workflows: extras })
-    expect(normalized.workflows).toHaveLength(12)
+    expect(normalized.workflows).toHaveLength(13)
     expect(normalized.workflows[0]?.id).toBe('pct-reminder')
     const copy = duplicateWorkflow(defaultPctWorkflow(), normalized.workflows.map(item => item.id), normalized.workflows.map(item => item.label))
     expect(copy.system).toBe(false)

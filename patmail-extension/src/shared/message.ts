@@ -9,7 +9,7 @@ import type { MailRuleBundle } from '../mail/types'
 import { isQueryGuid, isQueryTemplate } from '../query/query-validator'
 import type { QueryTemplate } from '../query/query-types'
 import { isEasyConnection, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope } from './connection'
-import { isCaseContactResult, isDictionaryResult, isFileSearchApiResult, isFileSearchQuery, isFilingSearchApiResult, isFilingSearchQuery, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
+import { isCaseContactResult, isDictionaryResult, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
 import type { LimitMonitorQuery } from '../api/limit-monitor-params'
 import type { FilingSearchQuery } from '../api/filing-search-params'
 import { isProcessOpenTarget, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from '../api/mail-process'
@@ -20,6 +20,7 @@ import type { MailContactAsset } from '../mail/easy/mail-contacts'
 import type { AccountReviewerList } from '../workflow/contracts'
 import type { LimitMonitorResult } from '../api/limit-monitor-types'
 import type { FilingSearchResult } from '../api/filing-search-types'
+import type { FilingFlowRow, FilingUser } from '../api/filing-export'
 import type { DictionaryLoadRequest, DictionarySnapshot } from '../api/dictionaries'
 import type { FileSearchQuery } from '../api/file-search-params'
 import { fileSearchTimeoutMs } from '../api/file-search-params'
@@ -84,6 +85,10 @@ export const MessageType = {
   LookupIcFlowResult: 'LOOKUP_IC_FLOW_RESULT',
   ReadCaseFields: 'READ_CASE_FIELDS',
   ReadCaseFieldsResult: 'READ_CASE_FIELDS_RESULT',
+  ReadFilingFlow: 'READ_FILING_FLOW',
+  ReadFilingFlowResult: 'READ_FILING_FLOW_RESULT',
+  ReadUserInfo: 'READ_USER_INFO',
+  ReadUserInfoResult: 'READ_USER_INFO_RESULT',
   ReadCustomerDemands: 'READ_CUSTOMER_DEMANDS',
   CustomerDemandResult: 'CUSTOMER_DEMAND_RESULT',
   ReadCustomerDirectory: 'READ_CUSTOMER_DIRECTORY',
@@ -174,6 +179,8 @@ export type ContentRequest =
   | Response<'READ_CASE_BUS_FLOW', { caseId: string; procId: string }>
   | Response<'LOOKUP_IC_FLOW', { rows: IcFlowAsk[] }>
   | Response<'READ_CASE_FIELDS', { caseVolume: string }>
+  | Response<'READ_FILING_FLOW', { filingId: string }>
+  | Response<'READ_USER_INFO', { userId: string }>
   | Response<'READ_CUSTOMER_DEMANDS', { customerId: string }>
   | Response<'READ_CUSTOMER_DIRECTORY', { customerId: string }>
   | Response<'READ_MAIL_CONTACTS', { mailId: string; customerId: string }>
@@ -348,6 +355,8 @@ export type ContentResponse =
   | Response<'CASE_BUS_FLOW_RESULT', ApiResult<{ gate: 'open' | 'pending' | 'done' }>>
   | Response<'LOOKUP_IC_FLOW_RESULT', ApiResult<{ items: IcFlowHit[] }>>
   | Response<'READ_CASE_FIELDS_RESULT', { text: string }>
+  | Response<'READ_FILING_FLOW_RESULT', ApiResult<FilingFlowRow[]>>
+  | Response<'READ_USER_INFO_RESULT', ApiResult<FilingUser>>
   | Response<'CUSTOMER_DEMAND_RESULT', ApiResult<CustomerDemandAsset>>
   | Response<'CUSTOMER_DIRECTORY_RESULT', ApiResult<CustomerDirectoryAsset>>
   | Response<'MAIL_CONTACT_RESULT', ApiResult<MailContactAsset>>
@@ -663,6 +672,11 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.ReadCaseFields:
       return isRecord(value.payload) && typeof value.payload.caseVolume === 'string' && value.payload.caseVolume.trim().length > 0 &&
         value.payload.caseVolume.length <= 80 && Object.keys(value.payload).length === 1
+    case MessageType.ReadFilingFlow:
+      return isRecord(value.payload) && typeof value.payload.filingId === 'string' && /^[0-9A-Za-z-]{1,100}$/.test(value.payload.filingId) &&
+        Object.keys(value.payload).length === 1
+    case MessageType.ReadUserInfo:
+      return isRecord(value.payload) && isQueryGuid(String(value.payload.userId)) && Object.keys(value.payload).length === 1
     case MessageType.ReadCustomerDemands:
     case MessageType.ReadCustomerDirectory:
       return isRecord(value.payload) && isQueryGuid(String(value.payload.customerId)) && Object.keys(value.payload).length === 1
@@ -805,6 +819,10 @@ export function isMessage(value: unknown): value is AppMessage {
       return isIcFlowResult(value.payload)
     case MessageType.ReadCaseFieldsResult:
       return isRecord(value.payload) && typeof value.payload.text === 'string' && value.payload.text.length <= 8000 && Object.keys(value.payload).length === 1
+    case MessageType.ReadFilingFlowResult:
+      return isFilingFlowApiResult(value.payload)
+    case MessageType.ReadUserInfoResult:
+      return isFilingUserApiResult(value.payload)
     case MessageType.CustomerDemandResult:
       return isCustomerPageResult(value.payload, isCustomerDemandAsset)
     case MessageType.CustomerDirectoryResult:
@@ -937,11 +955,13 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.RestoreWorkflow || value.type === MessageType.DiagnoseExistingMail ||
     value.type === MessageType.RunReadonlyAcceptance ||
     value.type === MessageType.CallEasy ||
-    value.type === MessageType.ReadCaseFields
+    value.type === MessageType.ReadCaseFields ||
+    value.type === MessageType.ReadFilingFlow ||
+    value.type === MessageType.ReadUserInfo
   )
 }
 
-const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'RESOLVE_DOWNLOAD_NAMES'])
+const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES'])
 const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE'])
 
 /** 不允许转发时给出原因。写开关关掉时，创建、保存和查询模板写回都停在这里。 */

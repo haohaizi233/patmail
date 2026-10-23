@@ -3,6 +3,7 @@ import { computed, inject, onMounted, onUnmounted, reactive, ref, watch } from '
 import MailTypeTreeSelect from '../../shell/components/MailTypeTreeSelect.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import EmptyGuide from './EmptyGuide.vue'
+import FilingExportPanel from './FilingExportPanel.vue'
 import LimitMonitorQuery from './LimitMonitorQuery.vue'
 import type { MailSender } from '../../customer/mailset'
 import { PCT_RESUME_KEY, PENDING_CUSTOMER_KEY } from '../../customer/mail-flow'
@@ -28,7 +29,7 @@ import { MessageType, type MessageBridge } from '../../shared/message'
 import { sceneOwnerChanged, scopeFromConnection } from '../../shared/connection'
 import { useWorkspace } from '../composables/useWorkspace'
 import { endProgress, logProgress, progressSummaryLine } from '../dialog'
-import { FILE_MANAGE_ID, packagedPctWorkflow, pctRuntimeFrom, workflowSender, type WorkflowCatalog, type WorkflowDefinition } from '../../workflow/catalog'
+import { FILING_EXPORT_ID, FILE_MANAGE_ID, packagedPctWorkflow, pctRuntimeFrom, workflowSender, type WorkflowCatalog, type WorkflowDefinition } from '../../workflow/catalog'
 import FileManageMail from './FileManageMail.vue'
 
 const props = defineProps<{
@@ -1796,6 +1797,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
   <section class="card">
     <div class="card-head"><h2>按工作流发文</h2></div>
     <p v-if="workflowId === FILE_MANAGE_ID" class="hint">选择已经绑好文件管理的客户。按这位客户保存的查询条件和发文方式查出文件。文件描述按发文映射对上发文类型。收件人是案件联系人，抄送是默认发件人和商务，审核人是默认审核人，标题用标题模板，正文用发文页邮件签名下拉里的格式。所属部门包含研发本部时，在文件描述右侧写入全部发明人，顿号分隔。</p>
+    <p v-else-if="workflowId === FILING_EXPORT_ID" class="hint">这条工作流不发文：在下面的查询表单里现场查出递交记录并勾选（逐行、全选本页、全选所有都行），点「导出 Excel」，下表逐件出导出预览，取完数自动下载八列 Excel（我方文号、申请日、案件流向、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态，首行冻结）。每件只打两个接口：流程历史加人员部门。</p>
     <p v-else class="hint">一次读「提醒申请PCT」和「PCT进国家」两张表。进国家有客户文号就用贵方案号，没有客户文号就用我方案号。外观用涉外外观那一种。同一客户里空着的联系人默认只在连成整块时顺延补上，中间隔了别的客户就断开；「同客户隔行也顺延补上」打开后不受截断影响。完全空着的，核对时会带上客户要求和著录项目里的发明人、客户联系人。交给助手时只使用这份暂存，不再查客户名单或案件。助手按文号把收件人写回这一行。核对完成后可以导出，在原表上加一列审核状态。邮箱那一列不读。</p>
     <div class="form-grid">
       <div v-if="workflowOptions.length === 0" class="span-all">
@@ -1808,6 +1810,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
     <p v-if="definitionHint(definition)" class="hint">{{ definitionHint(definition) }}</p>
 
     <FileManageMail v-if="workflowId === FILE_MANAGE_ID" :customers="customers" :rules="rules" :senders="senders" />
+    <FilingExportPanel v-else-if="workflowId === FILING_EXPORT_ID" :bridge="bridge" :user-id="operatorId" />
     <template v-else-if="runnable">
       <div class="form-grid">
         <label v-if="senderMissing">发件人 <span class="need-mark">必填</span>

@@ -391,6 +391,23 @@
 .workspace .query-template .template-picks button.on { background: #fff0f6; }
 .workspace .query-template .template-picks small { background: #ffe4ef; color: #ff3f86; border-radius: 999px; padding: 2px 8px; }
 .workspace .query-template .check-line { max-width: 520px; font-size: 13px; color: #66758f; }
+.workspace .query-conditions .template-picks { gap: 8px; }
+.workspace .query-conditions .template-picks button { min-height: 40px; border-radius: 12px; padding: 8px 12px; }
+.workspace .query-conditions .template-picks button.on { background: #fff0f6; }
+.workspace .query-conditions .template-picks small { background: #ffe4ef; color: #ff3f86; border-radius: 999px; padding: 2px 8px; }
+/* 递交查询与导出预览：按钮和间距对标期限监控那套。上下两张表之间留 14px，和 .workspace-body 的卡片节奏一致。 */
+.filing-export-panel { display: grid; gap: 14px; }
+.filing-export { display: grid; gap: 10px; }
+.filing-export .section-heading .inline-actions { gap: 8px; align-items: center; }
+.filing-search-query .text-button,
+.filing-export .text-button {
+  border: 1px solid #eadff0; border-radius: 999px; background: #fff; color: #e45b92;
+  padding: 4px 12px; font-size: 12px; line-height: 18px;
+}
+.filing-search-query .text-button:hover:not(:disabled),
+.filing-export .text-button:hover:not(:disabled) { border-color: #ffb3d0; background: #fff5f9; }
+.filing-search-query .text-button:disabled,
+.filing-export .text-button:disabled { opacity: .45; cursor: not-allowed; }
 .workspace .query-template .query-preview dl div { padding: 8px 0; border-top: 1px solid #f6e5ee; font-size: 13px; }
 .flow-editor .tabs { align-items: baseline; }
 .flow-editor .tabs .hint { margin: 0; }

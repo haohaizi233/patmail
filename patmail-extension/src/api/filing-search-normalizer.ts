@@ -20,8 +20,11 @@ const TEXT_FIELDS = {
   create_user: 'createUser',
   create_time: 'createTime',
   flow_status: 'flowStatus',
+  flow_direction: 'flowDirection',
   app_no: 'appNo',
-  customer_volume: 'customerVolume'
+  customer_volume: 'customerVolume',
+  app_date: 'appDate',
+  case_status: 'caseStatus'
 } as const
 
 function text(value: unknown): string {
@@ -60,7 +63,8 @@ export function normalizeFilingSearch(response: unknown, query: FilingSearchQuer
     const item: FilingSearchRow = {
       filingId: '', caseId: '', procId: '', caseVolume: '', caseName: '', customerName: '',
       customerCode: '', applyType: '', ctrlProc: '', intDueDate: '', filingDate: '', caseType: '',
-      branchDept: '', createUser: '', createTime: '', flowStatus: '', appNo: '', customerVolume: ''
+      branchDept: '', createUser: '', createTime: '', flowStatus: '', flowDirection: '', appNo: '', customerVolume: '',
+      appDate: '', caseStatus: ''
     }
     for (const source of Object.keys(TEXT_FIELDS) as Array<keyof typeof TEXT_FIELDS>) {
       const value = text(row[source])
