@@ -17,3 +17,6 @@ Desktop.ini
 *.pem
 dist.pem
 credentials.json
+
+# local scratch files captured from the EASY site, keep out of the repo
+/_diff_tmp/
