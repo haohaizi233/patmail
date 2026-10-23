@@ -176,6 +176,30 @@ function columnRef(index: number): string {
   return letters
 }
 
+/** Excel 的列宽单位约等于一个半角字符。全角字按两个算，和双击「最合适列宽」的目测结果接近。 */
+function cellWidth(value: string): number {
+  let units = 0
+  for (const char of value) {
+    units += (char.codePointAt(0) ?? 0) > 0x2e80 ? 2 : 1
+  }
+  return units
+}
+
+/** 每列按最长的内容算最合适列宽，两边留一点空。上限取 Excel 自己的 255。 */
+function bestFitCols(rows: string[][]): string {
+  const widths: number[] = []
+  for (const line of rows) {
+    line.forEach((value, column) => {
+      widths[column] = Math.max(widths[column] ?? 0, cellWidth(value))
+    })
+  }
+  if (!widths.length) return ''
+  return `<cols>${widths.map((width, column) => {
+    const fitted = Math.min(255, Math.max(6, width + 2))
+    return `<col min="${column + 1}" max="${column + 1}" width="${fitted}" customWidth="1"/>`
+  }).join('')}</cols>`
+}
+
 function sheetXml(rows: string[][], freezeHeader: boolean): string {
   const body = rows.map((line, index) => {
     const cells = line.map((value, column) => `<c r="${columnRef(column)}${index + 1}" t="inlineStr"><is><t>${xmlText(value)}</t></is></c>`).join('')
@@ -186,7 +210,7 @@ function sheetXml(rows: string[][], freezeHeader: boolean): string {
     ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>`
     : ''
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${views}<sheetData>${body}</sheetData></worksheet>`
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${views}${bestFitCols(rows)}<sheetData>${body}</sheetData></worksheet>`
 }
 
 function storedZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {

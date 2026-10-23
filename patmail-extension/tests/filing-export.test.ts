@@ -180,7 +180,7 @@ describe('递交导出编排', () => {
 })
 
 describe('递交导出表', () => {
-  it('七列顺序固定，导出冻结首行', () => {
+  it('八列顺序固定，导出冻结首行', () => {
     expect([...FILING_EXPORT_HEADERS]).toEqual(['我方文号', '申请日', '案件流向', '流程专员（退回者）', '代理师（接受者）', '代理师所属部门', '退回的原因', '案件状态'])
     const sheet = filingExportSheet([filingExportRows(filing(), [flowRow()], () => '')[0]])
     expect(sheet.rows[0]).toEqual([...FILING_EXPORT_HEADERS])
@@ -189,6 +189,24 @@ describe('递交导出表', () => {
     const bytes = new TextDecoder().decode(new Uint8Array(xlsxBookBytes([sheet])))
     expect(bytes).toContain('ySplit="1"')
     expect(bytes).toContain('state="frozen"')
+    expect(bytes).toContain('<cols>')
+    expect(bytes).toContain('customWidth="1"')
+  })
+
+  it('列宽按内容算最合适列宽，全角字按两个算', () => {
+    const sheet = filingExportSheet([filingExportRows(filing(), [flowRow()], () => '')[0]])
+    const bytes = new TextDecoder().decode(new Uint8Array(xlsxBookBytes([sheet])))
+    // 「我方文号」表头 4 个全角字是 8 单位，内容 PA261111285CND 是 14 半角，取长的再加 2 空。
+    expect(bytes).toContain('<col min="1" max="1" width="16" customWidth="1"/>')
+    // 「流程专员（退回者）」9 个全角字是 18 单位，比内容「余佳希」长。
+    expect(bytes).toContain('<col min="4" max="4" width="20" customWidth="1"/>')
+    // 内容比表头长就撑开该列，短列保持小宽度。
+    const wide = new TextDecoder().decode(new Uint8Array(xlsxBookBytes([{
+      name: 'x',
+      rows: [['甲', '说明'], ['乙', '这是一个很长很长很长的中文内容，要把这一列撑开']]
+    }])))
+    expect(wide).toContain('<col min="1" max="1" width="6" customWidth="1"/>')
+    expect(wide).toContain('<col min="2" max="2" width="48" customWidth="1"/>')
   })
 })
 
