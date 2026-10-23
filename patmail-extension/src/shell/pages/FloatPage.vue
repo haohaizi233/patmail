@@ -67,7 +67,7 @@ const hits = [
         <button class="solid" @click="ui.notify('正在按规则执行全部发文')"><b>一键执行</b><small>按规则自动完成所有发文</small></button>
         <button class="ghost" @click="ui.go('发文任务')"><b>人工接管</b><small>跳转至页面手动操作</small></button>
       </div>
-      <footer><button @click="ui.open('系统设置')">设置</button><span>♡ 专注细节，让知识更有力量 ♡</span><small>PatMail v1.2.0</small></footer>
+      <footer><button @click="ui.open('系统设置')">设置</button><span>♡ 专注细节，让知识更有力量 ♡</span><small>PatMail v1.4.0</small></footer>
     </aside>
   </div>
 </template>
