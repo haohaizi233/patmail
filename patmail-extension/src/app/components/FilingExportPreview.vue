@@ -10,11 +10,13 @@ import { paintTaskCheckProgress } from '../check-progress'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 
-/** 导出预览：上表勾选的递交在这里逐件出导出行，行级刷新，跑完导出带冻结首行的 xlsx。 */
-const props = defineProps<{ bridge?: MessageBridge; rows: FilingSearchRow[]; token: number }>()
+/** 导出预览：上表勾选的递交在这里逐件出导出行，行级刷新，取完数按需导出带冻结首行的 xlsx。 */
+const props = defineProps<{ bridge?: MessageBridge; rows: FilingSearchRow[]; token: number; downloadToken?: number }>()
 
 const problems = ref<string[]>([])
 const running = ref(false)
+const collectedToken = ref(-1)
+let downloadPending = false
 const doneCount = ref(0)
 const pageIndex = ref(1)
 const pageSize = ref(50)
@@ -65,6 +67,7 @@ async function run(): Promise<void> {
   const current = ++generation
   slots = props.rows.map(() => [])
   previewTick.value += 1
+  collectedToken.value = -1
   problems.value = []
   pageIndex.value = 1
   doneCount.value = 0
@@ -100,9 +103,13 @@ async function run(): Promise<void> {
     if (current !== generation) return
     problems.value = result.problems
     paintTaskCheckProgress(props.rows.length, props.rows.length, startedAt, 'done')
-    // 点「导出 Excel」就是为了要文件：取完数先刷一次预览，再直接下载，不用再点一次。
+    // 取完数先刷一次预览；点过「导出 Excel」就直接给文件，不用再点一次。
     previewTick.value += 1
-    if (allLines.value.length) exportXlsx()
+    collectedToken.value = props.token
+    if (downloadPending) {
+      downloadPending = false
+      if (allLines.value.length) exportXlsx()
+    }
   } catch {
     if (current === generation) paintTaskCheckProgress(doneCount.value, props.rows.length, startedAt, 'fail')
   } finally {
@@ -111,6 +118,16 @@ async function run(): Promise<void> {
 }
 
 watch(() => props.token, () => { void run() }, { immediate: true })
+
+/** 点「导出 Excel」：取好的立刻下文件；没取好的记下来，取完自动下，不用再点一次。 */
+watch(() => props.downloadToken ?? 0, value => {
+  if (!value) return
+  if (!running.value && collectedToken.value === props.token && allLines.value.length) {
+    exportXlsx()
+    return
+  }
+  downloadPending = true
+}, { immediate: true })
 
 function exportXlsx(): void {
   if (!allLines.value.length) return
@@ -138,7 +155,7 @@ function page(delta: number): void {
     </div>
     <p class="hint">八列口径：我方文号、申请日（没有申请日用申请事项的完成日）、案件流向、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。一次退回一行，同一份的第二行起我方文号留空；xlsx 自动冻结首行。</p>
     <p v-if="problems.length" class="error" role="alert">{{ problems.length }} 件没读全：{{ problems.slice(0, 3).join('；') }}</p>
-    <p v-if="!displayLines.length && !running" class="hint">在上面的查询结果里勾选递交记录，点「导出 Excel」，这里会逐件出预览行，跑完自动下载。</p>
+    <p v-if="!displayLines.length && !running" class="hint">在上面的查询结果里勾选递交记录，这里会逐件出预览行。全选所有会自动先取数；点「导出 Excel」出文件，取好的立刻下，没取好的取完自动下。</p>
     <template v-else>
       <div class="table-scroll">
         <table class="grid">

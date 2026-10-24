@@ -1,10 +1,11 @@
 import type { FilingSearchRow } from '../api/filing-search-types'
+import { FILING_FETCH_CONCURRENCY } from '../api/filing-export'
 
 /** 一页拉取的结果。session 表示登录失效：原地重试没用，等重新登录后补齐。 */
 export type FilingPageResult = { ok: true; rows: FilingSearchRow[] } | { ok: false; session: boolean }
 
 export interface FilingPageRunOptions {
-  /** 并行几页，默认 4。 */
+  /** 并行几页，默认和导出取数同一个并发数（6），把请求打满。 */
   concurrency?: number
   /** 每页最多试几轮，默认 3。 */
   attempts?: number
@@ -23,7 +24,7 @@ export async function runFilingPages(
   fetchPage: (page: number) => Promise<FilingPageResult>,
   options: FilingPageRunOptions = {}
 ): Promise<number[]> {
-  const concurrency = Math.max(1, options.concurrency ?? 4)
+  const concurrency = Math.max(1, options.concurrency ?? FILING_FETCH_CONCURRENCY)
   const attempts = Math.max(1, options.attempts ?? 3)
   const gapMs = Math.max(0, options.gapMs ?? 600)
   const missed = new Set<number>()

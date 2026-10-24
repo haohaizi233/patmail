@@ -27,6 +27,8 @@ const props = defineProps<{ bridge?: MessageBridge; userId: string; canSearch: b
 const emit = defineEmits<{
   searched: [query: FilingSearchQuery]
   export: [rows: FilingSearchRow[]]
+  /** 全选所有一结束就把行交出去预取导出数据，先不下文件。 */
+  warm: [rows: FilingSearchRow[]]
 }>()
 
 /** 通道优先用外层传进来的，缺了再用注入的。两处都没有时查询要报错，不能一声不吭不响应。 */
@@ -584,7 +586,7 @@ function describeMissed(pages: number[]): string {
   return `第 ${pages.slice(0, 8).join('、')}${pages.length > 8 ? ' 等' : ''} 页`
 }
 
-/** 全选所有页：按上次的条件把每一页都拉回来。4 页并行、边拉边计数；有漏的自动兜一轮，再不行留按钮补。 */
+/** 全选所有页：按上次的条件把每一页都拉回来。6 页并行、边拉边计数；有漏的自动兜一轮，再不行留按钮补。 */
 async function selectAllPages(): Promise<void> {
   const total = result.value?.total ?? 0
   const bridge = activeBridge()
@@ -603,6 +605,8 @@ async function selectAllPages(): Promise<void> {
     if (missed.length) {
       selectionNotice.value = `全选所有有 ${missed.length} 页没读到（${describeMissed(missed)}）。已选的不受影响，点「重试没读到的页」补齐。`
     }
+    const rows = [...selectedMap.values()]
+    if (rows.length) emit('warm', rows)
   } finally {
     selectingAll.value = false
   }
@@ -622,6 +626,8 @@ async function retryFailedPages(): Promise<void> {
     selectionNotice.value = missed.length
       ? `还有 ${missed.length} 页没读到（${describeMissed(missed)}），可以再点一次重试。`
       : '没读到的页都补齐了。'
+    const rows = [...selectedMap.values()]
+    if (rows.length) emit('warm', rows)
   } finally {
     selectingAll.value = false
   }

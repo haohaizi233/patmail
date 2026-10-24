@@ -53,6 +53,14 @@ async function settle(): Promise<void> {
   }
 }
 
+function rowOf(id: string) {
+  return {
+    filingId: id, caseId: '', procId: '', caseVolume: `PA-${id}`, caseName: '', customerName: '', customerCode: '',
+    applyType: '', ctrlProc: '', intDueDate: '', filingDate: '2026-10-22', caseType: '', branchDept: '', createUser: '',
+    createTime: '', flowStatus: '', flowDirection: 'IO', appNo: '', customerVolume: '', appDate: '2026-10-22', caseStatus: '审定'
+  }
+}
+
 /** 走通「查询 → 勾选 → 导出」整条链：查询结果一行，流程历史一次退回，部门按人去重读一次。 */
 function exportBridge(calls: unknown[]): MessageBridge {
   const row = {
@@ -162,11 +170,6 @@ describe('递交查询面板的查询按钮', () => {
 
   it('全选所有按页拉取，边拉边计数，不再一口气卡住界面', async () => {
     const calls: Array<{ type?: string; payload?: { query?: { pageIndex?: number; pageSize?: number } } }> = []
-    const rowOf = (id: string) => ({
-      filingId: id, caseId: '', procId: '', caseVolume: `PA-${id}`, caseName: '', customerName: '', customerCode: '',
-      applyType: '', ctrlProc: '', intDueDate: '', filingDate: '2026-10-22', caseType: '', branchDept: '', createUser: '',
-      createTime: '', flowStatus: '', flowDirection: 'IO', appNo: '', customerVolume: '', appDate: '2026-10-22', caseStatus: '审定'
-    })
     const bridge: MessageBridge = {
       request: async (message): Promise<ContentResponse> => {
         calls.push(message as { type?: string })
@@ -192,5 +195,48 @@ describe('递交查询面板的查询按钮', () => {
     expect(pages.map(item => item.payload?.query?.pageIndex).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([1, 2, 3])
     app.unmount()
     host.remove()
+  })
+
+  it('全选所有一结束就预取导出数据，点「导出 Excel」只是下文件', async () => {
+    const calls: Array<{ type?: string; payload?: { query?: { pageIndex?: number; pageSize?: number } } }> = []
+    const saved: string[] = []
+    const globalUrl = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
+    globalUrl.createObjectURL = () => 'blob:patmail-test'
+    globalUrl.revokeObjectURL = () => {}
+    const anchorClick = HTMLAnchorElement.prototype.click
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement): void {
+      saved.push(this.download)
+    }
+    try {
+      const base = exportBridge(calls as unknown[])
+      const bridge: MessageBridge = {
+        request: async message => {
+          const type = (message as { type?: string }).type
+          if (type !== MessageType.SearchFiling) return base.request(message)
+          calls.push(message as { type?: string })
+          const query = (message as { payload?: { query?: { pageIndex?: number; pageSize?: number } } }).payload?.query
+          const page = query?.pageIndex ?? 1
+          const size = query?.pageSize ?? 20
+          const rows = Array.from({ length: page === 3 ? 50 : 100 }, (_, index) => rowOf(`f-${page}-${index}`))
+          return { type: MessageType.SearchFilingResult, payload: { ok: true, data: { items: rows, total: 250, pageIndex: page, pageSize: size, totalPages: Math.ceil(250 / size) } } }
+        }
+      }
+      const { host, app } = mountPanel(bridge, true)
+      await settle()
+      buttonOf(host, '查询').click()
+      await settle()
+      buttonOf(host, '全选所有').click()
+      await settle()
+      // 全选一结束就开始取导出数据（流程历史已经开打），但还不下文件。
+      expect(calls.some(item => item.type === MessageType.ReadFilingFlow)).toBe(true)
+      expect(saved).toEqual([])
+      buttonOf(host, '导出 Excel').click()
+      await settle()
+      expect(saved.some(name => name.startsWith('递交管理-已完成导出-'))).toBe(true)
+      app.unmount()
+      host.remove()
+    } finally {
+      HTMLAnchorElement.prototype.click = anchorClick
+    }
   })
 })

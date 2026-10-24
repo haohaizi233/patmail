@@ -106,6 +106,9 @@ export function readUserInfo(data: unknown, userId: string): ApiResult<FilingUse
   }
 }
 
+/** 递交取数的统一并发数：翻页拉行、导出取流程历史都按这个数打满。 */
+export const FILING_FETCH_CONCURRENCY = 6
+
 /** 导出表的八列，顺序固定，第一行冻结。 */
 export const FILING_EXPORT_HEADERS = ['我方文号', '申请日', '案件流向', '流程专员（退回者）', '代理师（接受者）', '代理师所属部门', '退回的原因', '案件状态'] as const
 

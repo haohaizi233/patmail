@@ -3,6 +3,7 @@ import type { FilingSearchRow } from '../api/filing-search-types'
 import {
   acceptorUserIds,
   FILING_EXPORT_HEADERS,
+  FILING_FETCH_CONCURRENCY,
   filingExportCells,
   filingExportRows,
   type FilingExportRow,
@@ -27,8 +28,8 @@ export interface FilingExportProgress {
   onProgress?: (done: number, total: number) => void
 }
 
-/** 取数时并行几件。多一点快，太多会把原站打满。 */
-const FILING_EXPORT_CONCURRENCY = 4
+/** 取数时并行几件。和翻页拉行同一个并发数，把请求打满。 */
+const FILING_EXPORT_CONCURRENCY = FILING_FETCH_CONCURRENCY
 
 function acceptorIdsOf(flow: readonly FilingFlowRow[]): string[] {
   return acceptorUserIds(flow)
