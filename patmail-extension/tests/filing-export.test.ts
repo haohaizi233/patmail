@@ -195,6 +195,31 @@ describe('递交导出编排', () => {
     expect(result.lines).toHaveLength(1)
     expect(result.lines[0].returnReason).toBe('没有盖章')
   })
+
+  it('行档里已有的件不再打接口，取数从断点接着走', async () => {
+    const carried = filingExportRows(filing(), [flowRow()], () => '')
+    let flowCalls = 0
+    const seen: number[] = []
+    const result = await collectFilingExport(
+      [filing(), filing({ filingId: '6739422c-a570-48a4-900a-f3a4ea2da680', caseVolume: 'PA2' })],
+      {
+        readFlow: async () => {
+          flowCalls += 1
+          return { ok: true, data: [flowRow()] }
+        },
+        readUser: async () => ({ ok: true, data: { userId: 'u', cnName: '', deptFullName: '', email: '', tel: '' } })
+      },
+      {
+        known: index => (index === 0 ? carried : undefined),
+        onFiling: index => { seen.push(index) }
+      }
+    )
+    // 第一件从行档直接拿，接口只打第二件的一次。
+    expect(flowCalls).toBe(1)
+    expect(seen.sort()).toEqual([0, 1])
+    expect(result.lines).toHaveLength(2)
+    expect(result.lines[0].caseVolume).toBe('PA261111285CND')
+  })
 })
 
 describe('递交导出表', () => {

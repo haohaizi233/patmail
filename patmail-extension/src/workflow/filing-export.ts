@@ -1,4 +1,5 @@
 import { apiError, type ApiResult } from '../api/types'
+import { yieldToMain } from '../utils/idle'
 import type { FilingSearchRow } from '../api/filing-search-types'
 import {
   acceptorUserIds,
@@ -26,6 +27,8 @@ export interface FilingExportProgress {
   /** 一件查完就报这一件的行，页面按件行级刷新。 */
   onFiling?: (index: number, lines: FilingExportRow[]) => void
   onProgress?: (done: number, total: number) => void
+  /** 行档里已经有的件直接拿来用，不再打接口。取数中断后续传就靠这个。 */
+  known?: (index: number) => FilingExportRow[] | undefined
 }
 
 /** 取数时并行几件。和翻页拉行同一个并发数，把请求打满。 */
@@ -71,11 +74,21 @@ export async function collectFilingExport(
   }
   let cursor = 0
   let done = 0
+  let spun = 0
   const worker = async (): Promise<void> => {
     while (cursor < filings.length) {
       const index = cursor++
       const filing = filings[index]
       try {
+        const carried = progress.known?.(index)
+        if (carried) {
+          slots[index] = carried
+          progress.onFiling?.(index, carried)
+          // 行档里现成的件不过网络，一口气涌进来会把主线程整段占住；干一段让一让。
+          spun += 1
+          if (spun % 200 === 0) await yieldToMain()
+          continue
+        }
         if (!filing.filingId) throw new Error('这条递交缺编号，读不到流程历史。')
         const flowResult = await retryRead(() => deps.readFlow(filing.filingId))
         if (!flowResult.ok) throw new Error(flowResult.error.message)
