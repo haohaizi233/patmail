@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { markRaw, ref, shallowRef } from 'vue'
 import FilingSearchQuery from './FilingSearchQuery.vue'
 import FilingExportPreview from './FilingExportPreview.vue'
 import type { FilingSearchRow } from '../../api/filing-search-types'
@@ -12,7 +12,8 @@ import type { MessageBridge } from '../../shared/message'
  */
 const props = defineProps<{ bridge?: MessageBridge; userId: string }>()
 
-const exportRows = ref<FilingSearchRow[]>([])
+// 几万行是只读数据，进深度响应式等于每格读写都过代理，起导那一瞬先交这笔税不值当。
+const exportRows = shallowRef<FilingSearchRow[]>([])
 const exportToken = ref(0)
 const downloadToken = ref(0)
 
@@ -23,7 +24,7 @@ function startExport(rows: FilingSearchRow[]): void {
   const same = rows.length === current.length && rows.length > 0 &&
     rows[0] === current[0] && rows[rows.length - 1] === current[current.length - 1]
   if (!same) {
-    exportRows.value = rows
+    exportRows.value = markRaw(rows)
     exportToken.value += 1
   }
   downloadToken.value += 1

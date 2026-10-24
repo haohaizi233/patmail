@@ -12,13 +12,14 @@ import { filingTemplateValues, filingTemplatesOf, applyFilingBuiltin, FILING_BUI
 import type { QueryTemplate } from '../../query/query-types'
 import { hasOptionTree } from '../../query/option-tree'
 import { activateOptionFallback, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
-import { assignColumnWidths, type ColumnFit } from '../../shell/column-fit'
+import { fitColumnWidths, type ColumnFit } from '../../shell/column-fit'
+import { createTextRuler } from '../../shell/text-width'
 import { isMultiPickerKey } from '../../shared/picker-modes'
 import { scopeFromConnection, type ExpectedAccountScope } from '../../shared/connection'
 import { MessageType, type FileSearchFormField, type MessageBridge } from '../../shared/message'
 import { confirmDialog } from '../dialog'
 import { useWorkspace } from '../composables/useWorkspace'
-import { paintTaskCheckProgress } from '../check-progress'
+import { paintTaskCheckProgress, taskCheckProgress } from '../check-progress'
 import { runFilingPages, type FilingPageResult } from '../filing-pages'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
@@ -579,6 +580,12 @@ function describeMissed(pages: number[]): string {
 /** 全选所有翻页的进度：和取数同一根彩虹条，动词换成「翻页」。 */
 const paging = { startedAt: 0, total: 0, done: 0 }
 
+/** 全选所有进行中把「预计几点完成」也写在按钮旁，翻页快时彩虹条一闪而过也看得到。 */
+const pagingHint = computed(() => {
+  if (!selectingAll.value) return ''
+  return taskCheckProgress.eta ? `（全选所有进行中，预计 ${taskCheckProgress.eta} 完成）` : '（全选所有进行中…）'
+})
+
 function paintPaging(status: 'run' | 'done'): void {
   paintTaskCheckProgress(paging.done, paging.total, paging.startedAt, status, '翻页')
 }
@@ -636,11 +643,10 @@ async function retryFailedPages(): Promise<void> {
   if (!bridge || !query || selectingAll.value || !pages.length) return
   selectingAll.value = true
   try {
-    if (!paging.total) {
-      paging.startedAt = Date.now()
-      paging.total = pages.length
-      paging.done = 0
-    }
+    // 重试这一轮自己的件数和起点，不然接在上一轮 100% 后面就再也算不出预计完成时间。
+    paging.startedAt = Date.now()
+    paging.total = pages.length
+    paging.done = 0
     paintPaging('run')
     let missed = await collectPages(bridge, query, pages, 100, tickPage)
     if (missed.length) missed = await collectPages(bridge, query, missed, 100, tickPage)
@@ -665,14 +671,11 @@ const tableStyle = computed(() => {
   const total = colWidths.value.reduce((sum, width) => sum + width, 0)
   return { width: `${total}px`, minWidth: '100%' }
 })
-let ruler: HTMLSpanElement | null = null
+let ruler = createTextRuler()
 let observer: ResizeObserver | undefined
 
 function textWidth(text: string, source: Element | null): number {
-  if (!ruler || !source) return 0
-  ruler.style.font = getComputedStyle(source).font
-  ruler.textContent = String(text ?? '')
-  return Math.ceil(ruler.offsetWidth) + 2
+  return ruler.width(text, source)
 }
 
 /** 和期限表同一套：按文字量出每列下限和内容宽，交给 column-fit 分配。 */
@@ -697,7 +700,7 @@ function columnSpecs(header: Element | null, body: Element | null): ColumnFit[] 
 function layoutColumns(): void {
   const root = resultsTableHost.value
   const table = root?.querySelector('table')
-  if (!root || !table || !ruler) return
+  if (!root || !table) return
   if (!result.value?.items.length) {
     colWidths.value = []
     return
@@ -706,7 +709,7 @@ function layoutColumns(): void {
   if (container <= 0) return
   const header = table.querySelector('thead th') || table
   const cell = table.querySelector('tbody td') || header
-  colWidths.value = assignColumnWidths(columnSpecs(header, cell), container)
+  colWidths.value = fitColumnWidths(columnSpecs(header, cell), container)
 }
 
 const measureKey = computed(() => {
@@ -743,9 +746,6 @@ onMounted(() => {
   void readFilingTimeout().then(value => {
     if (!timeoutDirty) queryTimeoutMs.value = value
   })
-  ruler = document.createElement('span')
-  ruler.style.cssText = 'position:absolute;left:-9999px;top:0;white-space:nowrap;visibility:hidden;pointer-events:none;'
-  document.body.appendChild(ruler)
   layoutColumns()
   observer = new ResizeObserver(() => layoutColumns())
   if (resultsTableHost.value) observer.observe(resultsTableHost.value)
@@ -755,8 +755,7 @@ onBeforeUnmount(() => {
   generation += 1
   stopFallbackWatch()
   observer?.disconnect()
-  ruler?.remove()
-  ruler = null
+  ruler.dispose()
 })
 </script>
 
@@ -838,7 +837,7 @@ onBeforeUnmount(() => {
         <button type="button" class="ghost" :disabled="searchState === 'loading'" @click="selectPage(false)">取消本页</button>
         <button type="button" class="ghost" :disabled="searchState === 'loading' || selectingAll" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
         <button type="button" class="ghost" :disabled="searchState === 'loading' || selectedCount === 0" @click="clearSelected">取消所有</button>
-        <span class="hint">已选 {{ selectedCount }} 件{{ selectingAll ? '（全选所有进行中…）' : '' }}</span>
+        <span class="hint">已选 {{ selectedCount }} 件{{ pagingHint }}</span>
         <button v-if="failedPages.length" type="button" class="ghost" :disabled="selectingAll" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
         <button type="button" class="solid tiny" :disabled="selectedCount === 0 || selectingAll" @click="exportSelected">导出 Excel</button>
       </div>

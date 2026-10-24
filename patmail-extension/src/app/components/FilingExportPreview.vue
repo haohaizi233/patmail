@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ApiResult } from '../../api/types'
 import { apiError } from '../../api/types'
 import type { FilingSearchRow } from '../../api/filing-search-types'
 import { FILING_EXPORT_HEADERS, filingExportCells, type FilingExportRow } from '../../api/filing-export'
 import { collectFilingExport, filingExportSheet } from '../../workflow/filing-export'
+import { FilingRowsLedger, filingRowsBatchKey } from '../../workflow/filing-rows'
 import { downloadXlsxSheets } from '../../customer/xlsx-table'
 import { paintTaskCheckProgress } from '../check-progress'
+import { fitColumnWidths, type ColumnFit } from '../../shell/column-fit'
+import { createTextRuler } from '../../shell/text-width'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 
@@ -17,7 +20,6 @@ const problems = ref<string[]>([])
 const running = ref(false)
 const collectedToken = ref(-1)
 let downloadPending = false
-const doneCount = ref(0)
 const pageIndex = ref(1)
 const pageSize = ref(50)
 const pageSizeOptions = [
@@ -27,10 +29,11 @@ const pageSizeOptions = [
 ]
 
 /**
- * 每件的导出行按勾选顺序放普通数组，不进响应式；几万件时每件完成都整表重算会把界面卡死，
- * 这里只按节拍（约 250ms）刷一次预览，取完数再立刻刷一次。
+ * 几万件的导出行不进响应式、也不整摊平：按件记进行档（内存一份 + 恢复账本一份），
+ * 翻页才把那一页的行拿出来算格子。没翻到的页不算不渲染，几万件照样轻快；
+ * 取数中断了账本里还有，同一批件再导时装回来接着取。
  */
-let slots: FilingExportRow[][] = []
+let ledger = new FilingRowsLedger(filingRowsBatchKey([]), [])
 const previewTick = ref(0)
 let tickPending = false
 function schedulePreview(): void {
@@ -42,20 +45,106 @@ function schedulePreview(): void {
   }, 250)
 }
 
-const allLines = computed(() => {
+/** 进度也走背压：一件一报会把响应式刷爆，攒 250ms 一把刷，收尾那笔不等节拍。 */
+const doneCount = ref(0)
+let paintPending = false
+let paintDone = 0
+function schedulePaint(): void {
+  if (paintPending) return
+  paintPending = true
+  setTimeout(() => {
+    paintPending = false
+    doneCount.value = paintDone
+  }, 250)
+}
+
+const lineCount = computed(() => {
   void previewTick.value
-  return slots.flat()
+  return ledger.lineCount
 })
-const displayLines = computed(() => {
+const totalPages = computed(() => Math.max(Math.ceil(lineCount.value / pageSize.value), 1))
+/** 翻页才取行：只把当前页那几十行拿出来算格子，没翻到的页一个字都不算。 */
+const pageLines = computed(() => {
   void previewTick.value
-  const out: Array<{ key: string; cells: string[] }> = []
-  slots.forEach((group, index) => {
-    group.forEach((line, order) => out.push({ key: `${index}-${order}`, cells: filingExportCells(line) }))
+  const from = (pageIndex.value - 1) * pageSize.value
+  return ledger.page(from, pageSize.value).map(({ key, row }) => ({ key, cells: filingExportCells(row) }))
+})
+
+/** 一次退回一行，同一份的第二行起我方文号留空；九列加序号的列宽和上表、期限表同一套 column-fit，不出横向滚动条。 */
+const exportColumnMode = (head: string): 'lock' | 'grow' | undefined => {
+  if (head === '申请日' || head === '案件状态') return 'lock'
+  if (head === '退回的原因' || head === '我方文号') return 'grow'
+  return undefined
+}
+
+const colWidths = ref<number[]>([])
+const tableStyle = computed(() => {
+  const total = colWidths.value.reduce((sum, width) => sum + width, 0)
+  return { width: `${total}px`, minWidth: '100%' }
+})
+const exportTableHost = ref<HTMLElement | null>(null)
+const ruler = createTextRuler()
+let observer: ResizeObserver | undefined
+
+/** 和上表、期限表同一套：按文字量出每列下限和内容宽，交给 column-fit 分配；容器窄就压进去，不出横向滚动条。 */
+function columnSpecs(header: Element | null, body: Element | null): ColumnFit[] {
+  const specs: ColumnFit[] = []
+  const add = (title: string, values: string[], mode?: 'lock' | 'grow'): void => {
+    const min = ruler.width(title, header) + 16
+    let content = min
+    for (const value of values) content = Math.max(content, ruler.width(value, body) + 16)
+    specs.push({ min, content, lock: mode === 'lock', grow: mode === 'grow' })
+  }
+  const lines = pageLines.value
+  add('序号', lines.map((_, index) => String((pageIndex.value - 1) * pageSize.value + index + 1)), 'lock')
+  FILING_EXPORT_HEADERS.forEach((head, cellIndex) => {
+    add(head, lines.map(line => line.cells[cellIndex] ?? ''), exportColumnMode(head))
   })
-  return out
+  return specs
+}
+
+function layoutColumns(): void {
+  const root = exportTableHost.value
+  const table = root?.querySelector('table')
+  if (!root || !table) return
+  if (!pageLines.value.length) {
+    colWidths.value = []
+    return
+  }
+  const container = root.clientWidth
+  if (container <= 0) return
+  const header = table.querySelector('thead th') || table
+  const cell = table.querySelector('tbody td') || header
+  colWidths.value = fitColumnWidths(columnSpecs(header, cell), container)
+}
+
+const measureKey = computed(() => {
+  const lines = pageLines.value
+  return [pageIndex.value, pageSize.value,
+    ...lines.map(line => line.cells.join('|'))].join('~')
 })
-const totalPages = computed(() => Math.max(Math.ceil(displayLines.value.length / pageSize.value), 1))
-const pageLines = computed(() => displayLines.value.slice((pageIndex.value - 1) * pageSize.value, pageIndex.value * pageSize.value))
+watch(measureKey, () => layoutColumns(), { flush: 'post' })
+
+/** 彩虹条同样攒刷：每件都刷一次进度条就是每件一次重绘，几万件直接把界面刷死。 */
+let barPending = false
+let barLive = false
+let barDone = 0
+let barTotal = 0
+let barStartedAt = 0
+function paintTaskCheckProgressThrottled(done: number, total: number, startedAt: number): void {
+  barDone = done
+  barTotal = total
+  barStartedAt = startedAt
+  barLive = true
+  if (barPending) return
+  barPending = true
+  setTimeout(() => {
+    barPending = false
+    // 收尾那笔已经刷过就不再倒回去刷「进行中」。
+    if (!barLive) return
+    paintTaskCheckProgress(barDone, barTotal, barStartedAt, barDone >= barTotal ? 'done' : 'run')
+  }, 250)
+}
 
 function failed(message: string): ApiResult<never> {
   return apiError('NETWORK_ERROR', message)
@@ -65,7 +154,7 @@ let generation = 0
 
 async function run(): Promise<void> {
   const current = ++generation
-  slots = props.rows.map(() => [])
+  ledger = new FilingRowsLedger(filingRowsBatchKey(props.rows), props.rows)
   previewTick.value += 1
   collectedToken.value = -1
   problems.value = []
@@ -77,6 +166,12 @@ async function run(): Promise<void> {
   }
   running.value = true
   const startedAt = Date.now()
+  // 同一批件的旧档先装回来：取过的件不再打接口，断点从没取到的那件接着往下走。
+  const carried = await ledger.restore()
+  if (current !== generation) return
+  if (carried) previewTick.value += 1
+  // 进度从 0 起数：行档里装回的件也按件报，进度条一路只涨不跌。
+  paintDone = 0
   paintTaskCheckProgress(0, props.rows.length, startedAt, 'run')
   try {
     const result = await collectFilingExport(props.rows, {
@@ -89,29 +184,45 @@ async function run(): Promise<void> {
         return response.type === MessageType.ReadUserInfoResult ? response.payload : failed('人员信息没有回传。')
       }
     }, {
+      known: index => ledger.filled(index),
       onFiling: (index, lines) => {
         if (current !== generation) return
-        slots[index] = lines
+        ledger.put(index, lines)
         schedulePreview()
       },
       onProgress: (done, total) => {
         if (current !== generation) return
-        doneCount.value = done
-        paintTaskCheckProgress(done, total, startedAt, done >= total ? 'done' : 'run')
+        // 装回的件也在 done 里逐件报（行档里有的件直接过），进度条一路只涨不跌。
+        // 进度显示走节拍攒刷，不跟着每件重绘；结束那笔直接刷到位。
+        paintDone = done
+        if (done >= total) {
+          barLive = false
+          doneCount.value = done
+          paintTaskCheckProgress(done, total, startedAt, 'done')
+          return
+        }
+        schedulePaint()
+        paintTaskCheckProgressThrottled(done, total, startedAt)
       }
     })
     if (current !== generation) return
     problems.value = result.problems
+    barLive = false
     paintTaskCheckProgress(props.rows.length, props.rows.length, startedAt, 'done')
     // 取完数先刷一次预览；点过「导出 Excel」就直接给文件，不用再点一次。
     previewTick.value += 1
     collectedToken.value = props.token
+    void ledger.flush()
     if (downloadPending) {
       downloadPending = false
-      if (allLines.value.length) exportXlsx()
+      if (lineCount.value) exportXlsx()
     }
   } catch {
-    if (current === generation) paintTaskCheckProgress(doneCount.value, props.rows.length, startedAt, 'fail')
+    if (current === generation) {
+      barLive = false
+      paintTaskCheckProgress(paintDone, props.rows.length, startedAt, 'fail')
+    }
+    void ledger.flush()
   } finally {
     if (current === generation) running.value = false
   }
@@ -122,7 +233,7 @@ watch(() => props.token, () => { void run() }, { immediate: true })
 /** 点「导出 Excel」：取好的立刻下文件；没取好的记下来，取完自动下，不用再点一次。 */
 watch(() => props.downloadToken ?? 0, value => {
   if (!value) return
-  if (!running.value && collectedToken.value === props.token && allLines.value.length) {
+  if (!running.value && collectedToken.value === props.token && lineCount.value) {
     exportXlsx()
     return
   }
@@ -130,11 +241,13 @@ watch(() => props.downloadToken ?? 0, value => {
 }, { immediate: true })
 
 function exportXlsx(): void {
-  if (!allLines.value.length) return
+  // 全量只在导出这一刻摊平一次，渲染循环里不碰。
+  const lines = ledger.all()
+  if (!lines.length) return
   const now = new Date()
   const pad = (value: number): string => String(value).padStart(2, '0')
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
-  downloadXlsxSheets([filingExportSheet(allLines.value)], `递交管理-已完成导出-${stamp}.xlsx`)
+  downloadXlsxSheets([filingExportSheet(lines)], `递交管理-已完成导出-${stamp}.xlsx`)
 }
 
 function page(delta: number): void {
@@ -142,6 +255,20 @@ function page(delta: number): void {
   if (next < 1 || next > totalPages.value) return
   pageIndex.value = next
 }
+
+onMounted(() => {
+  layoutColumns()
+  observer = new ResizeObserver(() => layoutColumns())
+  if (exportTableHost.value) observer.observe(exportTableHost.value)
+})
+
+onBeforeUnmount(() => {
+  generation += 1
+  observer?.disconnect()
+  // 关页前把没落账本的行补上，下次同一批件接着取。
+  void ledger.flush()
+  ruler.dispose()
+})
 </script>
 
 <template>
@@ -149,16 +276,19 @@ function page(delta: number): void {
     <div class="section-heading">
       <strong>导出预览</strong>
       <span class="inline-actions">
-        <span class="hint">{{ running ? `正在取数 ${doneCount}/${rows.length} 件…` : rows.length ? `已选 ${rows.length} 件，导出行 ${allLines.length} 行` : '还没有要导出的递交记录' }}</span>
-        <button type="button" class="solid tiny" :disabled="!allLines.length" @click="exportXlsx">重新导出</button>
+        <span class="hint">{{ running ? `正在取数 ${doneCount}/${rows.length} 件…` : rows.length ? `已选 ${rows.length} 件，导出行 ${lineCount} 行` : '还没有要导出的递交记录' }}</span>
+        <button type="button" class="solid tiny" :disabled="!lineCount" @click="exportXlsx">重新导出</button>
       </span>
     </div>
     <p class="hint">九列口径：我方文号、申请日（没有申请日用申请事项的完成日）、案件流向、处理事项、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。一次退回一行，同一份的第二行起我方文号留空；xlsx 自动冻结首行。</p>
     <p v-if="problems.length" class="error" role="alert">{{ problems.length }} 件没读全：{{ problems.slice(0, 3).join('；') }}</p>
-    <p v-if="!displayLines.length && !running" class="hint">在上面的查询结果里勾选递交记录（全选所有只翻页拉行），点「导出 Excel」才开始取数，取完自动下载。</p>
+    <p v-if="!lineCount && !running" class="hint">在上面的查询结果里勾选递交记录（全选所有只翻页拉行），点「导出 Excel」才开始取数，取完自动下载。</p>
     <template v-else>
-      <div class="table-scroll">
-        <table class="grid">
+      <div ref="exportTableHost" class="fit-table filing-cols">
+        <table class="grid" :style="tableStyle">
+          <colgroup>
+            <col v-for="(width, index) in colWidths" :key="index" :style="{ width: width + 'px' }" />
+          </colgroup>
           <thead>
             <tr>
               <th class="seq">序号</th>
