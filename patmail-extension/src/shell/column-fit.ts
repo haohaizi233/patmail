@@ -64,6 +64,41 @@ export function assignColumnWidths(columns: readonly ColumnFit[], container: num
   return widths
 }
 
+/**
+ * 分配和 assignColumnWidths 一样，只多一条兜底：容器连各列下限都放不下时，
+ * 按比例把列压进容器宽里——单元格本来就是省略号截字，宁可截一点也不出横向滚动条。
+ */
+export function fitColumnWidths(columns: readonly ColumnFit[], container: number): number[] {
+  const widths = assignColumnWidths(columns, container)
+  const target = Math.max(0, Math.floor(container))
+  const total = widths.reduce((sum, width) => sum + width, 0)
+  if (total <= target || total === 0) return widths
+  const floor = 24
+  const scaled = widths.map(width => Math.max(floor, Math.floor(width * target / total)))
+  let rest = target - scaled.reduce((sum, width) => sum + width, 0)
+  if (rest > 0) {
+    const order = scaled.map((width, index) => ({ width, index })).sort((left, right) => right.width - left.width).map(item => item.index)
+    let at = 0
+    while (rest > 0 && order.length) {
+      scaled[order[at % order.length]] += 1
+      rest -= 1
+      at += 1
+    }
+    return scaled
+  }
+  // 连下限的地板都顶破容器时（极窄的容器），从最宽的列开始往下削，直到塞进容器。
+  while (rest < 0) {
+    let widest = 0
+    for (let index = 1; index < scaled.length; index += 1) {
+      if (scaled[index] > scaled[widest]) widest = index
+    }
+    if (scaled[widest] <= 1) break
+    scaled[widest] -= 1
+    rest += 1
+  }
+  return scaled
+}
+
 function leftoverWeight(specs: { min: number; content: number }[], indexes: number[]): number[] {
   return indexes.map(index => Math.max(0, specs[index].content - specs[index].min))
 }

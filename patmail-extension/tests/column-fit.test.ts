@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assignColumnWidths, type ColumnFit } from '../src/shell/column-fit'
+import { assignColumnWidths, fitColumnWidths, type ColumnFit } from '../src/shell/column-fit'
 
 function sum(widths: number[]): number {
   return widths.reduce((total, width) => total + width, 0)
@@ -56,12 +56,23 @@ describe('期限表列宽', () => {
     expect(widths).toEqual([40, 200])
   })
 
-  it('每列都能放下时铺满整行，锁定列不加空白', () => {
-    const widths = assignColumnWidths([
-      { min: 40, content: 100, lock: true },
-      { min: 40, content: 80, grow: true },
-      { min: 40, content: 60 }
-    ], 400)
-    expect(widths).toEqual([100, 240, 60])
+  it('容器连下限都放不下时按比例压进去，不出横向滚动条', () => {
+    const widths = fitColumnWidths([
+      { min: 72, content: 130 },
+      { min: 64, content: 200, grow: true },
+      { min: 80, content: 180, lock: true }
+    ], 200)
+    expect(sum(widths)).toBe(200)
+    for (const width of widths) expect(width).toBeGreaterThan(0)
+    const again = fitColumnWidths([
+      { min: 72, content: 130 },
+      { min: 64, content: 200, grow: true },
+      { min: 80, content: 180, lock: true }
+    ], 72 + 64 + 180 + 200)
+    expect(again).toEqual(assignColumnWidths([
+      { min: 72, content: 130 },
+      { min: 64, content: 200, grow: true },
+      { min: 80, content: 180, lock: true }
+    ], 72 + 64 + 180 + 200))
   })
 })
