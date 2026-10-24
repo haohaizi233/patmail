@@ -153,7 +153,7 @@ export function defaultFilingExportWorkflow(): WorkflowDefinition {
       { id: 'export-flow', title: '读流程历史', detail: '每件递交读一次流程历史（obj_id 传递交编号），把办理结果是「退回」的行挑出来：退回的人是流程专员，退回这一行的办理意见是退回原因。', params: [] },
       { id: 'export-people', title: '对上接手人和部门', detail: '退回后下面第一个「启动流程」的人是代理师（接受者）；没有这样的行就取再下面一位办理人。所属部门按人去重读人员浮窗。', params: [] },
       { id: 'export-preview', title: '导出预览', detail: '上表是查询结果，下表是导出预览，都是分页行级刷新。一次退回一行，同一份的第二行起我方文号留空。', params: [] },
-      { id: 'export-file', title: '下载 Excel', detail: '八列：我方文号、申请日、案件流向、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。首行冻结，取完数自动下载。', params: [] }
+      { id: 'export-file', title: '下载 Excel', detail: '九列：我方文号、申请日、案件流向、处理事项、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。首行冻结，取完数自动下载。', params: [] }
     ]
   }
 }

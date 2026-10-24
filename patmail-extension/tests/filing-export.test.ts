@@ -101,6 +101,7 @@ describe('递交导出行', () => {
       caseVolume: 'PA261111285CND',
       applyDate: '2026-10-22',
       flowDirection: '内-外',
+      ctrlProc: '新申请',
       returnedBy: '余佳希',
       acceptedBy: '刘斌斌',
       acceptedDept: '电学三部',
@@ -110,6 +111,7 @@ describe('递交导出行', () => {
     expect(rows[1]).toMatchObject({ caseVolume: '', returnedBy: '高艳丽', returnReason: '补照片' })
     expect(rows[1].applyDate).toBe('2026-10-22')
     expect(rows[1].flowDirection).toBe('内-外')
+    expect(rows[1].ctrlProc).toBe('新申请')
     expect(rows[1].caseStatus).toBe('审定')
   })
 
@@ -196,8 +198,8 @@ describe('递交导出编排', () => {
 })
 
 describe('递交导出表', () => {
-  it('八列顺序固定，导出冻结首行', () => {
-    expect([...FILING_EXPORT_HEADERS]).toEqual(['我方文号', '申请日', '案件流向', '流程专员（退回者）', '代理师（接受者）', '代理师所属部门', '退回的原因', '案件状态'])
+  it('九列顺序固定，导出冻结首行', () => {
+    expect([...FILING_EXPORT_HEADERS]).toEqual(['我方文号', '申请日', '案件流向', '处理事项', '流程专员（退回者）', '代理师（接受者）', '代理师所属部门', '退回的原因', '案件状态'])
     const sheet = filingExportSheet([filingExportRows(filing(), [flowRow()], () => '')[0]])
     expect(sheet.rows[0]).toEqual([...FILING_EXPORT_HEADERS])
     expect(sheet.freezeHeader).toBe(true)
@@ -214,8 +216,10 @@ describe('递交导出表', () => {
     const bytes = new TextDecoder().decode(new Uint8Array(xlsxBookBytes([sheet])))
     // 「我方文号」表头 4 个全角字是 8 单位，内容 PA261111285CND 是 14 半角，取长的再加 2 空。
     expect(bytes).toContain('<col min="1" max="1" width="16" customWidth="1"/>')
+    // 「处理事项」表头和内容「新申请」都是 4 个全角字，8 单位 + 2 空。
+    expect(bytes).toContain('<col min="4" max="4" width="10" customWidth="1"/>')
     // 「流程专员（退回者）」9 个全角字是 18 单位，比内容「余佳希」长。
-    expect(bytes).toContain('<col min="4" max="4" width="20" customWidth="1"/>')
+    expect(bytes).toContain('<col min="5" max="5" width="20" customWidth="1"/>')
     // 内容比表头长就撑开该列，短列保持小宽度。
     const wide = new TextDecoder().decode(new Uint8Array(xlsxBookBytes([{
       name: 'x',

@@ -109,8 +109,8 @@ export function readUserInfo(data: unknown, userId: string): ApiResult<FilingUse
 /** 递交取数的统一并发数：翻页拉行、导出取流程历史都按这个数打满。 */
 export const FILING_FETCH_CONCURRENCY = 6
 
-/** 导出表的八列，顺序固定，第一行冻结。 */
-export const FILING_EXPORT_HEADERS = ['我方文号', '申请日', '案件流向', '流程专员（退回者）', '代理师（接受者）', '代理师所属部门', '退回的原因', '案件状态'] as const
+/** 导出表的九列，顺序固定，第一行冻结。 */
+export const FILING_EXPORT_HEADERS = ['我方文号', '申请日', '案件流向', '处理事项', '流程专员（退回者）', '代理师（接受者）', '代理师所属部门', '退回的原因', '案件状态'] as const
 
 /** 办理结果里算「退回」的文字。 */
 export const FILING_RETURN_AUDIT = '退回'
@@ -121,6 +121,7 @@ export interface FilingExportRow {
   caseVolume: string
   applyDate: string
   flowDirection: string
+  ctrlProc: string
   returnedBy: string
   acceptedBy: string
   acceptedDept: string
@@ -129,7 +130,7 @@ export interface FilingExportRow {
 }
 
 export function filingExportCells(row: FilingExportRow): string[] {
-  return [row.caseVolume, row.applyDate, row.flowDirection, row.returnedBy, row.acceptedBy, row.acceptedDept, row.returnReason, row.caseStatus]
+  return [row.caseVolume, row.applyDate, row.flowDirection, row.ctrlProc, row.returnedBy, row.acceptedBy, row.acceptedDept, row.returnReason, row.caseStatus]
 }
 
 /** 案件流向在列表行里是 II/IO/OI/OO 这类代码，导出写案件页上的中文名（内-外这类）。对不上就原样写。 */
@@ -162,12 +163,15 @@ export function filingExportSourceOf(filing: {
   filingDate: string
   caseStatus: string
   flowDirection: string
-}): { caseVolume: string; applyDate: string; flowDirection: string; caseStatus: string } {
+  ctrlProc: string
+}): { caseVolume: string; applyDate: string; flowDirection: string; ctrlProc: string; caseStatus: string } {
   return {
     caseVolume: filing.caseVolume.trim(),
     // 申请日没有时用申请事项的完成日，也就是这次递交的完成时间。
     applyDate: filing.appDate.trim() || filing.filingDate.trim(),
     flowDirection: filingFlowDirectionText(filing.flowDirection),
+    // 列表行里的处理事项就是中文名（新申请这类），原样写。
+    ctrlProc: filing.ctrlProc.trim(),
     caseStatus: filing.caseStatus.trim()
   }
 }
@@ -177,7 +181,7 @@ export function filingExportSourceOf(filing: {
  * 一件都没有退回的也出一行，免得导出里悄悄少件。
  */
 export function filingExportRows(
-  filing: { caseVolume: string; appDate: string; filingDate: string; caseStatus: string; flowDirection: string },
+  filing: { caseVolume: string; appDate: string; filingDate: string; caseStatus: string; flowDirection: string; ctrlProc: string },
   flow: readonly FilingFlowRow[],
   deptOf: (userId: string) => string = () => ''
 ): FilingExportRow[] {
@@ -190,6 +194,7 @@ export function filingExportRows(
       caseVolume: order === 0 ? source.caseVolume : '',
       applyDate: source.applyDate,
       flowDirection: source.flowDirection,
+      ctrlProc: source.ctrlProc,
       returnedBy: row?.auditUserName ?? '',
       acceptedBy: accepted?.auditUserName ?? '',
       acceptedDept: accepted?.auditUserId ? deptOf(accepted.auditUserId) : '',

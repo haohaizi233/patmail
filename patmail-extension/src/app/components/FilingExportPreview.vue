@@ -153,7 +153,7 @@ function page(delta: number): void {
         <button type="button" class="solid tiny" :disabled="!allLines.length" @click="exportXlsx">重新导出</button>
       </span>
     </div>
-    <p class="hint">八列口径：我方文号、申请日（没有申请日用申请事项的完成日）、案件流向、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。一次退回一行，同一份的第二行起我方文号留空；xlsx 自动冻结首行。</p>
+    <p class="hint">九列口径：我方文号、申请日（没有申请日用申请事项的完成日）、案件流向、处理事项、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。一次退回一行，同一份的第二行起我方文号留空；xlsx 自动冻结首行。</p>
     <p v-if="problems.length" class="error" role="alert">{{ problems.length }} 件没读全：{{ problems.slice(0, 3).join('；') }}</p>
     <p v-if="!displayLines.length && !running" class="hint">在上面的查询结果里勾选递交记录（全选所有只翻页拉行），点「导出 Excel」才开始取数，取完自动下载。</p>
     <template v-else>
