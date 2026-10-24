@@ -1,4 +1,4 @@
-import type { ApiResult } from '../api/types'
+import { apiError, type ApiResult } from '../api/types'
 import type { FilingSearchRow } from '../api/filing-search-types'
 import {
   acceptorUserIds,
@@ -38,6 +38,21 @@ function acceptorIdsOf(flow: readonly FilingFlowRow[]): string[] {
  * 逐件读流程历史、按人去重读部门，产出导出行。失败的件记进 problems，导出照常继续，
  * 不让一件读不到就整批停住。
  */
+/** 容灾：偶发的繁忙、超时先自己重试一轮，一件读不到不该整批出洞。 */
+async function retryRead<T>(load: () => Promise<ApiResult<T>>, attempts = 2): Promise<ApiResult<T>> {
+  let last: ApiResult<T> | null = null
+  for (let round = 1; round <= attempts; round += 1) {
+    try {
+      last = await load()
+      if (last.ok) return last
+    } catch {
+      last = apiError('NETWORK_ERROR', '读取失败。')
+    }
+    if (round < attempts) await new Promise(resolve => setTimeout(resolve, 400))
+  }
+  return last ?? apiError('NETWORK_ERROR', '读取失败。')
+}
+
 export async function collectFilingExport(
   filings: readonly FilingSearchRow[],
   deps: FilingExportDeps,
@@ -49,7 +64,7 @@ export async function collectFilingExport(
   const loadUser = (userId: string): Promise<FilingUser | null> => {
     const existing = userLoads.get(userId)
     if (existing) return existing
-    const load = deps.readUser(userId).then(result => (result.ok ? result.data : null)).catch(() => null)
+    const load = retryRead(() => deps.readUser(userId)).then(result => (result.ok ? result.data : null)).catch(() => null)
     userLoads.set(userId, load)
     return load
   }
@@ -61,7 +76,7 @@ export async function collectFilingExport(
       const filing = filings[index]
       try {
         if (!filing.filingId) throw new Error('这条递交缺编号，读不到流程历史。')
-        const flowResult = await deps.readFlow(filing.filingId)
+        const flowResult = await retryRead(() => deps.readFlow(filing.filingId))
         if (!flowResult.ok) throw new Error(flowResult.error.message)
         const flow = flowResult.data
         const users = new Map<string, FilingUser>()

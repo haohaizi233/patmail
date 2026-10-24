@@ -18,6 +18,7 @@ import { scopeFromConnection, type ExpectedAccountScope } from '../../shared/con
 import { MessageType, type FileSearchFormField, type MessageBridge } from '../../shared/message'
 import { confirmDialog } from '../dialog'
 import { useWorkspace } from '../composables/useWorkspace'
+import { runFilingPages, type FilingPageResult } from '../filing-pages'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../../shell/components/WDatePicker.vue'
@@ -453,6 +454,8 @@ function search(): void {
     return
   }
   clearSelected()
+  failedPages.value = []
+  selectionNotice.value = ''
   void executeSearch({ ...draft, pageIndex: 1, pageSize: pageSize.value })
 }
 function refresh(): void {
@@ -479,6 +482,8 @@ function reset(): void {
   searchState.value = 'idle'
   searchMessage.value = ''
   clearSelected()
+  failedPages.value = []
+  selectionNotice.value = ''
   selectedTemplateId.value = ''
   saveName.value = ''
   saveNameDirty.value = false
@@ -541,40 +546,82 @@ async function confirmHuge(count: number): Promise<boolean> {
   })
 }
 
-/** 全选所有页：按上次的条件把每一页都拉回来。4 页并行、边拉边计数，界面不卡。 */
+const failedPages = ref<number[]>([])
+const selectionNotice = ref('')
+
+type PageFetch = FilingPageResult
+
+/** 一页只调一次；重试、并行、漏页统计都在 runFilingPages 里。 */
+async function fetchPage(bridge: MessageBridge, query: FilingSearchQuery, page: number, size: number): Promise<PageFetch> {
+  try {
+    const response = await bridge.request({
+      type: MessageType.SearchFiling,
+      // batch：批量拉页不占「新查询取消旧查询」的槽，并行几页才不会互相 abort。
+      payload: { query: { ...query, pageIndex: page, pageSize: size }, timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value), batch: true as const }
+    })
+    if (response.type === MessageType.SearchFilingResult && response.payload.ok) {
+      return { ok: true, rows: response.payload.data.items }
+    }
+    const message = response.type === MessageType.SearchFilingResult && !response.payload.ok
+      ? response.payload.error.message
+      : response.type === MessageType.Error ? response.payload.message : '这一页没有返回结果。'
+    return { ok: false, session: /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(message) }
+  } catch {
+    return { ok: false, session: false }
+  }
+}
+
+function collectPages(bridge: MessageBridge, query: FilingSearchQuery, pages: number[], size: number): Promise<number[]> {
+  return runFilingPages(pages, page => fetchPage(bridge, query, page, size), {
+    onPage: (_page, rows) => {
+      for (const row of rows) selectedMap.set(rowKey(row), row)
+      selectedVersion.value += 1
+    }
+  })
+}
+
+function describeMissed(pages: number[]): string {
+  return `第 ${pages.slice(0, 8).join('、')}${pages.length > 8 ? ' 等' : ''} 页`
+}
+
+/** 全选所有页：按上次的条件把每一页都拉回来。4 页并行、边拉边计数；有漏的自动兜一轮，再不行留按钮补。 */
 async function selectAllPages(): Promise<void> {
   const total = result.value?.total ?? 0
   const bridge = activeBridge()
-  if (!bridge || !props.canSearch || selectingAll.value || !lastQuery.value || !total) return
+  const query = lastQuery.value
+  if (!bridge || !props.canSearch || selectingAll.value || !query || !total) return
   if (!(await confirmHuge(total))) return
   selectingAll.value = true
+  selectionNotice.value = ''
+  failedPages.value = []
   try {
     const size = 100
-    const pages = Math.ceil(total / size)
-    let nextPage = 1
-    let failed = false
-    const worker = async (): Promise<void> => {
-      while (nextPage <= pages) {
-        const page = nextPage
-        nextPage += 1
-        const response = await bridge.request({
-          type: MessageType.SearchFiling,
-          // batch：批量拉页不占「新查询取消旧查询」的槽，4 页并行才不会互相 abort。
-          payload: { query: { ...lastQuery.value, pageIndex: page, pageSize: size }, timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value), batch: true as const }
-        })
-        if (response.type !== MessageType.SearchFilingResult || !response.payload.ok) {
-          failed = true
-          continue
-        }
-        for (const row of response.payload.data.items) selectedMap.set(rowKey(row), row)
-        selectedVersion.value += 1
-      }
+    const all = Array.from({ length: Math.ceil(total / size) }, (_, index) => index + 1)
+    let missed = await collectPages(bridge, query, all, size)
+    if (missed.length) missed = await collectPages(bridge, query, missed, size)
+    failedPages.value = missed
+    if (missed.length) {
+      selectionNotice.value = `全选所有有 ${missed.length} 页没读到（${describeMissed(missed)}）。已选的不受影响，点「重试没读到的页」补齐。`
     }
-    await Promise.all(Array.from({ length: 4 }, () => worker()))
-    if (failed) {
-      searchState.value = 'error'
-      searchMessage.value = '全选所有时有几页没有读到，先按已读到的页继续。'
-    }
+  } finally {
+    selectingAll.value = false
+  }
+}
+
+/** 容灾补齐：只重拉没读到的页，已选的不动。 */
+async function retryFailedPages(): Promise<void> {
+  const bridge = activeBridge()
+  const query = lastQuery.value
+  const pages = failedPages.value
+  if (!bridge || !query || selectingAll.value || !pages.length) return
+  selectingAll.value = true
+  try {
+    let missed = await collectPages(bridge, query, pages, 100)
+    if (missed.length) missed = await collectPages(bridge, query, missed, 100)
+    failedPages.value = missed
+    selectionNotice.value = missed.length
+      ? `还有 ${missed.length} 页没读到（${describeMissed(missed)}），可以再点一次重试。`
+      : '没读到的页都补齐了。'
   } finally {
     selectingAll.value = false
   }
@@ -765,8 +812,10 @@ onBeforeUnmount(() => {
         <button type="button" class="ghost" :disabled="searchState === 'loading' || selectingAll" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
         <button type="button" class="ghost" :disabled="searchState === 'loading' || selectedCount === 0" @click="clearSelected">取消所有</button>
         <span class="hint">已选 {{ selectedCount }} 件{{ selectingAll ? '（全选所有进行中…）' : '' }}</span>
+        <button v-if="failedPages.length" type="button" class="ghost" :disabled="selectingAll" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
         <button type="button" class="solid tiny" :disabled="selectedCount === 0 || selectingAll" @click="exportSelected">导出 Excel</button>
       </div>
+      <p v-if="selectionNotice" class="error" role="alert">{{ selectionNotice }}</p>
       <p v-if="searchState === 'idle'" class="hint">输入条件后查询递交记录。</p>
       <p v-else-if="searchState === 'loading'" class="hint" role="status">正在查询…</p>
       <p v-else-if="searchState === 'error'" class="error" role="alert">{{ searchMessage }}</p>

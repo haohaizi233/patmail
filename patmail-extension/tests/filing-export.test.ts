@@ -177,6 +177,22 @@ describe('递交导出编排', () => {
     expect(result.lines).toHaveLength(0)
     expect(result.problems[0]).toContain('PA261111285CND')
   })
+
+  it('读流程历史偶发失败自己重试一轮，不写问题行', async () => {
+    let calls = 0
+    const result = await collectFilingExport([filing()], {
+      readFlow: async () => {
+        calls += 1
+        if (calls === 1) return { ok: false, error: { code: 'NETWORK_ERROR', message: '网关异常，服务暂不可用' } }
+        return { ok: true, data: [flowRow()] }
+      },
+      readUser: async () => ({ ok: true, data: { userId: 'u', cnName: '', deptFullName: '', email: '', tel: '' } })
+    })
+    expect(calls).toBe(2)
+    expect(result.problems).toEqual([])
+    expect(result.lines).toHaveLength(1)
+    expect(result.lines[0].returnReason).toBe('没有盖章')
+  })
 })
 
 describe('递交导出表', () => {
