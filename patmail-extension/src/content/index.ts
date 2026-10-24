@@ -199,7 +199,7 @@ const bridge: MessageBridge = {
           payload: await easyRuntime.searchLimitMonitor(message.payload.query, message.payload.timeoutMs) }
       case MessageType.SearchFiling:
         return { type: MessageType.SearchFilingResult,
-          payload: await easyRuntime.searchFiling(message.payload.query, message.payload.timeoutMs) }
+          payload: await easyRuntime.searchFiling(message.payload.query, message.payload.timeoutMs, message.payload.batch === true) }
       case MessageType.SubmitLimitMail:
         return { type: MessageType.SubmitLimitMailResult,
           payload: await easyRuntime.submitLimitMails(message.payload.userId, message.payload.items) }

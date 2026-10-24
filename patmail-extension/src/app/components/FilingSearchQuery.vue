@@ -559,7 +559,8 @@ async function selectAllPages(): Promise<void> {
         nextPage += 1
         const response = await bridge.request({
           type: MessageType.SearchFiling,
-          payload: { query: { ...lastQuery.value, pageIndex: page, pageSize: size }, timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value) }
+          // batch：批量拉页不占「新查询取消旧查询」的槽，4 页并行才不会互相 abort。
+          payload: { query: { ...lastQuery.value, pageIndex: page, pageSize: size }, timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value), batch: true as const }
         })
         if (response.type !== MessageType.SearchFilingResult || !response.payload.ok) {
           failed = true

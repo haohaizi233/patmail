@@ -167,7 +167,7 @@ export type ContentRequest =
   | Request<'CHECK_SESSION'> | Request<'CANCEL_SESSION_CHECK'>
   | Request<'CANCEL_FILE_SEARCH'> | Request<'CANCEL_LIMIT_MONITOR'> | Response<'SEARCH_FILES', { query: FileSearchQuery; continuation?: { querySessionId: string }; timeoutMs?: number }>
   | Response<'SEARCH_LIMIT_MONITOR', { query: LimitMonitorQuery; timeoutMs?: number }>
-  | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number }>
+  | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number; batch?: true }>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
@@ -764,8 +764,9 @@ export function isMessage(value: unknown): value is AppMessage {
       if (!isRecord(value.payload) || !isFilingSearchQuery(value.payload.query)) return false
       const keys = Object.keys(value.payload)
       if (!keys.includes('query')) return false
-      return keys.every(key => key === 'query' || key === 'timeoutMs') &&
-        (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs)
+      return keys.every(key => key === 'query' || key === 'timeoutMs' || key === 'batch') &&
+        (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs) &&
+        (value.payload.batch === undefined || value.payload.batch === true)
     }
     case MessageType.SubmitLimitMail:
       return isLimitMailSubmitRequest(value.payload)

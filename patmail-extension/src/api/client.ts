@@ -667,11 +667,17 @@ export class EasyRuntime {
     this.limitController = null
   }
 
-  searchFiling(query: FilingSearchQuery, timeoutMs?: number): Promise<ApiResult<FilingSearchResult>> {
-    this.cancelFiling()
+  /**
+   * 手工查询走「新查询取消旧查询」的槽；全选所有页这类批量拉页传 batch，
+   * 不占这个槽：批页之间、批页和手查之间互不取消（否则 4 页并行会互相 abort 掉）。
+   */
+  searchFiling(query: FilingSearchQuery, timeoutMs?: number, batch = false): Promise<ApiResult<FilingSearchResult>> {
     const controller = new AbortController()
-    this.filingController = controller
-    const requestNumber = ++this.filingSequence
+    if (!batch) {
+      this.cancelFiling()
+      this.filingController = controller
+    }
+    const requestNumber = batch ? 0 : ++this.filingSequence
     return (async (): Promise<ApiResult<FilingSearchResult>> => {
       if (!(await this.confirmAccountRead())) {
         return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
@@ -679,7 +685,7 @@ export class EasyRuntime {
       const params = buildFilingSearchParams(query)
       if (!params.ok) return params
       const response = await this.transport.post('filingSearch', params.data, controller.signal, timeoutMs)
-      if (requestNumber !== this.filingSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
+      if (!batch && requestNumber !== this.filingSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
       const result = response.ok ? normalizeFilingSearch(response.data, query) : response
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
         this.session.expire()
