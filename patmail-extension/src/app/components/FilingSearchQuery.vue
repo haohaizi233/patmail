@@ -452,7 +452,7 @@ function search(): void {
     void showResults()
     return
   }
-  selected.value = {}
+  clearSelected()
   void executeSearch({ ...draft, pageIndex: 1, pageSize: pageSize.value })
 }
 function refresh(): void {
@@ -478,7 +478,7 @@ function reset(): void {
   pageIndex.value = 1
   searchState.value = 'idle'
   searchMessage.value = ''
-  selected.value = {}
+  clearSelected()
   selectedTemplateId.value = ''
   saveName.value = ''
   saveNameDirty.value = false
@@ -493,35 +493,42 @@ function cellText(row: FilingSearchRow, key: ResultColumnKey): string {
 
 const resultsTableHost = ref<HTMLElement | null>(null)
 
-/** 已勾选的递交。键用 filingId，导出工作流就按这批记录取数。 */
-const selected = ref<Record<string, FilingSearchRow>>({})
+/**
+ * 已勾选的递交。几万行不进响应式：存普通 Map，只靠一个版本号驱动重绘；
+ * 勾选也不整体拷贝，选中几万条时单行点一下照样轻快。
+ */
+const selectedMap = new Map<string, FilingSearchRow>()
+const selectedVersion = ref(0)
 const selectingAll = ref(false)
-const selectedRows = computed(() => Object.values(selected.value))
+const selectedCount = computed(() => {
+  void selectedVersion.value
+  return selectedMap.size
+})
 
 function rowKey(row: FilingSearchRow): string {
   return row.filingId || `${row.caseVolume}|${row.procId}|${row.createTime}`
 }
 function isSelected(row: FilingSearchRow): boolean {
-  return Boolean(selected.value[rowKey(row)])
+  void selectedVersion.value
+  return selectedMap.has(rowKey(row))
 }
 function toggleRow(row: FilingSearchRow, on: boolean): void {
-  const next = { ...selected.value }
   const key = rowKey(row)
-  if (on) next[key] = row
-  else delete next[key]
-  selected.value = next
+  if (on) selectedMap.set(key, row)
+  else selectedMap.delete(key)
+  selectedVersion.value += 1
 }
 function selectPage(on: boolean): void {
-  const next = { ...selected.value }
   for (const row of result.value?.items ?? []) {
     const key = rowKey(row)
-    if (on) next[key] = row
-    else delete next[key]
+    if (on) selectedMap.set(key, row)
+    else selectedMap.delete(key)
   }
-  selected.value = next
+  selectedVersion.value += 1
 }
 function clearSelected(): void {
-  selected.value = {}
+  selectedMap.clear()
+  selectedVersion.value += 1
 }
 
 /** 查询结果特别大时先劝一句再继续，避免不加条件就全选导致取数和导出拖很久。 */
@@ -534,7 +541,7 @@ async function confirmHuge(count: number): Promise<boolean> {
   })
 }
 
-/** 全选所有页：按上次的条件把每一页都拉一遍收进来。 */
+/** 全选所有页：按上次的条件把每一页都拉回来。4 页并行、边拉边计数，界面不卡。 */
 async function selectAllPages(): Promise<void> {
   const total = result.value?.total ?? 0
   const bridge = activeBridge()
@@ -542,29 +549,38 @@ async function selectAllPages(): Promise<void> {
   if (!(await confirmHuge(total))) return
   selectingAll.value = true
   try {
-    const picked: Record<string, FilingSearchRow> = {}
     const size = 100
     const pages = Math.ceil(total / size)
-    for (let page = 1; page <= pages; page += 1) {
-      const response = await bridge.request({
-        type: MessageType.SearchFiling,
-        payload: { query: { ...lastQuery.value, pageIndex: page, pageSize: size }, timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value) }
-      })
-      if (response.type !== MessageType.SearchFilingResult || !response.payload.ok) {
-        searchState.value = 'error'
-        searchMessage.value = '全选所有时有一页没有读到，先按已读到的页继续。'
-        break
+    let nextPage = 1
+    let failed = false
+    const worker = async (): Promise<void> => {
+      while (nextPage <= pages) {
+        const page = nextPage
+        nextPage += 1
+        const response = await bridge.request({
+          type: MessageType.SearchFiling,
+          payload: { query: { ...lastQuery.value, pageIndex: page, pageSize: size }, timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value) }
+        })
+        if (response.type !== MessageType.SearchFilingResult || !response.payload.ok) {
+          failed = true
+          continue
+        }
+        for (const row of response.payload.data.items) selectedMap.set(rowKey(row), row)
+        selectedVersion.value += 1
       }
-      for (const row of response.payload.data.items) picked[rowKey(row)] = row
     }
-    selected.value = picked
+    await Promise.all(Array.from({ length: 4 }, () => worker()))
+    if (failed) {
+      searchState.value = 'error'
+      searchMessage.value = '全选所有时有几页没有读到，先按已读到的页继续。'
+    }
   } finally {
     selectingAll.value = false
   }
 }
 
 async function exportSelected(): Promise<void> {
-  const rows = selectedRows.value
+  const rows = [...selectedMap.values()]
   if (!rows.length) return
   if (!(await confirmHuge(rows.length))) return
   emit('export', rows)
@@ -746,9 +762,9 @@ onBeforeUnmount(() => {
         <button type="button" class="ghost" :disabled="searchState === 'loading'" @click="selectPage(true)">全选本页</button>
         <button type="button" class="ghost" :disabled="searchState === 'loading'" @click="selectPage(false)">取消本页</button>
         <button type="button" class="ghost" :disabled="searchState === 'loading' || selectingAll" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
-        <button type="button" class="ghost" :disabled="searchState === 'loading' || selectedRows.length === 0" @click="clearSelected">取消所有</button>
-        <span class="hint">已选 {{ selectedRows.length }} 件</span>
-        <button type="button" class="solid tiny" :disabled="selectedRows.length === 0" @click="exportSelected">导出 Excel</button>
+        <button type="button" class="ghost" :disabled="searchState === 'loading' || selectedCount === 0" @click="clearSelected">取消所有</button>
+        <span class="hint">已选 {{ selectedCount }} 件{{ selectingAll ? '（全选所有进行中…）' : '' }}</span>
+        <button type="button" class="solid tiny" :disabled="selectedCount === 0 || selectingAll" @click="exportSelected">导出 Excel</button>
       </div>
       <p v-if="searchState === 'idle'" class="hint">输入条件后查询递交记录。</p>
       <p v-else-if="searchState === 'loading'" class="hint" role="status">正在查询…</p>

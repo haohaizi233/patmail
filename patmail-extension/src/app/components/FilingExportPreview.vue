@@ -13,7 +13,6 @@ import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 /** 导出预览：上表勾选的递交在这里逐件出导出行，行级刷新，跑完导出带冻结首行的 xlsx。 */
 const props = defineProps<{ bridge?: MessageBridge; rows: FilingSearchRow[]; token: number }>()
 
-const perFiling = ref<FilingExportRow[][]>([])
 const problems = ref<string[]>([])
 const running = ref(false)
 const doneCount = ref(0)
@@ -25,10 +24,30 @@ const pageSizeOptions = [
   { value: 100, label: '100' }
 ]
 
-const allLines = computed(() => perFiling.value.flat())
+/**
+ * 每件的导出行按勾选顺序放普通数组，不进响应式；几万件时每件完成都整表重算会把界面卡死，
+ * 这里只按节拍（约 250ms）刷一次预览，取完数再立刻刷一次。
+ */
+let slots: FilingExportRow[][] = []
+const previewTick = ref(0)
+let tickPending = false
+function schedulePreview(): void {
+  if (tickPending) return
+  tickPending = true
+  setTimeout(() => {
+    tickPending = false
+    previewTick.value += 1
+  }, 250)
+}
+
+const allLines = computed(() => {
+  void previewTick.value
+  return slots.flat()
+})
 const displayLines = computed(() => {
+  void previewTick.value
   const out: Array<{ key: string; cells: string[] }> = []
-  perFiling.value.forEach((group, index) => {
+  slots.forEach((group, index) => {
     group.forEach((line, order) => out.push({ key: `${index}-${order}`, cells: filingExportCells(line) }))
   })
   return out
@@ -44,7 +63,8 @@ let generation = 0
 
 async function run(): Promise<void> {
   const current = ++generation
-  perFiling.value = props.rows.map(() => [])
+  slots = props.rows.map(() => [])
+  previewTick.value += 1
   problems.value = []
   pageIndex.value = 1
   doneCount.value = 0
@@ -68,7 +88,8 @@ async function run(): Promise<void> {
     }, {
       onFiling: (index, lines) => {
         if (current !== generation) return
-        perFiling.value[index] = lines
+        slots[index] = lines
+        schedulePreview()
       },
       onProgress: (done, total) => {
         if (current !== generation) return
@@ -79,7 +100,8 @@ async function run(): Promise<void> {
     if (current !== generation) return
     problems.value = result.problems
     paintTaskCheckProgress(props.rows.length, props.rows.length, startedAt, 'done')
-    // 点「导出 Excel」就是为了要文件：取完数直接下载，不用再点一次。
+    // 点「导出 Excel」就是为了要文件：取完数先刷一次预览，再直接下载，不用再点一次。
+    previewTick.value += 1
     if (allLines.value.length) exportXlsx()
   } catch {
     if (current === generation) paintTaskCheckProgress(doneCount.value, props.rows.length, startedAt, 'fail')

@@ -159,4 +159,38 @@ describe('递交查询面板的查询按钮', () => {
       HTMLAnchorElement.prototype.click = anchorClick
     }
   })
+
+  it('全选所有按页拉取，边拉边计数，不再一口气卡住界面', async () => {
+    const calls: Array<{ type?: string; payload?: { query?: { pageIndex?: number; pageSize?: number } } }> = []
+    const rowOf = (id: string) => ({
+      filingId: id, caseId: '', procId: '', caseVolume: `PA-${id}`, caseName: '', customerName: '', customerCode: '',
+      applyType: '', ctrlProc: '', intDueDate: '', filingDate: '2026-10-22', caseType: '', branchDept: '', createUser: '',
+      createTime: '', flowStatus: '', flowDirection: 'IO', appNo: '', customerVolume: '', appDate: '2026-10-22', caseStatus: '审定'
+    })
+    const bridge: MessageBridge = {
+      request: async (message): Promise<ContentResponse> => {
+        calls.push(message as { type?: string })
+        const type = (message as { type?: string }).type
+        const query = (message as { payload?: { query?: { pageIndex?: number; pageSize?: number } } }).payload?.query
+        if (type === MessageType.SearchFiling) {
+          const page = query?.pageIndex ?? 1
+          const size = query?.pageSize ?? 20
+          const rows = Array.from({ length: page === 3 ? 50 : 100 }, (_, index) => rowOf(`f-${page}-${index}`))
+          return { type: MessageType.SearchFilingResult, payload: { ok: true, data: { items: rows, total: 250, pageIndex: page, pageSize: size, totalPages: Math.ceil(250 / size) } } }
+        }
+        return { type: MessageType.Error, payload: { message: '这个测试不接这个请求。' } }
+      }
+    }
+    const { host, app } = mountPanel(bridge, true)
+    await settle()
+    buttonOf(host, '查询').click()
+    await settle()
+    buttonOf(host, '全选所有').click()
+    await settle()
+    expect(host.textContent).toContain('已选 250 件')
+    const pages = calls.filter(item => item.type === MessageType.SearchFiling && item.payload?.query?.pageSize === 100)
+    expect(pages.map(item => item.payload?.query?.pageIndex).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([1, 2, 3])
+    app.unmount()
+    host.remove()
+  })
 })
