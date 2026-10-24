@@ -1,4 +1,5 @@
 import { recoveryLedger, rememberRecovery, type RecoverySlot } from './wal-ledger'
+import { yieldToMain } from '../utils/idle'
 
 const PREFIXES: Array<[string, RecoverySlot]> = [
   ['patmail.workflow.exec.v1:', 'workflow-exec'],
@@ -9,10 +10,14 @@ const PREFIXES: Array<[string, RecoverySlot]> = [
 export async function mirrorLocalExecutions(): Promise<void> {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return
   const stored = await chrome.storage.local.get(null)
+  let mirrored = 0
   for (const [prefix, slot] of PREFIXES) {
     for (const [key, value] of Object.entries(stored)) {
       if (!key.startsWith(prefix) || value == null) continue
       await rememberRecovery(slot, key, value)
+      // 抄档是启动那一瞬的活，抄一段让一让，别把首屏压在整批底下。
+      mirrored += 1
+      if (mirrored % 20 === 0) await yieldToMain()
     }
   }
 }
@@ -22,11 +27,16 @@ export async function restoreLocalExecutions(): Promise<void> {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return
   const ledger = await recoveryLedger()
   if (!ledger) return
+  let restored = 0
   for (const [, slot] of PREFIXES) {
     for (const head of await ledger.heads(slot)) {
       if (!head.scope.startsWith('patmail.')) continue
       const current = await chrome.storage.local.get(head.scope)
-      if (current[head.scope] == null) await chrome.storage.local.set({ [head.scope]: head.payload })
+      if (current[head.scope] == null) {
+        await chrome.storage.local.set({ [head.scope]: head.payload })
+        restored += 1
+        if (restored % 20 === 0) await yieldToMain()
+      }
     }
   }
 }

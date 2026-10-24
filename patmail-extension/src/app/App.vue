@@ -4,6 +4,7 @@ import { mirrorLocalExecutions, restoreLocalExecutions } from '../recovery/execu
 import { customerMode, hydrateCustomerMode, setCustomerMode, watchCustomerMode, type CustomerMode } from '../settings/customer-mode'
 import { resetTaskCheckProgress } from './check-progress'
 import { confirmDialog, progressDialog } from './dialog'
+import { runWhenIdle } from '../utils/idle'
 import { createFullPageBridge } from './services/full-page-bridge'
 import { useWorkspace } from './composables/useWorkspace'
 import { useAccountAvatar } from '../settings/use-account-avatar'
@@ -133,7 +134,10 @@ watch(() => workspace.connection.value.accountOffer?.operatorId ?? '', async (op
 
 onMounted(() => {
   window.addEventListener('hashchange', onHash)
-  void restoreLocalExecutions().finally(() => { void mirrorLocalExecutions() })
+  // 开恢复账本要编译 WASM、抄执行记录，都不挡首屏：排到空闲里干。
+  runWhenIdle(() => {
+    void restoreLocalExecutions().finally(() => { void mirrorLocalExecutions() })
+  })
   void hydrateCustomerMode().then(() => {
     mode.value = customerMode()
     void workspace.call({ action: 'load' })

@@ -1,10 +1,11 @@
 import initSqlJs, { type SqlStatic } from 'sql.js'
+import { runWhenIdle } from '../utils/idle'
 
 type SqlDatabase = InstanceType<SqlStatic['Database']>
 import wasmAsset from 'sql.js/dist/sql-wasm.wasm?url'
 
-/** 工作面、查询结果、发文账本、流程执行记录。登录掉了也按这个槽位装回去。 */
-export type RecoverySlot = 'workflow-desk' | 'limit-query' | 'limit-mail' | 'file-mail' | 'file-desk' | 'workflow-exec' | 'mail-exec'
+/** 工作面、查询结果、发文账本、流程执行记录、递交导出行档。登录掉了也按这个槽位装回去。 */
+export type RecoverySlot = 'workflow-desk' | 'limit-query' | 'limit-mail' | 'file-mail' | 'file-desk' | 'workflow-exec' | 'mail-exec' | 'filing-export'
 
 export interface StoredFrame {
   seq: number
@@ -28,7 +29,7 @@ export interface RecoveryHead {
   at: string
 }
 
-const SLOTS = new Set<RecoverySlot>(['workflow-desk', 'limit-query', 'limit-mail', 'file-mail', 'file-desk', 'workflow-exec', 'mail-exec'])
+const SLOTS = new Set<RecoverySlot>(['workflow-desk', 'limit-query', 'limit-mail', 'file-mail', 'file-desk', 'workflow-exec', 'mail-exec', 'filing-export'])
 
 /** 两个系统各留一份。origin 用站点地址，leaf 是页面里的槽。 */
 export function systemScope(origin: string, leaf: string): string {
@@ -214,9 +215,15 @@ function schema(db: SqlDatabase): string {
 }
 
 function maxSeq(db: SqlDatabase): number {
-  const rows = db.exec('SELECT COALESCE(MAX(seq), 0) AS seq FROM wal')
+  // 序号同时看暂存的 wal 和已折好的 head：wal 表被清掉之后序号也不能回头，不然新笔压不动旧 head。
+  const rows = db.exec('SELECT COALESCE(MAX(seq), 0) AS seq FROM (SELECT seq FROM wal UNION ALL SELECT seq FROM head)')
   const value = rows[0]?.values[0]?.[0]
   return typeof value === 'number' ? value : 0
+}
+
+/** 已经折进 head 的行从 wal 表里清掉。这张表只当暂存用，不清的话每笔快照都背着全量历史，越写越大。 */
+function compactWal(db: SqlDatabase, through: number): void {
+  try { db.run(`DELETE FROM wal WHERE seq <= ${through}`) } catch { /* 清不掉也不影响读写 */ }
 }
 
 function applyFrame(db: SqlDatabase, frame: StoredFrame): void {
@@ -231,6 +238,10 @@ function applyFrame(db: SqlDatabase, frame: StoredFrame): void {
     try { db.run('ROLLBACK') } catch { /* 事务已经结束 */ }
     throw error
   }
+}
+
+/** 折库前把 SQLite 自己的 WAL 日志并回主库，导出才是完整的一份。 */
+function foldJournal(db: SqlDatabase): void {
   try { db.run('PRAGMA wal_checkpoint(TRUNCATE)') } catch { /* 这一下没折进去，导出时仍是提交后的库 */ }
 }
 
@@ -244,14 +255,28 @@ function readPayload(raw: string): unknown | null {
   }
 }
 
-/** SQLite 开着 WAL。真正掉电前先把这一笔写进 IndexedDB，再折进库文件。库文件没写完时，下次打开会把那一笔补上。 */
+/** SQLite 开着 WAL。真正掉电前先把这一笔写进 IndexedDB，再折进库文件。库文件没写完时，下次打开会把那一笔补上。
+ * 折库是整库导出（O(库大小)），所以跟着写回合并攒着一把做：帧先落账本兜底，库文件按节拍/批量补上。 */
 export class RecoveryLedger {
   private chain: Promise<void> = Promise.resolve()
+  /** 已经折进内存库的最后一笔。 */
+  private foldedSeq = 0
+  /** 已经落进库文件的最后一笔。 */
+  private checkpointSeq = 0
+  private checkpointTimer: ReturnType<typeof setTimeout> | undefined
 
-  constructor(private readonly store: RecoveryStore, private readonly db: SqlDatabase, readonly journalMode: string) {}
+  constructor(private readonly store: RecoveryStore, private readonly db: SqlDatabase, readonly journalMode: string) {
+    this.foldedSeq = maxSeq(db)
+    this.checkpointSeq = this.foldedSeq
+  }
 
   put(slot: RecoverySlot, scope: string, payload: unknown): Promise<void> {
     return this.enqueue(() => this.write(slot, scope, payload))
+  }
+
+  /** 把攒着的笔一把折进库文件：整库导出只做一次，不跟着每一笔跑。 */
+  checkpoint(): Promise<void> {
+    return this.enqueue(() => this.fold())
   }
 
   forget(slot: RecoverySlot, scope: string): Promise<void> {
@@ -301,12 +326,44 @@ export class RecoveryLedger {
       payload: JSON.stringify(payload),
       at: new Date().toISOString()
     }
+    // 帧先落 IndexedDB（掉电兜底），整库导出攒着一把做——一笔一导出是 O(库大小) 的写放大。
     await this.store.appendFrame(frame)
     applyFrame(this.db, frame)
+    this.foldedSeq = frame.seq
+    if (frame.seq - this.checkpointSeq >= CHECKPOINT_BATCH) {
+      this.checkpoint().catch(() => { /* 折库失败不挡写入：帧已经落账本，下一笔再折 */ })
+      return
+    }
+    this.scheduleCheckpoint()
+  }
+
+  /** 写回合并：停手一小会儿才折库；连续写就一直攒着，最多攒 CHECKPOINT_BATCH 笔。 */
+  private scheduleCheckpoint(): void {
+    if (this.checkpointTimer !== undefined) clearTimeout(this.checkpointTimer)
+    this.checkpointTimer = setTimeout(() => {
+      this.checkpointTimer = undefined
+      this.checkpoint().catch(() => { /* 折库失败不挡写入：帧已经落账本，下次再折 */ })
+    }, CHECKPOINT_WAIT)
+  }
+
+  private async fold(): Promise<void> {
+    if (this.checkpointTimer !== undefined) {
+      clearTimeout(this.checkpointTimer)
+      this.checkpointTimer = undefined
+    }
+    const through = this.foldedSeq
+    if (through <= this.checkpointSeq) return
+    compactWal(this.db, through)
+    foldJournal(this.db)
     await this.store.writeCheckpoint(this.db.export())
-    await this.store.dropFramesThrough(frame.seq)
+    await this.store.dropFramesThrough(through)
+    this.checkpointSeq = through
   }
 }
+
+/** 折库节拍：停手 500ms 折一次，攒够 120 笔不等节拍直接折。 */
+const CHECKPOINT_WAIT = 500
+const CHECKPOINT_BATCH = 120
 
 async function replay(store: RecoveryStore, db: SqlDatabase): Promise<void> {
   const frames = (await store.readFrames()).sort((a, b) => a.seq - b.seq)
@@ -317,6 +374,8 @@ async function replay(store: RecoveryStore, db: SqlDatabase): Promise<void> {
     applied = frame.seq
   }
   if (applied) {
+    compactWal(db, applied)
+    foldJournal(db)
     await store.writeCheckpoint(db.export())
     await store.dropFramesThrough(applied)
   }
@@ -333,24 +392,43 @@ export async function openRecoveryLedger(store: RecoveryStore): Promise<Recovery
 
 let opening: Promise<RecoveryLedger | null> | null = null
 
-export function recoveryLedger(): Promise<RecoveryLedger | null> {
-  const store = indexedRecoveryStore()
-  if (!store) return Promise.resolve(null)
-  opening ??= openRecoveryLedger(store).catch(() => {
-    opening = null
-    return null
-  })
+function openNow(store: RecoveryStore): Promise<RecoveryLedger | null> {
+  opening ??= openRecoveryLedger(store).then(
+    ledger => ledger,
+    () => {
+      opening = null
+      return null
+    }
+  )
   return opening
 }
 
+/** 读账本：开库要编译 WASM、解析整库，排到空闲里做，不跟首屏抢主线程。 */
+export function recoveryLedger(): Promise<RecoveryLedger | null> {
+  const store = indexedRecoveryStore()
+  if (!store) return Promise.resolve(null)
+  if (opening) return opening
+  return new Promise(resolve => {
+    runWhenIdle(() => { openNow(store).then(resolve) })
+  })
+}
+
+/** 写账本不等空闲：落盘的事宁可占主线程也不能丢，关页前的抢救写走这条。 */
+export function recoveryLedgerNow(): Promise<RecoveryLedger | null> {
+  const store = indexedRecoveryStore()
+  if (!store) return Promise.resolve(null)
+  return openNow(store)
+}
+
 export async function rememberRecovery(slot: RecoverySlot, scope: string, payload: unknown): Promise<void> {
-  const ledger = await recoveryLedger()
+  // 写不等空闲：这一笔要落盘，等空闲反而可能等不到（关页前的抢救写）。
+  const ledger = await recoveryLedgerNow()
   if (!ledger) return
   await ledger.put(slot, scope, payload)
 }
 
 export async function forgetRecovery(slot: RecoverySlot, scope: string): Promise<void> {
-  const ledger = await recoveryLedger()
+  const ledger = await recoveryLedgerNow()
   if (!ledger) return
   await ledger.forget(slot, scope)
 }
@@ -432,5 +510,7 @@ if (typeof window !== 'undefined') {
       window.clearTimeout(item.timer)
       void commitScheduled(key, item)
     }
+    // 攒着还没折库的笔趁关页前折掉；折不完也没事，帧还在账本里，下次打开补上。
+    void opening?.then(ledger => ledger?.checkpoint()).catch(() => { /* 关页太快，下次打开再折 */ })
   })
 }
