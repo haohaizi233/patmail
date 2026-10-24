@@ -20,6 +20,13 @@ describe('发文核对进度', () => {
     expect(view.eta).toBe(`${pad(finish.getHours())}:${pad(finish.getMinutes())}:${pad(finish.getSeconds())}`)
   })
 
+  it('刚翻第一页就给预计完成时间，不等预热', () => {
+    // 翻页几页就完事，预热 800ms 的话彩虹条从头到尾只有「正在估算结束时间」。
+    const started = 1_000
+    const view = taskCheckSnapshot(1, 10, started, started + 300, 'run')
+    expect(view.eta).not.toBe('')
+  })
+
   it('对完之后不再写预计时间', () => {
     const view = taskCheckSnapshot(80, 80, 1_000, 9_000, 'done')
     expect(view.percent).toBe(100)

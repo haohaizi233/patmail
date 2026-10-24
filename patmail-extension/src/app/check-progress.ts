@@ -37,14 +37,13 @@ function clock(at: number): string {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`
 }
 
-/** 用已经对过的件数和开始时间，算出百分比和预计结束时刻。还没对上一件时不估时间。 */
+/** 用已经对过的件数和开始时间，算出百分比和预计结束时刻。还没对上一件时不估时间；对上一件就给，翻页这种几秒就完的事才看得见预计完成。 */
 export function taskCheckSnapshot(done: number, total: number, startedAt: number, now: number, status: TaskCheckStatus): { done: number; total: number; percent: number; eta: string } {
   const safeTotal = Math.max(0, Math.floor(total))
   const safeDone = Math.min(Math.max(0, Math.floor(done)), safeTotal)
   const percent = safeTotal ? Math.min(100, Math.round(safeDone / safeTotal * 1000) / 10) : 0
   if (status !== 'run' || safeDone <= 0 || safeDone >= safeTotal) return { done: safeDone, total: safeTotal, percent, eta: '' }
   const elapsed = now - startedAt
-  if (elapsed < 800) return { done: safeDone, total: safeTotal, percent, eta: '' }
   return { done: safeDone, total: safeTotal, percent, eta: clock(now + elapsed / safeDone * (safeTotal - safeDone)) }
 }
 
