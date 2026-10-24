@@ -18,6 +18,7 @@ import { scopeFromConnection, type ExpectedAccountScope } from '../../shared/con
 import { MessageType, type FileSearchFormField, type MessageBridge } from '../../shared/message'
 import { confirmDialog } from '../dialog'
 import { useWorkspace } from '../composables/useWorkspace'
+import { paintTaskCheckProgress } from '../check-progress'
 import { runFilingPages, type FilingPageResult } from '../filing-pages'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
@@ -27,8 +28,6 @@ const props = defineProps<{ bridge?: MessageBridge; userId: string; canSearch: b
 const emit = defineEmits<{
   searched: [query: FilingSearchQuery]
   export: [rows: FilingSearchRow[]]
-  /** 全选所有一结束就把行交出去预取导出数据，先不下文件。 */
-  warm: [rows: FilingSearchRow[]]
 }>()
 
 /** 通道优先用外层传进来的，缺了再用注入的。两处都没有时查询要报错，不能一声不吭不响应。 */
@@ -573,20 +572,34 @@ async function fetchPage(bridge: MessageBridge, query: FilingSearchQuery, page: 
   }
 }
 
-function collectPages(bridge: MessageBridge, query: FilingSearchQuery, pages: number[], size: number): Promise<number[]> {
-  return runFilingPages(pages, page => fetchPage(bridge, query, page, size), {
-    onPage: (_page, rows) => {
-      for (const row of rows) selectedMap.set(rowKey(row), row)
-      selectedVersion.value += 1
-    }
-  })
-}
-
 function describeMissed(pages: number[]): string {
   return `第 ${pages.slice(0, 8).join('、')}${pages.length > 8 ? ' 等' : ''} 页`
 }
 
-/** 全选所有页：按上次的条件把每一页都拉回来。6 页并行、边拉边计数；有漏的自动兜一轮，再不行留按钮补。 */
+/** 全选所有翻页的进度：和取数同一根彩虹条，动词换成「翻页」。 */
+const paging = { startedAt: 0, total: 0, done: 0 }
+
+function paintPaging(status: 'run' | 'done'): void {
+  paintTaskCheckProgress(paging.done, paging.total, paging.startedAt, status, '翻页')
+}
+
+function tickPage(): void {
+  paging.done += 1
+  paintPaging(paging.done >= paging.total ? 'done' : 'run')
+}
+
+function collectPages(bridge: MessageBridge, query: FilingSearchQuery, pages: number[], size: number, onEach?: () => void): Promise<number[]> {
+  return runFilingPages(pages, page => fetchPage(bridge, query, page, size), {
+    onPage: (_page, rows) => {
+      for (const row of rows) selectedMap.set(rowKey(row), row)
+      selectedVersion.value += 1
+      onEach?.()
+    }
+  })
+}
+
+/** 全选所有页：只按上次的条件把每一页的列表行拉回来（翻页），边拉边计数、彩虹条报进度；
+ * 有漏的自动兜一轮，再不行留按钮补。导出取数不在这里打，点「导出 Excel」才开始。 */
 async function selectAllPages(): Promise<void> {
   const total = result.value?.total ?? 0
   const bridge = activeBridge()
@@ -599,14 +612,17 @@ async function selectAllPages(): Promise<void> {
   try {
     const size = 100
     const all = Array.from({ length: Math.ceil(total / size) }, (_, index) => index + 1)
-    let missed = await collectPages(bridge, query, all, size)
-    if (missed.length) missed = await collectPages(bridge, query, missed, size)
+    paging.startedAt = Date.now()
+    paging.total = all.length
+    paging.done = 0
+    paintPaging('run')
+    let missed = await collectPages(bridge, query, all, size, tickPage)
+    if (missed.length) missed = await collectPages(bridge, query, missed, size, tickPage)
     failedPages.value = missed
+    paintPaging('done')
     if (missed.length) {
       selectionNotice.value = `全选所有有 ${missed.length} 页没读到（${describeMissed(missed)}）。已选的不受影响，点「重试没读到的页」补齐。`
     }
-    const rows = [...selectedMap.values()]
-    if (rows.length) emit('warm', rows)
   } finally {
     selectingAll.value = false
   }
@@ -620,14 +636,19 @@ async function retryFailedPages(): Promise<void> {
   if (!bridge || !query || selectingAll.value || !pages.length) return
   selectingAll.value = true
   try {
-    let missed = await collectPages(bridge, query, pages, 100)
-    if (missed.length) missed = await collectPages(bridge, query, missed, 100)
+    if (!paging.total) {
+      paging.startedAt = Date.now()
+      paging.total = pages.length
+      paging.done = 0
+    }
+    paintPaging('run')
+    let missed = await collectPages(bridge, query, pages, 100, tickPage)
+    if (missed.length) missed = await collectPages(bridge, query, missed, 100, tickPage)
     failedPages.value = missed
+    paintPaging('done')
     selectionNotice.value = missed.length
       ? `还有 ${missed.length} 页没读到（${describeMissed(missed)}），可以再点一次重试。`
       : '没读到的页都补齐了。'
-    const rows = [...selectedMap.values()]
-    if (rows.length) emit('warm', rows)
   } finally {
     selectingAll.value = false
   }

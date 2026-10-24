@@ -1,6 +1,7 @@
 import { createApp, h, nextTick, type App } from 'vue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import FilingExportPanel from '../src/app/components/FilingExportPanel.vue'
+import { taskCheckProgress } from '../src/app/check-progress'
 import { MessageType, type ContentResponse, type MessageBridge } from '../src/shared/message'
 
 /** 组件挂载测试：把「查询按钮点得动」钉住。上次就栽在可选布尔 prop 不传被 Vue 转成 false，查询静默不发。 */
@@ -197,7 +198,7 @@ describe('递交查询面板的查询按钮', () => {
     host.remove()
   })
 
-  it('全选所有一结束就预取导出数据，点「导出 Excel」只是下文件', async () => {
+  it('全选所有只翻页并报进度，点「导出 Excel」才开始取数', async () => {
     const calls: Array<{ type?: string; payload?: { query?: { pageIndex?: number; pageSize?: number } } }> = []
     const saved: string[] = []
     const globalUrl = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
@@ -227,11 +228,14 @@ describe('递交查询面板的查询按钮', () => {
       await settle()
       buttonOf(host, '全选所有').click()
       await settle()
-      // 全选一结束就开始取导出数据（流程历史已经开打），但还不下文件。
-      expect(calls.some(item => item.type === MessageType.ReadFilingFlow)).toBe(true)
+      // 全选所有只翻页：还没打流程历史，也没下文件；进度条动词是「翻页」。
+      expect(calls.some(item => item.type === MessageType.ReadFilingFlow)).toBe(false)
       expect(saved).toEqual([])
+      expect(taskCheckProgress.label).toBe('翻页')
       buttonOf(host, '导出 Excel').click()
       await settle()
+      // 点了导出才开始取数，取完自动落盘。
+      expect(calls.some(item => item.type === MessageType.ReadFilingFlow)).toBe(true)
       expect(saved.some(name => name.startsWith('递交管理-已完成导出-'))).toBe(true)
       app.unmount()
       host.remove()

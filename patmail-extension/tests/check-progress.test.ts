@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sessionInterrupted, taskCheckSnapshot } from '../src/app/check-progress'
+import { paintTaskCheckProgress, resetTaskCheckProgress, sessionInterrupted, taskCheckProgress, taskCheckSnapshot } from '../src/app/check-progress'
 
 describe('发文核对进度', () => {
   it('还没对上时只给百分比，不写结束时间', () => {
@@ -41,5 +41,16 @@ describe('发文核对进度', () => {
     expect(sessionInterrupted('尚未连接 EASY。')).toBe(true)
     expect(sessionInterrupted('绑定的 EASY 标签页已失效。')).toBe(true)
     expect(sessionInterrupted('原网站查询太慢，没有在 1 分钟内返回。')).toBe(false)
+  })
+
+  it('进度条的动词跟着任务走：核对、翻页、取数', () => {
+    paintTaskCheckProgress(3, 10, 1_000, 'run', '翻页')
+    expect(taskCheckProgress.label).toBe('翻页')
+    expect(taskCheckProgress.done).toBe(3)
+    paintTaskCheckProgress(10, 10, 1_000, 'done', '取数')
+    expect(taskCheckProgress.label).toBe('取数')
+    expect(taskCheckProgress.status).toBe('done')
+    resetTaskCheckProgress()
+    expect(taskCheckProgress.label).toBe('核对')
   })
 })

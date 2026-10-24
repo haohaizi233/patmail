@@ -13,7 +13,9 @@ export const taskCheckProgress = reactive({
   total: 0,
   percent: 0,
   eta: '',
-  status: 'idle' as TaskCheckStatus
+  status: 'idle' as TaskCheckStatus,
+  /** 进度条文案里的动词：核对（PCT 表格）、翻页（全选所有拉页）、取数（递交导出）。 */
+  label: '核对'
 })
 
 export function resetTaskCheckProgress(): void {
@@ -23,6 +25,7 @@ export function resetTaskCheckProgress(): void {
   taskCheckProgress.percent = 0
   taskCheckProgress.eta = ''
   taskCheckProgress.status = 'idle'
+  taskCheckProgress.label = '核对'
 }
 
 function clock(at: number): string {
@@ -45,15 +48,16 @@ export function taskCheckSnapshot(done: number, total: number, startedAt: number
   return { done: safeDone, total: safeTotal, percent, eta: clock(now + elapsed / safeDone * (safeTotal - safeDone)) }
 }
 
-export function paintTaskCheckProgress(done: number, total: number, startedAt: number, status: TaskCheckStatus, now = Date.now()): void {
+export function paintTaskCheckProgress(done: number, total: number, startedAt: number, status: TaskCheckStatus, label = '核对', now = Date.now()): void {
   const view = taskCheckSnapshot(done, total, startedAt, now, status)
   const visible = view.total > 0
   const bar = taskCheckProgress
-  if (bar.visible === visible && bar.done === view.done && bar.total === view.total && bar.percent === view.percent && bar.eta === view.eta && bar.status === status) return
+  if (bar.visible === visible && bar.done === view.done && bar.total === view.total && bar.percent === view.percent && bar.eta === view.eta && bar.status === status && bar.label === label) return
   bar.visible = visible
   bar.done = view.done
   bar.total = view.total
   bar.percent = view.percent
   bar.eta = view.eta
   bar.status = status
+  bar.label = label
 }

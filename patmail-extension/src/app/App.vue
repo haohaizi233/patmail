@@ -145,7 +145,7 @@ onUnmounted(() => window.removeEventListener('hashchange', onHash))
 <template>
   <Shell :page="pageName" :items="nav" :profile-name="profileName" :profile-dept="profileDept" :avatar-src="avatarSrc" :show-demo="false" :show-settings="true" :show-mode="true" :mode="mode" :mode-busy="modeBusy" @navigate="go" @settings="onShellSettings" @mode="onMode" @preview="openZoom()">
     <template #top-actions>
-      <CheckRainbow :page-on="taskPageOn" :label="route === '/filings' ? '取数' : '核对'" />
+      <CheckRainbow :page-on="taskPageOn" />
       <AgentDock />
       <DocsDock />
     </template>
