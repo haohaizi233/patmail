@@ -9,7 +9,6 @@ import { isQueryGuid } from '../../query/query-validator'
 import { clonePctTask } from '../../customer/pct-sheet'
 import {
   PENDING_CUSTOMER_KEY,
-  QUERY_SURFACES,
   customerMailStyleLabel,
   isFileMailStyle,
   isLimitMailStyle,
@@ -31,6 +30,7 @@ import type { FileMailStyle, LimitMailStyle, QuerySurfaceId, WorkflowId } from '
 import { scopeFromConnection, type ExpectedAccountScope } from '../../shared/connection'
 import { isRunnableWorkflow, packagedPctWorkflow, pctRuntimeFrom, workflowSender } from '../../workflow/catalog'
 import { confirmDialog } from '../dialog'
+import { useQuerySurfaces } from '../composables/useQuerySurfaces'
 import { useWorkflowCatalog } from '../composables/useWorkflowCatalog'
 import { useWorkspace } from '../composables/useWorkspace'
 
@@ -80,7 +80,11 @@ const formRevision = ref(1)
 const listMessage = ref('')
 const removingId = ref('')
 
-const surfaceOptions = computed(() => QUERY_SURFACES.map(item => ({ value: item.id, label: item.label })))
+const { surfaces: surfaceOptions, surfaceMessage, loadSurfaces } = useQuerySurfaces()
+/** 客户列表里的「查询入口」也跟着下拉里的热加载叫法走。 */
+function surfaceLabelOf(id: QuerySurfaceId | undefined): string {
+  return surfaceOptions.value.find(item => item.value === id)?.label ?? querySurfaceOf(id).label
+}
 const customerOptions = computed(() => {
   const items = customerCatalog.value.map(item => ({ value: item.id, label: item.name }))
   if (customerPick.value && !items.some(item => item.value.toLowerCase() === customerPick.value.toLowerCase())) {
@@ -489,7 +493,10 @@ async function loadMailSets(force: boolean): Promise<void> {
 
 void loadCustomerList(false)
 watch(ready, (value) => {
-  if (value) void loadCustomerList(false)
+  if (value) {
+    void loadCustomerList(false)
+    void loadSurfaces()
+  }
 })
 const stopCustomerModeWatch = watchCustomerMode(() => { void loadCustomerList(false) })
 onUnmounted(stopCustomerModeWatch)
@@ -502,6 +509,7 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
     customerCatalog.value = catalogCache.get(nextOrigin) ?? []
   }
   void loadCustomerList(false)
+  void loadSurfaces(true)
   mailNodes.value = []
   mailsets.value = []
   reviewers.value = []
@@ -533,7 +541,7 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
         <tbody>
           <tr v-for="item in customers" :key="item.id">
             <td>{{ item.name }}</td>
-            <td>{{ querySurfaceOf(item.querySurface).label }}</td>
+            <td>{{ surfaceLabelOf(item.querySurface) }}</td>
             <td>{{ item.workflowId === 'pct-reminder' ? pctName : (WORKFLOWS.find(flow => flow.id === item.workflowId)?.label ?? '—') }}</td>
             <td>{{ item.workflowRemark || '—' }}</td>
             <td>{{ customerMailStyleLabel(item) }}</td>
@@ -559,8 +567,10 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
         <button type="button" class="text-button" @click="loadCustomerList(true)">重新读取客户</button>
         <p v-if="unlocksCaseContacts(name)" class="hint">保存「{{ CASE_CONTACT_CUSTOMER_NAME }}」后，会打开导出联系人。改成别的名字就会关掉。</p>
         <label>查询入口
-          <ThemeSelect :model-value="surface" placeholder="请选择查询入口" :options="surfaceOptions" @update:model-value="surface = $event as QuerySurfaceId | ''" />
+          <ThemeSelect :model-value="surface" placeholder="请选择查询入口" :options="surfaceOptions" @update:model-value="surface = $event as QuerySurfaceId | ''" @open="loadSurfaces()" />
         </label>
+        <button type="button" class="text-button" @click="loadSurfaces(true)">重新读取查询入口</button>
+        <p v-if="surfaceMessage" class="hint">{{ surfaceMessage }}</p>
         <label v-if="workflowChoices.length">工作流
           <ThemeSelect :model-value="workflow" :options="workflowChoices" @update:model-value="workflow = String($event) as WorkflowId" />
         </label>

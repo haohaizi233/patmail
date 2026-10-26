@@ -1,4 +1,5 @@
-import { isContentRequest, MessageType, type ContentResponse, type FileSearchFormField, type MessageBridge } from '../shared/message'
+import { isContentRequest, MessageType, type ContentResponse, type FileSearchFormField, type MessageBridge, type QuerySurfaceEntry } from '../shared/message'
+import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
 import { sendToBackground } from '../utils/runtime'
 import { injectPanel } from './injector'
@@ -104,6 +105,65 @@ async function openProcessForm(target: ProcessOpenTarget): Promise<{ ok: boolean
   const resolved = await easyRuntime.resolveProcessForm(target)
   if (!resolved.ok) return { ok: false, message: resolved.error.message.slice(0, 200) }
   return openEasyTab(`f_${target.id}`, target.title, resolved.data)
+}
+
+/** 原网站把用户菜单放在页面变量 `_UserMenu` 里，内容脚本看不见，照打开页签的老办法注一段进页面读。 */
+function readUserMenu(): Promise<Array<{ name: string; url: string }>> {
+  const marker = `patmail-menu-${Date.now()}`
+  return new Promise(resolve => {
+    const timer = window.setTimeout(() => {
+      window.removeEventListener('message', onMessage)
+      resolve([])
+    }, 4000)
+    function onMessage(event: MessageEvent): void {
+      if (event.source !== window || event.origin !== location.origin) return
+      const data = event.data as { marker?: string; entries?: unknown } | null
+      if (!data || data.marker !== marker) return
+      window.clearTimeout(timer)
+      window.removeEventListener('message', onMessage)
+      const entries = Array.isArray(data.entries) ? data.entries : []
+      resolve(entries.flatMap(item => {
+        if (!item || typeof item !== 'object') return []
+        const row = item as { name?: unknown; url?: unknown }
+        const url = typeof row.url === 'string' ? row.url.trim().slice(0, 200) : ''
+        if (!url) return []
+        const name = typeof row.name === 'string' ? row.name.trim().slice(0, 40) : ''
+        return [{ name, url }]
+      }))
+    }
+    window.addEventListener('message', onMessage)
+    const script = document.createElement('script')
+    script.textContent = `(() => {
+      const marker = ${JSON.stringify(marker)};
+      const entries = [];
+      const menu = window._UserMenu;
+      if (Array.isArray(menu)) {
+        for (let i = 0; i < menu.length; i++) {
+          const node = menu[i] || {};
+          if (!(node.is_business || node.is_page)) continue;
+          const url = String(node.menu_url || '').trim();
+          if (!url) continue;
+          const name = String(node.menu_name || node.name || node.title || node.menu_title || node.text || '').trim();
+          entries.push({ name: name.slice(0, 40), url: url.slice(0, 200) });
+        }
+      }
+      window.postMessage({ marker, entries }, location.origin);
+    })()`
+    document.documentElement.appendChild(script)
+    script.remove()
+  })
+}
+
+/** 查询入口跟着原网站菜单走：菜单上有哪几项、叫什么名字，下拉里就出哪几项。 */
+async function readQuerySurfaces(): Promise<{ surfaces: QuerySurfaceEntry[] }> {
+  const entries = await readUserMenu()
+  const surfaces: QuerySurfaceEntry[] = []
+  for (const entry of entries) {
+    const id = surfaceIdFromMenuUrl(entry.url)
+    if (!id || surfaces.some(item => item.id === id)) continue
+    surfaces.push({ id, label: entry.name, url: entry.url })
+  }
+  return { surfaces }
 }
 
 async function readFileSearchForm(): Promise<FileSearchFormField[]> {
@@ -270,6 +330,8 @@ const bridge: MessageBridge = {
         return { type: MessageType.FileSearchFormResult, payload: { fields: await readFileSearchForm() } }
       case MessageType.ScanFilingForm:
         return { type: MessageType.FilingFormResult, payload: { fields: await readFilingForm() } }
+      case MessageType.ReadQuerySurfaces:
+        return { type: MessageType.QuerySurfacesResult, payload: await readQuerySurfaces() }
       case MessageType.LoadDictionary:
         return { type: MessageType.DictionaryResult,
           payload: await easyRuntime.loadDictionary(message.payload, signal) }

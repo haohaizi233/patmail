@@ -2,10 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
+import WDatePicker from '../shell/components/WDatePicker.vue'
 import { isMultiPickerKey } from '../shared/picker-modes'
 import type { HistoryQueryOption } from '../api/query-history'
 import { CURRENT_ENVIRONMENT } from '../api/config'
-import { LIMIT_BLOCKS, LIMIT_OPTION_KEYS, LIMIT_SELECTS, buildLimitQueryXml, readLimitQueryXml } from '../api/limit-form'
+import { LIMIT_BLOCKS, LIMIT_OPTION_KEYS, LIMIT_SELECTS, buildLimitQueryXml, limitColumnLabels, readLimitQueryXml } from '../api/limit-form'
 import { pageSelectOptions } from '../query/form-page'
 import { activateOptionFallback, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, savedChoices, subscribeOptionFallback } from '../query/option-fallback'
 import type { NormalizedDictionary } from '../api/dictionaries'
@@ -14,6 +15,7 @@ import { hasOptionTree } from '../query/option-tree'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../api/file-search-params'
 import { readLimitTimeout, writeLimitTimeout } from '../api/query-timeout'
 import { isLimitMonitorInputField, splitCtrlProcIds, type LimitMonitorQuery } from '../api/limit-monitor-params'
+import { looksLikeInternalIds } from '../schema'
 import { isQueryGuid } from '../query/query-validator'
 import { joinCaseVolumes, splitCaseVolumes } from '../customer/volume-list'
 import { TemplateLoadCoordinator } from '../query/load-coordinator'
@@ -46,6 +48,8 @@ watch(queryTimeoutMs, value => {
 }, { flush: 'sync' })
 
 const values = ref<Record<string, string>>({})
+/** 标记哪些值是用户手打进来的文本，只有这些才原样回显在输入框里。 */
+const typedKeys = ref<Record<string, boolean>>({})
 const displayValues = ref<Record<string, string>>({})
 const unknownFields = ref<Record<string, string>>({})
 const loadedValues = ref<Record<string, string>>({})
@@ -67,7 +71,18 @@ const stopFallbackWatch = subscribeOptionFallback(() => { fallbackTick.value = o
 const loads = new TemplateLoadCoordinator()
 let filterTimer = 0
 let applyingTemplate = false
-const blocks = computed(() => LIMIT_BLOCKS.filter(block => showMore.value || !block.more))
+/** 自定义栏位 1-5 的标题按 GetFieldColumn 换成当前租户的名字，例如「签约主体」「月结 特批单号」。 */
+const columnLabels = ref<Record<string, string>>({})
+const blocks = computed(() => LIMIT_BLOCKS
+  .filter(block => showMore.value || !block.more)
+  .map(block => ({
+    ...block,
+    cells: block.cells.map(cell => {
+      if (!('key' in cell)) return cell
+      const label = columnLabels.value[cell.key]
+      return label ? { ...cell, label } : cell
+    })
+  })))
 const canRead = computed(() => Boolean(props.bridge) && Boolean(props.userId))
 const templateLabels = computed(() => historyLabels(templates.value))
 function templateLabel(item: { id: string; name: string }): string {
@@ -83,8 +98,10 @@ onBeforeUnmount(() => {
 function valueOf(key: string): string {
   return values.value[key] ?? ''
 }
-function setValue(key: string, value: string): void {
+function setValue(key: string, value: string, fromText = false): void {
   values.value = { ...values.value, [key]: value }
+  // 只有手打的文本才原样回显；勾选出来的是内部 ID，要换成人名再显示。
+  typedKeys.value = { ...typedKeys.value, [key]: fromText }
 }
 function draftFields(): Record<string, string> {
   const fields: Record<string, string> = {}
@@ -95,7 +112,7 @@ function draftFields(): Record<string, string> {
 }
 watch(values, () => emit('draft', draftFields()))
 function onText(key: string, event: Event): void {
-  setValue(key, (event.target as HTMLInputElement).value)
+  setValue(key, (event.target as HTMLInputElement).value, true)
 }
 function checked(key: string): boolean {
   const value = valueOf(key).trim().toLowerCase()
@@ -104,6 +121,10 @@ function checked(key: string): boolean {
 function onCheck(key: string, event: Event): void {
   const on = (event.target as HTMLInputElement).checked
   setValue(key, on ? (key.endsWith('isnull') ? 'on' : 'true') : '')
+}
+/** 申请日(月日) 在原站是 `WdatePicker({ dateFmt: 'MM-dd' })`，其余日期格都是 `yyyy-MM-dd`。 */
+function dateFormatOf(cell: { start: string }): 'yyyy-MM-dd' | 'MM-dd' {
+  return cell.start === 'month_day_from' ? 'MM-dd' : 'yyyy-MM-dd'
 }
 function caseTypeFor(key: string): string {
   const selected = valueOf('case_type')
@@ -158,7 +179,13 @@ function namedLabel(key: string): string {
 function namedShown(key: string): string {
   const value = valueOf(key)
   if (!value) return ''
-  return displayValues.value[key]?.trim() || (isQueryGuid(value) ? '已选择' : value)
+  if (typedKeys.value[key]) return value
+  const history = displayValues.value[key]?.trim() ?? ''
+  if (history && !looksLikeInternalIds(history)) return history
+  const ids = value.split(',').map(item => item.trim()).filter(Boolean)
+  if (ids.length > 0 && ids.every(part => isQueryGuid(part))) return ids.length > 1 ? `已选 ${ids.length} 项` : '已选择'
+  if (looksLikeInternalIds(value)) return `已选 ${ids.length || 1} 项`
+  return value
 }
 function fieldLabel(key: string, value: string): string {
   const ids = key === 'ctrl_proc' ? splitCtrlProcIds(value) : []
@@ -225,6 +252,7 @@ async function applyTemplate(id: string): Promise<void> {
   saveNameDirty.value = false
   if (!id || !props.bridge) {
     values.value = {}
+    typedKeys.value = {}
     displayValues.value = {}
     unknownFields.value = {}
     loadedValues.value = {}
@@ -245,6 +273,7 @@ async function applyTemplate(id: string): Promise<void> {
   }
   applyingTemplate = true
   values.value = parsed.data.fields
+  typedKeys.value = {}
   displayValues.value = parsed.data.displayValues
   unknownFields.value = parsed.data.unknownFields
   loadedValues.value = { ...parsed.data.fields }
@@ -372,6 +401,7 @@ function search(): void {
 
 function reset(): void {
   values.value = {}
+  typedKeys.value = {}
   displayValues.value = {}
   unknownFields.value = {}
   loadedValues.value = {}
@@ -392,6 +422,10 @@ async function loadPickers(force: boolean): Promise<void> {
   const country = valueOf('country').split(',').map(item => item.trim()).filter(item => /^[A-Za-z0-9_-]{1,40}$/.test(item)).join(',')
   const procType = valueOf('proc_type')
   try {
+    const columnResponse = await props.bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'fieldColumn', force } })
+    if (columnResponse.type === MessageType.DictionaryResult && columnResponse.payload.ok && columnResponse.payload.data.kind === 'fieldColumn') {
+      columnLabels.value = limitColumnLabels(columnResponse.payload.data.columns)
+    }
     const response = await props.bridge.request({
       type: MessageType.LoadDictionary,
       payload: {
@@ -419,6 +453,8 @@ async function loadPickers(force: boolean): Promise<void> {
       rememberChoices(props.userId, 'case_status_id', choices('case_status_id'))
     }
     checkMessage.value = describePickerReceipt(response.payload.data.dictionaries, response.payload.data.warnings)
+    const renamed = Object.values(columnLabels.value)
+    if (renamed.length) checkMessage.value += `。自定义栏位标题已按 GetFieldColumn 对齐：${renamed.join('、')}`
   } catch {
     checkMessage.value = '读取期限下拉失败。'
   } finally {
@@ -429,6 +465,7 @@ async function loadPickers(force: boolean): Promise<void> {
 function applySeed(): void {
   if (!props.seed) return
   values.value = { ...props.seed }
+  typedKeys.value = {}
   selectedId.value = ''
   const hidden = new Set(LIMIT_BLOCKS.filter(block => block.more).flatMap(block => block.cells.flatMap(cell => {
     if (cell.kind === 'dates') return [cell.start, cell.end, cell.empty].filter((item): item is string => Boolean(item))
@@ -537,9 +574,9 @@ watch(() => [valueOf('case_type'), valueOf('proc_type'), valueOf('country')].joi
             <div v-else class="query-cell">
               <span>{{ cell.label }}</span>
               <span class="date-pair">
-                <input :value="valueOf(cell.start)" type="text" placeholder="起" @input="onText(cell.start, $event)" />
+                <WDatePicker :id="cell.start" :model-value="valueOf(cell.start)" :format="dateFormatOf(cell)" :max="valueOf(cell.end)" placeholder="起" @update:model-value="setValue(cell.start, String($event))" />
                 <em>到</em>
-                <input :value="valueOf(cell.end)" type="text" placeholder="止" @input="onText(cell.end, $event)" />
+                <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :format="dateFormatOf(cell)" :min="valueOf(cell.start)" placeholder="止" @update:model-value="setValue(cell.end, String($event))" />
                 <label v-if="cell.empty" class="empty-check"><input :checked="checked(cell.empty)" type="checkbox" @change="onCheck(cell.empty, $event)" />为空</label>
               </span>
             </div>

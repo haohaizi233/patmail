@@ -163,6 +163,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .query-cell .theme-select-trigger { min-width: 0; }
 .date-pair { display: flex; gap: 4px; align-items: center; min-width: 0; }
 .date-pair input { flex: 1; }
+.date-pair .w-date-picker { flex: 1; min-width: 0; }
 .date-pair em { font-style: normal; color: #a38ca5; font-size: 12px; }
 .empty-check, .check-group label { display: flex; align-items: center; gap: 4px; flex: none; font-size: 12px; color: #65536d; white-space: nowrap; }
 .limit-form .query-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -178,7 +179,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .download-note, .query-cell > .download-note + .hint { grid-column: 2; margin: 0; color: #e11d48; font-size: 12px; }
 .query-cell > .download-note + .hint { color: #8a7290; }
 .file-summary { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.file-summary em { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; color: #65536d; font-size: 12px; }
+.file-summary em { flex: 1; min-width: 0; overflow-wrap: anywhere; font-style: normal; color: #65536d; font-size: 12px; }
 .query-preview dl { display: grid; gap: 4px; margin: 0; }
 .query-preview dl div { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: 8px; font-size: 12px; }
 .query-preview dt { color: #a38ca5; }

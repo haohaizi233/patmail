@@ -7,20 +7,38 @@ const props = withDefaults(defineProps<{
   modelValue?: string
   min?: string
   max?: string
+  /** 原站的 `dateFmt`。申请日(月日) 一格是 `MM-dd`，其余日期都是 `yyyy-MM-dd`。 */
+  format?: 'yyyy-MM-dd' | 'MM-dd'
   disabled?: boolean
   id?: string
   placeholder?: string
-}>(), { modelValue: '', disabled: false, id: undefined, placeholder: '' })
+}>(), { modelValue: '', disabled: false, id: undefined, placeholder: '', format: 'yyyy-MM-dd' })
 
 const emit = defineEmits<{ 'update:modelValue': [value: string]; change: [value: string] }>()
 
-const DATE_TEXT = /^\d{4}-\d{2}-\d{2}$/
+const FULL_DATE = /^\d{4}-\d{2}-\d{2}$/
+const MONTH_DAY = /^\d{2}-\d{2}$/
 const WEEK_TITLES = ['日', '一', '二', '三', '四', '五', '六']
 const MONTH_TITLES = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月']
 
+function pad(part: number): string {
+  return String(part).padStart(2, '0')
+}
+
+const today = new Date()
+
+/** `MM-dd` 没有年份，补一个参照年再进日历；起止比较也落在同一年里。 */
 function parseDate(text: string): Date | null {
   const value = (text ?? '').trim()
-  if (!DATE_TEXT.test(value)) return null
+  if (props.format === 'MM-dd') {
+    if (!MONTH_DAY.test(value)) return null
+    const [month, day] = value.split('-').map(Number)
+    const year = today.getFullYear()
+    const date = new Date(year, month - 1, day)
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null
+    return date
+  }
+  if (!FULL_DATE.test(value)) return null
   const [year, month, day] = value.split('-').map(Number)
   const date = new Date(year, month - 1, day)
   if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null
@@ -28,7 +46,7 @@ function parseDate(text: string): Date | null {
 }
 
 function formatDate(date: Date): string {
-  const pad = (part: number): string => String(part).padStart(2, '0')
+  if (props.format === 'MM-dd') return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
@@ -36,7 +54,6 @@ function dayStart(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
 }
 
-const today = new Date()
 const opened = ref(false)
 const root = ref<HTMLElement | null>(null)
 const input = ref<HTMLInputElement | null>(null)

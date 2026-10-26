@@ -16,7 +16,7 @@ import { peekHistoryList, readHistoryList, saveHistoryList } from '../query/hist
 import { historyLabels } from '../query/history-labels'
 import { confirmDialog } from '../app/dialog'
 import { TemplateLoadCoordinator } from '../query/load-coordinator'
-import { optionsForCaseType, resolveFileDescriptionDisplay, resolveInternalIdDisplay } from '../schema'
+import { optionsForCaseType, looksLikeInternalIds, resolveFileDescriptionDisplay, resolveInternalIdDisplay, resolveMultiLabel } from '../schema'
 import type { FileTypeNode } from '../api/dictionaries'
 import type { QueryTemplate } from '../query/query-types'
 import { isQueryGuid } from '../query/query-validator'
@@ -29,6 +29,7 @@ import { selectionFromControls, type FileDownloadSelection } from '../mail/downl
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import { sameOptionValue } from '../shell/components/theme-select'
 import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
+import WDatePicker from '../shell/components/WDatePicker.vue'
 import { isMultiPickerKey } from '../shared/picker-modes'
 
 const props = withDefaults(defineProps<{
@@ -82,6 +83,8 @@ const baseMissing = ref(false)
 const baseName = ref('')
 const temporary = ref<Record<string, string>>({})
 const temporaryActive = ref<Record<string, boolean>>({})
+/** 标记哪些临时值是用户手打进来的文本，只有这些才原样回显在输入框里。 */
+const typedKeys = ref<Record<string, boolean>>({})
 function defaultOpenExtra(): Record<string, boolean> {
   return { 案件条件: true, 文件条件: true }
 }
@@ -259,19 +262,17 @@ watch(
   () => [formValue('filetemp'), formValue('selfilename1'), formValue('txtfilename1'), pickers.value.fileTemp?.options.length ?? 0],
   () => emit('download-name', currentDownloadSelection())
 )
-function setOverride(key: string, value: string): void {
+function setOverride(key: string, value: string, fromText = false): void {
   temporaryActive.value = { ...temporaryActive.value, [key]: true }
   temporary.value = { ...temporary.value, [key]: value }
+  // 只有用户手打的文本才原样回显；勾选/下拉选出来的是内部 ID，要换成人名再显示。
+  typedKeys.value = { ...typedKeys.value, [key]: fromText }
 }
 function checked(key: string): boolean {
   const value = formValue(key).trim().toLowerCase()
   return value === 'on' || value === 'true' || value === '1' || value === '是'
 }
-function shorten(text: string): string {
-  const parts = text.split(/[、,，]/).map(item => item.trim()).filter(Boolean)
-  if (text.length <= 48 && parts.length <= 3) return text
-  return `${parts.slice(0, 2).join('、')} 等 ${Math.max(parts.length, 1)} 项`
-}
+/** 显示文案不再自己截断：一行摆得下就完整显示，放不下由 CSS 省略号或悬浮提示兜底。 */
 function storedLabel(key: string, value: string): string {
   const page = PAGE_OPTIONS[key]?.find(item => item.value === value)
   if (page) return page.label
@@ -281,23 +282,41 @@ function storedLabel(key: string, value: string): string {
       ? optionsForCaseType(dictionary.name, dictionary.dictionary.options, formValue('case_type'))
       : dictionary.dictionary.options
     const display = resolveInternalIdDisplay(value, options, key === 'filetype')
-    if (!display.unresolved) return shorten(display.text)
+    if (!display.unresolved) return display.text
   }
   if (key === 'filetype') {
-    return shorten(resolveFileDescriptionDisplay({
+    return resolveFileDescriptionDisplay({
       savedIds: value,
       descriptions: fileTypeNodes.value,
       historyText: displayValues.value.filetype
-    }).text)
+    }).text
   }
-  if (displayValues.value[key]) return shorten(displayValues.value[key])
-  if (isQueryGuid(value) || value.split(',').every(part => isQueryGuid(part.trim()))) return '已选择'
-  return shorten(value)
+  if (displayValues.value[key] && !looksLikeInternalIds(displayValues.value[key])) return displayValues.value[key]
+  const ids = value.split(',').map(item => item.trim()).filter(Boolean)
+  if (ids.length > 0 && ids.every(part => isQueryGuid(part))) return ids.length > 1 ? `已选 ${ids.length} 项` : '已选择'
+  if (looksLikeInternalIds(value)) return `已选 ${ids.length || 1} 项`
+  return value
 }
 function namedShown(key: string): string {
-  if (temporaryActive.value[key]) return temporary.value[key] ?? ''
+  // 勾选出来的内部 ID 永远换成人名显示，不能把 GUID 串摆在输入框里。
+  if (temporaryActive.value[key] && typedKeys.value[key]) return temporary.value[key] ?? ''
   const value = formValue(key)
   return value ? storedLabel(key, value) : ''
+}
+/** 文件描述摘要。刚勾完还没落模板的值也要换成人名，不能把 GUID 串直接摆出来。 */
+function fileDisplay(key: string): string {
+  const value = formValue(key)
+  if (!value) return ''
+  return resolveFileDescriptionDisplay({
+    savedIds: value,
+    descriptions: fileTypeNodes.value,
+    historyText: displayValues.value.filetype
+  }).text
+}
+function fileSummary(key: string): string {
+  const text = fileDisplay(key)
+  // 一行里摆得下就完整显示，放不下的部分交给 CSS 省略号，不再自己截断成「等 N 项」。
+  return text && text !== '未设置' ? text : '未选择'
 }
 function dictionaryOptions(key: string): { value: string; label: string; parent?: string }[] | null {
   if (key === 'filetype' && fileTypeNodes.value.length) {
@@ -349,7 +368,7 @@ function showPicker(key: string): boolean {
   return isMultiPickerKey(key) || treeChoices(key).length > 0
 }
 function onText(key: string, event: Event): void {
-  setOverride(key, (event.target as HTMLInputElement).value)
+  setOverride(key, (event.target as HTMLInputElement).value, true)
 }
 function onCheck(key: string, event: Event): void {
   const on = (event.target as HTMLInputElement).checked
@@ -361,6 +380,7 @@ function cellClass(cell: QueryCell): string {
 function restoreTemplate(): void {
   temporaryActive.value = {}
   temporary.value = {}
+  typedKeys.value = {}
   showFileTree.value = false
 }
 function dictionaryFor(key: string): { name: string; dictionary: NormalizedDictionary } | undefined {
@@ -838,13 +858,19 @@ async function deleteCustomer(): Promise<void> {
   await reloadLocal()
 }
 
+/** 模板里的 `{控件}_text`：多选值逐个换成人名再用逗号拼，和原站一致；换不出名字就不写这节。 */
+function labelForSave(key: string, value: string): string {
+  const options = key === 'filetype' && fileTypeNodes.value.length
+    ? fileTypeNodes.value.map(node => ({ value: node.id, label: node.name }))
+    : optionsFor(key)
+  return resolveMultiLabel(value, options) || displayValues.value[key]?.trim() || ''
+}
 function filledDisplay(): Record<string, string> {
   const labels: Record<string, string> = {}
   for (const [key, value] of Object.entries(resolved.value.fields)) {
     if (!value.trim()) continue
-    const option = optionsFor(key).find(item => item.value === value)
-    const label = option?.label || displayValues.value[key] || ''
-    if (label.trim() && label.trim() !== value.trim()) labels[key] = label.trim()
+    const label = labelForSave(key, value.trim())
+    if (label && label !== value.trim()) labels[key] = label
   }
   return labels
 }
@@ -1263,9 +1289,9 @@ watch(selectedCustomerId, () => {
             <div v-else-if="cell.kind === 'dates'" :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
               <span class="date-pair">
-                <input :value="formValue(cell.start)" type="text" placeholder="起" @input="onText(cell.start, $event)" />
+                <WDatePicker :id="cell.start" :model-value="formValue(cell.start)" :max="formValue(cell.end)" placeholder="起" @update:model-value="setOverride(cell.start, String($event))" />
                 <em>到</em>
-                <input :value="formValue(cell.end)" type="text" placeholder="止" @input="onText(cell.end, $event)" />
+                <WDatePicker :id="cell.end" :model-value="formValue(cell.end)" :min="formValue(cell.start)" placeholder="止" @update:model-value="setOverride(cell.end, String($event))" />
                 <label v-if="cell.empty" class="empty-check"><input :checked="checked(cell.empty)" type="checkbox" @change="onCheck(cell.empty, $event)" />为空</label>
               </span>
             </div>
@@ -1290,7 +1316,7 @@ watch(selectedCustomerId, () => {
             <div v-else :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
               <span class="file-summary">
-                <em v-hint.clip="formValue(cell.key) ? namedShown(cell.key) : '未选择'">{{ formValue(cell.key) ? namedShown(cell.key) : '未选择' }}</em>
+                <em v-hint.clip="fileDisplay(cell.key) || '未选择'">{{ fileSummary(cell.key) }}</em>
                 <button type="button" class="text-button" @click="showFileTree = !showFileTree">{{ showFileTree ? '收起' : '修改' }}</button>
                 <button v-if="formValue(cell.key)" type="button" class="text-button" @click="setOverride(cell.key, '')">清除</button>
               </span>

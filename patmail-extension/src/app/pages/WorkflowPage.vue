@@ -34,11 +34,12 @@ import {
   styleValueParamId,
   type ChoiceOption
 } from '../../workflow/choices'
-import { matchPctMailTypes, QUERY_SURFACES } from '../../customer/mail-flow'
+import { matchPctMailTypes } from '../../customer/mail-flow'
 import type { TreeOption } from '../../query/option-tree'
 import { workflowPreview } from '../../workflow/preview-chart'
 import { SKILLS, skillTint, stepCaption } from '../../workflow/skills'
 import { useWorkflowChoices } from '../composables/useWorkflowChoices'
+import { useQuerySurfaces } from '../composables/useQuerySurfaces'
 import { confirmDialog } from '../dialog'
 
 type Screen = 'sea' | 'ocean' | 'flow'
@@ -55,6 +56,7 @@ const newName = ref('')
 const picked = ref<string[]>([])
 const creating = ref(false)
 const { rules, mailTypes, senders, procs, notice: choiceNotice, load: loadChoices } = useWorkflowChoices()
+const { surfaces: querySurfaces } = useQuerySurfaces()
 const WORD_PARAMS = new Set(['type_keyword', 'customer_keyword', 'our_keyword', 'city_keyword', 'other_city_keyword'])
 const LISTED_CHOICES = new Set(['sender_mailset', 'surface_label'])
 let silence = false
@@ -329,7 +331,7 @@ function shownTypeId(param: WorkflowParam): string {
 }
 
 function surfaceOptions(current: string): ChoiceOption[] {
-  const options = QUERY_SURFACES.map(item => ({ value: item.label, label: item.label }))
+  const options = querySurfaces.value.map(item => ({ value: item.label, label: item.label }))
   const saved = current.trim()
   if (saved && !options.some(item => item.value === saved)) options.unshift({ value: saved, label: saved })
   return options

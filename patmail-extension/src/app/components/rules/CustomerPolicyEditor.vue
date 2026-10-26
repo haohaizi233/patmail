@@ -1,16 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import ThemeSelect from '../../../shell/components/ThemeSelect.vue'
 import EmptyGuide from '../EmptyGuide.vue'
 import { FILE_MAIL_STYLES, LIMIT_MAIL_STYLES } from '../../../customer/mail-flow'
 import type { CustomerQueryProfile, LimitMailStyle, QuerySurfaceId } from '../../../customer/types'
 import { NEW_POLICY_SET, policyRemark, policySetKey } from '../../../mail/rules/customer-policy'
 import type { CustomerMailPolicy, SendMode } from '../../../mail/types'
-
-const SURFACES: { value: QuerySurfaceId; label: string }[] = [
-  { value: 'file', label: '文件管理' },
-  { value: 'limit', label: '期限监控' }
-]
+import { useQuerySurfaces } from '../../composables/useQuerySurfaces'
 
 const props = defineProps<{
   policies: CustomerMailPolicy[]
@@ -23,6 +19,10 @@ const emit = defineEmits<{
 
 const profileId = ref('')
 const surface = ref<QuerySurfaceId | ''>('')
+const { surfaces: SURFACES, loadSurfaces } = useQuerySurfaces([
+  { value: 'file', label: '文件管理' },
+  { value: 'limit', label: '期限监控' }
+])
 const sendMode = ref<SendMode | ''>('')
 const limitStyle = ref<LimitMailStyle | ''>('')
 const remark = ref('')
@@ -50,7 +50,7 @@ function surfaceOf(item: CustomerMailPolicy): QuerySurfaceId {
 }
 
 function surfaceLabel(item: CustomerMailPolicy): string {
-  return SURFACES.find(entry => entry.value === surfaceOf(item))?.label ?? '文件管理'
+  return SURFACES.value.find(entry => entry.value === surfaceOf(item))?.label ?? '文件管理'
 }
 
 function styleLabel(item: CustomerMailPolicy): string {
@@ -168,7 +168,7 @@ watch(() => props.policies, (list) => {
             <ThemeSelect v-model="profileId" placeholder="选择客户" :options="customers.map(item => ({ value: item.id, label: item.name }))" />
           </td>
           <td>
-            <ThemeSelect :model-value="surface" placeholder="选择查询方式" :options="SURFACES" @update:model-value="chooseSurface(String($event))" />
+            <ThemeSelect :model-value="surface" placeholder="选择查询方式" :options="SURFACES" @update:model-value="chooseSurface(String($event))" @open="loadSurfaces()" />
           </td>
           <td>
             <ThemeSelect :model-value="styleValue" :placeholder="surface ? '选择发文方式' : '先选择查询方式'" :disabled="!surface" :options="styleOptions" @update:model-value="chooseStyle(String($event))" />

@@ -33,7 +33,13 @@ export const LIMIT_XML_TO_FIELD: Record<string, string> = {
   doc_date_other_isnull: 'doc_date_isnull',
   p_case_info_flow_user_id: 'flow_user_id',
   apply_tags_id_other: 'apply_tags_id',
-  case_volume_customer_all: 'case_volume_customer'
+  case_volume_customer_all: 'case_volume_customer',
+  /** 自定义栏位在页面上的控件 id 带下划线（API/03：模板节点名是控件 id），查询参数是 column1~column5。 */
+  column_1: 'column1',
+  column_2: 'column2',
+  column_3: 'column3',
+  column_4: 'column4',
+  column_5: 'column5'
 }
 
 /** 期限控件对应文件查询页已经扫下来的选项。接口还没返回时用这份，避免下拉被清空。 */
@@ -84,6 +90,10 @@ export const LIMIT_SELECTS: Record<string, { value: string; label: string }[]> =
 
 const dates = (label: string, start: string, end: string, empty?: string): LimitDateCell => ({ kind: 'dates', label, start, end, empty })
 
+/**
+ * 原站表单尾部（业务助理 / 流程人员 起到自定义栏位 5）在页面上一直可见，不属于「更多条件」，
+ * 这里放在主块末尾跟原站同序。自定义栏位的标题运行时按 GetFieldColumn 覆盖，见 `limitColumnLabels`。
+ */
 export const LIMIT_BLOCKS: LimitBlock[] = [
   {
     title: '期限条件',
@@ -122,20 +132,25 @@ export const LIMIT_BLOCKS: LimitBlock[] = [
       dates('返发明人日', 'back_inventor_date_start', 'back_inventor_date_end'),
       { kind: 'named', key: 'revise_user_id', label: '核稿人' },
       dates('官方发文日', 'doc_date_s', 'doc_date_e', 'doc_date_isnull'),
-      { kind: 'named', key: 'sales', label: '业务人员' }
+      { kind: 'named', key: 'sales', label: '业务人员' },
+      { kind: 'named', key: 'sales_help', label: '业务助理' },
+      { kind: 'named', key: 'flow_user_id', label: '流程人员' },
+      dates('委案日期', 'charge_date_from', 'charge_date_end'),
+      { kind: 'text', key: 'proc_note', label: '处理事项备注' },
+      { kind: 'named', key: 'apply_tags_id', label: '专利标签' },
+      { kind: 'named', key: 'pic_dept_id', label: '处理事项处理人所属部门' },
+      { kind: 'text', key: 'case_volume_customer', label: '客户文号' },
+      { kind: 'text', key: 'column1', label: '自定义栏位1' },
+      { kind: 'text', key: 'column2', label: '特批编号' },
+      { kind: 'text', key: 'column3', label: '回款日期' },
+      { kind: 'text', key: 'column4', label: '业务立案编号' },
+      { kind: 'text', key: 'column5', label: '所属部门' }
     ]
   },
   {
     title: '更多期限条件',
     more: true,
     cells: [
-      { kind: 'named', key: 'sales_help', label: '业务助理' },
-      { kind: 'named', key: 'flow_user_id', label: '流程人员' },
-      dates('委案日期', 'charge_date_from', 'charge_date_end'),
-      { kind: 'text', key: 'proc_note', label: '处理事项备注' },
-      { kind: 'named', key: 'apply_tags_id', label: '专利标签' },
-      { kind: 'named', key: 'pic_dept_id', label: '处理人部门' },
-      { kind: 'text', key: 'case_volume_customer', label: '客户文号' },
       { kind: 'named', key: 'user_assistant', label: '案件处理人助理' },
       dates('文件上传日期', 'upload_date_from', 'upload_date_end'),
       dates('代理人回复日', 'agent_to_reply_start', 'agent_to_reply_end'),
@@ -155,15 +170,27 @@ export const LIMIT_BLOCKS: LimitBlock[] = [
       dates('第三方回复日', 'third_party_revise_start', 'third_party_revise_end'),
       dates('回复第三方日', 'revise_third_party_start', 'revise_third_party_end'),
       dates('第三方确收日', 'receipt_third_party_start', 'receipt_third_party_end'),
-      { kind: 'text', key: 'pat_cus_fullname', label: '客户全称' },
-      { kind: 'text', key: 'column1', label: '自定义栏位1' },
-      { kind: 'text', key: 'column2', label: '特批编号' },
-      { kind: 'text', key: 'column3', label: '回款日期' },
-      { kind: 'text', key: 'column4', label: '业务立案编号' },
-      { kind: 'text', key: 'column5', label: '所属部门' }
+      { kind: 'text', key: 'pat_cus_fullname', label: '客户全称' }
     ]
   }
 ]
+
+/**
+ * 自定义栏位 1-5 的业务名由租户在 `GetFieldColumn` 里配置（API/21），原站按 `column_id` 改表单标题。
+ * 这里同口径：接口给了名字就用接口的，没给退回表单默认名（自定义栏位1/特批编号/回款日期/业务立案编号/所属部门）。
+ */
+export function limitColumnLabels(columns: readonly { field?: string; label?: string }[]): Record<string, string> {
+  const labels: Record<string, string> = {}
+  for (const column of columns) {
+    const field = column.field ?? ''
+    const label = column.label?.trim() ?? ''
+    if (!label) continue
+    if (field === 'column1' || field === 'column2' || field === 'column3' || field === 'column4' || field === 'column5') {
+      labels[field] = label
+    }
+  }
+  return labels
+}
 
 const DISPLAY_ONLY = new Set(['business_type_other'])
 const LIMIT_NODE = /^[A-Za-z_][A-Za-z0-9_]*$/

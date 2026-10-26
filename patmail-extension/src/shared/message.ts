@@ -113,6 +113,8 @@ export const MessageType = {
   FileSearchFormResult: 'FILE_SEARCH_FORM_RESULT',
   ScanFilingForm: 'SCAN_FILING_FORM',
   FilingFormResult: 'FILING_FORM_RESULT',
+  ReadQuerySurfaces: 'READ_QUERY_SURFACES',
+  QuerySurfacesResult: 'QUERY_SURFACES_RESULT',
   DictionaryResult: 'DICTIONARY_RESULT',
   CreateEasyMail: 'CREATE_EASY_MAIL',
   SaveEasyMail: 'SAVE_EASY_MAIL',
@@ -192,6 +194,7 @@ export type ContentRequest =
   | Response<'LOAD_DICTIONARY', DictionaryLoadRequest>
   | Request<'SCAN_FILE_SEARCH_FORM'>
   | Request<'SCAN_FILING_FORM'>
+  | Request<'READ_QUERY_SURFACES'>
   | Response<'CREATE_EASY_MAIL', { preview: MailDraftPreview; selection: SelectionClaim; confirmed: true }>
   | Response<'SAVE_EASY_MAIL', { executionId: string; preview: MailDraftPreview; selection: SelectionClaim; acknowledgedDigest: string; confirmed: true }>
   | Response<'FIND_MAIL_EXECUTION', { fingerprint: string }>
@@ -335,6 +338,17 @@ export interface FileSearchFormField {
   options: { value: string; label: string; parent?: string }[]
 }
 
+/** 原网站用户菜单里认出来的查询入口。名称按菜单上的说法，不做本地化。 */
+export interface QuerySurfaceEntry {
+  id: string
+  label: string
+  url: string
+}
+
+export interface QuerySurfaceMenu {
+  surfaces: QuerySurfaceEntry[]
+}
+
 export type ContentResponse =
   | Response<'SCAN_RESULT', PageSnapshot>
   | Response<'PAGE_INFO', PageInfo>
@@ -369,6 +383,7 @@ export type ContentResponse =
   | Response<'DICTIONARY_RESULT', ApiResult<DictionarySnapshot>>
   | Response<'FILE_SEARCH_FORM_RESULT', { fields: FileSearchFormField[] }>
   | Response<'FILING_FORM_RESULT', { fields: FileSearchFormField[] }>
+  | Response<'QUERY_SURFACES_RESULT', QuerySurfaceMenu>
   | Response<'MAIL_EXECUTION_RESULT', { view: MailExecutionView | null }>
   | Response<'WORKFLOW_RESULT', { view: WorkflowView | null }>
   | Response<'EXISTING_MAIL_DIAGNOSTIC', ExistingMailDiagnostic>
@@ -623,6 +638,12 @@ function isLimitMailSubmitResponse(value: unknown): boolean {
     ('to' in item) === ('cc' in item))
 }
 
+function isQuerySurfaceEntry(value: unknown): value is QuerySurfaceEntry {
+  return isRecord(value) && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 20 &&
+    typeof value.label === 'string' && value.label.length <= 40 &&
+    typeof value.url === 'string' && value.url.length > 0 && value.url.length <= 200
+}
+
 export function isMessage(value: unknown): value is AppMessage {
   if (!isRecord(value)) return false
   switch (value.type) {
@@ -634,6 +655,7 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.CancelSessionCheck:
     case MessageType.CancelFileSearch:
     case MessageType.CancelLimitMonitor:
+    case MessageType.ReadQuerySurfaces:
       return value.payload === undefined
     case MessageType.ListHistoryQueries:
       return isRecord(value.payload) && (value.payload.force === true || value.payload.force === false) &&
@@ -846,6 +868,9 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.FilingFormResult:
       return isRecord(value.payload) && Array.isArray(value.payload.fields) && value.payload.fields.length <= 200 &&
         value.payload.fields.every(isFileSearchFormField) && Object.keys(value.payload).length === 1
+    case MessageType.QuerySurfacesResult:
+      return isRecord(value.payload) && Array.isArray(value.payload.surfaces) && value.payload.surfaces.length <= 20 &&
+        value.payload.surfaces.every(isQuerySurfaceEntry) && Object.keys(value.payload).length === 1
     case MessageType.MailExecutionResult:
       return isRecord(value.payload) && Object.keys(value.payload).length === 1 &&
         (value.payload.view === null || isMailExecutionView(value.payload.view))
@@ -950,6 +975,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.SaveHistoryQuery ||
     value.type === MessageType.DeleteHistoryQuery ||
     value.type === MessageType.LoadDictionary || value.type === MessageType.ScanFileSearchForm || value.type === MessageType.ScanFilingForm || value.type === MessageType.CreateEasyMail ||
+    value.type === MessageType.ReadQuerySurfaces ||
     value.type === MessageType.SaveEasyMail || value.type === MessageType.FindMailExecution ||
     value.type === MessageType.InspectEasyMail || value.type === MessageType.ReadWorkflow ||
     value.type === MessageType.RefreshWorkflow || value.type === MessageType.PreviewWorkflow ||
@@ -962,7 +988,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
   )
 }
 
-const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES'])
+const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES'])
 const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE'])
 
 /** 不允许转发时给出原因。写开关关掉时，创建、保存和查询模板写回都停在这里。 */
