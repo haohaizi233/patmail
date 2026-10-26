@@ -12,6 +12,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['tests/**/*.test.ts'],
+    setupFiles: ['tests/setup/vitest-setup.ts'],
     environmentOptions: { jsdom: { url: 'https://example.test/forms?stage=1' } }
   }
 })
