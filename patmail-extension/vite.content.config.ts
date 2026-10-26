@@ -13,6 +13,8 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: false,
     cssCodeSplit: false,
+    // Content Script 必须整包 IIFE，文档和依赖都压在这一个文件里，提示无意义。
+    chunkSizeWarningLimit: 3072,
     rollupOptions: {
       input: resolve(__dirname, 'src/content/index.ts'),
       output: {
