@@ -1,26 +1,25 @@
 import assert from 'node:assert/strict'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { chromium } from 'playwright'
+import { distDir, docsWorkflowsDir } from './support/paths.mjs'
+import { extensionWorker, launchExtensionContext } from './support/browser.mjs'
+import { createReporter } from './support/report.mjs'
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const dist = path.join(root, 'dist')
-const sources = path.join(root, 'docs/workflows')
-assert.deepEqual((await readdir(sources)).sort(), ['PCT提醒.md', 'PCT鹏城专案.md', 'README.md', '文件管理.md'].sort())
-const context = await chromium.launchPersistentContext('', {
-  channel: 'chromium', headless: true, viewport: { width: 1440, height: 1000 },
-  args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`]
-})
+const dist = distDir
+const sources = docsWorkflowsDir
+const report = createReporter()
+assert.deepEqual((await readdir(sources)).sort(), ['PCT提醒.md', 'PCT鹏城专案.md', 'README.md', '文件管理.md', '递交管理-已完成导出.md'].sort())
+const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 } })
 const errors = []
 const runtimeLimitations = []
 const requests = []
-await context.route(/^https?:/, async route => { requests.push(route.request().url()); await route.abort() })
+const blockAll = async route => { requests.push(route.request().url()); await route.abort() }
+await context.route(/^https?:/, blockAll)
 try {
-  const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
+  const worker = await extensionWorker(context)
   const id = new URL(worker.url()).host
   const app = await context.newPage()
-  await mkdir(path.join(root, 'test-results'), { recursive: true })
+  await report.ensureResultsDir()
   app.on('pageerror', error => {
     // App startup also initializes its existing SQLite recovery database. The
     // current manifest blocks wasm evaluation; that pre-existing limitation is
@@ -74,7 +73,7 @@ try {
     }
     if (file === '文件管理.md') {
       await docs.getByRole('heading', { name: '9. 创建、保存和提交流程时序', exact: true }).scrollIntoViewIfNeeded()
-      await app.screenshot({ path: path.join(root, 'test-results/docs-mermaid-sequence.png') })
+      await report.screenshot(app, 'docs-mermaid-sequence.png')
       const actor = docs.locator('.mermaid-content svg rect.actor').first()
       assert.equal(await actor.evaluate(el => getComputedStyle(el).fill), 'rgb(255, 240, 246)')
       assert.equal(await actor.evaluate(el => getComputedStyle(el).rx), '12px')
@@ -124,14 +123,14 @@ try {
   await modal.getByRole('button', { name: '原始大小', exact: true }).click()
   assert.equal(Number(await zoom.inputValue()), 100)
   assert.equal(await preset('原始大小').getAttribute('aria-pressed'), 'true')
-  await app.screenshot({ path: path.join(root, 'test-results/docs-mermaid-presets.png') })
+  await report.screenshot(app, 'docs-mermaid-presets.png')
   await canvas.focus()
   await app.keyboard.press('-')
   assert.equal(Number(await zoom.inputValue()), 80)
-  await mkdir(path.join(root, 'test-results'), { recursive: true })
-  await app.screenshot({ path: path.join(root, 'test-results/docs-mermaid-detail.png') })
+  await report.ensureResultsDir()
+  await report.screenshot(app, 'docs-mermaid-detail.png')
   await app.keyboard.press('0')
-  await app.screenshot({ path: path.join(root, 'test-results/docs-mermaid-expanded.png') })
+  await report.screenshot(app, 'docs-mermaid-expanded.png')
   await app.keyboard.press('Escape')
   await modal.waitFor({ state: 'detached' })
   assert.equal(await docs.isVisible(), true)
@@ -158,12 +157,13 @@ try {
   assert.equal(await preset('适应宽度').getAttribute('aria-pressed'), 'true', 'a new page must restore the persisted user preference')
   await app.getByRole('button', { name: '关闭放大图' }).click()
   assert.equal(await docs.isVisible(), true)
-  await app.screenshot({ path: path.join(root, 'test-results/docs-mermaid-inline.png') })
+  await report.screenshot(app, 'docs-mermaid-inline.png')
   assert.deepEqual(errors, [])
   assert.deepEqual(requests, [], 'Documents must render without network access')
   const result = { counts, inlineLayout: 'full width, natural height, responsive resize, five semantic pastel classes, no repeated card title', interactions: 'exclusive selected presets, persistent mode after reopen/reload, manual zoom clears highlight, drag preserves selection, wheel, numeric zoom, fit width/window, original size, keyboard, Escape', documentPageErrors: errors.length, networkRequests: requests.length, existingRuntimeLimitations: runtimeLimitations }
-  await writeFile(path.join(root, 'test-results/docs-mermaid.json'), JSON.stringify(result, null, 2))
+  await report.writeJson('docs-mermaid.json', result)
   console.log(JSON.stringify(result))
 } finally {
+  await context.unroute(/^https?:/, blockAll)
   await context.close()
 }
