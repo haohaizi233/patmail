@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,8 +25,32 @@ SERVER = "183.36.43.66"
 PORT = "8097"
 DATABASE = "IPEasy-X"
 USER = "sa"
-# vite 的 publicDir 在仓库根的 public/，不是 patmail-extension/public。
-OUT = Path(__file__).resolve().parents[2] / "public" / "assets" / "sme-customers.json"
+# 两份都要写：public/assets 是 manifest 里 web_accessible_resources 的那份；
+# src/assets 才是运行时真正读的（customer/sme-customers.ts 用 import.meta.url 打进 chunks），
+# 只写 public 的话重新构建也不会换掉插件里的客户名单。
+ROOT = Path(__file__).resolve().parents[2]
+OUT = ROOT / "public" / "assets" / "sme-customers.json"
+BUNDLED_OUT = ROOT / "patmail-extension" / "src" / "assets" / "sme-customers.json"
+
+
+def write_snapshot(out: Path, text: str) -> None:
+    """先写临时文件再原子替换：中途失败不会把旧快照截成半截。
+
+    直接 write_text 打开目标文件时，Windows 上偶尔被别的进程占着（构建、杀软扫描），
+    报的错还五花八门（实测见过 Errno 22 Invalid argument），所以失败就退避重试几次。
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(out.name + ".tmp")
+    last: OSError | None = None
+    for attempt in range(5):
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, out)
+            return
+        except OSError as error:
+            last = error
+            time.sleep(0.5 * (attempt + 1))
+    raise OSError(f"写 {out} 失败（重试 5 次）：{last}") from last
 
 
 def main() -> int:
@@ -56,12 +81,14 @@ def main() -> int:
         conn.close()
     customers = [[str(row[0]).strip(), str(row[1]).strip()] for row in rows]
     taken = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(
-        json.dumps({"takenAt": taken, "count": len(customers), "customers": customers}, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
+    text = json.dumps(
+        {"takenAt": taken, "count": len(customers), "customers": customers},
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
-    print(f"已写 {OUT}：{len(customers)} 家，{OUT.stat().st_size // 1024} KB，快照时间 {taken}")
+    for target in (OUT, BUNDLED_OUT):
+        write_snapshot(target, text)
+    print(f"已写 {OUT} 和 {BUNDLED_OUT}：{len(customers)} 家，{OUT.stat().st_size // 1024} KB，快照时间 {taken}")
     return 0
 
 
