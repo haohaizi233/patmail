@@ -160,6 +160,8 @@ function stripSearchContinuation(message: AppMessage): AppMessage {
     type: MessageType.SearchFiles,
     payload: {
       query: message.payload.query,
+      // batch 是批量拉页的标记（不占「新查询取消旧查询」的槽），continuation 留在后台记账，batch 要跟着过去。
+      ...(message.payload.batch === true ? { batch: true as const } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs })
     }
   }
