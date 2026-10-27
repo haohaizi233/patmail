@@ -17,6 +17,14 @@ const packed = {
   file_guid: '85ebabc1-cf99-490e-b5f7-298a77742012'
 }
 const calls = []
+const files = Array.from({ length: 141 }, (_, index) => ({
+  fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+  fileNo: `A${index + 1}`, fileName: `original-${index + 1}.pdf`
+}))
+const positions = new Map(files.map((file, index) => [file.fileId, index + 1]))
+let activeNames = 0
+let peakNames = 0
+let downloadParams
 const zip = Buffer.from('504b0506000000000000000000000000000000000000', 'hex')
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://183.36.43.66:88')
@@ -27,9 +35,25 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.endsWith('Login.ashx')) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8')
     res.end(JSON.stringify(session))
-  } else if (call === 'DownLoad') {
+  } else if (call === 'GetFileName') {
+    const params = new URLSearchParams(body)
+    const ids = params.get('file_ids').split(';')
+    activeNames++
+    peakNames = Math.max(peakNames, activeNames)
+    // 让后面的批次先返回，不能只验证按序完成的情况。
+    await new Promise(resolve => setTimeout(resolve, 180 - positions.get(ids[0])))
     res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-    res.end(JSON.stringify(packed))
+    res.end(JSON.stringify({ ClientInfo: { IsLogin: true, Status: true, Result: false }, file_names: ids.map(id => `file-${positions.get(id)}.pdf`).join(';') }))
+    activeNames--
+  } else if (call === 'DownLoad') {
+    downloadParams = new URLSearchParams(body)
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    res.write('  ')
+    await new Promise(resolve => setTimeout(resolve, 250))
+    const json = JSON.stringify(packed)
+    res.write(json.slice(0, 60))
+    await new Promise(resolve => setTimeout(resolve, 250))
+    res.end(json.slice(60))
   } else if (url.pathname.endsWith('FileHandler.ashx')) {
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', 'attachment; filename="fixture.zip"')
@@ -56,6 +80,17 @@ try {
   await page.goto('http://183.36.43.66:88/fixture')
   assert.deepEqual(await page.evaluate(() => ({ secure: isSecureContext, uuid: typeof crypto.randomUUID })),
     { secure: false, uuid: 'undefined' }, '必须在真实 HTTP 非安全上下文复现，不能用 localhost 或 HTTPS 掩盖缺陷')
+  const app = await context.newPage()
+  await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
+  const progressId = '11111111-1111-4111-8111-111111111111'
+  await app.evaluate(id => {
+    globalThis.__downloadAudit = []
+    globalThis.__downloadResult = null
+    chrome.runtime.onMessage.addListener(message => {
+      if (message.channel === 'patmail-download-progress' && message.id === id) globalThis.__downloadAudit.push(message.progress)
+      if (message.channel === 'patmail-download-result' && message.id === id) globalThis.__downloadResult = message.body
+    })
+  }, progressId)
   let tab
   for (let i = 0; i < 30; i++) {
     tab = (await worker.evaluate(() => chrome.tabs.query({}))).find(t => t.url?.endsWith('/fixture'))
@@ -66,30 +101,47 @@ try {
     await new Promise(resolve => setTimeout(resolve, 200))
   }
   let timeout
-  const result = await Promise.race([
-    worker.evaluate(id => chrome.tabs.sendMessage(id, {
+  const accepted = await Promise.race([
+    worker.evaluate(({ id, files, progressId }) => chrome.tabs.sendMessage(id, {
       type: 'DOWNLOAD_FILES', payload: {
-        items: [{ fileId: '603ca943-a07a-4894-9461-29dff2d60c4b', fileNo: 'A00111119448', fileName: 'test.pdf' }],
-        selection: null, stripAppNoDot: true
+        items: files,
+        selection: { newFilename: 'file_desc', fileNameType: 'colname' }, stripAppNoDot: true, progressId, detached: true
       }
-    }), tab.id),
+    }), { id: tab.id, files, progressId }),
     new Promise(resolve => { timeout = setTimeout(() => resolve({ diagnosticTimeout: true }), 40000) })
   ])
   clearTimeout(timeout)
+  assert.equal(accepted.type, 'DOWNLOAD_FILES_ACCEPTED', '长任务必须先短暂受理，不能一直占住后台转发')
+  await app.waitForFunction(() => globalThis.__downloadResult !== null, undefined, { timeout: 40000 })
+  const result = await app.evaluate(() => globalThis.__downloadResult)
   let downloads = []
   for (let attempt = 0; attempt < 50; attempt++) {
     downloads = await worker.evaluate(() => chrome.downloads.search({}).then(items => items.map(({ id, state, error, bytesReceived, totalBytes, filename }) => ({ id, state, error, bytesReceived, totalBytes, filename }))))
     if (downloads.some(item => item.state === 'complete' || item.state === 'interrupted')) break
     await new Promise(resolve => setTimeout(resolve, 200))
   }
-  const report = { result, downloads, calls, errors }
+  const progress = await app.evaluate(() => globalThis.__downloadAudit)
+  const report = { accepted, result, downloads, calls, errors, peakNames, progress }
   await mkdir(testResultsDir, { recursive: true })
   await writeFile(resultPath('download-e2e.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
   assert.equal(result.type, 'DOWNLOAD_FILES_RESULT')
   assert.equal(result.payload.ok, true)
+  assert.equal(result.payload.data.fileCount, 141)
   assert.equal(result.payload.data.notice, '', '后台应直接接住下载，不能靠 iframe 假成功')
   assert.equal(calls.filter(call => call.call === 'DownLoad').length, 1)
+  assert.equal(calls.filter(call => call.call === 'GetFileName').length, 8)
+  assert.equal(peakNames, 6)
+  assert.equal(downloadParams.get('file_no'), files.map(file => file.fileNo).join(';'))
+  assert.equal(downloadParams.get('file_name'), files.map((_, index) => `file-${index + 1}.pdf`).join(';'))
+  const naming = progress.filter(item => item.phase === 'naming')
+  assert.equal(naming[0].done, 0)
+  assert.equal(naming.at(-1).done, 141)
+  assert.equal(naming.every((item, index) => index === 0 || item.done > naming[index - 1].done), true)
+  assert(progress.some(item => item.phase === 'packing'))
+  const received = progress.filter(item => item.phase === 'packing' && item.receivedBytes > 0).map(item => item.receivedBytes)
+  assert(received.length >= 2 && received.at(-1) > received[0], '真实流式响应字节要逐步上报')
+  assert(progress.some(item => item.phase === 'saving'))
   assert.equal(calls.filter(call => call.path.endsWith('FileHandler.ashx')).length, 1)
   assert.equal(downloads.length, 1)
   assert.equal(downloads[0].state, 'complete')

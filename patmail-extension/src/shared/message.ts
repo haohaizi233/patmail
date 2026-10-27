@@ -72,8 +72,11 @@ export const MessageType = {
   ResolveDownloadNamesResult: 'RESOLVE_DOWNLOAD_NAMES_RESULT',
   DownloadFiles: 'DOWNLOAD_FILES',
   DownloadFilesResult: 'DOWNLOAD_FILES_RESULT',
+  DownloadFilesAccepted: 'DOWNLOAD_FILES_ACCEPTED',
   SaveDownload: 'SAVE_DOWNLOAD',
   SaveDownloadResult: 'SAVE_DOWNLOAD_RESULT',
+  DownloadState: 'DOWNLOAD_STATE',
+  DownloadStateResult: 'DOWNLOAD_STATE_RESULT',
   ExportCaseContacts: 'EXPORT_CASE_CONTACTS',
   ExportCaseContactsResult: 'EXPORT_CASE_CONTACTS_RESULT',
   ListMailProcesses: 'LIST_MAIL_PROCESSES',
@@ -178,7 +181,7 @@ export type ContentRequest =
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
-  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean }>
+  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true }>
   | Response<'EXPORT_CASE_CONTACTS', { volumes: string[] }>
   | Response<'LIST_MAIL_PROCESSES', { query: ProcessListQuery }>
   | Response<'OPEN_EASY_FORM', { target: ProcessOpenTarget }>
@@ -247,7 +250,8 @@ export type BackgroundRequest =
   | Response<'SAVE_EVIDENCE', { record: Record<string, unknown> }>
   | Response<'LIST_EVIDENCE', { origin: string; call: string }>
   | Response<'WORKSPACE', WorkspaceAction>
-  | Response<'SAVE_DOWNLOAD', { url: string; fileName: string }>
+  | Response<'SAVE_DOWNLOAD', { url: string; fileName: string; progressId?: string }>
+  | Response<'DOWNLOAD_STATE', { downloadId: number }>
   | Response<'AGENT_CHAT', { action: 'probe' | 'turn'; message: string } | { action: 'turn'; message: string; plain: true } | { action: 'answer'; message: string } | { action: 'history' | 'reset' | 'facts' | 'compact' | 'stop' | 'create' } | { action: 'create'; title: string } | { action: 'open' | 'remove'; id: string } | { action: 'rename'; id: string; title: string }>
 export type BackgroundResponse =
   | Response<'PONG', { ok: true }>
@@ -257,7 +261,8 @@ export type BackgroundResponse =
   | Response<'ACCEPTANCE_RESULT', { records: Record<string, unknown>[]; probe?: { httpStatus: number; sessionOk: boolean; fields: Record<string, string>; shape: string } }>
   | Response<'EVIDENCE_RESULT', { records: Record<string, unknown>[] }>
   | Response<'WORKSPACE_RESULT', WorkspaceResultPayload>
-  | Response<'SAVE_DOWNLOAD_RESULT', { ok: true; fileName: string }>
+  | Response<'SAVE_DOWNLOAD_RESULT', { ok: true; fileName: string; downloadId?: number }>
+  | Response<'DOWNLOAD_STATE_RESULT', { ok: true; state: 'inProgress' | 'complete' | 'interrupted'; receivedBytes: number; totalBytes: number | null; error?: string }>
   | Response<'AGENT_CHAT_RESULT', ApiResult<{ reply: string; model: string; steps: number; history: Array<{ role: 'user' | 'assistant'; content: string }>; sessions: Array<{ id: string; title: string; updatedAt: string; active: boolean }>; activeId: string }>>
   | ErrorMessage
 
@@ -370,6 +375,7 @@ export type ContentResponse =
   | Response<'SUBMIT_FILE_MANAGE_RESULT', { stopped: boolean; results: Array<{ fileId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES_RESULT', ApiResult<{ names: string[] }>>
   | Response<'DOWNLOAD_FILES_RESULT', ApiResult<{ fileName: string; fileCount: number; notice: string }>>
+  | Response<'DOWNLOAD_FILES_ACCEPTED', { progressId: string }>
   | Response<'EXPORT_CASE_CONTACTS_RESULT', ApiResult<CaseContactExport>>
   | Response<'LIST_MAIL_PROCESSES_RESULT', ApiResult<ProcessListResult>>
   | Response<'OPEN_EASY_FORM_RESULT', { ok: boolean; message: string }>
@@ -448,8 +454,11 @@ function isDownloadFileItem(value: unknown): value is { fileId: string; fileNo: 
     typeof value.fileName === 'string' && value.fileName.trim().length > 0 && value.fileName.length <= 180 && !value.fileName.includes(';')
 }
 
-function isDownloadFilesRequest(value: unknown): value is { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean } {
-  if (!isRecord(value) || Object.keys(value).length !== 3 || typeof value.stripAppNoDot !== 'boolean') return false
+function isDownloadFilesRequest(value: unknown): value is { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true } {
+  if (!isRecord(value) || typeof value.stripAppNoDot !== 'boolean' ||
+    Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached'].includes(key)) ||
+    (value.detached !== undefined && (value.detached !== true || !value.progressId)) ||
+    (value.progressId !== undefined && (typeof value.progressId !== 'string' || !isQueryGuid(value.progressId)))) return false
   const items = value.items
   if (!Array.isArray(items) || !items.length || items.length > DOWNLOAD_MAX_ITEMS || !items.every(isDownloadFileItem)) return false
   return value.selection === null || isFileDownloadSelection(value.selection)
@@ -839,18 +848,36 @@ export function isMessage(value: unknown): value is AppMessage {
       return isDownloadFilesRequest(value.payload)
     case MessageType.DownloadFilesResult:
       return isDownloadFilesResult(value.payload)
+    case MessageType.DownloadFilesAccepted:
+      return isRecord(value.payload) && Object.keys(value.payload).length === 1 && typeof value.payload.progressId === 'string' && isQueryGuid(value.payload.progressId)
     case MessageType.SaveDownload: {
       const payload = value.payload
-      // 只放行本插件打包出来的取包地址：后台会照着它发起浏览器下载。
-      return isRecord(payload) && Object.keys(payload).length === 2 &&
+      // 只放行本插件打包出来的取包地址：后台会照着它发起浏览器下载。progressId 供下载进度流回工作台。
+      return isRecord(payload) && (Object.keys(payload).length === 2 || Object.keys(payload).length === 3) &&
+        (payload.progressId === undefined || (typeof payload.progressId === 'string' && isQueryGuid(payload.progressId))) &&
         typeof payload.url === 'string' && payload.url.length <= 500 &&
         /^https?:\/\/[^/?#]+\/AjaxServers\/FileHandler\.ashx\?guid=[0-9a-f-]{36}(&file_size=\d+)?$/i.test(payload.url) &&
         typeof payload.fileName === 'string' && payload.fileName.endsWith('.zip') && payload.fileName.length <= 120 &&
         !payload.fileName.includes('/') && !payload.fileName.includes('\\')
     }
     case MessageType.SaveDownloadResult:
-      return isRecord(value.payload) && Object.keys(value.payload).length === 2 && value.payload.ok === true &&
-        typeof value.payload.fileName === 'string' && value.payload.fileName.length <= 120
+      return isRecord(value.payload) && (Object.keys(value.payload).length === 2 || Object.keys(value.payload).length === 3) &&
+        value.payload.ok === true &&
+        typeof value.payload.fileName === 'string' && value.payload.fileName.length <= 120 &&
+        (value.payload.downloadId === undefined || (typeof value.payload.downloadId === 'number' && Number.isSafeInteger(value.payload.downloadId) && value.payload.downloadId >= 0))
+    case MessageType.DownloadState:
+      return isRecord(value.payload) && Object.keys(value.payload).length === 1 &&
+        typeof value.payload.downloadId === 'number' && Number.isSafeInteger(value.payload.downloadId) && value.payload.downloadId >= 0
+    case MessageType.DownloadStateResult: {
+      const payload = value.payload
+      if (!isRecord(payload) || payload.ok !== true) return false
+      const keys = Object.keys(payload)
+      if (!keys.every(key => ['ok', 'state', 'receivedBytes', 'totalBytes', 'error'].includes(key))) return false
+      if (payload.state !== 'inProgress' && payload.state !== 'complete' && payload.state !== 'interrupted') return false
+      if (typeof payload.receivedBytes !== 'number' || !Number.isSafeInteger(payload.receivedBytes) || payload.receivedBytes < 0) return false
+      if (payload.totalBytes !== null && (typeof payload.totalBytes !== 'number' || !Number.isSafeInteger(payload.totalBytes) || payload.totalBytes < 0)) return false
+      return payload.error === undefined || (typeof payload.error === 'string' && payload.error.length <= 200)
+    }
     case MessageType.ExportCaseContacts:
       return isRecord(value.payload) && isVolumeList(value.payload.volumes) && Object.keys(value.payload).length === 1
     case MessageType.ListMailProcesses:

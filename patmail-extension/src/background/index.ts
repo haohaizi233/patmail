@@ -12,6 +12,7 @@ import { isMessage, MessageType, type AppMessage, type BackgroundResponse } from
 import { prepareApiDocs } from '../agent/rag-store'
 import { hydrateWriteSwitch, watchWriteSwitch } from '../settings/write-switch'
 import { customerMode, hydrateCustomerMode, modeOrigin, originMatchesMode, watchCustomerMode } from '../settings/customer-mode'
+import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL } from '../shared/download-progress'
 
 watchWriteSwitch()
 // 扩展 Service Worker 不能用顶层 await，否则 Chrome 直接拒绝启动，工具栏点击没有监听。
@@ -203,10 +204,32 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       return { type: MessageType.Error, payload: { message: '扩展缺「下载」权限：到 chrome://extensions 给 PatMail 点一次「重新加载」后再试。' } }
     }
     try {
-      await downloads.download({ url: message.payload.url, filename: message.payload.fileName, saveAs: false })
-      return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: message.payload.fileName } }
+      const downloadId = await downloads.download({ url: message.payload.url, filename: message.payload.fileName, saveAs: false })
+      return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: message.payload.fileName, downloadId } }
     } catch (error: unknown) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有接住这次下载。' } }
+    }
+  }
+  /** 浏览器下载进度由内容脚本回读：后台只做一次状态查询，下载再多分钟也不占后台定时器。 */
+  if (message.type === MessageType.DownloadState) {
+    const downloads = chrome.downloads
+    if (!downloads?.search) {
+      return { type: MessageType.Error, payload: { message: '扩展缺「下载」权限，读不到下载状态。' } }
+    }
+    try {
+      const items = await downloads.search({ id: message.payload.downloadId })
+      const item = items[0]
+      // 任务已经不在下载记录里（被清掉或还没建出来）：明确报错，让调用方按读不到处理，不能假装还在传。
+      if (!item) return { type: MessageType.Error, payload: { message: '没有在浏览器下载记录里找到这个任务。' } }
+      const receivedBytes = Number.isSafeInteger(item.bytesReceived) && item.bytesReceived >= 0 ? item.bytesReceived : 0
+      const totalBytes = Number.isSafeInteger(item.totalBytes) && item.totalBytes > 0 ? item.totalBytes : null
+      const state = item.state === 'complete' ? 'complete' : item.state === 'interrupted' ? 'interrupted' : 'inProgress'
+      return {
+        type: MessageType.DownloadStateResult,
+        payload: { ok: true, state, receivedBytes, totalBytes, ...(item.error ? { error: String(item.error).slice(0, 200) } : {}) }
+      }
+    } catch (error: unknown) {
+      return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有回报下载状态。' } }
     }
   }
   let scoped: AppMessage = message
@@ -295,6 +318,8 @@ chrome.runtime.onConnect.addListener(port => {
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return
   if (isRecord(message) && message.channel === RESULT_CHANNEL) return
+  if (isRecord(message) && message.channel === DOWNLOAD_PROGRESS_CHANNEL) return
+  if (isRecord(message) && message.channel === DOWNLOAD_RESULT_CHANNEL) return
   const requestId = isRecord(message) && message.channel === CALL_CHANNEL && typeof message.id === 'string' && message.id.length > 0 && message.id.length <= 80
     ? message.id : null
   const payload = requestId && isRecord(message) ? message.message : message

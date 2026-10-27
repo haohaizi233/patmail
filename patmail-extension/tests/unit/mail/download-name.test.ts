@@ -1,11 +1,45 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { EasyTransport } from '../../../src/api/transport'
+import type { ApiResult } from '../../../src/api/types'
 import {
-  buildGetFileNameParams, downloadRecipe, readGeneratedFileNames, resolveDownloadFileNames, selectionFromControls, stripApplicationNoDot
+  buildGetFileNameParams, downloadRecipe, NAME_BATCH, readGeneratedFileNames, resolveDownloadFileNames, selectionFromControls, stripApplicationNoDot
 } from '../../../src/mail/download-name'
 
 const TEMPLATE = 'd9896997-1e83-4c7d-9a49-da69ba56e7aa'
 const FILE = '603ca943-a07a-4894-9461-29dff2d60c4b'
+/** 641 个文件正好是 7 批（6 批满 100 + 41），能验证 6 路并发和第 7 批乱序补位。 */
+const FILES = Array.from({ length: 641 }, (_, index) =>
+  `603ca943-a07a-4894-9461-${String(index).padStart(12, '0')}`)
+const GENERATED = FILES.map((_, index) => `文件${index}.pdf`)
+const SELECTION = { newFilename: 'file_desc', fileNameType: 'colname' }
+
+function controlledNames() {
+  const pending: { ids: string[]; signal?: AbortSignal; finish: (result?: ApiResult<unknown>) => void }[] = []
+  let active = 0
+  let peak = 0
+  const transport = {
+    async post(operation: string, params: URLSearchParams, signal?: AbortSignal) {
+      expect(operation).toBe('getFileName')
+      const ids = params.get('file_ids')!.split(';')
+      expect(ids.length).toBeLessThanOrEqual(NAME_BATCH)
+      active += 1
+      peak = Math.max(peak, active)
+      return new Promise<ApiResult<unknown>>(resolve => {
+        pending.push({ ids, signal, finish(result) {
+          active -= 1
+          resolve(result ?? {
+            ok: true,
+            data: {
+              file_names: ids.map(id => GENERATED[FILES.indexOf(id)]).join(';'),
+              ClientInfo: { IsLogin: true, Status: true, Result: false }
+            }
+          })
+        } })
+      })
+    }
+  } as unknown as EasyTransport
+  return { transport, pending, peak: () => peak }
+}
 
 describe('下载名称', () => {
   it('选中模板时记下配方，不把空列当成名称', () => {
@@ -56,6 +90,81 @@ describe('下载名称', () => {
     }
     const named = await resolveDownloadFileNames(transport as unknown as EasyTransport, [FILE], { templateId: TEMPLATE })
     expect(named).toEqual({ ok: true, data: ['PA1官文.pdf'] })
+  })
+
+  it('最多同时生成六批名称，乱序完成后仍逐项对应原文件且进度按完成文件数递增', async () => {
+    const { transport, pending, peak } = controlledNames()
+    const progress: number[][] = []
+    const named = resolveDownloadFileNames(transport, FILES, SELECTION, {
+      onProgress: (done, total) => progress.push([done, total])
+    })
+    await vi.waitFor(() => expect(pending).toHaveLength(6))
+    pending[4].finish()
+    await vi.waitFor(() => expect(pending).toHaveLength(7))
+    pending[1].finish()
+    for (const index of [6, 3, 5, 0, 2]) pending[index].finish()
+    expect(await named).toEqual({ ok: true, data: GENERATED })
+    expect(peak()).toBe(6)
+    expect(progress).toEqual([[0, 641], [100, 641], [200, 641], [241, 641], [341, 641], [441, 641], [541, 641], [641, 641]])
+  })
+
+  it.each([
+    { label: '单批网络失败', response: { ok: false, error: { code: 'NETWORK_ERROR', message: '无法连接 EASY。' } } as ApiResult<unknown>, code: 'NETWORK_ERROR' },
+    { label: '单批登录失效', response: { ok: true, data: { ClientInfo: { IsLogin: false, Status: true }, file_names: GENERATED.slice(0, 20).join(';') } } as ApiResult<unknown>, code: 'SESSION_EXPIRED' },
+    { label: '单批名称数量不足', response: { ok: true, data: { ClientInfo: { IsLogin: true, Status: true }, file_names: '只有一个.pdf' } } as ApiResult<unknown>, code: 'INVALID_RESPONSE' }
+  ])('$label 后停止派发并取消其余请求，不返回残缺名称', async ({ response, code }) => {
+    const { transport, pending } = controlledNames()
+    const progress: number[][] = []
+    const named = resolveDownloadFileNames(transport, FILES, SELECTION, {
+      onProgress: (done, total) => progress.push([done, total])
+    })
+    await vi.waitFor(() => expect(pending).toHaveLength(6))
+    pending[2].finish(response)
+    await vi.waitFor(() => expect(pending[0].signal?.aborted).toBe(true))
+    for (const index of [0, 1, 3, 4, 5]) pending[index].finish()
+    expect(await named).toMatchObject({ ok: false, error: { code } })
+    expect(pending).toHaveLength(6)
+    expect(progress).toEqual([[0, 641]])
+  })
+
+  it('取消时停止派发并取消正在生成名称的请求', async () => {
+    const { transport, pending } = controlledNames()
+    const controller = new AbortController()
+    const named = resolveDownloadFileNames(transport, FILES, SELECTION, { signal: controller.signal })
+    await vi.waitFor(() => expect(pending).toHaveLength(6))
+    controller.abort()
+    expect(pending.every(batch => batch.signal?.aborted)).toBe(true)
+    for (const batch of pending) batch.finish()
+    expect(await named).toMatchObject({ ok: false, error: { code: 'REQUEST_ABORTED' } })
+    expect(pending).toHaveLength(6)
+  })
+
+  it('已取消时不再读取模板或生成名称', async () => {
+    let requests = 0
+    const transport = { async post() {
+      requests += 1
+      return { ok: true, data: { ClientInfo: { Status: true }, file_names: '文件.pdf' } }
+    } } as unknown as EasyTransport
+    const controller = new AbortController()
+    controller.abort()
+    expect(await resolveDownloadFileNames(transport, [FILE], SELECTION, { signal: controller.signal }))
+      .toMatchObject({ ok: false, error: { code: 'REQUEST_ABORTED' } })
+    expect(requests).toBe(0)
+  })
+
+  it('生成名的公共响应标记已登出时不能接受名称', () => {
+    expect(readGeneratedFileNames({ ClientInfo: { Status: true, IsLogin: false }, file_names: '文件.pdf' }, 1)).toBeNull()
+  })
+
+  it('模板响应标记登录失效时不使用缓存配方继续生成名称', async () => {
+    const calls: string[] = []
+    const transport = { async post(operation: string) {
+      calls.push(operation)
+      return { ok: true, data: { ClientInfo: { IsLogin: false, Status: true }, file_names: '文件.pdf' } }
+    } } as unknown as EasyTransport
+    expect(await resolveDownloadFileNames(transport, [FILE], { templateId: TEMPLATE, ...SELECTION }))
+      .toMatchObject({ ok: false, error: { code: 'SESSION_EXPIRED' } })
+    expect(calls).toEqual(['fileTempList'])
   })
 
   it('下载文件名里申请号去掉校验点，扩展名的小数点不动', () => {

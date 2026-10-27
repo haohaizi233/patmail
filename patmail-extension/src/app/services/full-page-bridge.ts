@@ -1,17 +1,23 @@
 import { MessageType, type ContentResponse, type MessageBridge } from '../../shared/message'
 import { fileSearchTimeoutMs } from '../../api/file-search-params'
 import { sendToBackground } from '../../utils/runtime'
+import { waitForDownloadJob } from '../../utils/download-job'
 
 /** 完整页面只通过后台把有类型的请求送到已绑定的 EASY 标签页。 */
 export function createFullPageBridge(): MessageBridge {
-  return {
-    async request(message): Promise<ContentResponse> {
+  const bridge: MessageBridge = {
+    async request(message, signal): Promise<ContentResponse> {
+      if (message.type === MessageType.DownloadFiles && message.payload.progressId && !message.payload.detached) {
+        return waitForDownloadJob(message.payload.progressId, () => bridge.request({
+          ...message, payload: { ...message.payload, detached: true }
+        }), signal)
+      }
       const lookupFlow = message.type === MessageType.LookupIcFlow
       const contactExport = message.type === MessageType.ExportCaseContacts
       // 提交一封信要串完建单、联系人、保存和提交流程，并成几件的信更长。原站高峰期 30 秒不够，放宽到 3 分钟。
       const submitWait = message.type === MessageType.SubmitLimitMail || message.type === MessageType.SubmitFileManage ? 180_000 : 0
-      // 打包加取包要走完 DownLoad 和 FileHandler.ashx；文件名生成在慢站一批就要十几秒，下载数量不设上限，30 分钟起步。
-      const downloadWait = message.type === MessageType.DownloadFiles ? 1_800_000 : 0
+      // 新界面只等短受理，最终结果走独立任务消息；旧调用保留原等待预算。
+      const downloadWait = message.type === MessageType.DownloadFiles ? (message.payload.detached ? 70_000 : 1_800_000) : 0
       const slow = contactExport || submitWait > 0 || message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor
         || message.type === MessageType.ListMailProcesses || message.type === MessageType.ListFlowReviewers
         || message.type === MessageType.ReadCaseDemands
@@ -34,4 +40,5 @@ export function createFullPageBridge(): MessageBridge {
       return forwarded as ContentResponse
     }
   }
+  return bridge
 }

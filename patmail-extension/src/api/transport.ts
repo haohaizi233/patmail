@@ -117,7 +117,7 @@ export function transientEasyFailure(message: string): boolean {
   return /网关异常|服务暂不可用|请求超时|无法连接 EASY/.test(message)
 }
 
-/** 发文提交这一串在原站高峰期常要 20 到 30 秒，先建单、后读联系人和流程、再保存和提交。下载打包一次上百个 PDF 也要等服务端压包；GetFileName 一批 20 个文件名在慢站实测要十几秒，15 秒会把它掐成「下载停了」。 */
+/** 发文提交这一串在原站高峰期常要 20 到 30 秒，先建单、后读联系人和流程、再保存和提交。下载打包一次上百个 PDF 也要等服务端压包；GetFileName 一批 100 个文件名在慢站实测单批要几分钟，15 秒会把它掐成「下载停了」。 */
 const SLOW_OPERATIONS = new Set<EasyOperation>([
   'limitMailCustomer', 'mailProcess', 'processAP', 'processEF', 'agencySearchCase', 'icSearch', 'caseBusFlow', 'casePageDemand', 'caseInventor', 'caseRecordContact', 'customerList',
   'getMailInfo', 'getMailCase', 'getMailRule', 'getCustomerContact', 'getRecentContact', 'getCaseContact', 'getSalesContact', 'getPicsContact', 'getCaseAgentContact',
@@ -143,9 +143,9 @@ export class EasyTransport {
   }
 
   /** 只读请求遇到网关 502/503 时再试。写请求不重试，避免一次 502 后面又创建出第二封；打包下载也不重试，免得在原站留两份临时包。 */
-  async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number): Promise<ApiResult<unknown>> {
+  async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void): Promise<ApiResult<unknown>> {
     const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload'
-    let result = await this.postOnce(operation, params, signal, timeoutMs)
+    let result = await this.postOnce(operation, params, signal, timeoutMs, onBytes)
     for (let attempt = 1; retryable && !result.ok && (result.error.status === 502 || result.error.status === 503) && attempt < 3; attempt += 1) {
       if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
       await new Promise(resolve => setTimeout(resolve, 200 * attempt))
@@ -160,21 +160,23 @@ export class EasyTransport {
   private waitMs(operation: EasyOperation, timeoutMs?: number): number {
     if (this.timeoutMs < 15_000) return this.timeoutMs
     if (operation === 'fileSearch' || operation === 'limitMonitor' || operation === 'filingSearch') return fileSearchTimeoutMs(timeoutMs)
-    // 打包一次可能上千个 PDF，服务端压包不止一分钟。
-    if (operation === 'fileDownload') return 300_000
+    // 原站先准备完整压缩包再返回GUID；与原站Ajax一样不设总时长，不能在5分钟主动掐断。
+    if (operation === 'fileDownload') return 0
+    // 命名一批 100 个实测单批可超过两分钟；与原站 jQuery 一样不设总时长，不能在固定时限主动掐断，显式取消仍然生效。
+    if (operation === 'getFileName') return 0
     if (SLOW_OPERATIONS.has(operation)) return 60_000
     return this.timeoutMs
   }
 
   /** Handler、Call、方法和目标 Origin 由内部白名单固定，页面消息不能提供 URL。 */
-  private async postOnce(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number): Promise<ApiResult<unknown>> {
+  private async postOnce(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void): Promise<ApiResult<unknown>> {
     if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
     const route = ROUTES[operation]
     if (!route || params.getAll('Call').length !== 1 || params.get('Call') !== route.call) {
       return apiError('INVALID_QUERY', '业务请求类型无效。')
     }
     if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
-    return this.sendForm(route.path, params, this.waitMs(operation, timeoutMs), signal)
+    return this.sendForm(route.path, params, this.waitMs(operation, timeoutMs), signal, onBytes)
   }
 
   /** DownLoad 打包后取压缩包的地址（原站把隐藏 iframe 指到这里，浏览器负责落盘）。 */
@@ -204,16 +206,16 @@ export class EasyTransport {
   }
 
   /** Handler 和 Call 已由上层收口。Cookie 只随当前页面发出，不读出来。 */
-  private async sendForm(path: string, params: URLSearchParams, timeoutMs: number, signal?: AbortSignal): Promise<ApiResult<unknown>> {
+  private async sendForm(path: string, params: URLSearchParams, timeoutMs: number, signal?: AbortSignal, onBytes?: (received: number) => void): Promise<ApiResult<unknown>> {
     if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
     const controller = new AbortController()
     let timedOut = false
     const onExternalAbort = () => controller.abort()
     signal?.addEventListener('abort', onExternalAbort, { once: true })
-    const timer = setTimeout(() => {
+    const timer = timeoutMs > 0 ? setTimeout(() => {
       timedOut = true
       controller.abort()
-    }, timeoutMs)
+    }, timeoutMs) : undefined
     try {
       const response = await this.fetcher(this.origin + path, {
         method: 'POST',
@@ -233,7 +235,23 @@ export class EasyTransport {
         return apiError('HTTP_ERROR', response.status === 502 ? 'EASY 网关异常。' :
           response.status === 503 ? 'EASY 服务暂不可用。' : 'EASY 返回 HTTP 错误。', response.status)
       }
-      const body = (await response.text()).trim()
+      let text = ''
+      if (onBytes && response.body) {
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let received = 0
+        try {
+          for (;;) {
+            const chunk = await reader.read()
+            if (chunk.done) break
+            received += chunk.value.byteLength
+            text += decoder.decode(chunk.value, { stream: true })
+            onBytes(received)
+          }
+          text += decoder.decode()
+        } finally { reader.releaseLock() }
+      } else text = await response.text()
+      const body = text.trim()
       if (body.startsWith('<')) {
         return apiError(looksLikeLoggedOutHtml(body) ? 'SESSION_EXPIRED' : 'UNEXPECTED_HTML',
           looksLikeLoggedOutHtml(body) ? 'EASY 登录状态已失效，请在原网站重新登录。' : 'EASY 返回了非业务 HTML。')

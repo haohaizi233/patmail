@@ -20,8 +20,51 @@ export interface DownloadNameRecipe {
   fileNameType: string
 }
 
-const COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/
-const NAME_BATCH = 20
+export interface DownloadNamePart { column: string; fixedText: string }
+export class DownloadNameValidationError extends Error {}
+
+export function downloadNameParts(selection: FileDownloadSelection | null): DownloadNamePart[] {
+  const recipe = selection?.newFilename && selection.fileNameType
+    ? downloadRecipe(selection.newFilename, selection.fileNameType) : null
+  if (!recipe) return [{ column: selection?.column ?? '', fixedText: selection?.fixedText ?? '' }]
+  const names = recipe.newFilename.split(';')
+  return recipe.fileNameType.split(';').map((kind, index) => ({
+    column: kind === 'txt' ? 'fixtxt' : names[index], fixedText: kind === 'txt' ? names[index] : ''
+  }))
+}
+
+/** 编辑过的配方不携带模板ID，避免下载时重新加载模板覆盖本次修改。 */
+export function selectionFromNameParts(parts: DownloadNamePart[], label = ''): FileDownloadSelection | null {
+  const names: string[] = []
+  const types: string[] = []
+  for (const [index, part] of parts.entries()) {
+    if (!part.column) continue
+    if (part.column === 'fixtxt' && !part.fixedText.trim()) {
+      throw new DownloadNameValidationError(`第${index + 1}段固定字符不能为空。`)
+    }
+    names.push(part.column === 'fixtxt' ? part.fixedText.trim() : part.column)
+    types.push(part.column === 'fixtxt' ? 'txt' : 'colname')
+  }
+  if (!names.length) return null
+  const recipe = downloadRecipe(names.join(';'), types.join(';'))
+  // 单段固定字符含分号不能混入配方分隔符。
+  if (!recipe || parts.some(part => part.column === 'fixtxt' && part.fixedText.includes(';'))) {
+    throw new DownloadNameValidationError('下载名称最多31段，每段最多80字，固定字符不能包含分号。')
+  }
+  return { ...recipe, label: label ? `${label.slice(0, 73)}（已修改）` : '自定义下载名称' }
+}
+
+export interface DownloadNameOptions {
+  /** 已完成的文件数；并发批次完成顺序不影响返回名称的顺序。 */
+  onProgress?: (done: number, total: number) => void
+  signal?: AbortSignal
+}
+
+const COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,40}$
+/
+/** 命名一批 100 个：20 个一批时 1605 个文件要打 81 次往返、实测七分钟，减少往返才是主要提速；名称仍由原站逐个生成。 */
+export const NAME_BATCH = 100
+const NAME_CONCURRENCY = 6
 
 function segments(value: string): string[] {
   return value.split(';')
@@ -142,13 +185,13 @@ export function buildGetFileNameParams(fileIds: string[], recipe: DownloadNameRe
 export function readGeneratedFileNames(data: unknown, count: number): string[] | null {
   if (!isRecord(data) || count < 1) return null
   const info = readClientInfo(data.ClientInfo)
-  if (!info.ok || info.data.Status !== true || typeof data.file_names !== 'string') return null
+  if (!info.ok || info.data.IsLogin === false || info.data.Status !== true || typeof data.file_names !== 'string') return null
   const names = data.file_names.split(';').map(name => name.trim())
   if (names.length !== count || names.some(name => !name || name.length > 180)) return null
   return names
 }
 
-async function recipeFor(transport: EasyTransport, selection: FileDownloadSelection): Promise<ApiResult<DownloadNameRecipe>> {
+async function recipeFor(transport: EasyTransport, selection: FileDownloadSelection, signal?: AbortSignal): Promise<ApiResult<DownloadNameRecipe>> {
   const saved = snapshotRecipe(selection)
   if (!selection.templateId) {
     return saved ? { ok: true, data: saved } : apiError('INVALID_QUERY', '下载名称没有配好，没有按这个名称发文。')
@@ -156,10 +199,14 @@ async function recipeFor(transport: EasyTransport, selection: FileDownloadSelect
   const params = new URLSearchParams()
   params.set('Call', 'GetFileTempNameList')
   params.set('log_pagename', 'FileSearch.aspx')
-  const listed = await transport.post('fileTempList', params)
+  const listed = await transport.post('fileTempList', params, signal)
   if (!listed.ok) {
-    if (saved && listed.error.code !== 'SESSION_EXPIRED') return { ok: true, data: saved }
+    if (saved && listed.error.code !== 'SESSION_EXPIRED' && listed.error.code !== 'REQUEST_ABORTED') return { ok: true, data: saved }
     return listed
+  }
+  if (isRecord(listed.data)) {
+    const info = readClientInfo(listed.data.ClientInfo)
+    if (info.ok && info.data.IsLogin === false) return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效。')
   }
   const live = recipeFromTempList(listed.data, selection.templateId)
   if (live) return { ok: true, data: live }
@@ -171,23 +218,64 @@ async function recipeFor(transport: EasyTransport, selection: FileDownloadSelect
 export async function resolveDownloadFileNames(
   transport: EasyTransport,
   fileIds: string[],
-  selection: FileDownloadSelection
+  selection: FileDownloadSelection,
+  options: DownloadNameOptions = {}
 ): Promise<ApiResult<string[]>> {
   if (!fileIds.length || fileIds.length > DOWNLOAD_MAX_ITEMS || fileIds.some(id => !isQueryGuid(id))) {
     return apiError('INVALID_QUERY', '文件编号不能用来生成下载名称。')
   }
-  const recipe = await recipeFor(transport, selection)
+  if (options.signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
+  options.onProgress?.(0, fileIds.length)
+  const recipe = await recipeFor(transport, selection, options.signal)
   if (!recipe.ok) return recipe
-  const names: string[] = []
-  for (let index = 0; index < fileIds.length; index += NAME_BATCH) {
-    const batch = fileIds.slice(index, index + NAME_BATCH)
-    const params = buildGetFileNameParams(batch, recipe.data)
-    if (!params) return apiError('INVALID_QUERY', '下载名称参数无效，没有发文。')
-    const response = await transport.post('getFileName', params)
-    if (!response.ok) return response
-    const generated = readGeneratedFileNames(response.data, batch.length)
-    if (!generated) return apiError('INVALID_RESPONSE', '下载名称没有生成完整的文件名，没有按原文件名发文。')
-    names.push(...generated)
+  if (options.signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
+  const controller = new AbortController()
+  let failure: ApiResult<never> | undefined
+  const stop = (result: ApiResult<never>) => {
+    failure ??= result
+    controller.abort()
   }
-  return { ok: true, data: names }
+  const abort = () => stop(apiError('REQUEST_ABORTED', '请求已取消。'))
+  options.signal?.addEventListener('abort', abort, { once: true })
+  const names: string[] = new Array(fileIds.length)
+  let next = 0
+  let completed = 0
+  const worker = async () => {
+    while (!failure && next < fileIds.length) {
+      const index = next
+      next += NAME_BATCH
+      const batch = fileIds.slice(index, index + NAME_BATCH)
+      const params = buildGetFileNameParams(batch, recipe.data)
+      if (!params) {
+        stop(apiError('INVALID_QUERY', '下载名称参数无效，没有发文。'))
+        return
+      }
+      const response = await transport.post('getFileName', params, controller.signal)
+      if (failure) return
+      if (!response.ok) {
+        stop(response)
+        return
+      }
+      const info = isRecord(response.data) ? readClientInfo(response.data.ClientInfo) : null
+      if (info?.ok && info.data.IsLogin === false) {
+        stop(apiError('SESSION_EXPIRED', 'EASY 登录状态已失效。'))
+        return
+      }
+      const generated = readGeneratedFileNames(response.data, batch.length)
+      if (!generated) {
+        stop(apiError('INVALID_RESPONSE', '下载名称没有生成完整的文件名，没有按原文件名发文。'))
+        return
+      }
+      // 原站只给分号分隔的名称，没有 ID；必须按请求的原偏移落位。
+      names.splice(index, generated.length, ...generated)
+      completed += batch.length
+      options.onProgress?.(completed, fileIds.length)
+    }
+  }
+  try {
+    await Promise.all(Array.from({ length: Math.min(NAME_CONCURRENCY, Math.ceil(fileIds.length / NAME_BATCH)) }, worker))
+    return failure ?? { ok: true, data: names }
+  } finally {
+    options.signal?.removeEventListener('abort', abort)
+  }
 }

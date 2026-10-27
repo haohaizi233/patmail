@@ -47,6 +47,7 @@ import type { ExistingMailDiagnostic } from '../shared/message'
 import { submitFileManageBatch, type FileManageSubmitItem, type FileManageSubmitResult } from '../customer/file-manage-submit'
 import { resolveDownloadFileNames, stripApplicationNoDot, type FileDownloadSelection } from '../mail/download-name'
 import { buildDownloadParams, downloadArchiveName, readDownloadHandle, DOWNLOAD_MAX_ITEMS, type DownloadFileItem, type DownloadedArchive } from './file-download'
+import type { FileDownloadProgress } from '../shared/download-progress'
 import { submitLimitMailBatch, type LimitMailSubmitItem, type LimitMailSubmitResult } from '../customer/limit-mail-submit'
 import { loadCaseContacts } from '../case-contact/load'
 import type { CaseContactExport } from '../case-contact/query'
@@ -676,7 +677,7 @@ export class EasyRuntime {
    * stripAppNoDot 打开时申请号校验点去掉（202610026334.9 → 2026100263349），关掉就原样下载。
    * 不选下载名称就用查询结果里的原名。
    */
-  downloadFiles(items: DownloadFileItem[], selection: FileDownloadSelection | null, stripAppNoDot: boolean): Promise<ApiResult<DownloadedArchive>> {
+  downloadFiles(items: DownloadFileItem[], selection: FileDownloadSelection | null, stripAppNoDot: boolean, onProgress?: (progress: FileDownloadProgress) => void): Promise<ApiResult<DownloadedArchive>> {
     return (async (): Promise<ApiResult<DownloadedArchive>> => {
       if (!items.length || items.length > DOWNLOAD_MAX_ITEMS) {
         return apiError('INVALID_QUERY', `一次只能下载 1 到 ${DOWNLOAD_MAX_ITEMS} 个文件。`)
@@ -688,7 +689,9 @@ export class EasyRuntime {
         return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
       }
       const named = selection
-        ? await resolveDownloadFileNames(this.transport, items.map(item => item.fileId), selection)
+        ? await resolveDownloadFileNames(this.transport, items.map(item => item.fileId), selection, {
+          onProgress: (done, total) => onProgress?.({ phase: 'naming', done, total })
+        })
         : { ok: true as const, data: items.map(item => item.fileName.trim()) }
       if (!named.ok) {
         if (named.error.code === 'SESSION_EXPIRED') this.session.expire()
@@ -697,7 +700,15 @@ export class EasyRuntime {
       const names = stripAppNoDot ? named.data.map(stripApplicationNoDot) : named.data
       const params = buildDownloadParams(items.map(item => item.fileNo.trim()), names)
       if (!params) return apiError('INVALID_QUERY', '下载名称参数无效，没有下载。')
-      const prepared = await this.transport.post('fileDownload', params)
+      onProgress?.({ phase: 'packing', done: 0, total: 1 })
+      const packingStarted = Date.now()
+      let receivedBytes = 0
+      const reportPacking = () => onProgress?.({ phase: 'packing', done: 0, total: 1, elapsedMs: Date.now() - packingStarted, receivedBytes })
+      const pulse = onProgress ? setInterval(reportPacking, 15_000) : undefined
+      const prepared = await this.transport.post('fileDownload', params, undefined, undefined, received => {
+        receivedBytes = received
+        reportPacking()
+      }).finally(() => clearInterval(pulse))
       if (!prepared.ok) {
         if (prepared.error.code === 'SESSION_EXPIRED') this.session.expire()
         return prepared

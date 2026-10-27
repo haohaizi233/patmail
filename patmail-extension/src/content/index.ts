@@ -2,8 +2,10 @@ import { isContentRequest, MessageType, type ContentResponse, type FileSearchFor
 import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
 import { sendToBackground } from '../utils/runtime'
+import { watchBrowserDownload } from '../utils/download-outcome'
 import { injectPanel } from './injector'
 import { startArchiveDownload } from './save-file'
+import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL, type FileDownloadProgress } from '../shared/download-progress'
 import { readPageInfo, scanPage } from './scanner'
 import { EasyRuntime } from '../api/client'
 import { scanFileSearchForm } from '../query/scan-file-search-form.mjs'
@@ -19,6 +21,15 @@ void hydrateCustomerMode()
 
 // API 请求始终由目标页面同源的 Content Script 发起，沿用浏览器已有会话。
 const easyRuntime = new EasyRuntime(location.origin)
+
+/** 结果提示要进消息校验（200 字内）：打包提示和下载状态拼一起后统一截断。 */
+function noticeOf(packing: string, tail: string): string {
+  return [packing.trim(), tail.trim()].filter(Boolean).join(' ').slice(0, 200)
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
 
 function hasSearchTable(doc: Document): boolean {
   return Boolean(doc.querySelector('#table_element'))
@@ -275,12 +286,19 @@ const bridge: MessageBridge = {
         }
       }
       case MessageType.DownloadFiles: {
-        const downloaded = await easyRuntime.downloadFiles(message.payload.items, message.payload.selection, message.payload.stripAppNoDot)
+        const report = (progress: FileDownloadProgress): void => {
+          if (!message.payload.progressId) return
+          try {
+            chrome.runtime.sendMessage({ channel: DOWNLOAD_PROGRESS_CHANNEL, id: message.payload.progressId, progress }, () => { void chrome.runtime.lastError })
+          } catch { /* 工作台已离开或扩展已重载，不中断正在准备的下载 */ }
+        }
+        const downloaded = await easyRuntime.downloadFiles(message.payload.items, message.payload.selection, message.payload.stripAppNoDot, report)
         if (!downloaded.ok) return { type: MessageType.DownloadFilesResult, payload: downloaded }
+        report({ phase: 'saving', done: 0, total: 1 })
         // 浏览器负责落盘：走后台的 chrome.downloads 才会在下载记录里留下条目，文件名也听插件的。
         const saved = await sendToBackground({
           type: MessageType.SaveDownload,
-          payload: { url: downloaded.data.downloadUrl, fileName: downloaded.data.fileName }
+          payload: { url: downloaded.data.downloadUrl, fileName: downloaded.data.fileName, ...(message.payload.progressId ? { progressId: message.payload.progressId } : {}) }
         }, 30_000)
         if (saved?.type !== MessageType.SaveDownloadResult) {
           const reason = saved?.type === MessageType.Error ? saved.payload.message : '扩展后台没有接住这次下载。'
@@ -293,8 +311,28 @@ const bridge: MessageBridge = {
               data: {
                 fileName: downloaded.data.fileName,
                 fileCount: downloaded.data.fileCount,
-                notice: `${downloaded.data.notice} 另存走了浏览器直接下载，文件名以下载记录为准（${reason}）`.trim()
+                notice: noticeOf(downloaded.data.notice, `另存走了浏览器直接下载，文件名以下载记录为准（${reason}）`)
               }
+            }
+          }
+        }
+        // 任务已交给浏览器后继续流式回报下载字节，直到完成或中断才定最终结果。
+        const outcome = typeof saved.payload.downloadId === 'number'
+          ? await watchBrowserDownload({
+            downloadId: saved.payload.downloadId,
+            poll: async id => {
+              const state = await sendToBackground({ type: MessageType.DownloadState, payload: { downloadId: id } }, 15_000)
+              return state?.type === MessageType.DownloadStateResult ? state.payload : null
+            },
+            onProgress: report
+          })
+          : null
+        if (outcome?.state === 'interrupted') {
+          return {
+            type: MessageType.DownloadFilesResult,
+            payload: {
+              ok: false,
+              error: { code: 'BUSINESS_ERROR', message: noticeOf('', `浏览器下载中断${outcome.error ? `（${outcome.error}）` : ''}，压缩包没有保存完整，请重新下载。`) }
             }
           }
         }
@@ -305,7 +343,9 @@ const bridge: MessageBridge = {
             data: {
               fileName: downloaded.data.fileName,
               fileCount: downloaded.data.fileCount,
-              notice: downloaded.data.notice
+              notice: noticeOf(downloaded.data.notice, outcome
+                ? `浏览器下载完成（${formatMegabytes(outcome.receivedBytes)}）。`
+                : '已交给浏览器下载，进度看浏览器右上角下载记录。')
             }
           }
         }
@@ -434,6 +474,15 @@ if (!pageWorld.__patmailContent) {
     if (!isContentRequest(message)) {
       const type = message && typeof message === 'object' && 'type' in message ? String((message as { type?: unknown }).type) : '未知'
       sendResponse({ type: MessageType.Error, payload: { message: `当前 EASY 页面脚本不认识 ${type}。请刷新这个 EASY 标签页。` } } satisfies ContentResponse)
+      return
+    }
+    if (message.type === MessageType.DownloadFiles && message.payload.detached && message.payload.progressId) {
+      const id = message.payload.progressId
+      const publish = (body: ContentResponse): void => {
+        try { chrome.runtime.sendMessage({ channel: DOWNLOAD_RESULT_CHANNEL, id, body }, () => { void chrome.runtime.lastError }) } catch { /* 工作台可关闭，浏览器下载已独立交接 */ }
+      }
+      sendResponse({ type: MessageType.DownloadFilesAccepted, payload: { progressId: id } } satisfies ContentResponse)
+      void bridge.request(message).then(publish).catch(() => publish({ type: MessageType.Error, payload: { message: '下载准备失败，请检查原站页面。' } }))
       return
     }
     void bridge.request(message).then(sendResponse).catch(() => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { EasyRuntime } from '../../../src/api/client'
 
 const TEMPLATE = 'd9896997-1e83-4c7d-9a49-da69ba56e7aa'
@@ -7,6 +7,65 @@ const GUID = '85ebabc1-cf99-490e-b5f7-298a77742012'
 const authenticated = { ClientInfo: { IsLogin: true, Status: true, Result: true } }
 
 describe('文件下载', () => {
+  it('多批名称乱序返回后按原文件编号打成一个包', async () => {
+    // 241 个文件正好 3 批（100、100、41），验证 100 一批的切批和乱序回填。
+    const items = Array.from({ length: 241 }, (_, index) => ({
+      fileId: `603ca943-a07a-4894-9461-${String(index).padStart(12, '0')}`,
+      fileNo: `A${index}`,
+      fileName: `原文件${index}.pdf`
+    }))
+    const pending: (() => void)[] = []
+    const packages: URLSearchParams[] = []
+    const fetcher: typeof fetch = async (_url, init) => {
+      const params = new URLSearchParams(String(init?.body ?? ''))
+      const call = params.get('Call')
+      if (call === 'GetFileName') {
+        const ids = params.get('file_ids')!.split(';')
+        return new Promise<Response>(resolve => pending.push(() => resolve(new Response(JSON.stringify({
+          file_names: ids.map(id => `新文件${items.findIndex(item => item.fileId === id)}.pdf`).join(';'),
+          ClientInfo: { IsLogin: true, Status: true, Result: false }
+        })))))
+      }
+      if (call === 'DownLoad') {
+        packages.push(params)
+        return new Response(JSON.stringify({ ...authenticated, file_guid: GUID }))
+      }
+      return new Response(JSON.stringify(authenticated))
+    }
+    const runtime = new EasyRuntime('http://183.36.43.66:88', { fetcher })
+    await runtime.checkSession()
+    const downloaded = runtime.downloadFiles(items, { newFilename: 'file_desc', fileNameType: 'colname' }, false)
+    await vi.waitFor(() => expect(pending).toHaveLength(3))
+    pending[2]()
+    pending[0]()
+    expect(packages).toHaveLength(0)
+    pending[1]()
+    expect(await downloaded).toMatchObject({ ok: true, data: { fileCount: 241 } })
+    expect(packages).toHaveLength(1)
+    expect(packages[0].get('file_no')?.split(';')).toEqual(items.map(item => item.fileNo))
+    expect(packages[0].get('file_name')?.split(';')).toEqual(items.map((_, index) => `新文件${index}.pdf`))
+  })
+
+  it.each([
+    { label: '缺少生成名', response: { ...authenticated, file_names: '' }, code: 'INVALID_RESPONSE' },
+    { label: '登录失效', response: { ClientInfo: { IsLogin: false, Status: true }, file_names: '新文件.pdf' }, code: 'SESSION_EXPIRED' }
+  ])('$label 时不向原站提交下载打包', async ({ response, code }) => {
+    let packages = 0
+    const fetcher: typeof fetch = async (_url, init) => {
+      const call = new URLSearchParams(String(init?.body ?? '')).get('Call')
+      if (call === 'GetFileName') return new Response(JSON.stringify(response))
+      if (call === 'DownLoad') packages += 1
+      return new Response(JSON.stringify(authenticated))
+    }
+    const runtime = new EasyRuntime('http://183.36.43.66:88', { fetcher })
+    await runtime.checkSession()
+    expect(await runtime.downloadFiles(
+      [{ fileId: FILE, fileNo: 'A00110397537', fileName: '原文件.pdf' }],
+      { newFilename: 'file_desc', fileNameType: 'colname' }, false
+    )).toMatchObject({ ok: false, error: { code } })
+    expect(packages).toBe(0)
+  })
+
   it('按下载名称生成文件名、去掉申请号校验点，打包后给出取包地址', async () => {
     let downloadBody = ''
     const fetcher: typeof fetch = async (url, init) => {

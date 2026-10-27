@@ -160,7 +160,7 @@ describe('EASY 受限传输', () => {
     }
   })
 
-  it('GetFileName 按慢接口给时限：慢站一批文件名要十几秒，15 秒会掐断下载', async () => {
+  it('GetFileName 不设总时长，100个一批的长响应不被固定时限掐断', async () => {
     vi.useFakeTimers()
     try {
       let aborted = false
@@ -170,14 +170,16 @@ describe('EASY 受限传输', () => {
           reject(new DOMException('aborted', 'AbortError'))
         }, { once: true })
       })
+      const controller = new AbortController()
       const pending = new EasyTransport('http://183.36.43.66:88', { fetcher }).post(
         'getFileName',
-        new URLSearchParams({ Call: 'GetFileName' })
+        new URLSearchParams({ Call: 'GetFileName' }),
+        controller.signal
       )
-      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(600_000)
       expect(aborted).toBe(false)
-      await vi.advanceTimersByTimeAsync(30_000)
-      await expect(pending).resolves.toMatchObject({ ok: false, error: { code: 'REQUEST_TIMEOUT' } })
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ ok: false, error: { code: 'REQUEST_ABORTED' } })
       expect(aborted).toBe(true)
     } finally {
       vi.useRealTimers()
