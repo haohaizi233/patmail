@@ -12,8 +12,11 @@ import { runPagedFetch, type PageFetchResult } from '../page-pool'
 import QueryTemplateSection from '../../floating/QueryTemplateSection.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { MessageType, type MessageBridge } from '../../shared/message'
-import type { FileDownloadSelection } from '../../mail/download-name'
+import { DownloadNameValidationError, type FileDownloadSelection } from '../../mail/download-name'
 import { downloadNameText } from '../../mail/download-name'
+import { DOWNLOAD_PROGRESS_CHANNEL, isDownloadProgress } from '../../shared/download-progress'
+import { newUuid } from '../../utils/uuid'
+import { isRecord } from '../../shared/guards'
 
 const props = withDefaults(defineProps<{
   userId: string
@@ -29,7 +32,7 @@ const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { d
 
 const emit = defineEmits<{
   searched: [query: FileSearchQuery]
-  'download-name': [selection: FileDownloadSelection | null]
+  'download-name': [selection: FileDownloadSelection | null, problem: string]
   plan: []
   review: []
 }>()
@@ -39,6 +42,9 @@ const queryForm = ref<InstanceType<typeof QueryTemplateSection> | null>(null)
 const downloadSelection = ref<FileDownloadSelection | null>(null)
 const stripAppNoDot = ref(true)
 const downloading = ref(false)
+let disposed = false
+let releaseDownloadProgress: (() => void) | null = null
+let downloadWait: AbortController | null = null
 const toolbarNotice = ref('')
 /** 按钮悬浮提示：下载用的名称是点的一刻读表单当前值，查询之后改也不用重新查。 */
 const downloadTitle = computed(() => {
@@ -46,7 +52,8 @@ const downloadTitle = computed(() => {
   return name ? `按「${name}」生成文件名；下载时读取表单当前值` : '用查询结果里的附件原名打包下载'
 })
 const searchTimeoutMs = ref<FileSearchTimeoutMs>(60_000)
-const pageSize = ref(20)
+// 原站每次都重跑整套筛选；实测20条与100条都约16秒，默认100避免重复五倍的慢查询。
+const pageSize = ref(100)
 const pageSizeOptions = [
   { value: 20, label: '20' },
   { value: 50, label: '50' },
@@ -126,6 +133,7 @@ async function showResults(): Promise<void> {
 async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs): Promise<void> {
   if (timeoutMs !== undefined) searchTimeoutMs.value = fileSearchTimeoutMs(timeoutMs)
   if (!bridge || !props.canSearch) return
+  stopBulk()
   const { fields, oversized } = fieldsFor(query)
   if (oversized.length) {
     searchState.value = 'error'
@@ -194,6 +202,7 @@ function cellText(file: PatentFile, key: typeof resultColumns[number]['key']): s
   return file[key]?.trim() ?? ''
 }
 function togglePage(event: Event): void {
+  stopBulk()
   const items = result.value?.items ?? []
   const on = (event.target as HTMLInputElement).checked
   selected.value = selectPage(selected.value, items.map(file => toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
@@ -212,6 +221,7 @@ function page(delta: number): void {
   void executeSearch({ ...lastQuery.value, pageIndex: next }, 'continue')
 }
 function clearView(): void {
+  stopBulk()
   generation += 1
   result.value = null
   lastQuery.value = null
@@ -223,32 +233,71 @@ function clearView(): void {
   selected.value = {}
 }
 
-function onDownloadName(selection: FileDownloadSelection | null): void {
+function onDownloadName(selection: FileDownloadSelection | null, problem = ''): void {
   downloadSelection.value = selection
-  emit('download-name', selection)
+  emit('download-name', selection, problem)
 }
 
 /** 勾选的文件按下载名称打包下载；包里文件名的申请号校验点已去掉。 */
 async function downloadSelected(): Promise<void> {
   const files = Object.values(selected.value)
-  if (!bridge || !files.length || downloading.value) return
+  if (!bridge || !files.length || downloading.value || selectingAll.value) return
   if (files.some(file => !file.fileNo?.trim())) {
     toolbarNotice.value = '有文件缺文件编号，没有打包下载。换个查询条件重新查一次再选。'
     return
   }
-  downloading.value = true
-  toolbarNotice.value = '正在打包下载…'
-  // 下载名称不进查询：点下载的一刻再取一次表单当前值，查询之后改模板或固定字符都按新的来。
-  const selection = queryForm.value?.currentDownloadSelection() ?? downloadSelection.value
+  let selection: FileDownloadSelection | null
   try {
+    selection = queryForm.value ? queryForm.value.currentDownloadSelection() : downloadSelection.value
+  } catch (error) {
+    toolbarNotice.value = error instanceof DownloadNameValidationError ? error.message : '没有读到下载名称，请重新选择。'
+    return
+  }
+  downloading.value = true
+  const wait = downloadWait = new AbortController()
+  toolbarNotice.value = '正在生成下载名称并打包…'
+  const startedAt = Date.now()
+  const progressId = newUuid()
+  let completed = false
+  paintTaskCheckProgress(0, files.length, startedAt, 'run', '生成下载名称')
+  const runtime = globalThis.chrome?.runtime
+  const onProgress = (message: unknown, sender: chrome.runtime.MessageSender): void => {
+    if (disposed || sender.id !== runtime?.id || !isRecord(message) || message.channel !== DOWNLOAD_PROGRESS_CHANNEL ||
+      message.id !== progressId || !isDownloadProgress(message.progress)) return
+    const progress = message.progress
+    if (progress.phase === 'packing') {
+      const seconds = Math.floor((progress.elapsedMs ?? 0) / 1000)
+      const size = ((progress.receivedBytes ?? 0) / 1024).toFixed(1)
+      toolbarNotice.value = `原站正在准备压缩包，已等待 ${seconds} 秒，已收到 ${size} KB 打包响应；完成后交给浏览器下载。`
+    }
+    if (progress.phase === 'downloading') {
+      const received = progress.receivedBytes ?? 0
+      const total = progress.totalBytes ?? 0
+      const got = (received / 1024 / 1024).toFixed(1)
+      toolbarNotice.value = total > 0
+        ? `浏览器正在流式下载压缩包：${got} / ${(total / 1024 / 1024).toFixed(1)} MB（${Math.min(100, Math.round(received / total * 100))}%）。`
+        : `浏览器正在流式下载压缩包：已收到 ${got} MB。`
+    }
+    const label = progress.phase === 'naming' ? '生成下载名称' : progress.phase === 'packing' ? '打包压缩包' : progress.phase === 'downloading' ? '浏览器下载' : '交给浏览器'
+    // 下载阶段按字节画进度条，其余阶段按文件数。
+    if (progress.phase === 'downloading') paintTaskCheckProgress(progress.receivedBytes ?? 0, progress.totalBytes || 1, startedAt, 'run', label)
+    else paintTaskCheckProgress(progress.done, progress.total, startedAt, 'run', label)
+  }
+  try {
+    runtime?.onMessage?.addListener(onProgress)
+    releaseDownloadProgress = () => {
+      try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 扩展已重载 */ }
+    }
+    // 下载名称不进查询：点下载的一刻再取一次表单当前值，查询之后改模板或固定字符都按新的来。
     const response = await bridge.request({
       type: MessageType.DownloadFiles,
       payload: {
         items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })),
         selection,
-        stripAppNoDot: stripAppNoDot.value
+        stripAppNoDot: stripAppNoDot.value,
+        progressId
       }
-    })
+    }, wait.signal)
     if (response.type !== MessageType.DownloadFilesResult) {
       toolbarNotice.value = response.type === MessageType.Error ? response.payload.message : '下载返回了意外结果。'
       return
@@ -258,19 +307,36 @@ async function downloadSelected(): Promise<void> {
       return
     }
     const data = response.payload.data
-    toolbarNotice.value = `已下载 ${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
+    completed = true
+    toolbarNotice.value = `${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
   } catch {
     toolbarNotice.value = '下载通信失败，请重试。'
   } finally {
+    releaseDownloadProgress?.()
+    releaseDownloadProgress = null
+    if (downloadWait === wait) downloadWait = null
     downloading.value = false
+    if (!disposed) {
+      if (completed) paintTaskCheckProgress(files.length, files.length, startedAt, 'done', '下载准备')
+      else paintTaskCheckProgress(taskCheckProgress.done, taskCheckProgress.total, startedAt, 'fail', taskCheckProgress.label)
+    }
   }
 }
 
 /** 全选本页 / 取消全选本页：只动当前页的行，其他页已选的不受影响。 */
 function selectCurrentPage(on: boolean): void {
+  stopBulk()
   const items = result.value?.items ?? []
   if (!items.length) return
   selected.value = selectPage(selected.value, items.map(file => toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
+}
+function clearSelection(): void {
+  stopBulk()
+  selected.value = {}
+}
+function toggleFile(file: PatentFile): void {
+  stopBulk()
+  selected.value = toggleSelected(selected.value, toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value))
 }
 
 /** 全选所有进行中把「预计几点完成」也写在按钮旁，翻页快时彩虹条一闪而过也看得到。 */
@@ -294,41 +360,86 @@ function describeMissed(pages: number[]): string {
   return `第 ${pages.slice(0, 8).join('、')}${pages.length > 8 ? ' 等' : ''} 页`
 }
 
-/** 一页只调一次；重试、并发、漏页统计都在 runPagedFetch 里。batch：批量拉页不占「新查询取消旧查询」的槽，并发几页才不会互相 abort。 */
-async function fetchPage(page: number, size: number): Promise<PageFetchResult<SelectedPatentFile>> {
-  const query = lastQuery.value
-  if (!bridge || !query) return { ok: false, session: true }
+const BULK_PAGE_SIZE = 100
+interface BulkRead {
+  generation: number
+  query: FileSearchQuery
+  querySessionId: string
+  totalPages: number
+  timeoutMs: number
+  controller: AbortController
+  interrupted: boolean
+  reason: string
+  completed: Set<number>
+  selection: Record<string, SelectedPatentFile>
+}
+let activeBulk: BulkRead | null = null
+let retryBulk: BulkRead | null = null
+function bulkCurrent(bulk: BulkRead): boolean {
+  return activeBulk === bulk && bulk.generation === generation && !bulk.controller.signal.aborted
+}
+function stopBulk(): void {
+  activeBulk?.controller.abort()
+  activeBulk = null
+  retryBulk = null
+  selectingAll.value = false
+  failedPages.value = []
+  if (taskCheckProgress.label === '翻页') resetTaskCheckProgress()
+}
+
+/** 批次固定查询条件、来源和布局；不读取后续手工查询改变的响应式值。 */
+async function readBulkPage(bulk: BulkRead, page: number, fresh = false): Promise<{ ok: true; data: FileSearchResult } | { ok: false; session: boolean }> {
+  if (!bridge || !bulkCurrent(bulk)) return { ok: false, session: true }
   try {
     const response = await bridge.request({
       type: MessageType.SearchFiles,
       payload: {
-        query: { ...query, pageIndex: page, pageSize: size },
-        ...(querySessionId.value ? { continuation: { querySessionId: querySessionId.value } } : {}),
-        timeoutMs: searchTimeoutMs.value,
-        batch: true as const
+        query: { ...bulk.query, pageIndex: page, pageSize: BULK_PAGE_SIZE },
+        ...(!fresh && bulk.querySessionId ? { continuation: { querySessionId: bulk.querySessionId } } : {}),
+        timeoutMs: bulk.timeoutMs,
+        // 创建来源的第一页走普通取消槽；后续已绑定来源的页才免取消并发。
+        // 否则晚到的旧首包仍会在后台创建新来源，使用户刚发起的同布局查询失效。
+        ...(fresh ? {} : { batch: true as const })
       }
     })
+    if (!bulkCurrent(bulk)) return { ok: false, session: true }
     if (response.type === MessageType.SearchFilesResult && response.payload.ok) {
-      // 查询运行失效（重新查询过、页布局变了）时这批行带的来源 ID 已经死了，再拉也没法下载，停手比重试省时间。
-      if (response.payload.data.sourceCode === 'QUERY_SESSION_INVALID' || response.payload.data.sourceCode === 'QUERY_LAYOUT_CHANGED') {
+      const data = response.payload.data
+      if (data.sourceCode === 'QUERY_SESSION_INVALID' || data.sourceCode === 'QUERY_LAYOUT_CHANGED'
+        || data.pageSize !== BULK_PAGE_SIZE || data.pageIndex !== page
+        || (!fresh && data.querySessionId && data.querySessionId !== bulk.querySessionId)) {
+        bulk.interrupted = true
+        bulk.reason = '查询运行或分页布局已变化，请重新查询后再全选。'
         return { ok: false, session: true }
       }
-      return { ok: true, rows: response.payload.data.items.map(file => toSelectedFile(file, undefined, querySessionId.value)) }
+      return { ok: true, data }
     }
     const message = response.type === MessageType.SearchFilesResult && !response.payload.ok
       ? messageForError(response.payload.error.code, response.payload.error.message)
       : response.type === MessageType.Error ? response.payload.message : '这一页没有返回结果。'
-    return { ok: false, session: /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(message) }
+    const session = /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(message)
+    if (session) { bulk.interrupted = true; bulk.reason = message }
+    return { ok: false, session }
   } catch {
     return { ok: false, session: false }
   }
 }
 
-function collectPages(pages: number[], size: number): Promise<number[]> {
-  return runPagedFetch(pages, page => fetchPage(page, size), {
+function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
+  return runPagedFetch(pages, async page => {
+    const result = await readBulkPage(bulk, page)
+    return result.ok
+      ? { ok: true, rows: result.data.items.map(file => toSelectedFile(file, undefined, bulk.querySessionId)) }
+      : result
+  }, {
+    signal: bulk.controller.signal,
     // 边拉边勾上，已选数字跟着涨；selectPage 会保留已经绑好的客户。
-    onPage: (_page, rows) => {
-      selected.value = selectPage(selected.value, rows, true)
+    onPage: (page, rows) => {
+      if (!bulkCurrent(bulk)) return
+      // defineModel 的受控 prop 要等父组件渲染后才回流；同一轮并发响应不能各自基于旧 prop 覆盖。
+      bulk.selection = selectPage({ ...bulk.selection, ...selected.value }, rows, true)
+      selected.value = bulk.selection
+      bulk.completed.add(page)
       tickPage()
     }
   })
@@ -340,40 +451,78 @@ const selectingAll = ref(false)
 const failedPages = ref<number[]>([])
 async function selectAllPages(): Promise<void> {
   const summary = result.value
-  if (!bridge || !lastQuery.value || !summary || selectingAll.value) return
-  const totalPages = Math.max(1, summary.totalPages)
+  if (!bridge || !lastQuery.value || !summary || selectingAll.value || downloading.value) return
+  const bulk: BulkRead = {
+    generation, query: { ...lastQuery.value, ...(lastQuery.value.resolvedFields ? { resolvedFields: { ...lastQuery.value.resolvedFields } } : {}), pageSize: BULK_PAGE_SIZE },
+    querySessionId: summary.pageSize === BULK_PAGE_SIZE ? querySessionId.value : '',
+    totalPages: Math.max(1, Math.ceil(summary.total / BULK_PAGE_SIZE)), timeoutMs: searchTimeoutMs.value,
+    controller: new AbortController(), interrupted: false, reason: '', completed: new Set(), selection: { ...selected.value }
+  }
+  activeBulk = bulk
+  retryBulk = null
   selectingAll.value = true
   failedPages.value = []
   toolbarNotice.value = ''
   try {
-    const all = Array.from({ length: totalPages }, (_, index) => index + 1)
     paging.startedAt = Date.now()
-    paging.total = all.length
+    paging.total = bulk.totalPages
     paging.done = 0
     paintPaging('run')
-    let missed = await collectPages(all, summary.pageSize)
-    if (missed.length) missed = await collectPages(missed, summary.pageSize)
+    let first = summary
+    if (summary.pageSize !== BULK_PAGE_SIZE || !bulk.querySessionId) {
+      const loaded = await readBulkPage(bulk, 1, true)
+      if (!bulkCurrent(bulk)) return
+      if (!loaded.ok) {
+        toolbarNotice.value = bulk.reason || '没有读到100条分页的第一页，请重试全选。'
+        paintPaging('fail')
+        return
+      }
+      first = loaded.data
+      bulk.querySessionId = first.querySessionId ?? ''
+      if (!bulk.querySessionId) {
+        toolbarNotice.value = '没有确认这次全选的查询来源，请重新查询。'
+        paintPaging('fail')
+        return
+      }
+      bulk.totalPages = Math.max(1, first.totalPages)
+      paging.total = bulk.totalPages
+      // 采用新布局，后续手工翻页也沿用同一查询来源，不能把20条来源混进100条布局。
+      result.value = first
+      pageSize.value = BULK_PAGE_SIZE
+      lastQuery.value = { ...bulk.query, pageIndex: 1 }
+      querySessionId.value = bulk.querySessionId
+    }
+    bulk.selection = selectPage(bulk.selection, first.items.map(file => toSelectedFile(file, undefined, bulk.querySessionId)), true)
+    selected.value = bulk.selection
+    bulk.completed.add(first.pageIndex)
+    tickPage()
+    const all = Array.from({ length: bulk.totalPages }, (_, index) => index + 1).filter(page => !bulk.completed.has(page))
+    let missed = await collectPages(bulk, all)
+    if (!bulkCurrent(bulk)) return
+    if (missed.length && !bulk.interrupted) missed = await collectPages(bulk, missed)
+    if (!bulkCurrent(bulk)) return
     failedPages.value = missed
-    paintPaging('done')
-    toolbarNotice.value = missed.length
+    retryBulk = missed.length ? bulk : null
+    paintPaging(missed.length ? 'fail' : 'done')
+    toolbarNotice.value = bulk.interrupted ? `${bulk.reason} 还有 ${missed.length} 页未读完。` : missed.length
       ? `全选所有有 ${missed.length} 页没读到（${describeMissed(missed)}）。已勾上的不受影响，点「重试没读到的页」补齐。`
-      : `已全选 ${Object.keys(selected).length} 个文件。`
+      : `已全选 ${Object.keys(bulk.selection).length} 个文件。`
   } catch {
+    if (!bulkCurrent(bulk)) return
     paintPaging('fail')
     toolbarNotice.value = '翻页取行失败，没有全选。'
   } finally {
-    selectingAll.value = false
-    setTimeout(() => {
-      if (taskCheckProgress.label === '翻页') resetTaskCheckProgress()
-    }, 2_000)
+    if (activeBulk === bulk) selectingAll.value = false
   }
 }
 
 /** 容灾补齐：只重拉没读到的页，已勾上的不动。 */
 async function retryFailedPages(): Promise<void> {
-  const summary = result.value
+  const bulk = retryBulk
   const pages = failedPages.value
-  if (!bridge || !summary || selectingAll.value || !pages.length) return
+  if (!bridge || !bulk || !bulkCurrent(bulk) || selectingAll.value || downloading.value || !pages.length) return
+  bulk.interrupted = false
+  bulk.reason = ''
   selectingAll.value = true
   try {
     // 重试这一轮自己的页数和起点，不然接在上一轮 100% 后面就再也算不出预计完成时间。
@@ -381,21 +530,22 @@ async function retryFailedPages(): Promise<void> {
     paging.total = pages.length
     paging.done = 0
     paintPaging('run')
-    let missed = await collectPages(pages, summary.pageSize)
-    if (missed.length) missed = await collectPages(missed, summary.pageSize)
+    let missed = await collectPages(bulk, pages)
+    if (!bulkCurrent(bulk)) return
+    if (missed.length && !bulk.interrupted) missed = await collectPages(bulk, missed)
+    if (!bulkCurrent(bulk)) return
     failedPages.value = missed
-    paintPaging('done')
+    retryBulk = missed.length ? bulk : null
+    paintPaging(missed.length ? 'fail' : 'done')
     toolbarNotice.value = missed.length
       ? `还有 ${missed.length} 页没读到（${describeMissed(missed)}）。已勾上的不受影响，可以再试。`
       : '没读到的页都补齐了。'
   } catch {
+    if (!bulkCurrent(bulk)) return
     paintPaging('fail')
     toolbarNotice.value = '翻页取行失败。'
   } finally {
-    selectingAll.value = false
-    setTimeout(() => {
-      if (taskCheckProgress.label === '翻页') resetTaskCheckProgress()
-    }, 2_000)
+    if (activeBulk === bulk) selectingAll.value = false
   }
 }
 
@@ -416,6 +566,12 @@ watch(() => props.seedToken, () => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  downloadWait?.abort()
+  downloadWait = null
+  releaseDownloadProgress?.()
+  releaseDownloadProgress = null
+  stopBulk()
   generation += 1
   if (bridge) void bridge.request({ type: MessageType.CancelFileSearch })
 })
@@ -460,12 +616,12 @@ onBeforeUnmount(() => {
         <div v-if="selectable" class="result-toolbar">
           <button type="button" class="ghost" :disabled="!result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
           <button type="button" class="ghost" :disabled="!result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
-          <button type="button" class="ghost" :disabled="!result || selectingAll" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
-          <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="selected = {}">取消全选所有</button>
-          <button v-if="failedPages.length" type="button" class="ghost" :disabled="selectingAll" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
+          <button type="button" class="ghost" :disabled="!result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
+          <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
+          <button v-if="failedPages.length" type="button" class="ghost" :disabled="selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
           <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" />申请号去点</label>
-          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || downloading" :title="downloadTitle" @click="downloadSelected">{{ downloading ? '正在打包下载…' : '下载已选' }}</button>
+          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || downloading || selectingAll" :title="downloadTitle" @click="downloadSelected">{{ downloading ? '正在打包下载…' : '下载已选' }}</button>
         </div>
         <p v-if="toolbarNotice" class="hint" role="status">{{ toolbarNotice }}</p>
         <div class="table-scroll">
@@ -487,7 +643,7 @@ onBeforeUnmount(() => {
             <tbody>
               <tr v-for="(file, index) in result.items" :key="file.fileId" :class="{ 'is-selected': Boolean(selected[file.fileId]) }">
                 <td v-if="selectable" class="check">
-                  <input type="checkbox" :aria-label="file.fileName" :checked="Boolean(selected[file.fileId])" @change="selected = toggleSelected(selected, toSelectedFile(file, selected[file.fileId]?.customerProfileId, querySessionId))" />
+                  <input type="checkbox" :aria-label="file.fileName" :checked="Boolean(selected[file.fileId])" @change="toggleFile(file)" />
                 </td>
                 <td class="seq">{{ rowNo(index) }}</td>
                 <td v-for="column in resultColumns" :key="column.key">

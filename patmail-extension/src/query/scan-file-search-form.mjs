@@ -11,11 +11,21 @@ export function scanFileSearchForm(doc) {
   function inlineHidden(node) {
     return /display\s*:\s*none/i.test(node.getAttribute('style') || '')
   }
-  function hideChain(node) {
+  function foldedRow(row) {
+    // FileSearch.js 的“更多”只给当时可见的行打这个标记，恢复时只展开这些行。
+    if (row.classList.contains('js-toggle-hide')) return true
+    const group = row.getAttribute('name')
+    if (group !== 'case' && group !== 'file') return false
+    // #is_file / #is_case 折叠的是整段布局，不代表条件不可用。
+    // 带 PTE、KLFD 等配置类的行仍按真实隐藏处理，不能因整段收起而放出来。
+    if ([...row.classList].some(name => name !== 'tr_hide')) return false
+    return Boolean(row.ownerDocument.querySelector(`#is_${group} > td > a.img_hide`))
+  }
+  function hideChain(node, folded) {
     const chain = []
     let current = node
     while (current && current.id !== 'table_element') {
-      if (inlineHidden(current)) {
+      if (current !== folded && inlineHidden(current)) {
         const id = current.id ? `#${current.id}` : ''
         const classes = String(current.className || '').trim().replace(/\s+/g, '.')
         chain.push(`${current.tagName.toLowerCase()}${id}${classes ? `.${classes}` : ''}`)
@@ -117,9 +127,10 @@ export function scanFileSearchForm(doc) {
       for (const control of controls) {
         if (seen.has(control.id)) continue
         seen.add(control.id)
-        const chain = hideChain(control)
+        const folded = foldedRow(row) ? row : null
+        const chain = hideChain(control, folded)
         const view = root.defaultView
-        const computedHidden = view ? view.getComputedStyle(control).display === 'none' || view.getComputedStyle(row).display === 'none' : chain.length > 0
+        const computedHidden = view ? view.getComputedStyle(control).display === 'none' || (!folded && view.getComputedStyle(row).display === 'none') : chain.length > 0
         fields.push({
           id: control.id,
           label: title ? labelOf(title) : control.id,

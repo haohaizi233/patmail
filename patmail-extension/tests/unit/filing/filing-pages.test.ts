@@ -43,7 +43,7 @@ describe('全选所有拉页的容灾', () => {
       return page === 2 ? { ok: false, session: true } : { ok: true, rows: [row(`f-${page}`)] }
     }, { ...fast, concurrency: 1 })
     expect(called).toEqual([1, 2])
-    expect(missed).toEqual([2])
+    expect(missed).toEqual([2, 3, 4, 5, 6])
   })
 
   it('抛异常也算失败页，不炸整批', async () => {

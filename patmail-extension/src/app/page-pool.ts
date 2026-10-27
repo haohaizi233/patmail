@@ -10,6 +10,8 @@ export interface PageRunOptions<Row> {
   gapMs?: number
   /** 每读回一页报一次，带这页的行，用于边拉边收。 */
   onPage?: (page: number, rows: Row[]) => void
+  /** 停止派发和重试，忽略取消后才返回的结果。 */
+  signal?: AbortSignal
 }
 
 /**
@@ -24,30 +26,37 @@ export async function runPagedFetch<Row>(
   fetchPage: (page: number) => Promise<PageFetchResult<Row>>,
   options: PageRunOptions<Row> = {}
 ): Promise<number[]> {
-  const concurrency = Math.max(1, options.concurrency ?? 6)
+  const requestedConcurrency = options.concurrency ?? 6
+  const concurrency = Number.isFinite(requestedConcurrency) ? Math.max(1, Math.trunc(requestedConcurrency)) : 6
   const attempts = Math.max(1, options.attempts ?? 3)
   const gapMs = Math.max(0, options.gapMs ?? 600)
-  const missed = new Set<number>()
+  const missed = new Set(pages)
   let cursor = 0
   let sessionDown = false
+  const stopped = (): boolean => sessionDown || options.signal?.aborted === true
   const worker = async (): Promise<void> => {
-    while (!sessionDown && cursor < pages.length) {
+    while (!stopped() && cursor < pages.length) {
       const page = pages[cursor]
       cursor += 1
       let got: PageFetchResult<Row> = { ok: false, session: false }
-      for (let round = 1; round <= attempts; round += 1) {
+      for (let round = 1; round <= attempts && !stopped(); round += 1) {
         try {
           got = await fetchPage(page)
         } catch {
           got = { ok: false, session: false }
         }
-        if (got.ok || got.session) break
+        if (options.signal?.aborted) return
+        if (got.ok) break
+        if (got.session) {
+          sessionDown = true
+          break
+        }
+        if (stopped()) break
         if (round < attempts && gapMs > 0) await new Promise(resolve => setTimeout(resolve, gapMs))
       }
-      if (got.ok) options.onPage?.(page, got.rows)
-      else {
-        missed.add(page)
-        if (got.session) sessionDown = true
+      if (got.ok && !options.signal?.aborted) {
+        options.onPage?.(page, got.rows)
+        missed.delete(page)
       }
     }
   }
