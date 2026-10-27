@@ -201,14 +201,15 @@ export class EasyRuntime {
 
   /** 进入页面时顺手确认会话。已经登录则直接过；检测被取消时再试一次。 */
   private async confirmAccountRead(): Promise<boolean> {
-    if (this.session.status === 'authenticated') return true
+    if (this.session.isAuthenticated()) return true
     const result = await this.checkSession()
     if (result.ok && result.data.status === 'authenticated') return true
     if (!result.ok && result.error.code === 'REQUEST_ABORTED') {
       const retry = await this.checkSession()
       return retry.ok && retry.data.status === 'authenticated'
     }
-    return false
+    // 检测超时或网络抖动但上次还登录着：按登录继续，业务请求真掉登录会自己报 SESSION_EXPIRED。
+    return this.session.isAuthenticated()
   }
 
   cancelSessionCheck(): void {

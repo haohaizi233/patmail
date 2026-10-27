@@ -162,8 +162,10 @@ export class EasyTransport {
     if (operation === 'fileSearch' || operation === 'limitMonitor' || operation === 'filingSearch') return fileSearchTimeoutMs(timeoutMs)
     // 原站先准备完整压缩包再返回GUID；与原站Ajax一样不设总时长，不能在5分钟主动掐断。
     if (operation === 'fileDownload') return 0
-    // 命名一批 100 个实测单批可超过两分钟；与原站 jQuery 一样不设总时长，不能在固定时限主动掐断，显式取消仍然生效。
+    // 命名一批 40 个实测单批可超过一分钟；与原站 jQuery 一样不设总时长，不能在固定时限主动掐断，显式取消仍然生效。
     if (operation === 'getFileName') return 0
+    // 会话检测在命名、批量拉页打满连接时也要排队；15 秒掐断会把“检测慢”报成“掉登录”，给 30 秒余量。
+    if (operation === 'session') return 30_000
     if (SLOW_OPERATIONS.has(operation)) return 60_000
     return this.timeoutMs
   }

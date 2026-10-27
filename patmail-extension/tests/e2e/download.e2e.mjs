@@ -134,8 +134,8 @@ try {
   assert.match(result.payload.data.notice, /浏览器下载完成/, '最终结果要回报浏览器下载完成')
   assert(!/另存走了浏览器直接下载/.test(result.payload.data.notice), '后台应直接接住下载，不能靠 iframe 假成功')
   assert.equal(calls.filter(call => call.call === 'DownLoad').length, 1)
-  // 命名一批 100 个：141 个文件是 2 批（100 + 41）。
-  assert.equal(calls.filter(call => call.call === 'GetFileName').length, 2)
+  // 命名一批 40 个、并发 2 路：141 个文件是 4 批（40+40+40+21），在途峰值 2。
+  assert.equal(calls.filter(call => call.call === 'GetFileName').length, 4)
   assert.equal(peakNames, 2)
   assert.equal(downloadParams.get('file_no'), files.map(file => file.fileNo).join(';'))
   assert.equal(downloadParams.get('file_name'), files.map((_, index) => `file-${index + 1}.pdf`).join(';'))

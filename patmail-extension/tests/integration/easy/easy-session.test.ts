@@ -115,4 +115,29 @@ describe('GetUserModel 会话判断', () => {
     expect(await session.check()).toMatchObject({ ok: false, error: { code: 'SESSION_EXPIRED' } })
     expect(session.status).toBe('expired')
   })
+
+  it('已登录后超时、网关和畸形响应都不改登录态，只有明确没登录才判失效', async () => {
+    let mode: 'ok' | 'timeout' | 'gateway' | 'malformed' | 'logout' = 'ok'
+    const fetcher: typeof fetch = async (_url, init) => {
+      if (mode === 'timeout') {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+        })
+      }
+      if (mode === 'gateway') return new Response('gateway down', { status: 502 })
+      if (mode === 'malformed') return new Response(JSON.stringify({ ClientInfo: { IsLogin: 'yes' } }))
+      return new Response(JSON.stringify({ ClientInfo: { IsLogin: mode !== 'logout' } }))
+    }
+    const session = new SessionService(new EasyTransport('http://183.36.43.66:88', { fetcher, timeoutMs: 5 }))
+    expect(await session.check()).toMatchObject({ ok: true, data: { status: 'authenticated' } })
+    for (const transient of ['timeout', 'gateway', 'malformed'] as const) {
+      mode = transient
+      const result = await session.check()
+      expect(result.ok, `${transient} 只是这次检测失败`).toBe(false)
+      expect(session.status, `${transient} 不能把已登录改成掉登录`).toBe('authenticated')
+    }
+    mode = 'logout'
+    expect(await session.check()).toMatchObject({ ok: true, data: { status: 'expired' } })
+    expect(session.status).toBe('expired')
+  })
 })

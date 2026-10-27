@@ -833,6 +833,8 @@ async function readBoundSession(host: WorkspaceHost, attempt = 0, adoptForeign =
     }
     if (!response.payload.ok) {
       if (response.payload.error.code === 'REQUEST_ABORTED') return
+      // 瞬时失败（超时、网络、网关）不是掉登录：已连接就保持现状，只把这次检测当成没读到。明确的登录失效才改状态。
+      if (response.payload.error.code !== 'SESSION_EXPIRED' && host.connection.context.sessionStatus === 'authenticated') return
       host.connection.applySession({
         ok: false,
         status: response.payload.error.code === 'SESSION_EXPIRED' ? 'expired' : 'error',

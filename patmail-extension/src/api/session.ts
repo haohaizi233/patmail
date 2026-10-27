@@ -46,6 +46,19 @@ export class SessionService {
     this.status = 'expired'
   }
 
+  /**
+   * 检测失败但不是“明确没登录”的结论时，已登录过就保持登录：
+   * 命名、批量拉页把连接打满时 GetUserModel 会超时，超时只代表这次检测没做成，不能报成掉登录。
+   */
+  private transientStatus(): SessionStatus {
+    return this.wasAuthenticated ? 'authenticated' : 'error'
+  }
+
+  /** 最近一次明确结论仍是登录；瞬时检测失败不改变这个答案。 */
+  isAuthenticated(): boolean {
+    return this.status === 'authenticated'
+  }
+
   async check(signal?: AbortSignal): Promise<ApiResult<SessionSummary>> {
     const current = ++this.generation
     // 已经登录时，后台复查不能把状态改成“检测中”，否则并行的模板请求会当成未登录。
@@ -58,7 +71,7 @@ export class SessionService {
     }
     if (!response.ok) {
       this.status = response.error.code === 'SESSION_EXPIRED'
-        ? this.wasAuthenticated ? 'expired' : 'unauthenticated' : 'error'
+        ? this.wasAuthenticated ? 'expired' : 'unauthenticated' : this.transientStatus()
       if (response.error.code === 'SESSION_EXPIRED') {
         if (!this.wasAuthenticated) {
           return { ok: true, data: { status: 'unauthenticated', checkedAt: new Date().toISOString() } }
@@ -67,12 +80,12 @@ export class SessionService {
       return response
     }
     if (!isRecord(response.data)) {
-      this.status = 'error'
+      this.status = this.transientStatus()
       return apiError('INVALID_RESPONSE', 'GetUserModel 响应不是对象。')
     }
     const client = readClientInfo(response.data.ClientInfo)
     if (!client.ok) {
-      this.status = 'error'
+      this.status = this.transientStatus()
       if (response.data.ClientInfo === undefined) {
         return { ok: false, error: {
           code: 'AUTH_UNKNOWN', message: '无法确认当前登录状态。',
@@ -87,12 +100,12 @@ export class SessionService {
       return { ok: true, data: { status: this.status, checkedAt: new Date().toISOString() } }
     }
     if (info.Status === false) {
-      this.status = 'error'
+      this.status = this.transientStatus()
       return apiError('BUSINESS_ERROR', businessMessage(info))
     }
     // 现场 GetUserModel 在已登录时 Result 仍为 false，不能把它当成登录失败。
     if (info.IsLogin !== true) {
-      this.status = 'error'
+      this.status = this.transientStatus()
       return { ok: false, error: {
         code: 'AUTH_UNKNOWN', message: '无法确认当前登录状态。',
         responseKeys: safeResponseKeys(response.data)
