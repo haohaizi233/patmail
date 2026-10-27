@@ -89,6 +89,8 @@ Manifest 对 `http://183.36.43.66:88/*`、`https://ip.pcl.ac.cn:81/*`、`http://
 
 ## 目录
 
+开发排障经验在 [docs/开发排障经验.md](docs/开发排障经验.md)，记录下载阶段定位、HTTP 内容脚本的 API 兼容、接口响应判定和浏览器回归方法。
+
 工作流详细文档在 [docs/workflows/README.md](docs/workflows/README.md)：PCT 提醒、PCT 鹏城专案、文件管理各一篇 Markdown。工作台“文档 → 工作流”可直接阅读并渲染 Mermaid；每张图支持“放大查看”、滚轮缩放、拖拽、百分比输入、适应宽度、适应窗口和键盘操作；正文图按宽度展开、高度自适应，并采用粉紫圆角主题。
 
 构建后运行 `pnpm test:e2e:docs`，可用独立 Chromium 验证三篇文档的全部流程图、索引跳转及图表交互；测试拦截外部网络请求。

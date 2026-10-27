@@ -468,7 +468,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 | Call | 文档 |
 |---|---|
-| `DownLoad` | [06](06-文件操作.md#下载)。页面步骤已核对，未下载文件 |
+| `DownLoad` | [06](06-文件操作.md#下载)。2026-10-26 抓包已核对：`file_guid` 非空即成功，包内条目名等于 `file_name` |
 | `DownLoadFiles` | [06](06-文件操作.md#下载)。没有重新执行 |
 | `DownLoadZip` | [06](06-文件操作.md#下载)。没有重新执行 |
 | `GetBaseData` | [骨架](31-基础信息补充.md#baseinfoashx-getbasedata) |
