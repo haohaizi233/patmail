@@ -9,6 +9,7 @@ import LiveAcceptancePanel from './LiveAcceptancePanel.vue'
 import MailExecutionPanel from './MailExecutionPanel.vue'
 import WorkflowPanel from './WorkflowPanel.vue'
 import { plainClone, queryTemplateVersionOf } from '../automation/snapshot'
+import { newUuid } from '../utils/uuid'
 import { isConfirmedOperator } from '../automation/operator'
 import { ChromeBundleRepository, storageKey } from '../storage/query-bundle'
 import { scopeFromConnection } from '../shared/connection'
@@ -102,7 +103,7 @@ async function save(mutate: (draft: MailRuleBundle) => void): Promise<void> {
   message.value = response.payload.message || '已保存。'
 }
 function newId(prefix: string): string {
-  return `${prefix}-${globalThis.crypto.randomUUID()}`
+  return `${prefix}-${newUuid()}`
 }
 async function importRules(): Promise<void> {
   let parsed: MailRuleBundle

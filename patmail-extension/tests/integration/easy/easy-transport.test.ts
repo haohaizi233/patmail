@@ -160,6 +160,30 @@ describe('EASY 受限传输', () => {
     }
   })
 
+  it('GetFileName 按慢接口给时限：慢站一批文件名要十几秒，15 秒会掐断下载', async () => {
+    vi.useFakeTimers()
+    try {
+      let aborted = false
+      const fetcher: typeof fetch = async (_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true
+          reject(new DOMException('aborted', 'AbortError'))
+        }, { once: true })
+      })
+      const pending = new EasyTransport('http://183.36.43.66:88', { fetcher }).post(
+        'getFileName',
+        new URLSearchParams({ Call: 'GetFileName' })
+      )
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(30_000)
+      await expect(pending).resolves.toMatchObject({ ok: false, error: { code: 'REQUEST_TIMEOUT' } })
+      expect(aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('aborts on timeout and respects explicit cancellation', async () => {
     const fetcher: typeof fetch = async (_url, init) => new Promise((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })

@@ -12,7 +12,7 @@ export type EasyOperation =
   | 'getFlowInfo' | 'getFlowHistory' | 'getUrgencyList' | 'getFlowSubmit' | 'getFlowLastStatus' | 'caseBusFlow' | 'showUserInfo'
   | 'limitMonitor' | 'limitMailCustomer' | 'mailSubmit' | 'mailProcess' | 'processAP' | 'processEF' | 'getIsNewCpc'
   | 'agencySearchCase' | 'agencyCaseInfo' | 'patentCaseData' | 'icSearch' | 'customerList'
-  | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName'
+  | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName' | 'fileDownload'
   | 'filingSearch' | 'filingFlowNode' | 'contractInit'
 
 export interface TransportOptions {
@@ -86,6 +86,7 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   icSearch: { path: '/AjaxServers/CaseInfo.ashx', call: 'ICSearchList' },
   customerList: { path: '/AjaxServers/Customer.ashx', call: 'GetCustomerlist' },
   getFileName: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetFileName' },
+  fileDownload: { path: '/AjaxServers/BaseInfo.ashx', call: 'DownLoad' },
   filingSearch: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFinished' },
   filingFlowNode: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFilingFlowNode' },
   contractInit: { path: '/AjaxServers/Customer.ashx', call: 'InitContractStatus' }
@@ -116,11 +117,11 @@ export function transientEasyFailure(message: string): boolean {
   return /网关异常|服务暂不可用|请求超时|无法连接 EASY/.test(message)
 }
 
-/** 发文提交这一串在原站高峰期常要 20 到 30 秒，先建单、后读联系人和流程、再保存和提交。 */
+/** 发文提交这一串在原站高峰期常要 20 到 30 秒，先建单、后读联系人和流程、再保存和提交。下载打包一次上百个 PDF 也要等服务端压包；GetFileName 一批 20 个文件名在慢站实测要十几秒，15 秒会把它掐成「下载停了」。 */
 const SLOW_OPERATIONS = new Set<EasyOperation>([
   'limitMailCustomer', 'mailProcess', 'processAP', 'processEF', 'agencySearchCase', 'icSearch', 'caseBusFlow', 'casePageDemand', 'caseInventor', 'caseRecordContact', 'customerList',
   'getMailInfo', 'getMailCase', 'getMailRule', 'getCustomerContact', 'getRecentContact', 'getCaseContact', 'getSalesContact', 'getPicsContact', 'getCaseAgentContact',
-  'getFlowInfo', 'getFlowSubmit', 'getUrgencyList', 'getFlowLastStatus', 'saveMailInfo', 'mailSubmit'
+  'getFlowInfo', 'getFlowSubmit', 'getUrgencyList', 'getFlowLastStatus', 'saveMailInfo', 'mailSubmit', 'fileDownload', 'getFileName'
 ])
 
 /** 发文已经创建、后面的读取失败时，再点提交应沿用这封，而不是再创建一封。 */
@@ -141,9 +142,9 @@ export class EasyTransport {
     this.timeoutMs = options.timeoutMs ?? 15_000
   }
 
-  /** 只读请求遇到网关 502/503 时再试。写请求不重试，避免一次 502 后面又创建出第二封。 */
+  /** 只读请求遇到网关 502/503 时再试。写请求不重试，避免一次 502 后面又创建出第二封；打包下载也不重试，免得在原站留两份临时包。 */
   async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number): Promise<ApiResult<unknown>> {
-    const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit'
+    const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload'
     let result = await this.postOnce(operation, params, signal, timeoutMs)
     for (let attempt = 1; retryable && !result.ok && (result.error.status === 502 || result.error.status === 503) && attempt < 3; attempt += 1) {
       if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
@@ -159,6 +160,8 @@ export class EasyTransport {
   private waitMs(operation: EasyOperation, timeoutMs?: number): number {
     if (this.timeoutMs < 15_000) return this.timeoutMs
     if (operation === 'fileSearch' || operation === 'limitMonitor' || operation === 'filingSearch') return fileSearchTimeoutMs(timeoutMs)
+    // 打包一次可能上千个 PDF，服务端压包不止一分钟。
+    if (operation === 'fileDownload') return 300_000
     if (SLOW_OPERATIONS.has(operation)) return 60_000
     return this.timeoutMs
   }
@@ -172,6 +175,15 @@ export class EasyTransport {
     }
     if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
     return this.sendForm(route.path, params, this.waitMs(operation, timeoutMs), signal)
+  }
+
+  /** DownLoad 打包后取压缩包的地址（原站把隐藏 iframe 指到这里，浏览器负责落盘）。 */
+  fileDownloadUrl(fileGuid: string, fileSize: number | null): string | null {
+    if (!this.origin) return null
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileGuid)) return null
+    const query = new URLSearchParams({ guid: fileGuid })
+    if (fileSize !== null) query.set('file_size', String(fileSize))
+    return `${this.origin}/AjaxServers/FileHandler.ashx?${query.toString()}`
   }
 
   /** 用当前页面的登录会话调用文档里的只读接口。入口和 Call 由调用方先校验。 */

@@ -4,6 +4,7 @@ import { isEasyOrigin } from '../api/config'
 import { isCustomerMode, type CustomerMode } from '../settings/customer-mode'
 import { isCustomerProfile } from '../customer/guards'
 import { isFileDownloadSelection, type FileDownloadSelection } from '../mail/download-name'
+import { DOWNLOAD_MAX_ITEMS } from '../api/file-download'
 import type { CustomerQueryProfile } from '../customer/types'
 import type { MailRuleBundle } from '../mail/types'
 import { isQueryGuid, isQueryTemplate } from '../query/query-validator'
@@ -69,6 +70,10 @@ export const MessageType = {
   SubmitFileManageResult: 'SUBMIT_FILE_MANAGE_RESULT',
   ResolveDownloadNames: 'RESOLVE_DOWNLOAD_NAMES',
   ResolveDownloadNamesResult: 'RESOLVE_DOWNLOAD_NAMES_RESULT',
+  DownloadFiles: 'DOWNLOAD_FILES',
+  DownloadFilesResult: 'DOWNLOAD_FILES_RESULT',
+  SaveDownload: 'SAVE_DOWNLOAD',
+  SaveDownloadResult: 'SAVE_DOWNLOAD_RESULT',
   ExportCaseContacts: 'EXPORT_CASE_CONTACTS',
   ExportCaseContactsResult: 'EXPORT_CASE_CONTACTS_RESULT',
   ListMailProcesses: 'LIST_MAIL_PROCESSES',
@@ -167,12 +172,13 @@ type Response<T extends string, P> = Message<P> & { type: T; payload: P }
 export type ContentRequest =
   | Request<'SCAN_PAGE'> | Request<'GET_PAGE_INFO'> | Request<'SHOW_PANEL'> | Request<'PING'>
   | Request<'CHECK_SESSION'> | Request<'CANCEL_SESSION_CHECK'>
-  | Request<'CANCEL_FILE_SEARCH'> | Request<'CANCEL_LIMIT_MONITOR'> | Response<'SEARCH_FILES', { query: FileSearchQuery; continuation?: { querySessionId: string }; timeoutMs?: number }>
+  | Request<'CANCEL_FILE_SEARCH'> | Request<'CANCEL_LIMIT_MONITOR'> | Response<'SEARCH_FILES', { query: FileSearchQuery; continuation?: { querySessionId: string }; timeoutMs?: number; batch?: true }>
   | Response<'SEARCH_LIMIT_MONITOR', { query: LimitMonitorQuery; timeoutMs?: number }>
   | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number; batch?: true }>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
+  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean }>
   | Response<'EXPORT_CASE_CONTACTS', { volumes: string[] }>
   | Response<'LIST_MAIL_PROCESSES', { query: ProcessListQuery }>
   | Response<'OPEN_EASY_FORM', { target: ProcessOpenTarget }>
@@ -241,6 +247,7 @@ export type BackgroundRequest =
   | Response<'SAVE_EVIDENCE', { record: Record<string, unknown> }>
   | Response<'LIST_EVIDENCE', { origin: string; call: string }>
   | Response<'WORKSPACE', WorkspaceAction>
+  | Response<'SAVE_DOWNLOAD', { url: string; fileName: string }>
   | Response<'AGENT_CHAT', { action: 'probe' | 'turn'; message: string } | { action: 'turn'; message: string; plain: true } | { action: 'answer'; message: string } | { action: 'history' | 'reset' | 'facts' | 'compact' | 'stop' | 'create' } | { action: 'create'; title: string } | { action: 'open' | 'remove'; id: string } | { action: 'rename'; id: string; title: string }>
 export type BackgroundResponse =
   | Response<'PONG', { ok: true }>
@@ -250,6 +257,7 @@ export type BackgroundResponse =
   | Response<'ACCEPTANCE_RESULT', { records: Record<string, unknown>[]; probe?: { httpStatus: number; sessionOk: boolean; fields: Record<string, string>; shape: string } }>
   | Response<'EVIDENCE_RESULT', { records: Record<string, unknown>[] }>
   | Response<'WORKSPACE_RESULT', WorkspaceResultPayload>
+  | Response<'SAVE_DOWNLOAD_RESULT', { ok: true; fileName: string }>
   | Response<'AGENT_CHAT_RESULT', ApiResult<{ reply: string; model: string; steps: number; history: Array<{ role: 'user' | 'assistant'; content: string }>; sessions: Array<{ id: string; title: string; updatedAt: string; active: boolean }>; activeId: string }>>
   | ErrorMessage
 
@@ -361,6 +369,7 @@ export type ContentResponse =
   | Response<'SUBMIT_LIMIT_MAIL_RESULT', { stopped: boolean; results: Array<{ procId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string; to?: string; cc?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE_RESULT', { stopped: boolean; results: Array<{ fileId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES_RESULT', ApiResult<{ names: string[] }>>
+  | Response<'DOWNLOAD_FILES_RESULT', ApiResult<{ fileName: string; fileCount: number; notice: string }>>
   | Response<'EXPORT_CASE_CONTACTS_RESULT', ApiResult<CaseContactExport>>
   | Response<'LIST_MAIL_PROCESSES_RESULT', ApiResult<ProcessListResult>>
   | Response<'OPEN_EASY_FORM_RESULT', { ok: boolean; message: string }>
@@ -420,7 +429,7 @@ function isCaseDemandAsset(value: unknown): value is CaseDemandAsset {
 function isDownloadNameRequest(value: unknown): value is { fileIds: string[]; selection: FileDownloadSelection } {
   if (!isRecord(value) || Object.keys(value).length !== 2) return false
   const ids = value.fileIds
-  return Array.isArray(ids) && ids.length > 0 && ids.length <= 300 && ids.every(id => typeof id === 'string' && isQueryGuid(id)) &&
+  return Array.isArray(ids) && ids.length > 0 && ids.length <= DOWNLOAD_MAX_ITEMS && ids.every(id => typeof id === 'string' && isQueryGuid(id)) &&
     isFileDownloadSelection(value.selection)
 }
 
@@ -429,7 +438,30 @@ function isDownloadNameResult(value: unknown): value is ApiResult<{ names: strin
   if (value.ok === false) return isRecord(value.error) && typeof value.error.code === 'string' && typeof value.error.message === 'string'
   if (value.ok !== true || !isRecord(value.data) || Object.keys(value.data).length !== 1 || !Array.isArray(value.data.names)) return false
   const names = value.data.names
-  return names.length <= 300 && names.every(name => typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';'))
+  return names.length <= DOWNLOAD_MAX_ITEMS && names.every(name => typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';'))
+}
+
+function isDownloadFileItem(value: unknown): value is { fileId: string; fileNo: string; fileName: string } {
+  return isRecord(value) && Object.keys(value).length === 3 &&
+    typeof value.fileId === 'string' && isQueryGuid(value.fileId) &&
+    typeof value.fileNo === 'string' && value.fileNo.trim().length > 0 && value.fileNo.length <= 40 && !value.fileNo.includes(';') &&
+    typeof value.fileName === 'string' && value.fileName.trim().length > 0 && value.fileName.length <= 180 && !value.fileName.includes(';')
+}
+
+function isDownloadFilesRequest(value: unknown): value is { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean } {
+  if (!isRecord(value) || Object.keys(value).length !== 3 || typeof value.stripAppNoDot !== 'boolean') return false
+  const items = value.items
+  if (!Array.isArray(items) || !items.length || items.length > DOWNLOAD_MAX_ITEMS || !items.every(isDownloadFileItem)) return false
+  return value.selection === null || isFileDownloadSelection(value.selection)
+}
+
+function isDownloadFilesResult(value: unknown): value is ApiResult<{ fileName: string; fileCount: number; notice: string }> {
+  if (!isRecord(value)) return false
+  if (value.ok === false) return isRecord(value.error) && typeof value.error.code === 'string' && typeof value.error.message === 'string'
+  return value.ok === true && isRecord(value.data) && Object.keys(value.data).length === 3 &&
+    typeof value.data.fileName === 'string' && value.data.fileName.endsWith('.zip') && value.data.fileName.length <= 120 &&
+    typeof value.data.fileCount === 'number' && Number.isInteger(value.data.fileCount) && value.data.fileCount > 0 && value.data.fileCount <= DOWNLOAD_MAX_ITEMS &&
+    typeof value.data.notice === 'string' && value.data.notice.length <= 200
 }
 
 function isCaseBusFlowResult(value: unknown): value is ApiResult<{ gate: 'open' | 'pending' | 'done' }> {
@@ -454,7 +486,7 @@ function isLibraryVolume(value: unknown): value is string {
 function isIcFlowResult(value: unknown): value is ApiResult<{ items: IcFlowHit[] }> {
   if (!isRecord(value)) return false
   if (value.ok === false) return isRecord(value.error) && typeof value.error.code === 'string' && typeof value.error.message === 'string'
-  if (value.ok !== true || !isRecord(value.data) || !Array.isArray(value.data.items) || value.data.items.length > 300 || Object.keys(value.data).length !== 1) return false
+  if (value.ok !== true || !isRecord(value.data) || !Array.isArray(value.data.items) || value.data.items.length > DOWNLOAD_MAX_ITEMS || Object.keys(value.data).length !== 1) return false
   return value.data.items.every(item => {
     if (!isRecord(item) || !isShortText(item.caseVolume, 80) || !isShortText(item.procLabel, 80) || typeof item.found !== 'boolean') return false
     if (item.gate !== '' && item.gate !== 'open' && item.gate !== 'pending' && item.gate !== 'done') return false
@@ -772,8 +804,9 @@ export function isMessage(value: unknown): value is AppMessage {
       const keys = Object.keys(value.payload)
       if (!keys.includes('query')) return false
       const extra = keys.filter(key => key !== 'query')
-      return extra.every(key => key === 'continuation' || key === 'timeoutMs') &&
-        (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs)
+      return extra.every(key => key === 'continuation' || key === 'timeoutMs' || key === 'batch') &&
+        (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs) &&
+        (value.payload.batch === undefined || value.payload.batch === true)
     }
     case MessageType.SearchLimitMonitor: {
       if (!isRecord(value.payload) || !isLimitMonitorQuery(value.payload.query)) return false
@@ -802,6 +835,22 @@ export function isMessage(value: unknown): value is AppMessage {
       return isDownloadNameRequest(value.payload)
     case MessageType.ResolveDownloadNamesResult:
       return isDownloadNameResult(value.payload)
+    case MessageType.DownloadFiles:
+      return isDownloadFilesRequest(value.payload)
+    case MessageType.DownloadFilesResult:
+      return isDownloadFilesResult(value.payload)
+    case MessageType.SaveDownload: {
+      const payload = value.payload
+      // 只放行本插件打包出来的取包地址：后台会照着它发起浏览器下载。
+      return isRecord(payload) && Object.keys(payload).length === 2 &&
+        typeof payload.url === 'string' && payload.url.length <= 500 &&
+        /^https?:\/\/[^/?#]+\/AjaxServers\/FileHandler\.ashx\?guid=[0-9a-f-]{36}(&file_size=\d+)?$/i.test(payload.url) &&
+        typeof payload.fileName === 'string' && payload.fileName.endsWith('.zip') && payload.fileName.length <= 120 &&
+        !payload.fileName.includes('/') && !payload.fileName.includes('\\')
+    }
+    case MessageType.SaveDownloadResult:
+      return isRecord(value.payload) && Object.keys(value.payload).length === 2 && value.payload.ok === true &&
+        typeof value.payload.fileName === 'string' && value.payload.fileName.length <= 120
     case MessageType.ExportCaseContacts:
       return isRecord(value.payload) && isVolumeList(value.payload.volumes) && Object.keys(value.payload).length === 1
     case MessageType.ListMailProcesses:
@@ -961,6 +1010,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.SubmitLimitMail ||
     value.type === MessageType.SubmitFileManage ||
     value.type === MessageType.ResolveDownloadNames ||
+    value.type === MessageType.DownloadFiles ||
     value.type === MessageType.ExportCaseContacts ||
     value.type === MessageType.OpenEasyForm ||
     value.type === MessageType.ListFlowReviewers ||
@@ -988,7 +1038,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
   )
 }
 
-const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES'])
+const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES'])
 const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE'])
 
 /** 不允许转发时给出原因。写开关关掉时，创建、保存和查询模板写回都停在这里。 */

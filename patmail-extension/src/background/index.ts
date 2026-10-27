@@ -196,6 +196,19 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '后台没有完成转发。' } }
     }
   }
+  /** 打包下载的压缩包由浏览器直接落盘：走 chrome.downloads 才会在下载记录里留下条目，文件名也听插件的。 */
+  if (message.type === MessageType.SaveDownload) {
+    const downloads = chrome.downloads
+    if (!downloads?.download) {
+      return { type: MessageType.Error, payload: { message: '扩展缺「下载」权限：到 chrome://extensions 给 PatMail 点一次「重新加载」后再试。' } }
+    }
+    try {
+      await downloads.download({ url: message.payload.url, filename: message.payload.fileName, saveAs: false })
+      return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: message.payload.fileName } }
+    } catch (error: unknown) {
+      return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有接住这次下载。' } }
+    }
+  }
   let scoped: AppMessage = message
   const accountScoped = WRITES.has(message.type) || READS.has(message.type)
   if (accountScoped || fromExtensionPage(sender)) {

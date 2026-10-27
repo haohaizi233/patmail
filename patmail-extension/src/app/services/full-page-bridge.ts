@@ -10,6 +10,8 @@ export function createFullPageBridge(): MessageBridge {
       const contactExport = message.type === MessageType.ExportCaseContacts
       // 提交一封信要串完建单、联系人、保存和提交流程，并成几件的信更长。原站高峰期 30 秒不够，放宽到 3 分钟。
       const submitWait = message.type === MessageType.SubmitLimitMail || message.type === MessageType.SubmitFileManage ? 180_000 : 0
+      // 打包加取包要走完 DownLoad 和 FileHandler.ashx；文件名生成在慢站一批就要十几秒，下载数量不设上限，30 分钟起步。
+      const downloadWait = message.type === MessageType.DownloadFiles ? 1_800_000 : 0
       const slow = contactExport || submitWait > 0 || message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor
         || message.type === MessageType.ListMailProcesses || message.type === MessageType.ListFlowReviewers
         || message.type === MessageType.ReadCaseDemands
@@ -21,7 +23,7 @@ export function createFullPageBridge(): MessageBridge {
         || message.type === MessageType.LoadDictionary || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm
       const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor || message.type === MessageType.SearchFiling
         ? fileSearchTimeoutMs(message.payload.timeoutMs) + 15_000 : 0
-      const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || searchWait || (slow ? 70_000 : 30_000))
+      const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || downloadWait || searchWait || (slow ? 70_000 : 30_000))
       if (response?.type === MessageType.Error) return response
       const forwarded = response?.type === MessageType.WorkspaceResult ? response.payload.forwarded : null
       if (forwarded && forwarded.type === MessageType.Error) return forwarded

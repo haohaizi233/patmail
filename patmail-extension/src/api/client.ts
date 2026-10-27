@@ -45,7 +45,8 @@ import { isQueryGuid } from '../query/query-validator'
 import { EasyMailReadService } from '../mail/easy/read-service'
 import type { ExistingMailDiagnostic } from '../shared/message'
 import { submitFileManageBatch, type FileManageSubmitItem, type FileManageSubmitResult } from '../customer/file-manage-submit'
-import { resolveDownloadFileNames, type FileDownloadSelection } from '../mail/download-name'
+import { resolveDownloadFileNames, stripApplicationNoDot, type FileDownloadSelection } from '../mail/download-name'
+import { buildDownloadParams, downloadArchiveName, readDownloadHandle, DOWNLOAD_MAX_ITEMS, type DownloadFileItem, type DownloadedArchive } from './file-download'
 import { submitLimitMailBatch, type LimitMailSubmitItem, type LimitMailSubmitResult } from '../customer/limit-mail-submit'
 import { loadCaseContacts } from '../case-contact/load'
 import type { CaseContactExport } from '../case-contact/query'
@@ -215,7 +216,11 @@ export class EasyRuntime {
     this.activeSession = null
   }
 
-  searchFiles(query: FileSearchQuery, timeoutMs?: number): Promise<ApiResult<FileSearchResult>> {
+  /**
+   * 手工查询走「新查询取消旧查询」的槽；全选所有页这类批量拉页传 batch，
+   * 不占这个槽：批页之间、批页和手查之间互不取消（否则并发翻页会互相 abort 掉）。
+   */
+  searchFiles(query: FileSearchQuery, timeoutMs?: number, batch = false): Promise<ApiResult<FileSearchResult>> {
     if (this.session.status !== 'authenticated') {
       return Promise.resolve(apiError(
         this.session.status === 'expired' || this.session.status === 'unauthenticated' ? 'SESSION_EXPIRED' : 'AUTH_UNKNOWN',
@@ -237,13 +242,16 @@ export class EasyRuntime {
       ? buildGetSearchFilesFromFields(query.resolvedFields, query, environment)
       : buildGetSearchFilesParams(query, environment)
     if (!params.ok) return Promise.resolve(params)
-    this.cancelFileSearch()
     const controller = new AbortController()
-    this.searchController = controller
-    const requestNumber = ++this.searchSequence
+    let requestNumber = 0
+    if (!batch) {
+      this.cancelFileSearch()
+      this.searchController = controller
+      requestNumber = ++this.searchSequence
+    }
     const promise = (async (): Promise<ApiResult<FileSearchResult>> => {
       const response = await this.transport.post('fileSearch', params.data, controller.signal, timeoutMs)
-      if (requestNumber !== this.searchSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
+      if (!batch && requestNumber !== this.searchSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
       const result = response.ok ? normalizeFileSearch(response.data, query) : response
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
         this.session.expire()
@@ -251,13 +259,15 @@ export class EasyRuntime {
       }
       return result
     })()
-    this.activeSearch = { signature, promise }
-    void promise.then(() => {
-      if (this.activeSearch?.promise === promise) {
-        this.activeSearch = null
-        this.searchController = null
-      }
-    })
+    if (!batch) {
+      this.activeSearch = { signature, promise }
+      void promise.then(() => {
+        if (this.activeSearch?.promise === promise) {
+          this.activeSearch = null
+          this.searchController = null
+        }
+      })
+    }
     return promise
   }
 
@@ -658,6 +668,56 @@ export class EasyRuntime {
       const result = await resolveDownloadFileNames(this.transport, fileIds, selection)
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') this.session.expire()
       return result
+    })()
+  }
+
+  /**
+   * 下载文件：按下载名称生成文件名，再交给原站 DownLoad 打包、按 file_guid 把压缩包取回来。
+   * stripAppNoDot 打开时申请号校验点去掉（202610026334.9 → 2026100263349），关掉就原样下载。
+   * 不选下载名称就用查询结果里的原名。
+   */
+  downloadFiles(items: DownloadFileItem[], selection: FileDownloadSelection | null, stripAppNoDot: boolean): Promise<ApiResult<DownloadedArchive>> {
+    return (async (): Promise<ApiResult<DownloadedArchive>> => {
+      if (!items.length || items.length > DOWNLOAD_MAX_ITEMS) {
+        return apiError('INVALID_QUERY', `一次只能下载 1 到 ${DOWNLOAD_MAX_ITEMS} 个文件。`)
+      }
+      if (items.some(item => !isQueryGuid(item.fileId) || !item.fileNo.trim() || !item.fileName.trim())) {
+        return apiError('INVALID_QUERY', '文件编号或原名不能用来下载。')
+      }
+      if (!(await this.confirmAccountRead())) {
+        return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      }
+      const named = selection
+        ? await resolveDownloadFileNames(this.transport, items.map(item => item.fileId), selection)
+        : { ok: true as const, data: items.map(item => item.fileName.trim()) }
+      if (!named.ok) {
+        if (named.error.code === 'SESSION_EXPIRED') this.session.expire()
+        return named
+      }
+      const names = stripAppNoDot ? named.data.map(stripApplicationNoDot) : named.data
+      const params = buildDownloadParams(items.map(item => item.fileNo.trim()), names)
+      if (!params) return apiError('INVALID_QUERY', '下载名称参数无效，没有下载。')
+      const prepared = await this.transport.post('fileDownload', params)
+      if (!prepared.ok) {
+        if (prepared.error.code === 'SESSION_EXPIRED') this.session.expire()
+        return prepared
+      }
+      const handle = readDownloadHandle(prepared.data)
+      if (!handle.ok) {
+        if (handle.error.code === 'SESSION_EXPIRED') this.session.expire()
+        return handle
+      }
+      const archive = this.transport.fileDownloadUrl(handle.data.fileGuid, handle.data.fileSize)
+      if (!archive) return apiError('INVALID_QUERY', '下载文件编号无效，没有下载。')
+      return {
+        ok: true,
+        data: {
+          downloadUrl: archive,
+          fileName: downloadArchiveName(),
+          fileCount: items.length,
+          notice: handle.data.notice
+        }
+      }
     })()
   }
 

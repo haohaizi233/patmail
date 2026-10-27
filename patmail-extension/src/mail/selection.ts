@@ -15,6 +15,7 @@ export function toSelectedFile(file: PatentFile, customerProfileId?: string, que
     fileName: file.fileName,
     fileDescription: file.fileDescription?.trim() ?? '',
     customerName: file.customerName?.trim() ?? '',
+    ...(file.fileNo ? { fileNo: file.fileNo } : {}),
     ...(customerProfileId ? { customerProfileId } : {}),
     ...(file.caseName ? { caseName: file.caseName } : {}),
     ...(file.caseVolume ? { caseVolume: file.caseVolume } : {}),

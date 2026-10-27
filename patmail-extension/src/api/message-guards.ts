@@ -69,7 +69,7 @@ export function coerceFileSearchQuery(value: unknown): FileSearchQuery | null {
   }
   for (const key of ['caseVolume', 'applicationNo', 'customerName', 'fileName', 'fileDescriptionId'] as const) {
     const raw = value[key]
-    if (typeof raw === 'string' && raw.length <= 4000) query[key] = raw
+    if (typeof raw === 'string' && raw.length <= fileSearchValueLimit(key)) query[key] = raw
   }
   return query
 }
@@ -89,9 +89,11 @@ export function prepareForwardedSearch(message: unknown): void {
     typeof continuation.querySessionId === 'string' && CONTINUATION_ID.test(continuation.querySessionId)
   const chosen = fileSearchTimeoutMs(inner.payload.timeoutMs)
   const timeoutMs = inner.payload.timeoutMs !== undefined && chosen === Number(inner.payload.timeoutMs) ? chosen : undefined
+  // batch 是批量拉页的标记，得跟着查询一起过去：收消息时把它一并留好，别在这层收丢。
+  const batch = inner.payload.batch === true ? { batch: true as const } : {}
   inner.payload = keep
-    ? { query, continuation, ...(timeoutMs === undefined ? {} : { timeoutMs }) }
-    : { query, ...(timeoutMs === undefined ? {} : { timeoutMs }) }
+    ? { query, continuation, ...batch, ...(timeoutMs === undefined ? {} : { timeoutMs }) }
+    : { query, ...batch, ...(timeoutMs === undefined ? {} : { timeoutMs }) }
 }
 
 function isApiError(value: unknown): value is ApiError {
@@ -147,7 +149,7 @@ const LIMIT_QUERY_KEYS = new Set(['type', 'caseVolume', 'applicationNo', 'custom
 export function isLimitMonitorQuery(value: unknown): value is LimitMonitorQuery {
   if (!isRecord(value) || Object.keys(value).some(key => !LIMIT_QUERY_KEYS.has(key))) return false
   if (typeof value.type !== 'string' || !isLimitMonitorType(value.type)) return false
-  if (value.fields !== undefined && (!isRecord(value.fields) || Object.entries(value.fields).some(([key, item]) => !isLimitMonitorInputField(key) || typeof item !== 'string' || item.length > 4000))) return false
+  if (value.fields !== undefined && (!isRecord(value.fields) || Object.entries(value.fields).some(([key, item]) => !isLimitMonitorInputField(key) || typeof item !== 'string' || item.length > fileSearchValueLimit(key)))) return false
   return Number.isSafeInteger(value.pageIndex) && Number(value.pageIndex) >= 1 &&
     Number.isSafeInteger(value.pageSize) && Number(value.pageSize) >= 1 && Number(value.pageSize) <= 100 &&
     ['caseVolume', 'applicationNo', 'customerName', 'ctrlProcId'].every(key => optionalString(value[key]))

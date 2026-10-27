@@ -73,10 +73,16 @@ export function isFileSearchBusinessField(name: string): boolean {
 
 const FIELD_VALUE_MAX = 4000
 /** 官方来文一次勾选几百项时，编号会拼成一万多字。原网站这次提交了 396 个。 */
-const FILETYPE_VALUE_MAX = 100_000
+const BATCH_VALUE_MAX = 100_000
+/** 一次粘几百个编号的列表字段（我方文号、申请号、附件名称这类）。原站模板里我方文号 534 条共 8163 字很常见；
+ *  按普通字段的 4000 字会把整条条件丢掉，查询退化成全库（2026-10-26 实测 91510 条）。 */
+const BATCH_VALUE_FIELDS = new Set([
+  'filetype', 'case_volume', 'case_volume_customer', 'app_no',
+  'file_name', 'file_name_batch', 'pub_no', 'issue_no'
+])
 
 export function fileSearchValueLimit(key: string): number {
-  return key === 'filetype' ? FILETYPE_VALUE_MAX : FIELD_VALUE_MAX
+  return BATCH_VALUE_FIELDS.has(key) ? BATCH_VALUE_MAX : FIELD_VALUE_MAX
 }
 
 /** 文件查询在原网站上的等待时间。页面下拉只允许这四档，别的值按 1 分钟。 */
@@ -89,8 +95,23 @@ export function fileSearchTimeoutMs(value: unknown): FileSearchTimeoutMs {
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** 原站保存的模板会带尾逗号或空段，不能因此把整条文件描述判成非法。 */
 function validInternalIds(value: string): boolean {
-  return value.split(',').every(id => GUID.test(id.trim()))
+  const ids = value.split(',').map(id => id.trim()).filter(Boolean)
+  return ids.length > 0 && ids.every(id => GUID.test(id))
+}
+
+function normalizeInternalIds(value: string): string {
+  return value.split(',').map(id => id.trim()).filter(Boolean).join(',')
+}
+
+function internalIdOffenders(value: string): string[] {
+  return value.split(',').map(id => id.trim()).filter(id => id && !GUID.test(id))
+}
+
+function internalIdError(value: string): string {
+  const offenders = internalIdOffenders(value)
+  return `文件描述里有 ${offenders.length} 项不是内部 ID（如：${offenders.slice(0, 3).join('、')}）。点开文件描述重新勾选后再查。`
 }
 
 export function buildGetSearchFilesParams(
@@ -106,12 +127,12 @@ export function buildGetSearchFilesParams(
   const applicationNo = query.applicationNo?.trim().replace(/\./g, '') ?? ''
   const customerName = query.customerName?.trim() ?? ''
   const fileName = query.fileName?.trim() ?? ''
-  const fileDescriptionId = query.fileDescriptionId?.trim() ?? ''
+  const fileDescriptionId = normalizeInternalIds(query.fileDescriptionId ?? '')
   if (![caseVolume, applicationNo, customerName, fileName, fileDescriptionId].some(Boolean)) {
     return apiError('INVALID_QUERY', '请输入查询条件。')
   }
   if (fileDescriptionId && !validInternalIds(fileDescriptionId)) {
-    return apiError('INVALID_QUERY', '文件描述必须使用内部 ID。')
+    return apiError('INVALID_QUERY', internalIdError(fileDescriptionId))
   }
   const values: Record<string, string> = {
     pageIndex: String(query.pageIndex),
@@ -209,8 +230,11 @@ export function buildGetSearchFilesFromFields(
     }
     explicit[key] = fields[key]
   }
-  if (explicit.filetype?.trim() && !validInternalIds(explicit.filetype)) {
-    return apiError('INVALID_QUERY', '文件描述必须使用内部 ID。')
+  if (explicit.filetype?.trim()) {
+    if (!validInternalIds(explicit.filetype)) {
+      return apiError('INVALID_QUERY', internalIdError(explicit.filetype))
+    }
+    explicit.filetype = normalizeInternalIds(explicit.filetype)
   }
   if (!hasExplicitFileSearchFilter(explicit)) {
     return apiError('INVALID_QUERY', '请提供有效筛选条件，不能进行全库查询。')

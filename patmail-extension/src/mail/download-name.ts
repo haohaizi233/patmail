@@ -1,6 +1,7 @@
 import { apiError, type ApiResult } from '../api/types'
 import { isRecord, readClientInfo } from '../api/response-guards'
 import type { EasyTransport } from '../api/transport'
+import { DOWNLOAD_MAX_ITEMS } from '../api/file-download'
 import { isQueryGuid } from '../query/query-validator'
 
 /** 文件查询里选中的下载名称。不进 GetSearchFiles，发文前交给 GetFileName。 */
@@ -100,6 +101,13 @@ export function downloadNameText(selection: FileDownloadSelection | null | undef
   return ''
 }
 
+/** 申请号带校验点（202610026334.9、202311613183.X）。下载文件名里把点去掉（2026100263349、202311613183X），扩展名和其他小数点不动。 */
+const APPLICATION_NO_DOT = /(?<!\d)(\d{12}|\d{8})\.(?:(\d)(?!\d)|([Xx])(?![\dXx]))/g
+
+export function stripApplicationNoDot(name: string): string {
+  return name.replace(APPLICATION_NO_DOT, '$1$2$3')
+}
+
 export function recipeFromTempList(data: unknown, templateId: string): DownloadNameRecipe | null {
   if (!isRecord(data) || !Array.isArray(data.TempNameList)) return null
   for (const row of data.TempNameList) {
@@ -165,7 +173,7 @@ export async function resolveDownloadFileNames(
   fileIds: string[],
   selection: FileDownloadSelection
 ): Promise<ApiResult<string[]>> {
-  if (!fileIds.length || fileIds.length > 300 || fileIds.some(id => !isQueryGuid(id))) {
+  if (!fileIds.length || fileIds.length > DOWNLOAD_MAX_ITEMS || fileIds.some(id => !isQueryGuid(id))) {
     return apiError('INVALID_QUERY', '文件编号不能用来生成下载名称。')
   }
   const recipe = await recipeFor(transport, selection)

@@ -19,6 +19,8 @@ export interface SelectedPatentFile {
   customerId?: string
   customerProfileId?: string
   customerBinding?: CustomerBinding
+  /** 查询行里的文件编号（A00110397537）。下载打包时 DownLoad 认这个。 */
+  fileNo?: string
   caseId?: string
   caseName?: string
   caseVolume?: string

@@ -1,5 +1,6 @@
 import { isRecord } from '../shared/guards'
 import { isMessage, MessageType, type BackgroundRequest, type BackgroundResponse } from '../shared/message'
+import { newUuid } from './uuid'
 
 function failure(message: string): BackgroundResponse {
   return { type: MessageType.Error, payload: { message } }
@@ -14,6 +15,7 @@ function acceptedBackground(response: unknown): response is BackgroundResponse {
     response.type === MessageType.ExecutionLease || response.type === MessageType.ExecutionRecovered ||
     response.type === MessageType.TaskResult || response.type === MessageType.AcceptanceResult ||
     response.type === MessageType.EvidenceResult || response.type === MessageType.WorkspaceResult ||
+    response.type === MessageType.SaveDownloadResult ||
     response.type === MessageType.AgentChatResult
   )
 }
@@ -33,7 +35,8 @@ export interface BackgroundTimeoutHold {
 function sendThroughMessage(message: BackgroundRequest, timeoutMs: number, hold?: BackgroundTimeoutHold): Promise<BackgroundResponse | null> {
   return new Promise((resolve) => {
     let settled = false
-    const requestId = globalThis.crypto.randomUUID()
+    // 内容脚本运行在 EASY 的 HTTP 页面，randomUUID 只在安全上下文可用，newUuid 里带兜底。
+    const requestId = newUuid()
     const started = Date.now()
     let pausedSince = 0
     let pausedMs = 0

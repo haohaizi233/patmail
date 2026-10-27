@@ -3,6 +3,7 @@ import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
 import { sendToBackground } from '../utils/runtime'
 import { injectPanel } from './injector'
+import { startArchiveDownload } from './save-file'
 import { readPageInfo, scanPage } from './scanner'
 import { EasyRuntime } from '../api/client'
 import { scanFileSearchForm } from '../query/scan-file-search-form.mjs'
@@ -253,7 +254,7 @@ const bridge: MessageBridge = {
         return { type: MessageType.SessionCheckCancelled, payload: { ok: true } }
       case MessageType.SearchFiles:
         return { type: MessageType.SearchFilesResult,
-          payload: await easyRuntime.searchFiles(message.payload.query, message.payload.timeoutMs) }
+          payload: await easyRuntime.searchFiles(message.payload.query, message.payload.timeoutMs, message.payload.batch === true) }
       case MessageType.SearchLimitMonitor:
         return { type: MessageType.SearchLimitMonitorResult,
           payload: await easyRuntime.searchLimitMonitor(message.payload.query, message.payload.timeoutMs) }
@@ -271,6 +272,42 @@ const bridge: MessageBridge = {
         return {
           type: MessageType.ResolveDownloadNamesResult,
           payload: named.ok ? { ok: true, data: { names: named.data } } : named
+        }
+      }
+      case MessageType.DownloadFiles: {
+        const downloaded = await easyRuntime.downloadFiles(message.payload.items, message.payload.selection, message.payload.stripAppNoDot)
+        if (!downloaded.ok) return { type: MessageType.DownloadFilesResult, payload: downloaded }
+        // 浏览器负责落盘：走后台的 chrome.downloads 才会在下载记录里留下条目，文件名也听插件的。
+        const saved = await sendToBackground({
+          type: MessageType.SaveDownload,
+          payload: { url: downloaded.data.downloadUrl, fileName: downloaded.data.fileName }
+        }, 30_000)
+        if (saved?.type !== MessageType.SaveDownloadResult) {
+          const reason = saved?.type === MessageType.Error ? saved.payload.message : '扩展后台没有接住这次下载。'
+          // 兜底走原站的办法：隐藏 iframe 指到取包地址，浏览器照样下载并留记录，文件名以下载记录为准。
+          startArchiveDownload(document, downloaded.data.downloadUrl)
+          return {
+            type: MessageType.DownloadFilesResult,
+            payload: {
+              ok: true,
+              data: {
+                fileName: downloaded.data.fileName,
+                fileCount: downloaded.data.fileCount,
+                notice: `${downloaded.data.notice} 另存走了浏览器直接下载，文件名以下载记录为准（${reason}）`.trim()
+              }
+            }
+          }
+        }
+        return {
+          type: MessageType.DownloadFilesResult,
+          payload: {
+            ok: true,
+            data: {
+              fileName: downloaded.data.fileName,
+              fileCount: downloaded.data.fileCount,
+              notice: downloaded.data.notice
+            }
+          }
         }
       }
       case MessageType.ExportCaseContacts:

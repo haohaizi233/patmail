@@ -1,4 +1,5 @@
 import { isQueryGuid } from '../query/query-validator'
+import { newUuid } from '../utils/uuid'
 import { caseContactSkills } from './skills'
 import type { CustomerRepository } from './repository'
 import type { CustomerQueryProfile } from './types'
@@ -18,7 +19,7 @@ export class CustomerQueryService {
     const existing = input.id ? await this.repository.get(input.id) : null
     const skills = caseContactSkills(name)
     const profile: CustomerQueryProfile = {
-      id: existing?.id ?? input.id ?? `customer-${crypto.randomUUID()}`,
+      id: existing?.id ?? input.id ?? `customer-${newUuid()}`,
       name,
       ...(input.easyCustomerId ? { easyCustomerId: input.easyCustomerId } : {}),
       baseTemplateId: input.baseTemplateId.trim(),

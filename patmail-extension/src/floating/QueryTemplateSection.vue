@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { fileSearchValueLimit, fileSearchTimeoutMs, hasExplicitFileSearchFilter, isFileSearchBusinessField, FILE_SEARCH_REQUEST_FIELDS, FILE_SEARCH_SYSTEM_FIELDS, type FileSearchQuery, type FileSearchTimeoutMs } from '../api/file-search-params'
+import { newUuid } from '../utils/uuid'
 import type { NormalizedDictionary } from '../api/dictionaries'
 import type { HistoryQueryOption } from '../api/query-history'
 import type { CustomerQueryProfile } from '../customer/types'
@@ -16,7 +17,7 @@ import { peekHistoryList, readHistoryList, saveHistoryList } from '../query/hist
 import { historyLabels } from '../query/history-labels'
 import { confirmDialog } from '../app/dialog'
 import { TemplateLoadCoordinator } from '../query/load-coordinator'
-import { optionsForCaseType, looksLikeInternalIds, resolveFileDescriptionDisplay, resolveInternalIdDisplay, resolveMultiLabel } from '../schema'
+import { optionsForCaseType, looksLikeInternalIds, normalizeFileDescriptionValue, previewFileDescription, resolveFileDescriptionDisplay, resolveInternalIdDisplay, resolveMultiLabel } from '../schema'
 import type { FileTypeNode } from '../api/dictionaries'
 import type { QueryTemplate } from '../query/query-types'
 import { isQueryGuid } from '../query/query-validator'
@@ -210,6 +211,14 @@ const canSubmit = computed(() => props.canSearch && !baseMissing.value &&
   (props.mode !== 'customer' || Boolean(selectedCustomer.value?.enabled)) &&
   hasExplicitFileSearchFilter(resolved.value.fields))
 
+/** 查询按钮点不动时，把缺什么直接说清楚，不再只靠按钮变色。 */
+const submitHint = computed(() => {
+  if (!props.canSearch) return ''
+  if (baseMissing.value) return '基础模板不存在或无法解析，换一个模板再查询。'
+  if (props.mode === 'customer' && !selectedCustomer.value?.enabled) return '这位客户的发文配置还没启用，先到客户管理里启用再查。'
+  return '还缺一项能定位的查询条件：我方文号、申请号、客户名称、文件描述、附件名称或日期起止，任填一项才能查询。'
+})
+
 const baseChoices = computed(() => [
   ...historyOptions.value.map(item => ({ id: item.id, name: easyLabel(item), source: 'easy' as const })),
   ...localTemplates.value.map(item => ({ id: item.id, name: item.name, source: 'local' as const }))
@@ -262,6 +271,8 @@ watch(
   () => [formValue('filetemp'), formValue('selfilename1'), formValue('txtfilename1'), pickers.value.fileTemp?.options.length ?? 0],
   () => emit('download-name', currentDownloadSelection())
 )
+/** 下载是查询之后才点的：点的一刻再取一次当前值，查询后改模板/固定字符都按新的来。 */
+defineExpose({ currentDownloadSelection })
 function setOverride(key: string, value: string, fromText = false): void {
   temporaryActive.value = { ...temporaryActive.value, [key]: true }
   temporary.value = { ...temporary.value, [key]: value }
@@ -314,9 +325,38 @@ function fileDisplay(key: string): string {
   }).text
 }
 function fileSummary(key: string): string {
-  const text = fileDisplay(key)
-  // 一行里摆得下就完整显示，放不下的部分交给 CSS 省略号，不再自己截断成「等 N 项」。
-  return text && text !== '未设置' ? text : '未选择'
+  const value = formValue(key)
+  if (!value) return '未选择'
+  const display = resolveFileDescriptionDisplay({
+    savedIds: value,
+    descriptions: fileTypeNodes.value,
+    historyText: displayValues.value.filetype
+  })
+  const preview = previewFileDescription(display)
+  if (!preview.short || preview.short === '未设置') return '未选择'
+  return fileExpanded.value[key] ? display.text : preview.short
+}
+function fileTruncated(key: string): boolean {
+  const value = formValue(key)
+  if (!value) return false
+  return previewFileDescription(resolveFileDescriptionDisplay({
+    savedIds: value,
+    descriptions: fileTypeNodes.value,
+    historyText: displayValues.value.filetype
+  })).truncated
+}
+function toggleFileExpand(key: string): void {
+  fileExpanded.value = { ...fileExpanded.value, [key]: !fileExpanded.value[key] }
+}
+/** 模板和手填的文件描述可能混进名字、空段或中文逗号：查询前换回内部 ID，换不了的点名提示，不再整条拒绝。 */
+function cleanFileDescription(fields: Record<string, string>): void {
+  const value = fields.filetype?.trim() ?? ''
+  if (!value || !fileTypeNodes.value.length) return
+  const { value: ids, dropped } = normalizeFileDescriptionValue(value, fileTypeNodes.value)
+  fileDropNote.value = dropped.length
+    ? `文件描述有 ${dropped.length} 项没对上文件描述树，没有进查询：${dropped.slice(0, 3).join('、')}${dropped.length > 3 ? '…' : ''}`
+    : ''
+  fields.filetype = ids
 }
 function dictionaryOptions(key: string): { value: string; label: string; parent?: string }[] | null {
   if (key === 'filetype' && fileTypeNodes.value.length) {
@@ -418,6 +458,9 @@ function liveScope(): ExpectedAccountScope | null {
 }
 
 const fileTypeMessage = ref('')
+/** 模板里换不回内部 ID 的文件描述项，套用和查询时点名提示，不整条拒绝查询。 */
+const fileDropNote = ref('')
+const fileExpanded = ref<Record<string, boolean>>({})
 let fileTypeSerial = 0
 const selectedCaseTypeId = computed(() => formValue('case_type').trim())
 async function loadFileTypes(caseTypeId: string): Promise<void> {
@@ -545,6 +588,8 @@ function resetBase(): void {
   displayValues.value = {}
   baseFields.value = {}
   baseName.value = ''
+  fileDropNote.value = ''
+  fileExpanded.value = {}
   collapsedByUser.value = {}
   restoreTemplate()
 }
@@ -562,6 +607,7 @@ async function applyBase(id: string, ticket: { id: number; signal: AbortSignal }
     unknownFields.value = { ...(local.unknownFields ?? {}) }
     baseName.value = local.name
     await loadFileTypes(local.fields.case_type ?? '')
+    cleanFileDescription(baseFields.value)
     return
   }
   const easy = historyOptions.value.find(item => item.id === id)
@@ -591,6 +637,7 @@ async function applyBase(id: string, ticket: { id: number; signal: AbortSignal }
   parseWarnings.value = parsed.data.warnings
   baseName.value = response.payload.data.name
   await loadFileTypes(parsed.data.fields.case_type ?? '')
+  cleanFileDescription(baseFields.value)
 }
 
 function openTemplateEditor(template?: QueryTemplate): void {
@@ -630,7 +677,7 @@ async function saveTemplate(): Promise<void> {
     fields,
     updatedAt: now
   } : {
-    id: `local-${crypto.randomUUID()}`,
+    id: `local-${newUuid()}`,
     name,
     source: 'local',
     queryType: 'FileSearch',
@@ -654,7 +701,7 @@ async function importCurrent(): Promise<void> {
   if (!scope) return
   const now = new Date().toISOString()
   const template: QueryTemplate = {
-    id: `local-${crypto.randomUUID()}`,
+    id: `local-${newUuid()}`,
     name: `${baseName.value || '历史模板'} 的本地副本`.slice(0, 80),
     source: 'local',
     ...(historyOptions.value.some(item => item.id === selectedBaseId.value) && isQueryGuid(selectedBaseId.value) ? { sourceQueryId: selectedBaseId.value } : {}),
@@ -684,7 +731,7 @@ async function copySelected(): Promise<void> {
     expectedScope: scope,
     expectedVersion: null,
     template: {
-      id: `local-${crypto.randomUUID()}`,
+      id: `local-${newUuid()}`,
       name: `${baseName.value || '模板'} 副本`.slice(0, 80),
       source: 'local',
       queryType: 'FileSearch',
@@ -816,7 +863,7 @@ async function saveCustomer(): Promise<void> {
     expectedScope: scope,
     ...(draftCustomerId.value ? { expectedRevision: draftCustomerRevision.value } : {}),
     profile: {
-      ...(draftCustomerId.value ? { id: draftCustomerId.value, revision: draftCustomerRevision.value } : { id: `customer-${crypto.randomUUID()}` }),
+      ...(draftCustomerId.value ? { id: draftCustomerId.value, revision: draftCustomerRevision.value } : { id: `customer-${newUuid()}` }),
       name: draftName.value,
       ...(draftEasyId.value.trim() ? { easyCustomerId: draftEasyId.value.trim() } : {}),
       baseTemplateId: draftBaseId.value,
@@ -956,7 +1003,7 @@ async function saveBoth(): Promise<void> {
     displayValues: labels,
     updatedAt: now
   } : {
-    id: `local-${crypto.randomUUID()}`,
+    id: `local-${newUuid()}`,
     name,
     source: 'local',
     queryType: 'FileSearch',
@@ -1074,6 +1121,7 @@ async function checkAgainstPage(): Promise<void> {
 function search(): void {
   if (!canSubmit.value) return
   const fields = { ...resolved.value.fields }
+  cleanFileDescription(fields)
   if (fields.is_close !== undefined) fields.is_close = fields.is_close.trim() === '1' || fields.is_close.trim() === '否' ? '1' : ''
   const size = Number(props.pageSize)
   const pageSize = Number.isSafeInteger(size) && size >= 1 && size <= 100 ? size : 20
@@ -1319,6 +1367,7 @@ watch(selectedCustomerId, () => {
                 <em v-hint.clip="fileDisplay(cell.key) || '未选择'">{{ fileSummary(cell.key) }}</em>
                 <button type="button" class="text-button" @click="showFileTree = !showFileTree">{{ showFileTree ? '收起' : '修改' }}</button>
                 <button v-if="formValue(cell.key)" type="button" class="text-button" @click="setOverride(cell.key, '')">清除</button>
+                <button v-if="fileTruncated(cell.key)" type="button" class="text-button" @click="toggleFileExpand(cell.key)">{{ fileExpanded[cell.key] ? '收起全文' : '展开全部' }}</button>
               </span>
             </div>
             <div v-if="cell.kind === 'files' && showFileTree" class="query-cell span-all">
@@ -1332,9 +1381,11 @@ watch(selectedCustomerId, () => {
         </div>
       </section>
       <p ref="hotSentinel" class="hint">{{ hotLoading ? '正在从原网站读取下面的查询字段…' : hotNote || '继续往下，读取原网站上其余的查询字段。' }}</p>
+      <p v-if="fileDropNote" class="hint">{{ fileDropNote }}</p>
       <p v-if="checkMessage" class="hint">{{ checkMessage }}</p>
       <p v-if="resolved.warnings.length" class="hint">{{ resolved.warnings[0] }}</p>
     </div>
-    <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" @click="search">查询文件</button>
+    <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" :title="submitHint" @click="search">查询文件</button>
+    <p v-if="canSearch && !canSubmit" class="hint" role="status">{{ submitHint }}</p>
   </section>
 </template>

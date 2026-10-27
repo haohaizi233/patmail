@@ -108,6 +108,27 @@ describe('message validation', () => {
     expect(kept).toBe(filetype)
   })
 
+  it('forwards the download request only with its rename switch', () => {
+    const items = [{ fileId: '603ca943-a07a-4894-9461-29dff2d60c4b', fileNo: 'A00110397537', fileName: '202610026334.9-受理通知书.pdf' }]
+    const message = {
+      type: 'WORKSPACE',
+      payload: { action: 'forward', message: { type: 'DOWNLOAD_FILES', payload: { items, selection: null, stripAppNoDot: true } } }
+    }
+    expect(isMessage(message)).toBe(true)
+    // 少了 stripAppNoDot 的旧消息不能过：后台不接住时会报「没有接住转发 DOWNLOAD_FILES」。
+    expect(isMessage({ type: 'WORKSPACE', payload: { action: 'forward', message: { type: 'DOWNLOAD_FILES', payload: { items, selection: null } } } })).toBe(false)
+    expect(isMessage({ type: 'DOWNLOAD_FILES', payload: { items, selection: null, stripAppNoDot: 'yes' } })).toBe(false)
+  })
+
+  it('取包地址只放行 FileHandler 的 guid 链接，另存名不能带路径', () => {
+    const url = 'http://183.36.43.66:88/AjaxServers/FileHandler.ashx?guid=85ebabc1-cf99-490e-b5f7-298a77742012'
+    expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url, fileName: '下载文件-20261026-180000.zip' } })).toBe(true)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url: 'https://evil.test/payload.zip', fileName: 'a.zip' } })).toBe(false)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url: `${url}/../../x`, fileName: 'a.zip' } })).toBe(false)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url, fileName: '../a.zip' } })).toBe(false)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD_RESULT', payload: { ok: true, fileName: '下载文件-20261026-180000.zip' } })).toBe(true)
+  })
+
   it('keeps the file-search timeout chosen on the page when forwarding', () => {
     const message = {
       type: 'WORKSPACE',

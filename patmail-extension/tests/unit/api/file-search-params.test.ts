@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { apiDocsPath } from '../../helpers/project'
 import { describe, expect, it } from 'vitest'
-import { buildGetSearchFilesFromFields, buildGetSearchFilesParams, closedCaseParam } from '../../../src/api/file-search-params'
+import { buildGetSearchFilesFromFields, buildGetSearchFilesParams, closedCaseParam, fileSearchValueLimit } from '../../../src/api/file-search-params'
 
 const documentedNames = [...readFileSync(apiDocsPath('04-文件查询.md'), 'utf8')
   .matchAll(/^\d+ ([A-Za-z_][A-Za-z_0-9]*)$/gm)].map(match => match[1])
@@ -79,5 +79,37 @@ describe('GetSearchFiles 参数 Builder', () => {
     expect(result.data.get('case_type')).toBe('')
     expect(result.data.get('is_pat')).toBe('1')
     expect(result.data.get('colsel')).toBe(';file_id;file_name;')
+  })
+
+  it('文件描述带尾逗号不误杀，真不是内部 ID 时点名报错', () => {
+    const trailing = buildGetSearchFilesFromFields(
+      { case_volume: 'PA-1', filetype: 'EFD8CC29-E202-4463-835D-F29684ECF699,' },
+      { pageIndex: 1, pageSize: 20 }, undefined, () => 1
+    )
+    expect(trailing.ok).toBe(true)
+    if (trailing.ok) expect(trailing.data.get('filetype')).toBe('EFD8CC29-E202-4463-835D-F29684ECF699')
+    const bad = buildGetSearchFilesFromFields(
+      { case_volume: 'PA-1', filetype: '受理通知书,专利证书' },
+      { pageIndex: 1, pageSize: 20 }, undefined, () => 1
+    )
+    expect(bad).toMatchObject({ ok: false, error: { code: 'INVALID_QUERY' } })
+    if (!bad.ok) expect(bad.error.message).toContain('受理通知书')
+  })
+
+  it('keeps a long my-volume list like the site template instead of dropping the whole filter', () => {
+    // 2026-10-26 抓包：原站模板「季华-新申请文档」的 case_volume 是 534 条共 8163 字。
+    // 以前按 4000 字丢掉整条，查询退化成全库（91510 条）。
+    const caseVolume = Array.from({ length: 534 }, (_, index) => `PA25${String(100000 + index)}CND-YS`).join('\n')
+    expect(caseVolume.length).toBeGreaterThan(4000)
+    expect(caseVolume.length).toBeLessThanOrEqual(fileSearchValueLimit('case_volume'))
+    const result = buildGetSearchFilesFromFields(
+      { case_volume: caseVolume, filetype: 'EFD8CC29-E202-4463-835D-F29684ECF699' },
+      { pageIndex: 1, pageSize: 20 }, undefined, () => 1
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.get('case_volume')).toBe(caseVolume)
+    expect(fileSearchValueLimit('app_no')).toBe(fileSearchValueLimit('case_volume'))
+    expect(fileSearchValueLimit('case_name')).toBeLessThan(fileSearchValueLimit('case_volume'))
   })
 })

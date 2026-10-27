@@ -54,13 +54,14 @@ npm run test:regression       # 仅 tests/regression
 npx vitest run tests/unit/mail                # 按目录
 npx vitest run tests/unit/mail/mailset.test.ts # 单个文件
 npx vitest run -t "发文密送"                    # 按用例名过滤
-npm run test:all              # Vitest 全量 + 浏览器 E2E（extension + limit-query）
+npm run test:all              # Vitest 全量 + 浏览器 E2E（extension + limit-query + download）
 ```
 
 ## 浏览器 E2E
 
 ```bash
-npm run test:e2e          # tests/e2e/extension.e2e.mjs + tests/e2e/limit-query.e2e.mjs
+npm run test:e2e          # extension、limit-query、download 三个浏览器脚本
+npm run test:e2e:download # HTTP 页面打包、后台消息、浏览器下载记录及磁盘文件校验
 npm run test:e2e:limits   # 期限监控流程
 npm run test:e2e:docs     # 文档 / Mermaid 展示
 ```
@@ -70,6 +71,7 @@ npm run test:e2e:docs     # 文档 / Mermaid 展示
 - 需要 Playwright Chromium（`npx playwright install chromium`）。
 - 需要先构建扩展：`npm run build`（E2E 从 `dist/` 加载；也可用 `PATMAIL_TEST_DIST=<目录>` 指定其它构建产物）。
 - E2E 会在本地起 fixture 服务并拦截 `http://183.36.43.66:88/**`（EASY 业务地址）：所有业务请求都被 mock，脚本不允许、也不会访问真实业务服务器。
+- 下载脚本通过本地 HTTP 代理响应所有浏览器请求，代理从不转发到真实服务器。使用非 localhost 的 HTTP 页面，保留 `crypto.randomUUID` 不可用的真实条件，并校验 `chrome.downloads` 完成状态和落盘字节。
 - 截图与产物写入 `<项目根>/test-results/`（已在 .gitignore 中忽略）。
 
 ## 新增 Fixture / Mock / Factory

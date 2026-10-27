@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { FileTypeNode } from '../api/dictionaries'
-import { resolveFileDescriptionDisplay, searchFileTypeNodes } from '../schema'
+import { previewFileDescription, resolveFileDescriptionDisplay, searchFileTypeNodes } from '../schema'
 import FileTypeNodeRow from './FileTypeNodeRow.vue'
 
 const props = defineProps<{ nodes: FileTypeNode[]; rootIds: string[]; modelValue: string; historyText?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 const query = ref('')
 const expanded = ref<Record<string, boolean>>({})
+const showAll = ref(false)
 const byId = computed(() => new Map(props.nodes.map(node => [node.id, node])))
 const selected = computed(() => props.modelValue.split(',').map(item => item.trim()).filter(Boolean))
 const matches = computed(() => searchFileTypeNodes(props.nodes, query.value))
 const display = computed(() => resolveFileDescriptionDisplay({
   savedIds: props.modelValue, descriptions: props.nodes, historyText: props.historyText
 }))
+const preview = computed(() => previewFileDescription(display.value))
+const summary = computed(() => (showAll.value ? display.value.text : preview.value.short))
 
 function toggle(id: string): void {
   const next = new Set(selected.value)
@@ -28,7 +31,9 @@ function expand(id: string): void {
 
 <template>
   <div class="file-tree">
-    <p v-if="selected.length" class="hint">已选 {{ selected.length }} 项：{{ display.text }}</p>
+    <p v-if="selected.length" class="hint">已选 {{ selected.length }} 项：{{ summary }}
+      <button v-if="preview.truncated" type="button" class="text-button" @click="showAll = !showAll">{{ showAll ? '收起全文' : '展开全部' }}</button>
+    </p>
     <input v-model="query" type="search" placeholder="搜索文件描述" aria-label="搜索文件描述" />
     <div v-if="query.trim()" class="tree-list">
       <label v-for="id in matches" :key="id" class="check-line">
