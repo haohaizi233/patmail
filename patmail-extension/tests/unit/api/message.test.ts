@@ -122,11 +122,27 @@ describe('message validation', () => {
 
   it('取包地址只放行 FileHandler 的 guid 链接，另存名不能带路径', () => {
     const url = 'http://183.36.43.66:88/AjaxServers/FileHandler.ashx?guid=85ebabc1-cf99-490e-b5f7-298a77742012'
+    const progressId = '11111111-1111-4111-8111-111111111111'
     expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url, fileName: '下载文件-20261026-180000.zip' } })).toBe(true)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url, fileName: '下载文件-20261026-180000.zip', progressId } })).toBe(true)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url, fileName: 'a.zip', progressId: 'not-a-guid' } })).toBe(false)
     expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url: 'https://evil.test/payload.zip', fileName: 'a.zip' } })).toBe(false)
     expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url: `${url}/../../x`, fileName: 'a.zip' } })).toBe(false)
     expect(isMessage({ type: 'SAVE_DOWNLOAD', payload: { url, fileName: '../a.zip' } })).toBe(false)
     expect(isMessage({ type: 'SAVE_DOWNLOAD_RESULT', payload: { ok: true, fileName: '下载文件-20261026-180000.zip' } })).toBe(true)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD_RESULT', payload: { ok: true, fileName: '下载文件-20261026-180000.zip', downloadId: 12 } })).toBe(true)
+    expect(isMessage({ type: 'SAVE_DOWNLOAD_RESULT', payload: { ok: true, fileName: 'a.zip', downloadId: -1 } })).toBe(false)
+  })
+
+  it('下载状态查询只认任务号和三态结果', () => {
+    expect(isMessage({ type: 'DOWNLOAD_STATE', payload: { downloadId: 12 } })).toBe(true)
+    expect(isMessage({ type: 'DOWNLOAD_STATE', payload: { downloadId: -1 } })).toBe(false)
+    expect(isMessage({ type: 'DOWNLOAD_STATE', payload: { downloadId: 12, extra: 1 } })).toBe(false)
+    expect(isMessage({ type: 'DOWNLOAD_STATE_RESULT', payload: { ok: true, state: 'inProgress', receivedBytes: 10, totalBytes: 100 } })).toBe(true)
+    expect(isMessage({ type: 'DOWNLOAD_STATE_RESULT', payload: { ok: true, state: 'complete', receivedBytes: 100, totalBytes: null } })).toBe(true)
+    expect(isMessage({ type: 'DOWNLOAD_STATE_RESULT', payload: { ok: true, state: 'interrupted', receivedBytes: 3, totalBytes: null, error: 'NETWORK_FAILED' } })).toBe(true)
+    expect(isMessage({ type: 'DOWNLOAD_STATE_RESULT', payload: { ok: true, state: 'paused', receivedBytes: 3, totalBytes: null } })).toBe(false)
+    expect(isMessage({ type: 'DOWNLOAD_STATE_RESULT', payload: { ok: true, state: 'complete', receivedBytes: -1, totalBytes: null } })).toBe(false)
   })
 
   it('keeps the file-search timeout chosen on the page when forwarding', () => {

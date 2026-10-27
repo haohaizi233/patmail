@@ -48,12 +48,13 @@ const server = http.createServer(async (req, res) => {
   } else if (call === 'DownLoad') {
     downloadParams = new URLSearchParams(body)
     res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-    res.write('  ')
-    await new Promise(resolve => setTimeout(resolve, 250))
-    const json = JSON.stringify(packed)
-    res.write(json.slice(0, 60))
-    await new Promise(resolve => setTimeout(resolve, 250))
-    res.end(json.slice(60))
+    // 分块发送打包 JSON：块间留时间，验证插件按真实字节流式上报，不等整包才报一次。
+    const json = JSON.stringify({ ...packed, pad: 'p'.repeat(6000) })
+    for (const [start, end] of [[0, 800], [800, 2400], [2400, 4800], [4800, Infinity]]) {
+      res.write(json.slice(start, end))
+      if (end !== Infinity) await new Promise(resolve => setTimeout(resolve, 700))
+    }
+    res.end()
   } else if (url.pathname.endsWith('FileHandler.ashx')) {
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', 'attachment; filename="fixture.zip"')
@@ -128,10 +129,13 @@ try {
   assert.equal(result.type, 'DOWNLOAD_FILES_RESULT')
   assert.equal(result.payload.ok, true)
   assert.equal(result.payload.data.fileCount, 141)
-  assert.equal(result.payload.data.notice, '', '后台应直接接住下载，不能靠 iframe 假成功')
+  // 最终结果要带浏览器下载终态：压缩包保存完成才算完成，不能只报「已交给浏览器」。
+  assert.match(result.payload.data.notice, /浏览器下载完成/, '最终结果要回报浏览器下载完成')
+  assert(!/另存走了浏览器直接下载/.test(result.payload.data.notice), '后台应直接接住下载，不能靠 iframe 假成功')
   assert.equal(calls.filter(call => call.call === 'DownLoad').length, 1)
-  assert.equal(calls.filter(call => call.call === 'GetFileName').length, 8)
-  assert.equal(peakNames, 6)
+  // 命名一批 100 个：141 个文件是 2 批（100 + 41）。
+  assert.equal(calls.filter(call => call.call === 'GetFileName').length, 2)
+  assert.equal(peakNames, 2)
   assert.equal(downloadParams.get('file_no'), files.map(file => file.fileNo).join(';'))
   assert.equal(downloadParams.get('file_name'), files.map((_, index) => `file-${index + 1}.pdf`).join(';'))
   const naming = progress.filter(item => item.phase === 'naming')
@@ -142,6 +146,10 @@ try {
   const received = progress.filter(item => item.phase === 'packing' && item.receivedBytes > 0).map(item => item.receivedBytes)
   assert(received.length >= 2 && received.at(-1) > received[0], '真实流式响应字节要逐步上报')
   assert(progress.some(item => item.phase === 'saving'))
+  // 浏览器下载阶段的流式输出：至少要报出下载终态，长传输时还有 inProgress 字节进度。
+  const transfer = progress.filter(item => item.phase === 'downloading')
+  assert(transfer.some(item => item.state === 'complete'), '下载阶段要流式回报并给出完成终态')
+  assert.equal(transfer.filter(item => item.state === 'complete' || item.state === 'interrupted').length, 1, '终态只能报一次')
   assert.equal(calls.filter(call => call.path.endsWith('FileHandler.ashx')).length, 1)
   assert.equal(downloads.length, 1)
   assert.equal(downloads[0].state, 'complete')

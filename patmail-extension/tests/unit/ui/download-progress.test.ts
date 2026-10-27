@@ -15,4 +15,13 @@ describe('下载阶段进度', () => {
       expect(isDownloadProgress(value)).toBe(false)
     }
   })
+
+  it('浏览器下载阶段按字节上报并带终态', () => {
+    expect(isDownloadProgress({ phase: 'downloading', done: 0, total: 1, state: 'inProgress', receivedBytes: 4096, totalBytes: 65536 })).toBe(true)
+    expect(isDownloadProgress({ phase: 'downloading', done: 0, total: 1, state: 'complete', receivedBytes: 65536, totalBytes: 65536, elapsedMs: 9000 })).toBe(true)
+    expect(isDownloadProgress({ phase: 'downloading', done: 0, total: 1, state: 'interrupted', receivedBytes: 100 })).toBe(true)
+    expect(isDownloadProgress({ phase: 'downloading', done: 0, total: 1, state: 'inProgress', totalBytes: -1 })).toBe(false)
+    expect(isDownloadProgress({ phase: 'downloading', done: 0, total: 1, state: 'paused' })).toBe(false)
+    expect(isDownloadProgress({ phase: 'downloading', done: 0, total: 1 })).toBe(true)
+  })
 })

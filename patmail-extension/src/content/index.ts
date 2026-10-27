@@ -27,8 +27,8 @@ function noticeOf(packing: string, tail: string): string {
   return [packing.trim(), tail.trim()].filter(Boolean).join(' ').slice(0, 200)
 }
 
-function formatMegabytes(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+function formatBytes(bytes: number): string {
+  return bytes < 1024 ? `${bytes} 字节` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 function hasSearchTable(doc: Document): boolean {
@@ -344,7 +344,7 @@ const bridge: MessageBridge = {
               fileName: downloaded.data.fileName,
               fileCount: downloaded.data.fileCount,
               notice: noticeOf(downloaded.data.notice, outcome
-                ? `浏览器下载完成（${formatMegabytes(outcome.receivedBytes)}）。`
+                ? `浏览器下载完成（${formatBytes(outcome.receivedBytes)}）。`
                 : '已交给浏览器下载，进度看浏览器右上角下载记录。')
             }
           }

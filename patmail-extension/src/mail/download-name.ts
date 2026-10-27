@@ -60,8 +60,7 @@ export interface DownloadNameOptions {
   signal?: AbortSignal
 }
 
-const COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,40}$
-/
+const COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/
 /** 命名一批 100 个：20 个一批时 1605 个文件要打 81 次往返、实测七分钟，减少往返才是主要提速；名称仍由原站逐个生成。 */
 export const NAME_BATCH = 100
 const NAME_CONCURRENCY = 6
