@@ -62,6 +62,8 @@ npm run test:all              # Vitest 全量 + 浏览器 E2E（extension + limi
 ```bash
 npm run test:e2e          # extension、limit-query、download 三个浏览器脚本
 npm run test:e2e:download # HTTP 页面打包、后台消息、浏览器下载记录及磁盘文件校验
+npm run test:e2e:download-editor # 选择五段模板、修改固定字符，核验GetFileName收到完整当前配方
+npm run test:e2e:files    # 1597条文件全选：100条分页、复用已读页、六路在途、选中数量和完成提示
 npm run test:e2e:limits   # 期限监控流程
 npm run test:e2e:docs     # 文档 / Mermaid 展示
 ```
@@ -72,6 +74,10 @@ npm run test:e2e:docs     # 文档 / Mermaid 展示
 - 需要先构建扩展：`npm run build`（E2E 从 `dist/` 加载；也可用 `PATMAIL_TEST_DIST=<目录>` 指定其它构建产物）。
 - E2E 会在本地起 fixture 服务并拦截 `http://183.36.43.66:88/**`（EASY 业务地址）：所有业务请求都被 mock，脚本不允许、也不会访问真实业务服务器。
 - 下载脚本通过本地 HTTP 代理响应所有浏览器请求，代理从不转发到真实服务器。使用非 localhost 的 HTTP 页面，保留 `crypto.randomUUID` 不可用的真实条件，并校验 `chrome.downloads` 完成状态和落盘字节。
+- 下载回归以141个文件触发8批命名，断言实际并发峰值为6；故意让批次乱序返回，逐项校验编号与名称对应，只提交一次压缩请求，并检查命名、压缩和交给浏览器三个进度阶段。
+- v1.4.5下载回归先确认短受理，再独立接收最终结果；夹具分块发送打包JSON，验证响应字节持续增长，最后仍由浏览器直接取包落盘。长时间准备另用假时钟覆盖6分钟首字节等待、7分钟响应流和超过30分钟的任务状态续期，不让测试真的等待半小时。
+- 文件全选脚本从工作台真实按钮进入，保留后台、内容脚本及查询来源记录；拦截全部外部 HTTP 请求。1597条夹具先查询100条，再确认只补读15页、同时在途峰值为6、1597个不同文件全部选中。
+- 文件全选夹具包含原站折叠后的文件条件行；校对字段后四个主条件仍可见，全选完成超过旧版2秒自动清除期限后，彩虹条仍保留完成状态。
 - 截图与产物写入 `<项目根>/test-results/`（已在 .gitignore 中忽略）。
 
 ## 新增 Fixture / Mock / Factory

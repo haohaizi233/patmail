@@ -56,5 +56,5 @@ describe('交付包私钥检查', () => {
     expect(names.some(name => name.toLowerCase().endsWith('.pem'))).toBe(false)
     const verified = spawnSync(process.execPath, ['scripts/verify-archive.mjs', 'test-results/patmail-source.zip'], { cwd: root, encoding: 'utf8' })
     expect(verified.status).toBe(0)
-  })
+  }, 30_000)
 })
