@@ -40,8 +40,9 @@ const server = http.createServer(async (req, res) => {
     const ids = params.get('file_ids').split(';')
     activeNames++
     peakNames = Math.max(peakNames, activeNames)
-    // 让后面的批次先返回，不能只验证按序完成的情况。
-    await new Promise(resolve => setTimeout(resolve, 180 - positions.get(ids[0])))
+    // 让后面的批次先返回，不能只验证按序完成的情况。响应窗口要够长（1 秒级），
+    // 浏览器给同源短请求开连接偶有先后，窗口太短会把并发派发误测成串行。
+    await new Promise(resolve => setTimeout(resolve, 1500 - positions.get(ids[0])))
     res.setHeader('Content-Type', 'text/plain; charset=utf-8')
     res.end(JSON.stringify({ ClientInfo: { IsLogin: true, Status: true, Result: false }, file_names: ids.map(id => `file-${positions.get(id)}.pdf`).join(';') }))
     activeNames--
