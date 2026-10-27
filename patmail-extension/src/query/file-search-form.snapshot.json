@@ -21685,7 +21685,7 @@
       "label": "专利标签",
       "section": "case",
       "advanced": false,
-      "control": "text",
+      "control": "picker",
       "visible": true,
       "hiddenBy": [],
       "options": []
@@ -22508,7 +22508,7 @@
       "label": "案件流程人员",
       "section": "case",
       "advanced": false,
-      "control": "text",
+      "control": "picker",
       "visible": false,
       "hiddenBy": [
         "tr.ZTDZ_1118"
@@ -46897,7 +46897,7 @@
       "label": "复核人",
       "section": "file",
       "advanced": false,
-      "control": "text",
+      "control": "picker",
       "visible": false,
       "hiddenBy": [
         "tr.PTE.tr_hide"
@@ -46945,7 +46945,7 @@
       "label": "制作者",
       "section": "file",
       "advanced": false,
-      "control": "text",
+      "control": "picker",
       "visible": false,
       "hiddenBy": [
         "tr.PTE.tr_hide"
@@ -46993,7 +46993,7 @@
       "label": "审核者",
       "section": "file",
       "advanced": false,
-      "control": "text",
+      "control": "picker",
       "visible": false,
       "hiddenBy": [
         "tr.PTE.tr_hide"
@@ -47041,7 +47041,7 @@
       "label": "分配者",
       "section": "file",
       "advanced": false,
-      "control": "text",
+      "control": "picker",
       "visible": false,
       "hiddenBy": [
         "tr.PTE.tr_hide"

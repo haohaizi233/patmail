@@ -1,4 +1,5 @@
 import { isFileSearchBusinessField } from '../api/file-search-params'
+import { FILE_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
 import type { FileSearchFormField } from '../shared/message'
 import { formFieldKey } from './form-page'
 import { primaryQueryKeys, type QueryCell } from './form-layout'
@@ -8,7 +9,9 @@ function toCell(field: FileSearchFormField, key: string): QueryCell | null {
   if (key === 'filetype') return { kind: 'files', key, label }
   if (field.control === 'check') return { kind: 'checks', label, items: [{ key, label }] }
   if (field.control === 'select') return { kind: 'select', key, label }
-  if (field.control === 'picker') return { kind: 'named', key, label }
+  // 原站 TreeUser 字段（专利标签这种）在快照/缓存里可能记成 text：控件是接口回来后才异步初始化的。
+  // 认识这个字段的下拉来源就按树形框渲染，不能退化成自由文本——原站只收内部 ID，手打名字查不到。
+  if (field.control === 'picker' || FILE_PICKER_FIELDS[key]) return { kind: 'named', key, label }
   if (field.control === 'text') return { kind: 'text', key, label }
   return null
 }

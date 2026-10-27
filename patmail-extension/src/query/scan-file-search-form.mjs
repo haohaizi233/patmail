@@ -29,7 +29,8 @@ export function scanFileSearchForm(doc) {
     if (tag === 'select') return 'select'
     if (tag === 'textarea') return 'text'
     if (node.type === 'checkbox') return 'check'
-    if (node.readOnly || node.getAttribute('readonly') != null || node.classList.contains('li_down')) return 'picker'
+    // TreeUser 的输入框可搜索、不只读，判 picker 要看 tree_id：树是接口回来后才异步建的，扫描时选项可能是空的。
+    if (node.getAttribute('tree_id') || node.readOnly || node.getAttribute('readonly') != null || node.classList.contains('li_down')) return 'picker'
     return 'text'
   }
   function treeRoot(node) {
