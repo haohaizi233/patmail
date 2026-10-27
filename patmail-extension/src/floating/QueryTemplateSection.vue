@@ -26,7 +26,7 @@ import { MessageType, type FileSearchFormField, type MessageBridge } from '../sh
 import { useWorkspace } from '../app/composables/useWorkspace'
 import { hasOptionTree } from '../query/option-tree'
 import { describePickerReceipt, FILE_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
-import { selectionFromControls, type FileDownloadSelection } from '../mail/download-name'
+import { downloadNameParts, selectionFromNameParts, selectionFromControls, type DownloadNamePart, type FileDownloadSelection } from '../mail/download-name'
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import { sameOptionValue } from '../shell/components/theme-select'
 import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
@@ -47,7 +47,7 @@ const props = withDefaults(defineProps<{
 }>(), { manage: true, seed: null, seedToken: 0 })
 const emit = defineEmits<{
   search: [query: FileSearchQuery, timeoutMs: FileSearchTimeoutMs]
-  'download-name': [selection: FileDownloadSelection | null]
+  'download-name': [selection: FileDownloadSelection | null, problem: string]
 }>()
 
 const TIMEOUT_KEY = 'patmail.fileSearch.timeoutMs'
@@ -249,7 +249,7 @@ function formValue(key: string): string {
 function downloadChoices(key: string): { value: string; label: string }[] {
   return optionsFor(key).filter(item => item.label.replace(/[\s\-—_]/g, '') !== '请选择')
 }
-function currentDownloadSelection(): FileDownloadSelection | null {
+function storedDownloadSelection(): FileDownloadSelection | null {
   const templateId = formValue('filetemp').trim()
   const column = formValue('selfilename1').trim()
   const fixedText = formValue('txtfilename1').trim()
@@ -267,10 +267,56 @@ function currentDownloadSelection(): FileDownloadSelection | null {
     template: recipe
   })
 }
-watch(
-  () => [formValue('filetemp'), formValue('selfilename1'), formValue('txtfilename1'), pickers.value.fileTemp?.options.length ?? 0],
-  () => emit('download-name', currentDownloadSelection())
-)
+const nameParts = ref<DownloadNamePart[]>([{ column: '', fixedText: '' }])
+const namePartsEdited = ref(false)
+const downloadSource = computed(() => ({
+  templateId: formValue('filetemp'), column: formValue('selfilename1'), fixedText: formValue('txtfilename1'),
+  selection: storedDownloadSelection()
+}))
+watch(downloadSource, (next, previous) => {
+  const switched = !previous || next.templateId !== previous.templateId || next.column !== previous.column || next.fixedText !== previous.fixedText
+  // 元数据异步到达时补齐配方；同一模板的字典刷新不能覆盖用户正在编辑的内容。
+  if (switched || !namePartsEdited.value) {
+    nameParts.value = downloadNameParts(next.selection)
+    namePartsEdited.value = false
+  }
+}, { immediate: true })
+function currentDownloadSelection(): FileDownloadSelection | null {
+  return namePartsEdited.value
+    ? selectionFromNameParts(nameParts.value, storedDownloadSelection()?.label)
+    : storedDownloadSelection()
+}
+const downloadNameProblem = computed(() => {
+  try { currentDownloadSelection(); return '' } catch (error) { return error instanceof Error ? error.message : '下载名称无效。' }
+})
+watch(() => [downloadSource.value, nameParts.value, namePartsEdited.value], () => {
+  emit('download-name', downloadNameProblem.value ? null : currentDownloadSelection(), downloadNameProblem.value)
+}, { deep: true })
+function chooseDownloadTemplate(templateId: string): void {
+  setOverride('filetemp', templateId)
+  // 用户明确重选同一项也要还原；字典后台刷新仍走上面的保留编辑逻辑。
+  namePartsEdited.value = false
+  nameParts.value = downloadNameParts(storedDownloadSelection())
+}
+function editNamePart(index: number, patch: Partial<DownloadNamePart>): void {
+  namePartsEdited.value = true
+  nameParts.value = nameParts.value.map((part, at) => at === index ? { ...part, ...patch } : part)
+}
+function addNamePart(): void {
+  if (nameParts.value.length >= 31) return
+  namePartsEdited.value = true
+  nameParts.value = [...nameParts.value, { column: '', fixedText: '' }]
+}
+function removeNamePart(index: number): void {
+  namePartsEdited.value = true
+  nameParts.value = nameParts.value.filter((_, at) => at !== index)
+}
+function namePartChoices(column: string): { value: string; label: string }[] {
+  const options = downloadChoices('selfilename1').map(item => item.value ? item : { ...item, label: '请选择名称字段' })
+  if (!options.some(item => item.value === 'fixtxt')) options.push({ value: 'fixtxt', label: '固定字符' })
+  if (column && !options.some(item => item.value === column)) options.push({ value: column, label: column })
+  return options
+}
 /** 下载是查询之后才点的：点的一刻再取一次当前值，查询后改模板/固定字符都按新的来。 */
 defineExpose({ currentDownloadSelection })
 function setOverride(key: string, value: string, fromText = false): void {
@@ -421,6 +467,8 @@ function restoreTemplate(): void {
   temporaryActive.value = {}
   temporary.value = {}
   typedKeys.value = {}
+  namePartsEdited.value = false
+  nameParts.value = downloadNameParts(storedDownloadSelection())
   showFileTree.value = false
 }
 function dictionaryFor(key: string): { name: string; dictionary: NormalizedDictionary } | undefined {
@@ -1352,14 +1400,22 @@ watch(selectedCustomerId, () => {
             <div v-else-if="cell.kind === 'download-name'" :class="cellClass(cell)">
               <span>设置下载文件名称</span>
               <span class="download-name-row">
-                <ThemeSelect :model-value="formValue('filetemp')" :options="downloadChoices('filetemp')" @update:model-value="setOverride('filetemp', String($event))" />
-                <ThemeSelect :model-value="formValue('selfilename1')" :options="downloadChoices('selfilename1')" @update:model-value="setOverride('selfilename1', String($event))" />
-                <input v-if="formValue('selfilename1') === 'fixtxt'" :value="formValue('txtfilename1')" type="text" placeholder="固定字符" @input="onText('txtfilename1', $event)" />
+                <ThemeSelect class="download-template-select" aria-label="下载名称模板" :model-value="formValue('filetemp')" :options="downloadChoices('filetemp')" @update:model-value="chooseDownloadTemplate(String($event))" />
+                <span class="download-name-parts">
+                  <span v-for="(part, index) in nameParts" :key="index" class="download-name-part">
+                    <span v-if="index" class="download-part-plus" aria-hidden="true">+</span>
+                    <ThemeSelect :aria-label="`下载名称第${index + 1}段`" :model-value="part.column" :options="namePartChoices(part.column)" @update:model-value="editNamePart(index, { column: String($event) })" />
+                    <input v-if="part.column === 'fixtxt'" class="download-part-text" :aria-label="`第${index + 1}段固定字符`" :value="part.fixedText" maxlength="80" type="text" placeholder="固定字符" @input="editNamePart(index, { fixedText: ($event.target as HTMLInputElement).value })" />
+                    <button v-if="nameParts.length > 1" type="button" class="text-button download-part-remove" :aria-label="`删除第${index + 1}段`" @click="removeNamePart(index)">×</button>
+                  </span>
+                  <button type="button" class="text-button download-part-add" :disabled="nameParts.length >= 31" @click="addNamePart">添加名称段</button>
+                </span>
                 <input :value="formValue('tempName')" type="text" placeholder="模板名称" @input="onText('tempName', $event)" />
                 <button type="button" class="download-save" @click="downloadHint = '下载名称的保存和删除写在原网站账号上，这里先接上选择，不从插件提交。'">保存下载名称</button>
               </span>
               <p class="download-note">此处可设置文件下载名称模板，填写模板名称保存后，可在第一个下拉中进行选择。模板为执行保存的用户专有，其他用户不共享。选中的名称会带到后面的发文，用来生成文件名，不作为查询条件。</p>
               <p v-if="downloadHint" class="hint">{{ downloadHint }}</p>
+              <p v-if="downloadNameProblem" class="download-name-error" role="alert">{{ downloadNameProblem }}</p>
             </div>
             <div v-else :class="cellClass(cell)">
               <span>{{ cell.label }}</span>

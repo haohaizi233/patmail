@@ -173,7 +173,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .limit-form .form-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .check-group { display: flex; flex-wrap: wrap; gap: 6px 12px; }
 .download-name-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
-.download-name-row .theme-select { flex: 1 1 160px; min-width: 140px; }
+.download-name-row > .download-template-select { flex: 0 1 220px; min-width: 150px; }
+.download-name-parts { display: flex; flex: 1 1 440px; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.download-name-part { display: inline-flex; gap: 5px; align-items: center; min-width: 0; max-width: 100%; }
+.download-name-part .theme-select { flex: 0 1 130px; width: 130px; min-width: 105px; }
+.download-name-row .download-part-text { flex: 0 1 90px; width: 90px; min-width: 45px; }
+.download-part-plus { color: #d480a0; }
+.download-part-remove { padding: 2px 4px; }
+.download-name-error { grid-column: 2; margin: 0; color: #d32f55; font-size: 12px; }
 .download-name-row input { flex: 0 1 140px; width: auto; }
 .download-save { flex: none; min-height: 31px; padding: 4px 10px; border: 0; border-radius: 8px; background: #22a06b; color: #fff; font: inherit; font-size: 12px; cursor: pointer; }
 .download-note, .query-cell > .download-note + .hint { grid-column: 2; margin: 0; color: #e11d48; font-size: 12px; }

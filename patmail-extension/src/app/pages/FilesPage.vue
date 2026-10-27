@@ -13,6 +13,11 @@ const { connection } = useWorkspace()
 const ready = computed(() => connection.value.sessionStatus === 'authenticated')
 const fields = ref<Record<string, string>>({})
 const downloadName = ref<FileDownloadSelection | null>(null)
+const downloadNameProblem = ref('')
+function onDownloadName(selection: FileDownloadSelection | null, problem: string): void {
+  downloadName.value = selection
+  downloadNameProblem.value = problem
+}
 
 function onSearched(query: FileSearchQuery): void {
   fields.value = snapshotFromFileQuery(query)
@@ -27,8 +32,8 @@ function onSearched(query: FileSearchQuery): void {
   </section>
   <template v-else>
     <p class="hint">先套模板，再手工改条件。文件描述和发文类型是一对一，对照表在「发文映射」，可以直接看，也可以随时改。</p>
-    <FileSearchPanel :page-origin="connection.easyOrigin" :show-session="false" @searched="onSearched" @download-name="downloadName = $event">
-      <BindQueryBar surface="file" :fields="fields" :download-name="downloadName" />
+    <FileSearchPanel :page-origin="connection.easyOrigin" :show-session="false" @searched="onSearched" @download-name="onDownloadName">
+      <BindQueryBar surface="file" :fields="fields" :download-name="downloadName" :download-name-problem="downloadNameProblem" />
     </FileSearchPanel>
   </template>
 </template>

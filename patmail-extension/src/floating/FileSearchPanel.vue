@@ -20,7 +20,7 @@ const props = withDefaults(defineProps<{
 }>(), { showSession: true, seed: null, seedToken: 0 })
 const emit = defineEmits<{
   searched: [query: FileSearchRequest]
-  'download-name': [selection: FileDownloadSelection | null]
+  'download-name': [selection: FileDownloadSelection | null, problem: string]
 }>()
 const bridge = inject<MessageBridge>('bridge')
 const workspace = useWorkspace()
@@ -164,7 +164,7 @@ onBeforeUnmount(() => {
       :seed-token="seedToken"
       :epoch="epoch"
       @searched="emit('searched', $event)"
-      @download-name="emit('download-name', $event)"
+      @download-name="(selection, problem) => emit('download-name', selection, problem)"
       @plan="showMail = true"
       @review="showSelected = !showSelected"
     >

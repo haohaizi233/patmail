@@ -15,7 +15,8 @@ const props = withDefaults(defineProps<{
   templateId?: string
   showLoad?: boolean
   downloadName?: FileDownloadSelection | null
-}>(), { showLoad: false, downloadName: null })
+  downloadNameProblem?: string
+}>(), { showLoad: false, downloadName: null, downloadNameProblem: '' })
 const emit = defineEmits<{ load: [fields: Record<string, string>] }>()
 
 const { connection, customers, call } = useWorkspace()
@@ -49,6 +50,7 @@ function loadBound(): void {
 
 async function bind(): Promise<void> {
   message.value = ''
+  if (props.surface === 'file' && props.downloadNameProblem) { message.value = props.downloadNameProblem; return }
   const profile = current.value
   if (!profile) { message.value = '先在客户管理里添加客户。'; return }
   if (!ready.value) { message.value = '还没有可绑定的条件。先选择处理事项或填入我方文号，也可以传入 PCT 表格。'; return }
@@ -89,9 +91,10 @@ async function bind(): Promise<void> {
       </label>
       <p class="hint">{{ ready ? `将绑定：${summarizeBoundQuery(fields)}` : '还没有可绑定的条件。填写我方文号，或从列表选择处理事项，也可以传入 PCT 表格。' }}</p>
       <p v-if="surface === 'file' && downloadNameText(downloadName)" class="hint">发文文件名：{{ downloadNameText(downloadName) }}</p>
+      <p v-if="surface === 'file' && downloadNameProblem" class="hint" role="alert">{{ downloadNameProblem }}</p>
       <p v-if="current?.boundQuery" class="hint">当前绑定：{{ summarizeBoundQuery(current.boundQuery) }}</p>
       <div class="filters">
-        <button class="solid" type="button" :disabled="saving" @click="bind">{{ saving ? '正在绑定…' : `将查询条件绑定到${current?.name || '所选客户'}` }}</button>
+        <button class="solid" type="button" :disabled="saving || (surface === 'file' && Boolean(downloadNameProblem))" @click="bind">{{ saving ? '正在绑定…' : `将查询条件绑定到${current?.name || '所选客户'}` }}</button>
         <button v-if="showLoad" class="ghost" type="button" :disabled="!current" @click="loadBound">载入已绑定条件</button>
       </div>
     </template>
