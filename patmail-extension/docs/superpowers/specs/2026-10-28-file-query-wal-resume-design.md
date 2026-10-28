@@ -73,4 +73,4 @@
 - HTTP Range/If-Range/206/Content-Range：[RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-14)。
 - 浏览器是否可恢复及resume接口：[Chrome downloads](https://developer.chrome.com/docs/extensions/reference/api/downloads)。
 
-这是新增持久下载协议和恢复链路，当前只完成排查与设计，产品代码尚未实施。
+已按此方案实施，验证记录见对应实施计划；当前使用与恢复边界见 [v1.5.0恢复说明](../../file-recovery-resume-2026-10-28.md)。千件真实下载沿用历史审计证据，本次续传使用隔离浏览器夹具验证。

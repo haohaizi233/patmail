@@ -59,12 +59,17 @@ npm run test:all              # Vitest 全量 + 浏览器 E2E（extension + limi
 
 ## 浏览器 E2E
 
+测试默认把构建复制到独立的 `test-results/extension-*` 路径，隔离扩展 Origin，避免夹具账号影响正在使用的扩展下载授权。`PATMAIL_TEST_DIST` 可指定已准备的隔离构建；不要指向用户正在使用的扩展路径并行测试。
+
+下载回归可设置 `PATMAIL_TEST_BRIDGE_PORT` 使用独立端口；测试会为对应扩展副本替换本机地址，并创建独立磁盘缓存，保留真实用户桥接继续运行。性能合成对照：`python tests/stream_bridge_metadata_benchmark.py --chunks 100`。
+
 ```bash
 npm run test:e2e          # extension、limit-query、download 三个浏览器脚本
 npm run test:e2e:download # HTTP 页面打包、后台消息、浏览器下载记录及磁盘文件校验
 npm run test:e2e:stream-download # 81文件流水ZIP、原生字节提前增长、独立CRC解包及浏览器取消；需要Python 3
 npm run test:stream-bridge # Python标准库桥接的HTTP协议、背压、取消与来源校验
 npm run test:e2e:download-editor # 选择五段模板、修改固定字符，核验GetFileName收到完整当前配方
+npm run test:e2e:durable-download # 磁盘缓存重放、源附件Range、同downloadId续传及ZIP CRC
 npm run test:e2e:files    # 1597条文件全选：100条分页、复用已读页、六路在途、选中数量和完成提示
 npm run test:e2e:limits   # 期限监控流程
 npm run test:e2e:docs     # 文档 / Mermaid 展示
