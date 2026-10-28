@@ -89,6 +89,7 @@ const resultsSection = ref<HTMLElement | null>(null)
 const lastQuery = ref<FileSearchQuery | null>(null)
 const resultTemplateName = ref('')
 let generation = 0
+let searchGeneration = 0
 
 const recoveryNotice = ref('')
 const needsRevalidation = ref(false)
@@ -128,10 +129,18 @@ function scheduleSurface(): void {
 }
 watch(selected, () => { if (recoveryReady) void protectSurface().catch(() => {}) }, { deep: true })
 watch([stripAppNoDot, downloadSelection], scheduleSurface, { deep: true })
+function pauseActiveDownload(): void {
+  const task = activeTask.value
+  if (!task || task.status !== 'running') return
+  task.status = 'paused'
+  void protectSurface().catch(() => {})
+  if (bridge) void bridge.request({ type: MessageType.PauseDownload, payload: { taskId: task.id } }).catch(() => {})
+}
 watch(() => props.canSearch, allowed => {
   if (allowed) return
   stopBulk()
   generation += 1
+  pauseActiveDownload()
   downloadWait?.abort()
   if (activeTask.value?.status === 'running') activeTask.value.status = 'paused'
   needsRevalidation.value = Boolean(result.value)
@@ -188,6 +197,7 @@ async function showResults(): Promise<void> {
 async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs, templateName?: string): Promise<void> {
   if (timeoutMs !== undefined) searchTimeoutMs.value = fileSearchTimeoutMs(timeoutMs)
   if (!bridge || !props.canSearch) return
+  searchGeneration += 1
   stopBulk()
   const preserveRecoveredSelection = needsRevalidation.value && run === 'continue'
   if (needsRevalidation.value) { querySessionId.value = ''; run = 'start' }
@@ -304,7 +314,7 @@ function onDownloadName(selection: FileDownloadSelection | null, problem = ''): 
 }
 
 /** 勾选的文件按下载名称打包下载；包里文件名的申请号校验点已去掉。 */
-async function downloadSelected(resume = false): Promise<void> {
+async function downloadSelected(resume = false, saveAsNew = false): Promise<void> {
   const frozen = resume ? activeTask.value : null
   const files = frozen ? frozen.items : Object.values(selected.value)
   if (!bridge || !props.canSearch || needsRevalidation.value || !files.length || downloading.value || selectingAll.value) return
@@ -322,7 +332,11 @@ async function downloadSelected(resume = false): Promise<void> {
   }
   const task: FileQueryTask = frozen ?? { id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' }
   activeTask.value = task
+  const startingScope = snapshotScope
+  const startingGeneration = generation
   try { await protectSurface() } catch { toolbarNotice.value = '下载尚未启动：工作面没有持久保存。'; return }
+  if (disposed || !props.canSearch || needsRevalidation.value || snapshotScope !== startingScope ||
+    generation !== startingGeneration || activeTask.value?.id !== task.id) return
   task.status = 'running'
   downloading.value = true
   const wait = downloadWait = new AbortController()
@@ -359,6 +373,7 @@ async function downloadSelected(resume = false): Promise<void> {
       payload: {
         items: task.items,
         taskId: task.id,
+        ...(saveAsNew ? { saveAsNew: true as const } : {}),
         selection,
         stripAppNoDot: task.stripAppNoDot,
         archiveName: task.archiveName,
@@ -376,6 +391,7 @@ async function downloadSelected(resume = false): Promise<void> {
       return
     }
     task.status = 'done'
+    if (selection) paintTaskCheckProgress(files.length, files.length, startedAt, 'done', '生成下载名称')
     const data = response.payload.data
     toolbarNotice.value = `${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
   } catch {
@@ -390,7 +406,7 @@ async function downloadSelected(resume = false): Promise<void> {
     if (task.status !== 'done') task.status = 'paused'
     task.notice = toolbarNotice.value
     void protectSurface().catch(() => {})
-    if (!disposed && selection && namedFiles < files.length) {
+    if (!disposed && selection && namedFiles < files.length && task.status !== 'done') {
       paintTaskCheckProgress(namedFiles, files.length, startedAt, 'fail', '生成下载名称')
     }
   }
@@ -650,7 +666,7 @@ watch(snapshotIdentity, async scope => {
   const current = ++recoveryGeneration
   releaseDownloadProgress?.()
   releaseDownloadProgress = null
-  if (activeTask.value?.status === 'running') activeTask.value.status = 'paused'
+  pauseActiveDownload()
   downloadWait?.abort()
   downloading.value = false
   if (taskCheckProgress.label === '生成下载名称') resetTaskCheckProgress()
@@ -663,11 +679,11 @@ watch(snapshotIdentity, async scope => {
   activeTask.value = null
   readPages.value = []
   try {
-    const initialGeneration = generation
+    const initialGeneration = searchGeneration
     const saved = await recallRecovery('file-query', scope)
     if (current !== recoveryGeneration || disposed) return
     const restored = restoredFileQuery(saved, props.origin, props.userId, props.recoverySurface)
-    if (restored && generation === initialGeneration) {
+    if (restored && searchGeneration === initialGeneration) {
       lastQuery.value = restored.query
       result.value = restored.result
       selected.value = restored.selected
@@ -709,7 +725,7 @@ watch(() => props.seedToken, () => {
 
 onBeforeUnmount(() => {
   if (recoveryTimer) clearTimeout(recoveryTimer)
-  if (activeTask.value?.status === 'running') activeTask.value.status = 'paused'
+  pauseActiveDownload()
   void protectSurface().catch(() => {})
   if (taskCheckProgress.label === '生成下载名称' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
   disposed = true
@@ -728,8 +744,9 @@ onBeforeUnmount(() => {
     <p v-if="recoveryNotice" class="hint" role="alert">工作面未保护：{{ recoveryNotice }}</p>
     <p v-if="needsRevalidation" class="hint" role="status">已恢复本地查询与选择，当前为只读工作面。请确认同一账号后点击刷新重新验证查询；不会自动查询或发文。</p>
     <p v-if="activeTask && activeTask.status !== 'done'" class="hint" role="status">
-      下载已暂停，已保护 {{ activeTask.items.length }} 个文件的任务。{{ activeTask.notice }}
+      {{ activeTask.status === 'running' ? '下载进行中' : '下载已暂停' }}，任务包含 {{ activeTask.items.length }} 个文件。{{ activeTask.notice }}
       <button type="button" :disabled="!canSearch || needsRevalidation || downloading" @click="downloadSelected(true)">继续下载</button>
+      <button v-if="/不支持原记录续传|原下载记录已被清除|无法读取浏览器下载记录/.test(activeTask.notice)" type="button" :disabled="!canSearch || needsRevalidation || downloading" @click="downloadSelected(true, true)">从缓存另存为新文件</button>
       <button type="button" :disabled="!canSearch || downloading" @click="discardDownloadTask">丢弃下载任务</button>
     </p>
     <p class="hint">结案默认包含在结果里。更多案件条件里的「是否包含结案」选「否」，结案文件才不会出现。不要把那种空结果当成库里没有。</p>

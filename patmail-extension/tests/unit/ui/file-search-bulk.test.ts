@@ -9,9 +9,10 @@ const templateLabel = vi.hoisted(() => ({ value: '模板甲' }))
 const downloadRecipe = vi.hoisted(() => ({ value: null as { newFilename: string; fileNameType: string } | null }))
 
 const recoveryRows = vi.hoisted(() => new Map<string, unknown>())
+const recoveryGate = vi.hoisted(() => ({ wait: null as Promise<void> | null, read: null as Promise<void> | null }))
 vi.mock('../../../src/recovery/wal-ledger', () => ({
-  recallRecovery: async (_slot: string, scope: string) => recoveryRows.get(scope) ?? null,
-  rememberRecovery: async (_slot: string, scope: string, payload: unknown) => { recoveryRows.set(scope, JSON.parse(JSON.stringify(payload))) }
+  recallRecovery: async (_slot: string, scope: string) => { if (recoveryGate.read) await recoveryGate.read; return recoveryRows.get(scope) ?? null },
+  rememberRecovery: async (_slot: string, scope: string, payload: unknown) => { recoveryRows.set(scope, JSON.parse(JSON.stringify(payload))); if (recoveryGate.wait) await recoveryGate.wait }
 }))
 
 vi.mock('../../../src/floating/QueryTemplateSection.vue', async () => {
@@ -33,7 +34,7 @@ vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
 })
 
 let app: App | undefined
-afterEach(() => { app?.unmount(); recoveryRows.clear(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => { recoveryGate.wait = null; recoveryGate.read = null; app?.unmount(); recoveryRows.clear(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
 async function settle() { for (let i = 0; i < 30; i++) { await Promise.resolve(); await nextTick() } }
 function button(label: string): HTMLButtonElement {
   const found = Array.from(document.querySelectorAll('button')).find(node => node.textContent?.trim() === label)
@@ -51,10 +52,10 @@ function reply(message: Extract<ContentRequest, { type: 'SEARCH_FILES' }>, total
     }))
   } } }
 }
-function mount(request: MessageBridge['request']) {
+function mount(request: MessageBridge['request'], allowed = ref(true), epoch = ref(0)) {
   const selected = ref<Record<string, SelectedPatentFile>>({})
   app = createApp({ render: () => h(FileSearchQuery, {
-    userId: 'test', origin: 'http://183.36.43.66:88', canSearch: true, selectable: true,
+    userId: 'test', origin: 'http://183.36.43.66:88', canSearch: allowed.value, selectable: true, epoch: epoch.value,
     selected: selected.value, 'onUpdate:selected': value => { selected.value = value }
   }) })
   app.provide('bridge', { request })
@@ -64,6 +65,44 @@ function mount(request: MessageBridge['request']) {
 }
 
 describe('文件全选的批量分页', () => {
+  it.each(['unmount', 'session'] as const)('WAL ACK 等待期间发生 %s 后不能启动旧下载', async event => {
+    const messages: ContentRequest[] = []
+    const allowed = ref(true)
+    mount(async message => {
+      messages.push(message)
+      if (message.type === MessageType.SearchFiles) return reply(message, 1)
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }, allowed)
+    button('测试查询').click(); await settle()
+    button('全选本页').click(); await settle()
+    let release!: () => void
+    recoveryGate.wait = new Promise(resolve => { release = resolve })
+    button('下载已选').click(); await settle()
+    expect(messages.some(message => message.type === MessageType.DownloadFiles)).toBe(false)
+    if (event === 'unmount') { app?.unmount(); app = undefined }
+    else { allowed.value = false; await settle(); allowed.value = true }
+    await settle(); release(); recoveryGate.wait = null; await settle()
+    expect(messages.some(message => message.type === MessageType.DownloadFiles)).toBe(false)
+  })
+  it.each(['unmount', 'session'])('%s 时暂停来源生产者，不能只取消界面等待', async event => {
+    const messages: ContentRequest[] = [], allowed = ref(true)
+    let finish!: (response: ContentResponse) => void
+    mount(async message => {
+      messages.push(message)
+      if (message.type === MessageType.SearchFiles) return reply(message, 1)
+      if (message.type === MessageType.DownloadFiles) return new Promise(resolve => { finish = resolve })
+      if (message.type === MessageType.PauseDownload) return { type: MessageType.PauseDownloadResult, payload: { ok: true } }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }, allowed)
+    button('测试查询').click(); await settle()
+    button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    const task = messages.find(message => message.type === MessageType.DownloadFiles)!
+    if (event === 'unmount') { app?.unmount(); app = undefined } else allowed.value = false
+    await settle()
+    expect(messages).toContainEqual({ type: MessageType.PauseDownload, payload: { taskId: task.payload.taskId } })
+    finish({ type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'NETWORK_ERROR', message: '暂停' } } }); await settle()
+  })
   it('下载期间不能重试漏页，避免两个任务争用彩虹条', async () => {
     let finishDownload: ((value: ContentResponse) => void) | undefined
     let batchCalls = 0
@@ -220,6 +259,19 @@ describe('文件全选的批量分页', () => {
 
 
 describe('file query durable remount', () => {
+  it('会话 epoch 更新不能让待回放的只读工作面被跳过', async () => {
+    const request: MessageBridge['request'] = async message => message.type === MessageType.SearchFiles
+      ? reply(message, 1) : { type: MessageType.Error, payload: { message: 'unused' } }
+    mount(request); button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    app!.unmount(); app = undefined; await settle(); document.body.innerHTML = ''
+    let release!: () => void
+    recoveryGate.read = new Promise(resolve => { release = resolve })
+    const epoch = ref(0)
+    const selected = mount(request, ref(true), epoch); await settle()
+    epoch.value++; await settle(); release(); recoveryGate.read = null; await settle()
+    expect(Object.keys(selected.value)).toHaveLength(1)
+    expect(document.body.textContent).toContain('已恢复本地查询与选择')
+  })
   it('restores result/selection read-only without querying, clears orphan progress, then explicitly revalidates', async () => {
     let queries = 0
     const request: MessageBridge['request'] = async message => {

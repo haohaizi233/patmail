@@ -273,7 +273,9 @@ export async function resolveDownloadFileNames(
         stop(apiError('SESSION_EXPIRED', 'EASY 登录状态已失效。'))
         return
       }
-      const generated = readGeneratedFileNames(response.data, batch.length)
+      const generated = cached?.length === batch.length
+        ? cached.every(name => typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';')) ? cached.slice() : null
+        : readGeneratedFileNames(response.data, batch.length)
       if (!generated) {
         stop(apiError('INVALID_RESPONSE', '下载名称没有生成完整的文件名，没有按原文件名发文。'))
         return
