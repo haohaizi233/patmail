@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ApiResult } from '../../api/types'
 import { apiError } from '../../api/types'
 import type { FilingSearchRow } from '../../api/filing-search-types'
-import { FILING_EXPORT_HEADERS, filingExportCells, type FilingExportRow } from '../../api/filing-export'
+import { FILING_EXPORT_HEADERS, filingExportCells, filingRowsCurrent, type FilingExportRow } from '../../api/filing-export'
 import { collectFilingExport, filingExportSheet } from '../../workflow/filing-export'
 import { FilingRowsLedger, filingRowsBatchKey } from '../../workflow/filing-rows'
 import { downloadXlsxSheets } from '../../customer/xlsx-table'
@@ -70,7 +70,7 @@ const pageLines = computed(() => {
   return ledger.page(from, pageSize.value).map(({ key, row }) => ({ key, cells: filingExportCells(row) }))
 })
 
-/** 一次退回一行，同一份的第二行起我方文号留空；九列加序号的列宽和上表、期限表同一套 column-fit，不出横向滚动条。 */
+/** 一次退回一行，每行都写全九列（我方文号照常写）；九列加序号的列宽和上表、期限表同一套 column-fit，不出横向滚动条。 */
 const exportColumnMode = (head: string): 'lock' | 'grow' | undefined => {
   if (head === '申请日' || head === '案件状态') return 'lock'
   if (head === '退回的原因' || head === '我方文号') return 'grow'
@@ -184,7 +184,11 @@ async function run(): Promise<void> {
         return response.type === MessageType.ReadUserInfoResult ? response.payload : failed('人员信息没有回传。')
       }
     }, {
-      known: index => ledger.filled(index),
+      known: index => {
+        const carried = ledger.filled(index)
+        // 旧版行档的行没有 returned 这一位（重复退回的文号是空的），这批件重新取，不装旧行。
+        return carried && filingRowsCurrent(carried) ? carried : undefined
+      },
       onFiling: (index, lines) => {
         if (current !== generation) return
         ledger.put(index, lines)
@@ -280,7 +284,7 @@ onBeforeUnmount(() => {
         <button type="button" class="solid tiny" :disabled="!lineCount" @click="exportXlsx">重新导出</button>
       </span>
     </div>
-    <p class="hint">九列口径：我方文号、申请日（没有申请日用申请事项的完成日）、案件流向、处理事项、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。一次退回一行，同一份的第二行起我方文号留空；xlsx 自动冻结首行。</p>
+    <p class="hint">九列口径：我方文号、申请日（没有申请日用申请事项的完成日）、案件流向、处理事项、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态。一次退回一行，每行都写我方文号；xlsx 自动冻结首行，表格下方顺延一张前10大退回横向柱状图（按我方文号数退回次数）。</p>
     <p v-if="problems.length" class="error" role="alert">{{ problems.length }} 件没读全：{{ problems.slice(0, 3).join('；') }}</p>
     <p v-if="!lineCount && !running" class="hint">在上面的查询结果里勾选递交记录（全选所有只翻页拉行），点「导出 Excel」才开始取数，取完自动下载。</p>
     <template v-else>

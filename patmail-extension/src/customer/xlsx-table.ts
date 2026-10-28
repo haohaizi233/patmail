@@ -130,6 +130,37 @@ export interface XlsxSheet {
   hiddenRows?: number
 }
 
+/**
+ * 横向柱状图。柱子的数据就写在表里（标签列、值列、起止行，0 起数和 rows 对齐），
+ * 图表引用这几格并缓存一份值，浮在 anchor 这块单元格上。bars 的顺序和数据行一致。
+ */
+export interface XlsxBarChart {
+  /** 图表标题。 */
+  title: string
+  /** 系列名，图例上就是这一根柱子的口径。 */
+  seriesName: string
+  /** 每根柱子的分类文字和值。分类轴反向画，第一根在最上面。 */
+  bars: Array<{ label: string; value: number }>
+  /** 柱子标签写在第几列（0 起数）。 */
+  labelColumn: number
+  /** 柱子值写在第几列（0 起数）。 */
+  valueColumn: number
+  /** 柱子数据的起止行（0 起数，和 rows 对齐）。 */
+  firstRow: number
+  lastRow: number
+  /** 图表浮在这些单元格上（0 起数的行、列），不压着数据行。 */
+  anchor: { firstRow: number; lastRow: number; firstColumn: number; lastColumn: number }
+}
+
+/** 要写出去的一张表。单元格是文本或数字（数字写成数值格，图表引用时读得出来），表头就是每一张的第一行；freezeHeader 会把首行冻结。 */
+export interface XlsxSheetSpec {
+  name: string
+  rows: Array<Array<string | number>>
+  freezeHeader?: boolean
+  /** 一张横向柱状图，浮在 anchor 那块单元格上。 */
+  chart?: XlsxBarChart
+}
+
 function sheetEntries(files: Map<string, string>): Array<{ name: string; path: string }> {
   const workbook = files.get('xl/workbook.xml') ?? ''
   const rels = files.get('xl/_rels/workbook.xml.rels') ?? ''
@@ -186,11 +217,11 @@ function cellWidth(value: string): number {
 }
 
 /** 每列按最长的内容算最合适列宽，两边留一点空。上限取 Excel 自己的 255。 */
-function bestFitCols(rows: string[][]): string {
+function bestFitCols(rows: Array<Array<string | number>>): string {
   const widths: number[] = []
   for (const line of rows) {
     line.forEach((value, column) => {
-      widths[column] = Math.max(widths[column] ?? 0, cellWidth(value))
+      widths[column] = Math.max(widths[column] ?? 0, cellWidth(String(value)))
     })
   }
   if (!widths.length) return ''
@@ -200,17 +231,92 @@ function bestFitCols(rows: string[][]): string {
   }).join('')}</cols>`
 }
 
-function sheetXml(rows: string[][], freezeHeader: boolean): string {
+function sheetXml(rows: Array<Array<string | number>>, freezeHeader: boolean, hasChart: boolean): string {
   const body = rows.map((line, index) => {
-    const cells = line.map((value, column) => `<c r="${columnRef(column)}${index + 1}" t="inlineStr"><is><t>${xmlText(value)}</t></is></c>`).join('')
+    // 数字写成数值格（图表的 numRef 引用文本格会被 Excel 读成 0），文字照旧写文本格。
+    const cells = line.map((value, column) => {
+      const ref = `${columnRef(column)}${index + 1}`
+      return typeof value === 'number' && Number.isFinite(value)
+        ? `<c r="${ref}"><v>${value}</v></c>`
+        : `<c r="${ref}" t="inlineStr"><is><t>${xmlText(String(value))}</t></is></c>`
+    }).join('')
     return `<row r="${index + 1}">${cells}</row>`
   }).join('')
   // 冻结首行：表头钉住，往下滚数据时表头不动。
   const views = freezeHeader
     ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>`
     : ''
+  const root = hasChart
+    ? `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
+    : `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
+  // 图表挂在 drawing 部件上，关系写在这张表自己的 rels 里（rId1）。
+  const drawing = hasChart ? `<drawing r:id="rId1"/>` : ''
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${views}${bestFitCols(rows)}<sheetData>${body}</sheetData></worksheet>`
+    `${root}${views}${bestFitCols(rows)}<sheetData>${body}</sheetData>${drawing}</worksheet>`
+}
+
+/** 关系部件。表挂图、图挂图表各一份。 */
+function relsXml(relationships: Array<{ id: string; type: string; target: string }>): string {
+  const body = relationships
+    .map(item => `<Relationship Id="${item.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${item.type}" Target="${item.target}"/>`)
+    .join('')
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`
+}
+
+/** 图表里的轴号。每张图各写各的部分，写死一对就行。 */
+const CHART_CAT_AXIS = 81000001
+const CHART_VAL_AXIS = 81000002
+
+/** 图表公式里的表名。带空格、中文的名字都套单引号，名字里的单引号写两个。 */
+function sheetFormulaName(name: string): string {
+  return `'${name.replace(/'/g, "''")}'`
+}
+
+function chartPoints(values: readonly (string | number)[]): string {
+  return values.map((value, index) => `<c:pt idx="${index}"><c:v>${xmlText(String(value))}</c:v></c:pt>`).join('')
+}
+
+/**
+ * 横向柱状图（barDir=bar）的图表部件。分类轴反向（maxMin），次数最多的画在最上面；
+ * 值轴跟着挪到最下面那根（crosses=max），两根轴还是常规的左和下。柱子上标数值。
+ */
+function barChartXml(sheetName: string, chart: XlsxBarChart): string {
+  const first = chart.firstRow + 1
+  const last = chart.lastRow + 1
+  const labelRange = `${sheetFormulaName(sheetName)}!$${columnRef(chart.labelColumn)}$${first}:$${columnRef(chart.labelColumn)}$${last}`
+  const valueRange = `${sheetFormulaName(sheetName)}!$${columnRef(chart.valueColumn)}$${first}:$${columnRef(chart.valueColumn)}$${last}`
+  const count = chart.bars.length
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+    `<c:chart>` +
+    `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="1200" b="1"/><a:t>${xmlText(chart.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` +
+    `<c:autoTitleDeleted val="0"/><c:plotArea><c:layout/>` +
+    `<c:barChart><c:barDir val="bar"/><c:grouping val="clustered"/><c:varyColors val="0"/>` +
+    `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>${xmlText(chart.seriesName)}</c:v></c:tx><c:invertIfNegative val="0"/>` +
+    `<c:dLbls><c:numFmt formatCode="General" sourceLinked="0"/><c:dLblPos val="outEnd"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>` +
+    `<c:cat><c:strRef><c:f>${xmlText(labelRange)}</c:f><c:strCache><c:ptCount val="${count}"/>${chartPoints(chart.bars.map(bar => bar.label))}</c:strCache></c:strRef></c:cat>` +
+    `<c:val><c:numRef><c:f>${xmlText(valueRange)}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${count}"/>${chartPoints(chart.bars.map(bar => bar.value))}</c:numCache></c:numRef></c:val>` +
+    `</c:ser><c:gapWidth val="100"/><c:axId val="${CHART_CAT_AXIS}"/><c:axId val="${CHART_VAL_AXIS}"/></c:barChart>` +
+    // 分类轴留在左边（不写 crosses，取默认的 autoZero）；分类反向后值轴用 crosses=max 才压在最下面那根上。
+    `<c:catAx><c:axId val="${CHART_CAT_AXIS}"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:crossAx val="${CHART_VAL_AXIS}"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>` +
+    `<c:valAx><c:axId val="${CHART_VAL_AXIS}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${CHART_CAT_AXIS}"/><c:crosses val="max"/><c:crossBetween val="between"/></c:valAx>` +
+    `</c:plotArea><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>`
+}
+
+/** 图表画在哪几格上。from/to 是单元格左上角，锚定从 from 的左上到 to 的左上。 */
+function drawingXml(chart: XlsxBarChart): string {
+  const { firstRow, lastRow, firstColumn, lastColumn } = chart.anchor
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+    `<xdr:twoCellAnchor>` +
+    `<xdr:from><xdr:col>${firstColumn}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${firstRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+    `<xdr:to><xdr:col>${lastColumn}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${lastRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
+    `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="${xmlText(chart.title)}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>` +
+    `<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>` +
+    `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">` +
+    `<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/>` +
+    `</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>`
 }
 
 function storedZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
@@ -269,15 +375,20 @@ function zipFile(name: string, text: string): { name: string; data: Uint8Array }
   return { name, data: new TextEncoder().encode(text) }
 }
 
-/** 多张表。单元格都是文本，表头就是每一张的第一行；freezeHeader 会把首行冻结。 */
-export function xlsxBookBytes(sheets: Array<{ name: string; rows: string[][]; freezeHeader?: boolean }>): ArrayBuffer {
+/** 多张表。单元格都是文本，表头就是每一张的第一行；freezeHeader 会把首行冻结，chart 会在表里浮一张横向柱状图。 */
+export function xlsxBookBytes(sheets: XlsxSheetSpec[]): ArrayBuffer {
   const used = sheets.filter(sheet => sheet.rows.length).slice(0, 8)
-  const list = used.length ? used : [{ name: 'Sheet1', rows: [] as string[][] }]
-  const names = list.map((sheet, index) => {
+  const list: XlsxSheetSpec[] = used.length ? used : [{ name: 'Sheet1', rows: [] as string[][] }]
+  const rawNames = list.map((sheet, index) => {
     const text = sheet.name.replace(/[\\/?*[\]:]/g, ' ').trim().slice(0, 31) || `Sheet${index + 1}`
-    return xmlText(text)
+    return text
   })
+  const names = rawNames.map(name => xmlText(name))
   const overrides = list.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
+  const chartOverrides = list.flatMap((sheet, index) => sheet.chart ? [
+    `<Override PartName="/xl/drawings/drawing${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`,
+    `<Override PartName="/xl/charts/chart${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`
+  ] : []).join('')
   const sheetTags = list.map((_, index) => `<sheet name="${names[index]}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('')
   const rels = list.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')
   const files = [
@@ -287,6 +398,7 @@ export function xlsxBookBytes(sheets: Array<{ name: string; rows: string[][]; fr
       `<Default Extension="xml" ContentType="application/xml"/>` +
       `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
       overrides +
+      chartOverrides +
       `</Types>`),
     zipFile('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
@@ -297,8 +409,18 @@ export function xlsxBookBytes(sheets: Array<{ name: string; rows: string[][]; fr
       `<sheets>${sheetTags}</sheets></workbook>`),
     zipFile('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`),
-    ...list.map((sheet, index) => zipFile(`xl/worksheets/sheet${index + 1}.xml`, sheetXml(sheet.rows, sheet.freezeHeader === true)))
+    ...list.map((sheet, index) => zipFile(`xl/worksheets/sheet${index + 1}.xml`, sheetXml(sheet.rows, sheet.freezeHeader === true, Boolean(sheet.chart))))
   ]
+  // 有图的表再挂三件：表的 rels 指向 drawing，drawing 的 rels 指向 chart。
+  list.forEach((sheet, index) => {
+    if (!sheet.chart) return
+    files.push(
+      zipFile(`xl/worksheets/_rels/sheet${index + 1}.xml.rels`, relsXml([{ id: 'rId1', type: 'drawing', target: `../drawings/drawing${index + 1}.xml` }])),
+      zipFile(`xl/drawings/drawing${index + 1}.xml`, drawingXml(sheet.chart)),
+      zipFile(`xl/drawings/_rels/drawing${index + 1}.xml.rels`, relsXml([{ id: 'rId1', type: 'chart', target: `../charts/chart${index + 1}.xml` }])),
+      zipFile(`xl/charts/chart${index + 1}.xml`, barChartXml(rawNames[index], sheet.chart))
+    )
+  })
   const bytes = storedZip(files)
   const copy = new ArrayBuffer(bytes.byteLength)
   new Uint8Array(copy).set(bytes)
@@ -310,7 +432,7 @@ export function xlsxBytes(rows: string[][], sheetName = 'Sheet1'): ArrayBuffer {
   return xlsxBookBytes([{ name: sheetName, rows }])
 }
 
-export function downloadXlsxSheets(sheets: Array<{ name: string; rows: string[][]; freezeHeader?: boolean }>, filename: string): void {
+export function downloadXlsxSheets(sheets: XlsxSheetSpec[], filename: string): void {
   const blob = new Blob([xlsxBookBytes(sheets)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')

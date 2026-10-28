@@ -118,6 +118,8 @@ export const FILING_RETURN_AUDIT = '退回'
 export const FILING_START_STAGE = '启动流程'
 
 export interface FilingExportRow {
+  /** 这一行来自一次退回；一次都没有退回的占位行是 false。前10大退回的统计只数 true 的行。 */
+  returned: boolean
   caseVolume: string
   applyDate: string
   flowDirection: string
@@ -177,8 +179,8 @@ export function filingExportSourceOf(filing: {
 }
 
 /**
- * 一件递交导出成 1 到 N 行：一次退回一行，我方文号只写在第一行，其余列每行照写。
- * 一件都没有退回的也出一行，免得导出里悄悄少件。
+ * 一件递交导出成 1 到 N 行：一次退回一行，每行都写全九列（我方文号照常写，不再只写第一行）。
+ * 一件都没有退回的也出一行（returned 是 false，退回相关列留空），免得导出里悄悄少件。
  */
 export function filingExportRows(
   filing: { caseVolume: string; appDate: string; filingDate: string; caseStatus: string; flowDirection: string; ctrlProc: string },
@@ -188,10 +190,11 @@ export function filingExportRows(
   const source = filingExportSourceOf(filing)
   const returned = flow.flatMap((row, index) => (row.auditType.trim() === FILING_RETURN_AUDIT ? [{ row, index }] : []))
   const picks = returned.length ? returned : [{ row: null as FilingFlowRow | null, index: -1 }]
-  return picks.map(({ row, index }, order) => {
+  return picks.map(({ row, index }) => {
     const accepted = row ? acceptorAfter(flow, index) : null
     return {
-      caseVolume: order === 0 ? source.caseVolume : '',
+      returned: row !== null,
+      caseVolume: source.caseVolume,
       applyDate: source.applyDate,
       flowDirection: source.flowDirection,
       ctrlProc: source.ctrlProc,
@@ -202,4 +205,37 @@ export function filingExportRows(
       caseStatus: source.caseStatus
     }
   })
+}
+
+/** 这一行算不算一次退回。行档里装回的旧版行没有 returned 这一位，按退回者或原因回推。 */
+function isReturnLine(line: FilingExportRow): boolean {
+  return line.returned ?? Boolean(line.returnedBy.trim() || line.returnReason.trim())
+}
+
+/**
+ * 行档里装回的行是不是这一版的口径。旧版行没有 returned 这一位，重复退回的我方文号还是空的，
+ * 装回来也要重新取，别让旧行混进新口径的导出和统计。
+ */
+export function filingRowsCurrent(lines: readonly FilingExportRow[]): boolean {
+  return lines.every(line => typeof line.returned === 'boolean')
+}
+
+/**
+ * 前10大退回：按我方文号数退回次数，次数多的在前（一样多先出现的在前），最多 limit 件。
+ * 没有退回的占位行不算，没有退回的件也不上榜。
+ */
+export function filingReturnTop(
+  lines: readonly FilingExportRow[],
+  limit = 10
+): Array<{ caseVolume: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const line of lines) {
+    if (!isReturnLine(line)) continue
+    const key = line.caseVolume.trim()
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([caseVolume, count]) => ({ caseVolume, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit)
 }

@@ -7,10 +7,12 @@ import {
   FILING_FETCH_CONCURRENCY,
   filingExportCells,
   filingExportRows,
+  filingReturnTop,
   type FilingExportRow,
   type FilingFlowRow,
   type FilingUser
 } from '../api/filing-export'
+import type { XlsxBarChart, XlsxSheetSpec } from '../customer/xlsx-table'
 
 /**
  * 「递交管理-已完成导出」的取数编排。每件递交只打两个主接口：
@@ -116,11 +118,40 @@ export async function collectFilingExport(
   return { lines: slots.flat(), problems }
 }
 
-/** 表格第一行就是这七列，导出时冻结首行。 */
-export function filingExportSheet(lines: readonly FilingExportRow[]): { name: string; rows: string[][]; freezeHeader: true } {
-  return {
-    name: '递交管理-已完成导出',
-    rows: [[...FILING_EXPORT_HEADERS], ...lines.map(filingExportCells)],
-    freezeHeader: true
+/** 表格下面留两行空再上图。 */
+const CHART_GAP_ROWS = 2
+/** 图浮上去占多少行高，十根柱子放得下。 */
+const CHART_HEIGHT_ROWS = 22
+/** 图从第 1 列画到第 10 列，和九列的表差不多宽。 */
+const CHART_LAST_COLUMN = 9
+
+/**
+ * 导出表：第一行是九列表头，导出时冻结首行。表格下方顺延一张横向柱状图——
+ * 前10大退回（按我方文号数退回次数，多的在最上面），图下面附它引用的两列数据。
+ * 一次都没有退回时不带图，免得空图占着表下面一大块。
+ */
+export function filingExportSheet(lines: readonly FilingExportRow[]): XlsxSheetSpec {
+  const name = '递交管理-已完成导出'
+  const rows: Array<Array<string | number>> = [[...FILING_EXPORT_HEADERS], ...lines.map(filingExportCells)]
+  const top = filingReturnTop(lines)
+  if (!top.length) return { name, rows, freezeHeader: true }
+  const labels = top.map(item => item.caseVolume.trim() || '（无文号）')
+  const chartTop = rows.length + CHART_GAP_ROWS
+  const chartBottom = chartTop + CHART_HEIGHT_ROWS
+  const dataHeaderRow = chartBottom + 1
+  const chart: XlsxBarChart = {
+    title: '前10大退回（按我方文号）',
+    seriesName: '退回次数',
+    bars: top.map((item, index) => ({ label: labels[index], value: item.count })),
+    labelColumn: 0,
+    valueColumn: 1,
+    firstRow: dataHeaderRow + 1,
+    lastRow: dataHeaderRow + top.length,
+    anchor: { firstRow: chartTop, lastRow: chartBottom, firstColumn: 0, lastColumn: CHART_LAST_COLUMN }
   }
+  // 图浮在这些行上，行里一个字不写；数据块接着图下面，图表就引用这两列（次数是数值格，图上读得出数）。
+  while (rows.length <= chartBottom) rows.push([])
+  rows.push(['我方文号', '退回次数'])
+  top.forEach((item, index) => rows.push([labels[index], item.count]))
+  return { name, rows, freezeHeader: true, chart }
 }

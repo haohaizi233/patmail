@@ -5,16 +5,19 @@ import {
   filingExportRows,
   filingFlowHistoryParams,
   filingFlowDirectionText,
+  filingReturnTop,
+  filingRowsCurrent,
   FILING_EXPORT_HEADERS,
   readFilingFlowHistory,
   readUserInfo,
   userInfoParams,
+  type FilingExportRow,
   type FilingFlowRow
 } from '../../../src/api/filing-export'
 import { collectFilingExport, filingExportSheet } from '../../../src/workflow/filing-export'
 import { normalizeFilingSearch } from '../../../src/api/filing-search-normalizer'
 import type { FilingSearchRow } from '../../../src/api/filing-search-types'
-import { xlsxBookBytes } from '../../../src/customer/xlsx-table'
+import { xlsxBookBytes, readXlsxSheets } from '../../../src/customer/xlsx-table'
 
 const client = { ClientInfo: { IsLogin: true, Status: true, Result: true, Message: null } }
 
@@ -94,10 +97,11 @@ describe('递交导出行', () => {
     flowRow({ nodeName: '启动流程', auditUserId: 'user-9', auditUserName: '刘斌斌', auditType: '提交', remark: '' })
   ]
 
-  it('一次退回一行，我方文号只写第一行', () => {
+  it('一次退回一行，重复退回的行我方文号照常写', () => {
     const rows = filingExportRows(filing(), flow, id => (id === 'user-9' ? '电学三部' : ''))
     expect(rows).toHaveLength(2)
     expect(rows[0]).toEqual({
+      returned: true,
       caseVolume: 'PA261111285CND',
       applyDate: '2026-10-22',
       flowDirection: '内-外',
@@ -108,7 +112,7 @@ describe('递交导出行', () => {
       returnReason: '没有盖章',
       caseStatus: '审定'
     })
-    expect(rows[1]).toMatchObject({ caseVolume: '', returnedBy: '高艳丽', returnReason: '补照片' })
+    expect(rows[1]).toMatchObject({ returned: true, caseVolume: 'PA261111285CND', returnedBy: '高艳丽', returnReason: '补照片' })
     expect(rows[1].applyDate).toBe('2026-10-22')
     expect(rows[1].flowDirection).toBe('内-外')
     expect(rows[1].ctrlProc).toBe('新申请')
@@ -141,7 +145,7 @@ describe('递交导出行', () => {
   it('一件没有退回也出一行，免得导出里少件', () => {
     const rows = filingExportRows(filing(), [flowRow({ auditType: '提交', remark: '' })], () => '')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ caseVolume: 'PA261111285CND', returnedBy: '', returnReason: '', acceptedBy: '' })
+    expect(rows[0]).toMatchObject({ returned: false, caseVolume: 'PA261111285CND', returnedBy: '', returnReason: '', acceptedBy: '' })
   })
 
   it('接手人按人去重取部门', () => {
@@ -252,6 +256,106 @@ describe('递交导出表', () => {
     }])))
     expect(wide).toContain('<col min="1" max="1" width="6" customWidth="1"/>')
     expect(wide).toContain('<col min="2" max="2" width="48" customWidth="1"/>')
+  })
+})
+
+describe('前10大退回统计', () => {
+  function exportLine(caseVolume: string, returned = true): FilingExportRow {
+    return {
+      returned, caseVolume, applyDate: '2026-10-22', flowDirection: '内-外', ctrlProc: '新申请',
+      returnedBy: returned ? '余佳希' : '', acceptedBy: returned ? '刘斌斌' : '', acceptedDept: '电学三部',
+      returnReason: returned ? '没有盖章' : '', caseStatus: '审定'
+    }
+  }
+
+  it('按我方文号数退回次数，没有退回的占位行不算', () => {
+    const lines = [exportLine('PA1'), exportLine('PA1'), exportLine('PA1'), exportLine('PA2'), exportLine('PA3', false)]
+    expect(filingReturnTop(lines)).toEqual([
+      { caseVolume: 'PA1', count: 3 },
+      { caseVolume: 'PA2', count: 1 }
+    ])
+  })
+
+  it('退回多的在前，只取前 10；旧账本装回的行按退回者或原因回推', () => {
+    const many = Array.from({ length: 12 }, (_, index) => exportLine(`PA${index + 1}`))
+    many.push(exportLine('PA1'), exportLine('PA1'))
+    const top = filingReturnTop(many)
+    expect(top).toHaveLength(10)
+    expect(top[0]).toEqual({ caseVolume: 'PA1', count: 3 })
+    // 行档里装回的旧版行没有 returned 这一位，退回行照样算，空行不算。
+    const oldReturn = [{ ...exportLine('PA9'), returned: undefined } as unknown as FilingExportRow]
+    expect(filingReturnTop(oldReturn)).toEqual([{ caseVolume: 'PA9', count: 1 }])
+    const oldBlank = [{ ...exportLine('PA9', false), returned: undefined } as unknown as FilingExportRow]
+    expect(filingReturnTop(oldBlank)).toEqual([])
+    expect(filingReturnTop([])).toEqual([])
+  })
+
+  it('旧版行档装回的行认出来，整批件重新取', () => {
+    const fresh = [exportLine('PA1'), exportLine('PA1', false)]
+    expect(filingRowsCurrent(fresh)).toBe(true)
+    const stale = [exportLine('PA1'), { ...exportLine('PA1'), returned: undefined } as unknown as FilingExportRow]
+    expect(filingRowsCurrent(stale)).toBe(false)
+    expect(filingRowsCurrent([])).toBe(true)
+  })
+})
+
+describe('导出表下的前10大退回图', () => {
+  function exportLine(caseVolume: string, returned = true): FilingExportRow {
+    return {
+      returned, caseVolume, applyDate: '2026-10-22', flowDirection: '内-外', ctrlProc: '新申请',
+      returnedBy: returned ? '余佳希' : '', acceptedBy: returned ? '刘斌斌' : '', acceptedDept: '电学三部',
+      returnReason: returned ? '没有盖章' : '', caseStatus: '审定'
+    }
+  }
+
+  it('表格下方顺延横向柱状图，图下面附它引用的两列数据', () => {
+    const lines = [exportLine('PA1'), exportLine('PA1'), exportLine('PA2'), exportLine('PA3', false)]
+    const sheet = filingExportSheet(lines)
+    const chart = sheet.chart
+    if (!chart) throw new Error('应该带前10大退回图。')
+    expect(chart.title).toBe('前10大退回（按我方文号）')
+    expect(chart.bars).toEqual([{ label: 'PA1', value: 2 }, { label: 'PA2', value: 1 }])
+    // 表格占前 4 行，空两行再上图，图不压着数据行。
+    expect(chart.anchor.firstRow).toBe(lines.length + 3)
+    expect(chart.firstRow).toBe(chart.anchor.lastRow + 2)
+    expect(sheet.rows[chart.firstRow - 1]).toEqual(['我方文号', '退回次数'])
+    expect(sheet.rows[chart.firstRow]).toEqual(['PA1', 2])
+    expect(sheet.rows[chart.lastRow]).toEqual(['PA2', 1])
+    expect(chart.labelColumn).toBe(0)
+    expect(chart.valueColumn).toBe(1)
+  })
+
+  it('xlsx 里写原生横向柱状图部件，一次都没有退回不带图', () => {
+    const sheet = filingExportSheet([exportLine('PA1'), exportLine('PA1'), exportLine('PA2')])
+    const chart = sheet.chart
+    if (!chart) throw new Error('应该带前10大退回图。')
+    const bytes = new TextDecoder().decode(new Uint8Array(xlsxBookBytes([sheet])))
+    expect(bytes).toContain('<c:barChart>')
+    expect(bytes).toContain('<c:barDir val="bar"/>')
+    expect(bytes).toContain('前10大退回（按我方文号）')
+    expect(bytes).toContain('xl/charts/chart1.xml')
+    expect(bytes).toContain('xl/drawings/drawing1.xml')
+    expect(bytes).toContain('<drawing r:id="rId1"/>')
+    // 柱子引用图下面那两列，另外缓存一份值；次数写成数值格，不然 Excel 会把图读成全 0。
+    const first = chart.firstRow + 1
+    const last = chart.lastRow + 1
+    expect(bytes).toContain(`$A$${first}:$A$${last}`)
+    expect(bytes).toContain(`$B$${first}:$B$${last}`)
+    expect(bytes).toContain('<c:v>PA1</c:v>')
+    expect(bytes).toContain(`<c r="B${first}"><v>2</v></c>`)
+    // 全批没有退回就不出图，也不挂 drawing。
+    const plain = filingExportSheet([exportLine('PA1', false)])
+    expect(plain.chart).toBeUndefined()
+    const plainBytes = new TextDecoder().decode(new Uint8Array(xlsxBookBytes([plain])))
+    expect(plainBytes).not.toContain('<c:barChart>')
+    expect(plainBytes).not.toContain('<drawing r:id="rId1"/>')
+  })
+
+  it('带图的表还能读回行，导入不受图表部件影响', async () => {
+    const sheet = filingExportSheet([exportLine('PA1'), exportLine('PA1')])
+    const read = await readXlsxSheets(xlsxBookBytes([sheet]))
+    expect(read[0]?.rows[0]).toEqual([...FILING_EXPORT_HEADERS])
+    expect(read[0]?.rows[1]?.[0]).toBe('PA1')
   })
 })
 

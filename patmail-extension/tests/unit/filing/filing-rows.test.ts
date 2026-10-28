@@ -4,6 +4,7 @@ import type { FilingExportRow } from '../../../src/api/filing-export'
 
 function line(name: string, reason = '没有盖章'): FilingExportRow {
   return {
+    returned: true,
     caseVolume: name, applyDate: '2026-10-22', flowDirection: '内-外', ctrlProc: '新申请',
     returnedBy: '余佳希', acceptedBy: '刘斌斌', acceptedDept: '电学三部', returnReason: reason, caseStatus: '审定'
   }
