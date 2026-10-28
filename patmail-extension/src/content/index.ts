@@ -297,9 +297,12 @@ const bridge: MessageBridge = {
         if (message.payload.stream) {
           const fileName = message.payload.archiveName ?? templateArchiveName()
           try {
-            const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork) => easyRuntime.streamFiles(
-              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork
-            ), report)
+            const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork, context) => easyRuntime.streamFiles(
+              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, context
+            ), report, { taskId: message.payload.taskId, manifest: {
+              items: message.payload.items, selection: message.payload.selection,
+              stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName
+            } })
             return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: {
               fileName, fileCount: message.payload.items.length, notice: `浏览器下载完成（${formatBytes(bytes)}）。`
             } } }
@@ -368,6 +371,8 @@ const bridge: MessageBridge = {
           }
         }
       }
+      case MessageType.DiscardDownload:
+        return await sendToBackground(message) as ContentResponse ?? { type: MessageType.Error, payload: { message: '本机下载任务没有响应。' } }
       case MessageType.ExportCaseContacts:
         return { type: MessageType.ExportCaseContactsResult,
           payload: await easyRuntime.exportCaseContacts(message.payload.volumes) }

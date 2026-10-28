@@ -7,6 +7,11 @@ import { waitForDownloadJob } from '../../utils/download-job'
 export function createFullPageBridge(): MessageBridge {
   const bridge: MessageBridge = {
     async request(message, signal): Promise<ContentResponse> {
+      if (message.type === MessageType.DiscardDownload) {
+        const response = await sendToBackground(message)
+        return response?.type === MessageType.DiscardDownloadResult || response?.type === MessageType.Error
+          ? response : { type: MessageType.Error, payload: { message: '本机下载任务没有响应。' } }
+      }
       if (message.type === MessageType.DownloadFiles && message.payload.progressId && !message.payload.detached) {
         return waitForDownloadJob(message.payload.progressId, () => bridge.request({
           ...message, payload: { ...message.payload, detached: true }

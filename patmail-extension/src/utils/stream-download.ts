@@ -1,100 +1,143 @@
 import { MessageType, type StreamDownloadCommand } from '../shared/message'
 import type { FileDownloadProgress } from '../shared/download-progress'
 import { sendToBackground } from './runtime'
-import { watchBrowserDownload } from './download-outcome'
+import type { DownloadCache, CachedFileInfo } from '../api/stream-cache'
+import { isRecord } from '../shared/guards'
 
-/** 内容脚本只传有界数据块；本机URL由后台固定构造，页面不能指定中转目标。 */
+export interface NativeDownloadContext { cache?: DownloadCache; zipCreatedAt?: string; taskId?: string }
+const encode = (bytes: Uint8Array) => {
+  let text = ''
+  for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192))
+  return btoa(text)
+}
+const decode = (data: string) => Uint8Array.from(atob(data), char => char.charCodeAt(0))
+
+/** 首轮流式200；中断保留任务，封存后对同一浏览器记录发起Range续传。 */
 export async function nativeStreamArchive(
   fileName: string,
-  produce: (sink: WritableStream<Uint8Array>, signal: AbortSignal, onWork: (progress: FileDownloadProgress) => void) => Promise<void>,
-  report: (progress: FileDownloadProgress) => void
+  produce: (sink: WritableStream<Uint8Array>, signal: AbortSignal, onWork: (progress: FileDownloadProgress) => void, context: NativeDownloadContext) => Promise<void>,
+  report: (progress: FileDownloadProgress) => void,
+  options: { taskId?: string; manifest?: Record<string, unknown> } = {}
 ): Promise<number> {
   const command = async (payload: StreamDownloadCommand) => {
-    const response = await sendToBackground({ type: MessageType.StreamDownload, payload }, payload.action === 'write' ? 130_000 : 15_000)
-    if (response?.type !== MessageType.StreamDownloadResult) throw new Error(response?.type === MessageType.Error ? response.payload.message : '本机下载流没有应答。')
+    const response = await sendToBackground({ type: MessageType.StreamDownload, payload }, payload.action === 'write' || payload.action === 'cache' ? 130_000 : 20_000)
+    if (response?.type !== MessageType.StreamDownloadResult) throw new Error(response?.type === MessageType.Error ? response.payload.message : '本机下载流没有应答，已保留任务。')
     return response.payload
   }
-  const created = await command({ action: 'start', fileName })
+  const created = await command({ action: 'start', fileName, ...options })
   if (!created.token) throw new Error('本机下载流缺少写入凭据。')
   const token = created.token
+  const manifest = isRecord(created.info?.manifest) ? created.info.manifest : {}
+  const names: Record<string, string[]> = {}
+  if (isRecord(manifest.cachedNames)) for (const [key, list] of Object.entries(manifest.cachedNames)) {
+    if (Array.isArray(list) && list.every(name => typeof name === 'string')) names[key] = list
+  }
+  const metadata = (info: Partial<CachedFileInfo>): Record<string, unknown> => ({
+    ...(info.totalBytes === undefined ? {} : { totalBytes: info.totalBytes }),
+    ...(info.etag === undefined ? {} : { etag: info.etag }),
+    ...(info.lastModified === undefined ? {} : { lastModified: info.lastModified })
+  })
+  const cache: DownloadCache | undefined = created.taskId ? {
+    names,
+    async saveNames(offset, list) {
+      if (names[String(offset)]?.join(';') === list.join(';')) return
+      await command({ action: 'checkpoint', token, offset, names: list })
+      names[String(offset)] = list.slice()
+    },
+    async info(index) {
+      const result = (await command({ action: 'cache', command: 'info', token, index })).info
+      if (!result || !Number.isSafeInteger(result.receivedBytes) || Number(result.receivedBytes) < 0 || typeof result.complete !== 'boolean') {
+        throw new Error('本机附件检查点无效，不能继续下载。')
+      }
+      return result as unknown as CachedFileInfo
+    },
+    async reset(index, info) { await command({ action: 'cache', command: 'reset', token, index, metadata: metadata(info) }) },
+    async write(index, offset, bytes) { await command({ action: 'cache', command: 'write', token, index, offset, data: encode(bytes) }) },
+    async complete(index, info) { await command({ action: 'cache', command: 'complete', token, index, metadata: metadata(info) }) },
+    async read(index, offset) { const result = await command({ action: 'cache', command: 'read', token, index, offset }); return decode(result.data ?? '') }
+  } : undefined
+  const context: NativeDownloadContext = { cache, taskId: created.taskId, zipCreatedAt: typeof manifest.zipCreatedAt === 'string' ? manifest.zipCreatedAt : undefined }
   const controller = new AbortController()
-  const pageGone = () => controller.abort(new Error('EASY来源页面已离开，压缩包未完成。'))
+  const signal = controller.signal
+  let failure: Error | null = null, productionDone = false, succeeded = false
+  const untilAbort = <T>(promise: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
+    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true })
+    promise.then(value => { signal.removeEventListener('abort', abort); resolve(value) }, error => { signal.removeEventListener('abort', abort); reject(error) })
+  })
+  const pageGone = () => controller.abort(new Error('EASY来源页面已离开，下载已暂停并保留缓存。'))
   globalThis.addEventListener?.('pagehide', pageGone, { once: true })
-  let sequence = 0
-  let failure: Error | null = null
+  let sequence = 0, offset = 0, filled = 0
   const block = new Uint8Array(256 * 1024)
-  let filled = 0
   const flush = async () => {
     if (!filled) return
-    controller.signal.throwIfAborted()
-    let binary = ''
-    for (let offset = 0; offset < filled; offset += 8192) binary += String.fromCharCode(...block.subarray(offset, Math.min(filled, offset + 8192)))
-    await command({ action: 'write', token, sequence: sequence++, data: btoa(binary) })
-    filled = 0
+    signal.throwIfAborted()
+    await command({ action: 'write', token, sequence, offset, data: encode(block.subarray(0, filled)) })
+    sequence++; offset += filled; filled = 0
   }
   const sink = new WritableStream<Uint8Array>({
     async write(chunk) {
-      controller.signal.throwIfAborted()
-      for (let offset = 0; offset < chunk.byteLength;) {
-        const count = Math.min(block.byteLength - filled, chunk.byteLength - offset)
-        block.set(chunk.subarray(offset, offset + count), filled)
-        filled += count; offset += count
-        if (filled === block.byteLength) await flush()
+      signal.throwIfAborted()
+      for (let position = 0; position < chunk.length;) {
+        const count = Math.min(block.length - filled, chunk.length - position)
+        block.set(chunk.subarray(position, position + count), filled)
+        filled += count; position += count
+        if (filled === block.length) await flush()
       }
-      // 先发ZIP首块，让浏览器尽早创建在途记录；后续仍按256KiB合并，避免逐个小头部往返。
       if (sequence === 0 && filled) await flush()
     },
-    async close() { await flush(); await command({ action: 'finish', token }) },
-    async abort(reason) {
-      failure ??= reason instanceof Error ? reason : new Error('流水写入失败，压缩包未完成。')
-      await command({ action: 'abort', token }).catch(() => {})
-    }
+    async close() { await flush(); await command({ action: 'finish', token }); productionDone = true },
+    async abort(reason) { failure ??= reason instanceof Error ? reason : new Error('输出失败，下载任务已保留。'); await command({ action: 'pause', token }).catch(() => {}) }
   })
   const track = (async () => {
+    let downloadId = created.downloadId
     try {
-      while (!controller.signal.aborted) {
-        const status = await command({ action: 'status', token })
-        if (status.downloadId !== undefined) {
-          const outcome = await watchBrowserDownload({
-            downloadId: status.downloadId, signal: controller.signal, onProgress: report,
-            poll: async downloadId => {
-              const response = await sendToBackground({ type: MessageType.DownloadState, payload: { downloadId } }, 15_000)
-              return response?.type === MessageType.DownloadStateResult ? response.payload : null
-            }
-          })
-          if (outcome?.state !== 'complete') throw new Error(outcome?.error ? `浏览器下载中断（${outcome.error}），压缩包未保存完整。` : '无法确认浏览器下载完成，压缩包未保存完整。')
-          return outcome.receivedBytes
+      while (!signal.aborted) {
+        if (downloadId === undefined) downloadId = (await untilAbort(command({ action: 'status', token }))).downloadId
+        if (downloadId !== undefined) {
+          const response = await untilAbort(sendToBackground({ type: MessageType.DownloadState, payload: { downloadId } }, 15_000))
+          if (response?.type === MessageType.DownloadStateResult) {
+            const snapshot = response.payload
+            report({ phase: 'downloading', done: 0, total: 1, state: snapshot.state, receivedBytes: snapshot.receivedBytes,
+              ...(snapshot.totalBytes ? { totalBytes: snapshot.totalBytes } : {}) })
+            if (snapshot.state === 'complete' && productionDone) return Math.max(snapshot.receivedBytes, snapshot.totalBytes ?? 0)
+            if (snapshot.state === 'interrupted' && /USER_CANCELED/.test(snapshot.error ?? '')) throw new Error('浏览器下载已取消，本机任务已保留，可在工作台继续或丢弃。')
+            if (snapshot.state === 'interrupted' && productionDone) throw new Error('浏览器续传中断，本机完整缓存已保留，请继续下载。')
+          } else if (productionDone) throw new Error('无法读取浏览器下载记录，本机完整缓存已保留。')
         }
-        await new Promise(resolve => setTimeout(resolve, 500))
+        await untilAbort(new Promise<void>(resolve => setTimeout(resolve, 500)))
       }
     } catch (error) {
-      failure ??= error instanceof Error ? error : new Error('浏览器下载中断。')
-      controller.abort(failure)
+      if (!signal.aborted) { failure ??= error instanceof Error ? error : new Error('下载中断。'); controller.abort(failure) }
     }
     return 0
   })()
-  const started = Date.now()
+  const startedAt = Date.now()
   let lastWork: FileDownloadProgress = { phase: 'naming', done: 0, total: 1 }
   const onWork = (progress: FileDownloadProgress) => { lastWork = progress; report(progress) }
   const pulse = setInterval(() => {
     void command({ action: 'status', token }).catch(error => { failure ??= error; controller.abort(error) })
-    report({ ...lastWork, elapsedMs: Date.now() - started })
-  }, 15_000)
+    if (!productionDone) report({ ...lastWork, elapsedMs: Date.now() - startedAt })
+  }, 15000)
   try {
-    await produce(sink, controller.signal, onWork)
+    if (created.info?.sealed === true) { await command({ action: 'finish', token }); productionDone = true }
+    else await produce(sink, signal, onWork, context)
     const bytes = await track
     if (failure) throw failure
-    controller.signal.throwIfAborted()
+    signal.throwIfAborted()
+    succeeded = true
+    // 下载complete与ZIP封存均已确认，才清理磁盘缓存。
+    await command({ action: 'complete', token }).catch(async () => { await command({ action: 'pause', token }).catch(() => {}) })
     return bytes
   } catch (error) {
-    failure ??= error instanceof Error ? error : new Error('流水下载失败。')
-    controller.abort()
-    await command({ action: 'abort', token }).catch(() => {})
+    failure ??= error instanceof Error ? error : new Error('流水下载中断，任务缓存仍保留。')
+    controller.abort(failure)
+    await command({ action: 'pause', token }).catch(() => {})
     await track
-    throw failure ?? error
+    throw failure
   } finally {
     clearInterval(pulse)
     globalThis.removeEventListener?.('pagehide', pageGone)
-    await command({ action: 'abort', token }).catch(() => {})
+    if (!succeeded) await command({ action: 'pause', token }).catch(() => {})
   }
 }

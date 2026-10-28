@@ -4,7 +4,7 @@ import { projectRoot } from './paths.mjs'
 
 export async function ensureStreamBridge() {
   const ready = async () => {
-    try { return (await fetch('http://127.0.0.1:42843/health', { signal: AbortSignal.timeout(1000) }).then(response => response.json())).protocol === 'patmail-stream-v1' } catch { return false }
+    try { const info = await fetch('http://127.0.0.1:42843/health', { signal: AbortSignal.timeout(1000) }).then(response => response.json()); return info.protocol === 'patmail-stream-v1' && info.version === 2 } catch { return false }
   }
   if (await ready()) return () => {}
   const child = spawn('python', [join(projectRoot, 'scripts', 'stream-download-bridge.py')], { windowsHide: true, stdio: 'ignore' })
