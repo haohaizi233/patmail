@@ -20,3 +20,6 @@ credentials.json
 
 # local scratch files captured from the EASY site, keep out of the repo
 /_diff_tmp/
+
+# 会话 Cookie 是登录凭据，只留本机，不入仓
+cookies.txt
