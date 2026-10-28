@@ -16,6 +16,7 @@ function acceptedBackground(response: unknown): response is BackgroundResponse {
     response.type === MessageType.TaskResult || response.type === MessageType.AcceptanceResult ||
     response.type === MessageType.EvidenceResult || response.type === MessageType.WorkspaceResult ||
     response.type === MessageType.SaveDownloadResult || response.type === MessageType.DownloadStateResult || response.type === MessageType.StreamDownloadResult ||
+    response.type === MessageType.DiscardDownloadResult || response.type === MessageType.PauseDownloadResult ||
     response.type === MessageType.AgentChatResult
   )
 }

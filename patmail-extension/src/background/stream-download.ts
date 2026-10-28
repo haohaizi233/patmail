@@ -40,6 +40,7 @@ export class LocalStreamDownloads {
     if (command.action === 'start') {
       let data: Record<string, unknown>
       try {
+        if (command.manifest || command.taskId) await this.json('/authority', { owner })
         const response = await this.json('/sessions', { fileName: command.fileName, owner,
           ...(command.taskId ? { taskId: command.taskId } : {}), ...(command.manifest ? { manifest: command.manifest } : {}) })
         data = await response.json()
@@ -53,6 +54,10 @@ export class LocalStreamDownloads {
       const token = data.token as string
       const durable = data.version === 2 && typeof data.taskId === 'string'
       const taskId = durable ? data.taskId as string : undefined
+      if (data.completed === true) {
+        if (command.newCopy) throw new Error('该任务已完成且缓存已清理，请按当前文件新建下载任务。')
+        return { ok: true, token, taskId, info: data }
+      }
       const url = BASE + (taskId ? '/download/' + taskId : '/stream/' + token)
       let existing: chrome.downloads.DownloadItem | undefined
       if (taskId && this.downloads.search && !command.newCopy) {
@@ -78,7 +83,11 @@ export class LocalStreamDownloads {
         job.cancelled = true
         if (job.id !== undefined) await this.downloads.cancel(job.id).catch(() => {})
       }
-      await this.relay('/stream/' + token, { method: 'DELETE' })
+      if (command.action === 'complete' && job.durable) {
+        const item = job.id === undefined ? null : (await this.downloads.search?.({ id: job.id }))?.[0]
+        if (!item || item.state !== 'complete') throw new Error('浏览器尚未确认完成，缓存没有清理。')
+        await this.json('/complete/' + token, { downloadId: job.id })
+      } else await this.relay('/stream/' + token, { method: 'DELETE' })
       this.jobs.delete(token)
       return { ok: true }
     }
@@ -133,10 +142,19 @@ export class LocalStreamDownloads {
       this.jobs.delete(token)
     }
   }
+  async pauseTask(taskId: string, owner: string): Promise<number[]> {
+    const tabs: number[] = []
+    const response = await this.fetcher(BASE + '/pause-task/' + taskId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner }), signal: AbortSignal.timeout(10000) })
+    if (!response.ok && response.status !== 404) throw new Error('下载任务尚未暂停，请重试。')
+    for (const [token, job] of this.jobs) if (job.taskId === taskId) { tabs.push(job.tabId); this.jobs.delete(token) }
+    return tabs
+  }
   cancelTab(tabId: number): void {
     for (const [token, job] of this.jobs) if (job.tabId === tabId) void this.command({ action: 'pause', token }, tabId).catch(() => {})
   }
   revokeOtherOwners(owner: string): void {
+    // Python持久任务不随Service Worker的Map重启而消失，撤销必须覆盖整个同源任务登记表。
+    void this.json('/authority', { owner }).catch(() => {})
     for (const [token, job] of this.jobs) if (job.owner !== owner) {
       void this.json('/revoke/' + token).catch(() => {})
       this.jobs.delete(token)

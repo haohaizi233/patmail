@@ -23,6 +23,8 @@ PROTOCOL = 'patmail-stream-v1'
 CHUNK_LIMIT = 256 * 1024
 READ_LIMIT = 64 * 1024
 METADATA_LIMIT = 16 * 1024 * 1024
+# Leave room for pause/error/timestamp fields when capacity stops a hot write.
+METADATA_STATE_RESERVE = 128
 MAX_TASKS = 128
 MAX_ITEMS = 100000
 MAX_BYTES = 1 << 40
@@ -44,6 +46,10 @@ def integer(value, maximum=MAX_BYTES):
     return value
 
 
+def json_size(value):
+    return len(json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode())
+
+
 def atomic_json(path, value):
     """Data fsync precedes replace; write-through replace on Windows, directory fsync on POSIX."""
     data = json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode()
@@ -54,6 +60,10 @@ def atomic_json(path, value):
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
+    durable_replace(temp, path)
+
+
+def durable_replace(temp, path):
     if os.name == 'nt':
         import ctypes
         from ctypes import wintypes
@@ -69,6 +79,81 @@ def atomic_json(path, value):
         finally: os.close(fd)
 
 
+def ensure_journal(path):
+    if path.exists(): return
+    temp = path.with_suffix('.log.tmp')
+    with temp.open('wb') as stream:
+        stream.flush()
+        os.fsync(stream.fileno())
+    durable_replace(temp, path)
+
+
+def append_journal(path, record):
+    """Rollback a failed write/fsync before another request can use this journal."""
+    # Unbuffered writes let rollback seek/truncate even after a disk-full flush.
+    with path.open('r+b', buffering=0) as stream:
+        start = stream.seek(0, 2)
+        try:
+            if stream.write(record) != len(record): raise OSError('Short metadata write')
+            stream.flush()
+            os.fsync(stream.fileno())
+        except OSError:
+            stream.seek(start)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+            raise
+
+
+def apply_patches(data, patches):
+    for operation, path, value in patches:
+        if not isinstance(path, list) or not path or any(not isinstance(key, str) for key in path):
+            raise ValueError('Invalid metadata path')
+        target = data
+        for key in path[:-1]: target = target[key]
+        if operation == 'set': target[path[-1]] = value
+        elif operation == 'append': target[path[-1]].append(value)
+        else: raise ValueError('Invalid metadata operation')
+
+
+def load_metadata(directory, limit=METADATA_LIMIT):
+    raw = directory / 'task.json'
+    if raw.stat().st_size > limit: raise ValueError('Metadata limit')
+    data = json.loads(raw.read_text('utf-8'))
+    checkpoint = integer(data.get('_journalSeq', 0))
+    sequence = checkpoint
+    journal = directory / 'task.log'
+    if journal.exists():
+        previous = None
+        with journal.open('r+b') as stream:
+            while True:
+                start = stream.tell()
+                line = stream.readline(limit + 1)
+                if not line: break
+                if len(line) > limit: raise ValueError('Oversized metadata record')
+                if not line.endswith(b'\n'):
+                    # Only an incomplete final record is recoverable.
+                    stream.truncate(start)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                    break
+                record = json.loads(line)
+                payload = record['payload']
+                if hashlib.sha256(payload.encode()).hexdigest() != record['sha256']:
+                    raise ValueError('Metadata checksum mismatch')
+                event = json.loads(payload)
+                seq = integer(event['seq'])
+                if seq == 0 or (previous is not None and seq != previous + 1):
+                    raise ValueError('Metadata sequence gap')
+                previous = seq
+                if seq <= checkpoint: continue  # Atomic checkpoint won the crash race.
+                if seq != sequence + 1: raise ValueError('Metadata sequence gap')
+                apply_patches(data, event['patches'])
+                sequence = seq
+    data['_journalSeq'] = sequence
+    return data
+
+
 def new_blob():
     return {'receivedBytes':0, 'commits':[], 'complete':False, 'totalBytes':None, 'etag':None, 'lastModified':None}
 
@@ -77,6 +162,8 @@ class Session:
     def __init__(self, server, data):
         self.server = server
         self.data = data
+        self.journal_seq = data.get('_journalSeq', 0)
+        self.metadata_size = json_size(data)
         self.directory = server.cache_dir / data['taskId']
         self.condition = threading.Condition(threading.RLock())
         self.token = None
@@ -95,8 +182,38 @@ class Session:
     def path(self, index=None):
         return self.directory / ('archive.bin' if index is None else 'source-' + str(index) + '.bin')
 
-    def persist(self):
-        try: atomic_json(self.directory / 'task.json', self.data)
+    def persist(self, patches=None, metadata_delta=None):
+        """Hot operations commit bounded patches; lifecycle operations checkpoint atomically.
+
+        All callers hold the session lease. Payload fsync precedes metadata fsync.
+        A checkpoint's sequence makes an old journal safe after an interrupted rotation.
+        """
+        try:
+            journal = self.directory / 'task.log'
+            if patches is None:
+                if not self.data.get('completed'): ensure_journal(journal)
+                self.data['_journalSeq'] = self.journal_seq
+                atomic_json(self.directory / 'task.json', self.data)
+                self.metadata_size = json_size(self.data)
+                if journal.exists():
+                    if self.data.get('completed'): journal.unlink()
+                    else:
+                        with journal.open('r+b') as stream:
+                            stream.truncate(0)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                return
+            if metadata_delta is None: raise ValueError('Missing metadata size delta')
+            proposed_size = self.metadata_size + metadata_delta + len(str(self.journal_seq + 1)) - len(str(self.journal_seq))
+            if proposed_size + METADATA_STATE_RESERVE > METADATA_LIMIT: raise Problem(413, 'metadata_limit')
+            payload = json.dumps({'seq':self.journal_seq + 1, 'patches':patches},
+                                 ensure_ascii=True, separators=(',', ':'))
+            record = (json.dumps({'payload':payload, 'sha256':hashlib.sha256(payload.encode()).hexdigest()},
+                                 separators=(',', ':')) + '\n').encode()
+            if len(record) > METADATA_LIMIT: raise Problem(413, 'metadata_limit')
+            append_journal(journal, record)
+            self.journal_seq += 1
+            self.metadata_size = proposed_size
         except Problem as error:
             raise OSError('Metadata capacity exhausted') from error
 
@@ -111,7 +228,16 @@ class Session:
         return {'protocol':PROTOCOL, 'version':2, 'taskId':self.data['taskId'],
                 'receivedBytes':self.data['archive']['receivedBytes'], 'sequence':self.sequence,
                 'sealed':self.finished, 'manifest':self.data['manifest'],
-                'paused':self.data['paused'], 'authorized':self.authorized, 'error':self.data.get('error')}
+                'paused':self.data['paused'], 'authorized':self.authorized, 'error':self.data.get('error'),
+                'completed':self.data.get('completed', False), 'completedBytes':self.data.get('completedBytes', 0),
+                'completedDownloadId':self.data.get('completedDownloadId'), 'completedAt':self.data.get('completedAt')}
+
+    def cleanup_completed(self):
+        # Receipt is already durable. Only known payload files can be removed here.
+        for path in self.directory.iterdir():
+            if path.name in ('archive.bin', 'writer-receipts.bin') or re.fullmatch(r'source-\d+\.bin', path.name):
+                try: path.unlink()
+                except OSError: pass  # A locked orphan is retried on startup; receipt remains authoritative.
 
     def acknowledgement(self):
         return {'taskId':self.data['taskId'], 'receivedBytes':self.data['archive']['receivedBytes'],
@@ -140,7 +266,12 @@ class Session:
 
     def rollback(self):
         """A failed metadata commit never advances the acknowledged watermark."""
-        self.data = json.loads((self.directory / 'task.json').read_text('utf-8'))
+        self.data = load_metadata(self.directory)
+        self.journal_seq = self.data.get('_journalSeq', 0)
+        self.metadata_size = json_size(self.data)
+        if self.data.get('completed'):
+            self.cleanup_completed()
+            return
         self.verify(self.path(), self.data['archive'])
         for key, blob in self.data['sources'].items(): self.verify(self.path(int(key)), blob)
 
@@ -183,7 +314,11 @@ class Session:
                 os.fsync(stream.fileno())
                 blob['commits'].append([count, len(tail), hashlib.sha256(tail).hexdigest()])
                 blob['receivedBytes'] = end
-                self.persist()
+                path = ['archive'] if index is None else ['sources', str(index)]
+                self.persist([['append', path + ['commits'], blob['commits'][-1]],
+                              ['set', path + ['receivedBytes'], end]],
+                             metadata_delta=json_size(blob['commits'][-1]) + (1 if len(blob['commits']) > 1 else 0)
+                             + len(str(end)) - len(str(count)))
         self.touched = time.monotonic()
         self.condition.notify_all()
 
@@ -224,9 +359,7 @@ class BridgeServer(ThreadingHTTPServer):
         for directory in self.cache_dir.iterdir():
             if not TASK_ID.fullmatch(directory.name) or not directory.is_dir() or directory.is_symlink(): continue
             try:
-                raw = directory / 'task.json'
-                if raw.stat().st_size > METADATA_LIMIT: continue
-                data = json.loads(raw.read_text('utf-8'))
+                data = load_metadata(directory)
                 if data['taskId'] != directory.name: continue
                 session = Session(self, data)
                 if not isinstance(data.get('manifest'), dict) or not isinstance(data.get('sources'), dict):
@@ -235,10 +368,13 @@ class BridgeServer(ThreadingHTTPServer):
                     raise ValueError('Invalid owner metadata')
                 if not isinstance(data.get('sealed'), bool) or not isinstance(data.get('paused'), bool):
                     raise ValueError('Invalid state metadata')
-                session.verify(session.path(), data['archive'])
-                for key, blob in data['sources'].items():
-                    integer(int(key), MAX_ITEMS - 1)
-                    session.verify(session.path(int(key)), blob)
+                if data.get('completed'):
+                    session.cleanup_completed()
+                else:
+                    session.verify(session.path(), data['archive'])
+                    for key, blob in data['sources'].items():
+                        integer(int(key), MAX_ITEMS - 1)
+                        session.verify(session.path(int(key)), blob)
                 if not data['paused'] or data.get('retainedAt') is None: data['retainedAt'] = time.time()
                 data['paused'] = True
                 session.persist()
@@ -337,6 +473,7 @@ class Handler(BaseHTTPRequestHandler):
         return s
 
     def source(self, s, text, create=False, empty_info=False):
+        if s.data.get('completed'): raise Problem(410, 'completed')
         if not text.isdecimal(): raise Problem(400, 'invalid_index')
         index = integer(int(text), MAX_ITEMS - 1)
         items = s.data['manifest'].get('items')
@@ -345,9 +482,12 @@ class Handler(BaseHTTPRequestHandler):
         if key not in s.data['sources']:
             if empty_info: return index, new_blob()
             if not create: raise Problem(404, 'unknown_source')
-            s.path(index).touch()
+            # The source directory entry must survive before its journal watermark.
+            ensure_journal(s.path(index))
             s.data['sources'][key] = new_blob()
-            s.persist()
+            s.persist([['set', ['sources', key], s.data['sources'][key]]],
+                      metadata_delta=json_size(key) + 1 + json_size(s.data['sources'][key])
+                      + (1 if len(s.data['sources']) > 1 else 0))
         return index, s.data['sources'][key]
 
     def guarded(self, method):
@@ -388,14 +528,50 @@ class Handler(BaseHTTPRequestHandler):
     def handle_POST(self):
         parts = self.parts()
         if parts == ['sessions']: return self.create_session()
-        if len(parts) == 2 and parts[0] == 'discard-task':
+        if parts == ['authority']:
+            owner = self.json_body().get('owner')
+            if not isinstance(owner, str) or len(owner) > 8192: raise Problem(400, 'invalid_owner')
+            with self.server.lock: tasks = list(self.server.tasks.values())
+            pending = []
+            for task in tasks:
+                with task.condition:
+                    if task.aborted or task.data['origin'] != self.headers.get('Origin'): continue
+                    if owner and task.data['owner'] == owner: continue
+                    self.current_session = task
+                    # Revoke in memory before disk I/O so an I/O failure cannot preserve read access.
+                    task.authorized = False
+                    task.revoke_readers()
+                    if not task.data['paused'] or task.data.get('retainedAt') is None:
+                        task.data.update(paused=True, retainedAt=time.time())
+                        pending.append(task)
+            # Revoke every reader before the first disk operation can fail.
+            failure = None
+            for task in pending:
+                with task.condition:
+                    self.current_session = task
+                    try: task.persist()
+                    except OSError as error:
+                        if failure is None: failure = error
+            self.current_session = None
+            if failure is not None: raise failure
+            return self.answer(200)
+        if len(parts) == 2 and parts[0] in ('discard-task', 'pause-task'):
             data = self.json_body()
             with self.server.lock: s = self.server.tasks.get(parts[1])
             if s is None: raise Problem(404, 'unknown_task')
             with s.condition:
                 if s.data['origin'] != self.headers.get('Origin') or s.data['owner'] != data.get('owner'):
                     raise Problem(403, 'owner_mismatch')
-                self.discard(s)
+                if parts[0] == 'discard-task':
+                    self.discard(s)
+                else:
+                    if not s.data.get('completed'):
+                        s.data.update(paused=True, retainedAt=time.time())
+                        s.persist()
+                    s.revoke_readers()
+                    with self.server.lock:
+                        if s.token: self.server.sessions.pop(s.token, None)
+                        s.token = None
             return self.answer(200)
         if len(parts) < 2: raise Problem(404, 'unknown_endpoint')
         s = self.session(parts[1])
@@ -411,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
             elif parts[0] == 'touch':
                 s.touched = time.monotonic()  # A heartbeat deliberately leaves retainedAt untouched.
             elif parts[0] in ('pause', 'revoke'):
-                s.data.update(paused=True, retainedAt=time.time())
+                if not s.data.get('completed'): s.data.update(paused=True, retainedAt=time.time())
                 s.persist()
                 if parts[0] == 'revoke':
                     s.authorized = False
@@ -422,6 +598,17 @@ class Handler(BaseHTTPRequestHandler):
                 s.data['archive']['complete'] = True
                 s.persist()
                 s.condition.notify_all()
+            elif parts[0] == 'complete':
+                data = self.json_body()
+                download_id = integer(data['downloadId'], (1 << 53) - 1) if 'downloadId' in data else None
+                if not s.finished: raise Problem(409, 'not_sealed')
+                if not s.data.get('completed'):
+                    s.data.update(completed=True, completedBytes=s.data['archive']['receivedBytes'],
+                                  completedDownloadId=download_id, completedAt=datetime.now(timezone.utc).isoformat(),
+                                  paused=True, retainedAt=time.time(), archive=new_blob(), sources={})
+                    s.persist()  # Commit the terminal receipt before removing any payload.
+                s.revoke_readers()
+                s.cleanup_completed()
             elif parts[0] == 'manifest':
                 data = self.json_body()
                 offset = integer(data.get('offset'), MAX_ITEMS)
@@ -437,8 +624,10 @@ class Handler(BaseHTTPRequestHandler):
                     end = min(offset + len(names), int(old_offset) + len(old_names))
                     for at in range(start, end):
                         if names[at-offset] != old_names[at-int(old_offset)]: raise Problem(409, 'names_conflict')
-                cached[str(offset)] = names
-                s.persist()
+                key = str(offset)
+                delta = json_size(names) - json_size(cached[key]) if key in cached else json_size(key) + 1 + json_size(names) + (1 if cached else 0)
+                cached[key] = names
+                s.persist([['set', ['manifest', 'cachedNames', key], names]], metadata_delta=delta)
             elif parts[0] == 'cache' and len(parts) == 3:
                 data = self.json_body()
                 if data.get('read') is True:
@@ -451,11 +640,13 @@ class Handler(BaseHTTPRequestHandler):
                 index, blob = self.source(s, parts[2], create=True)
                 if data.get('reset'):
                     # Commit zero watermark before truncation: interruption can only leave an uncommitted tail.
+                    delta = json_size(new_blob()) - json_size(blob)
                     s.data['sources'][str(index)] = blob = new_blob()
-                    s.persist()
+                    s.persist([['set', ['sources', str(index)], blob]], metadata_delta=delta)
                     with s.path(index).open('wb') as stream:
                         stream.flush()
                         os.fsync(stream.fileno())
+                old_fields_size = json_size({k:v for k,v in blob.items() if k != 'commits'})
                 for field in ('etag', 'lastModified'):
                     if field in data:
                         value = data[field]
@@ -470,7 +661,9 @@ class Handler(BaseHTTPRequestHandler):
                     if blob['totalBytes'] is not None and blob['receivedBytes'] != blob['totalBytes']: raise Problem(409, 'incomplete_source')
                     blob['complete'] = True
                     blob['totalBytes'] = blob['receivedBytes']
-                s.persist()
+                s.persist([['set', ['sources', str(index), k], v]
+                           for k, v in blob.items() if k != 'commits'],
+                          metadata_delta=json_size({k:v for k,v in blob.items() if k != 'commits'}) - old_fields_size)
                 return self.answer(200, {k:v for k,v in blob.items() if k != 'commits'})
             else: raise Problem(404, 'unknown_endpoint')
             return self.answer(200, s.info())
@@ -524,14 +717,15 @@ class Handler(BaseHTTPRequestHandler):
             s.token = secrets.token_hex(32)
             s.sequence, s.cursor = 0, 0
             # Fixed-size disk receipts keep retry bookkeeping out of the application heap.
-            with (s.directory / 'writer-receipts.bin').open('wb') as receipts:
-                receipts.flush()
-                os.fsync(receipts.fileno())
+            if not s.data.get('completed'):
+                with (s.directory / 'writer-receipts.bin').open('wb') as receipts:
+                    receipts.flush()
+                    os.fsync(receipts.fileno())
             s.authorized = True
             s.aborted = False
             s.revoke_readers()
             s.touched = time.monotonic()
-            s.data.update(paused=False, retainedAt=time.time(), error=None)
+            if not s.data.get('completed'): s.data.update(paused=False, retainedAt=time.time(), error=None)
             s.persist()
             self.server.sessions[s.token] = s
             result = s.info()
@@ -544,6 +738,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) not in (2, 3) or parts[0] not in ('stream', 'cache'): raise Problem(404, 'unknown_endpoint')
         s = self.session(parts[1])
         self.current_session = s
+        if s.data.get('completed'): raise Problem(410, 'completed')
         body = self.body(CHUNK_LIMIT)
         with s.condition:
             if not s.authorized: raise Problem(403, 'reauthorization_required')
@@ -599,7 +794,7 @@ class Handler(BaseHTTPRequestHandler):
     def handle_GET(self):
         parts = self.parts()
         if parts == ['health']:
-            return self.answer(200, {'protocol':PROTOCOL,'version':2,'features':['durable','range','source-cache','manifest','revoke']})
+            return self.answer(200, {'protocol':PROTOCOL,'version':2,'features':['durable','range','source-cache','manifest','revoke','metadata-journal']})
         if len(parts) == 2 and parts[0] == 'status':
             s = self.session(parts[1])
             with s.condition: return self.answer(200, s.info())
@@ -621,6 +816,7 @@ class Handler(BaseHTTPRequestHandler):
             s = self.server.tasks.get(parts[1]) if parts[0] == 'download' else self.server.sessions.get(parts[1])
         if s is None or s.aborted: raise Problem(404, 'unknown_task')
         with s.condition:
+            if s.data.get('completed'): raise Problem(410, 'completed')
             if not s.authorized: raise Problem(403, 'reauthorization_required')
             if s.corrupt: raise Problem(409, 'corrupt_cache')
             generation = s.revocation

@@ -7,7 +7,8 @@ const BLOCK_BYTES = 64 * 1024
 export async function prefetchFile(
   url: string, filename: string, emptyAllowed: boolean, notice: string,
   budget: DownloadTokens | null, signal: AbortSignal, fetchFile: (url: string, init?: RequestInit) => Promise<Response>,
-  fail: (error: unknown) => void
+  fail: (error: unknown) => void,
+  replay?: (offset: number) => Promise<Uint8Array>
 ): Promise<{ body: ReadableStream<Uint8Array>; finished: Promise<void>; readonly bufferedBytes: number }> {
   const release = budget ? await budget.acquire('download', signal) : () => {}
   let reader: ReadableStreamDefaultReader<Uint8Array>
@@ -26,6 +27,7 @@ export async function prefetchFile(
 
   const queue: Uint8Array[] = []
   let bufferedBytes = 0, ended = false, failure: unknown
+  let available = 0, consumed = 0
   let bodyController!: ReadableStreamDefaultController<Uint8Array>
   const waiters = new Set<() => void>()
   const wake = () => { for (const resolve of waiters) resolve(); waiters.clear() }
@@ -40,6 +42,16 @@ export async function prefetchFile(
   const body = new ReadableStream<Uint8Array>({
     start(controller) { bodyController = controller },
     async pull(controller) {
+      if (replay) {
+        while (consumed === available && !ended && !failure) await wait()
+        signal.throwIfAborted()
+        if (failure) throw failure
+        if (consumed === available) { controller.close(); return }
+        const stored = await replay(consumed)
+        const chunk = stored.subarray(0, Math.min(stored.length, available - consumed))
+        if (!chunk.length) throw new Error('本机附件缓存不完整，不能继续写入压缩包。')
+        consumed += chunk.length; controller.enqueue(chunk); return
+      }
       while (!queue.length && !ended && !failure) await wait()
       if (failure) throw failure
       const chunk = queue.shift()
@@ -51,6 +63,9 @@ export async function prefetchFile(
   signal.addEventListener('abort', stop, { once: true })
   if (signal.aborted) stop()
   const push = async (chunk: Uint8Array) => {
+    // cachedFileResponse确认落盘后才交付字节。磁盘模式只推进水位，ZIP自行回读，
+    // 不能因ZIP的256KiB内存队列填满而扣住网络额度。
+    if (replay) { available += chunk.length; wake(); return }
     for (let offset = 0; offset < chunk.byteLength; offset += BLOCK_BYTES) {
       const count = Math.min(BLOCK_BYTES, chunk.byteLength - offset)
       while (bufferedBytes + count > FILE_BUFFER_BYTES && !signal.aborted) await wait()

@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { chromium } from 'playwright'
 import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
+import { waitForContentScript } from './support/browser.mjs'
 import { ensureStreamBridge } from './support/stream-bridge.mjs'
 
 const files = Array.from({ length: 6 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, fileNo: `R${index}`, fileName: `old-${index}.pdf` }))
@@ -80,6 +81,8 @@ try {
   const failedResult = await app.evaluate(id => window.__results[id], first)
   assert.equal(failedResult.payload.ok, false)
   assert(original?.bytesReceived > 0, '首轮必须留下非零浏览器前缀')
+  await easy.reload()
+  await waitForContentScript(worker, easy)
   const second = crypto.randomUUID()
   assert.equal((await start(second)).type, 'DOWNLOAD_FILES_ACCEPTED')
   await app.waitForFunction(id => Boolean(window.__results[id]), second, { timeout: 120000 })
@@ -96,7 +99,8 @@ try {
   await promisify(execFile)('python', ['-c', validation, downloads[0].filename], { windowsHide: true })
   await context.close(); context = null
   const events = JSON.parse(await readFile(netlog, 'utf8')).events
-  const headers = events.flatMap(event => event.params?.headers ?? []).filter(value => typeof value === 'string')
+  const headers = events.filter(event => String(event.params?.line ?? '').startsWith(`GET /download/${taskId} `))
+    .flatMap(event => event.params?.headers ?? []).filter(value => typeof value === 'string')
   const nativeRanges = headers.filter(header => /^range:\s*bytes=[1-9]\d*-/i.test(header))
   assert(nativeRanges.length > 0, '真实浏览器必须发出非零Range请求')
   const report = { passed: true, sameDownloadId: original.id, originalBytes: original.bytesReceived, names, sourceFetches: fetches, sourceRanges: ranges,

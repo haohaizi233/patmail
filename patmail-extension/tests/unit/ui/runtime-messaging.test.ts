@@ -5,6 +5,17 @@ import { MessageType } from '../../../src/shared/message'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('HTTP 内容脚本后台通信', () => {
+  it.each([
+    [MessageType.DiscardDownload, MessageType.DiscardDownloadResult],
+    [MessageType.PauseDownload, MessageType.PauseDownloadResult]
+  ] as const)('%s 的成功响应不会被通信白名单丢弃', async (type, result) => {
+    const response = { type: result, payload: { ok: true } }
+    vi.stubGlobal('chrome', { runtime: {
+      onMessage: { addListener() {}, removeListener() {} },
+      sendMessage: (_envelope: unknown, callback: (value: unknown) => void) => callback(response)
+    } })
+    await expect(sendToBackground({ type, payload: { taskId: '11111111-1111-4111-8111-111111111111' } })).resolves.toEqual(response)
+  })
   it('没有 randomUUID 时仍能发送取包消息并接收浏览器的响应', async () => {
     const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto)
     vi.stubGlobal('crypto', { getRandomValues })

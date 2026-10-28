@@ -3,7 +3,7 @@ import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
 import { sendToBackground } from '../utils/runtime'
 import { watchBrowserDownload } from '../utils/download-outcome'
-import { nativeStreamArchive } from '../utils/stream-download'
+import { nativeStreamArchive, pauseNativeDownload } from '../utils/stream-download'
 import { templateArchiveName } from '../api/file-download'
 import { injectPanel } from './injector'
 import { startArchiveDownload } from './save-file'
@@ -299,7 +299,7 @@ const bridge: MessageBridge = {
           try {
             const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork, context) => easyRuntime.streamFiles(
               message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, context
-            ), report, { taskId: message.payload.taskId, manifest: {
+            ), report, { taskId: message.payload.taskId, ...(message.payload.saveAsNew ? { newCopy: true as const } : {}), manifest: {
               items: message.payload.items, selection: message.payload.selection,
               stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName
             } })
@@ -373,6 +373,9 @@ const bridge: MessageBridge = {
       }
       case MessageType.DiscardDownload:
         return await sendToBackground(message) as ContentResponse ?? { type: MessageType.Error, payload: { message: '本机下载任务没有响应。' } }
+      case MessageType.PauseDownload:
+        pauseNativeDownload(message.payload.taskId)
+        return { type: MessageType.PauseDownloadResult, payload: { ok: true } }
       case MessageType.ExportCaseContacts:
         return { type: MessageType.ExportCaseContactsResult,
           payload: await easyRuntime.exportCaseContacts(message.payload.volumes) }

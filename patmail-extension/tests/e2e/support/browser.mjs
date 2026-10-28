@@ -1,8 +1,8 @@
 import { chromium } from 'playwright'
 
 /** 带扩展的持久化上下文；viewport 不传时保持 Playwright 默认（1280×720）。 */
-export async function launchExtensionContext(dist, { viewport, acceptDownloads } = {}) {
-  return await chromium.launchPersistentContext('', {
+export async function launchExtensionContext(dist, { viewport, acceptDownloads, userDataDir = '' } = {}) {
+  return await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
     headless: true,
     ...(viewport ? { viewport } : {}),

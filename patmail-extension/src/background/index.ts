@@ -162,7 +162,7 @@ watchCustomerMode(() => {
 chrome.action.onClicked.addListener(() => { void host.openApp() })
 
 function fromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
-  return !sender.tab && typeof sender.url === 'string' && sender.url.startsWith(chrome.runtime.getURL(''))
+  return typeof sender.url === 'string' && sender.url.startsWith(chrome.runtime.getURL(''))
 }
 
 const WRITES = new Set<string>([
@@ -249,6 +249,17 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
     }
     await streamDownloads.discardTask(message.payload.taskId, JSON.stringify([connection.context.easyOrigin, connection.context.operatorId]))
     return { type: MessageType.DiscardDownloadResult, payload: { ok: true } }
+  }
+  if (message.type === MessageType.PauseDownload) {
+    await connectionReady
+    const context = connection.context
+    const contentOwner = sender.tab?.id === context.easyTabId && trustedOrigin(sender.url ?? '') === context.easyOrigin
+    const owner = context.operatorId || context.lastOperatorId
+    if ((!fromExtensionPage(sender) && !contentOwner) || !owner) return { type: MessageType.Error, payload: { message: '下载任务账号范围无法确认。' } }
+    const tabs = await streamDownloads.pauseTask(message.payload.taskId, JSON.stringify([context.easyOrigin, owner]))
+    if (context.easyTabId != null) tabs.push(context.easyTabId)
+    await Promise.all([...new Set(tabs)].map(id => chrome.tabs.sendMessage(id, message).catch(() => {})))
+    return { type: MessageType.PauseDownloadResult, payload: { ok: true } }
   }
   /** 浏览器下载进度由内容脚本回读：后台只做一次状态查询，下载再多分钟也不占后台定时器。 */
   if (message.type === MessageType.DownloadState) {

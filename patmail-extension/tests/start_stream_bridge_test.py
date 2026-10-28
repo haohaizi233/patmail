@@ -1,9 +1,11 @@
 """启动器在下载间桥接退出后恢复服务；使用独立端口，不碰用户下载。"""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import socket
 import threading
+import tempfile
 import time
 import unittest
 import urllib.request
@@ -20,7 +22,7 @@ class LauncherBridgeTests(unittest.TestCase):
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
         stop = threading.Event()
-        with patch.object(launcher, 'STREAM_BRIDGE_PORT', port, create=True):
+        with tempfile.TemporaryDirectory() as cache_root, patch.dict(os.environ, {'LOCALAPPDATA': cache_root}), patch.object(launcher, 'STREAM_BRIDGE_PORT', port, create=True):
             monitor = threading.Thread(target=launcher.monitor_stream_bridge,
                                        args=(stop, .05), daemon=True)
             try:

@@ -5,6 +5,10 @@ import type { DownloadCache, CachedFileInfo } from '../api/stream-cache'
 import { isRecord } from '../shared/guards'
 
 export interface NativeDownloadContext { cache?: DownloadCache; zipCreatedAt?: string; taskId?: string }
+const activeProducers = new Map<string, AbortController>()
+export function pauseNativeDownload(taskId: string): void {
+  activeProducers.get(taskId)?.abort(new Error('下载已暂停，本机缓存和任务已保留。'))
+}
 const encode = (bytes: Uint8Array) => {
   let text = ''
   for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192))
@@ -17,14 +21,27 @@ export async function nativeStreamArchive(
   fileName: string,
   produce: (sink: WritableStream<Uint8Array>, signal: AbortSignal, onWork: (progress: FileDownloadProgress) => void, context: NativeDownloadContext) => Promise<void>,
   report: (progress: FileDownloadProgress) => void,
-  options: { taskId?: string; manifest?: Record<string, unknown> } = {}
+  options: { taskId?: string; manifest?: Record<string, unknown>; newCopy?: true } = {}
 ): Promise<number> {
+  const controller = new AbortController()
+  const signal = controller.signal
+  if (options.taskId) {
+    activeProducers.get(options.taskId)?.abort(new Error('任务已由新的恢复请求接管。'))
+    activeProducers.set(options.taskId, controller)
+  }
   const command = async (payload: StreamDownloadCommand) => {
     const response = await sendToBackground({ type: MessageType.StreamDownload, payload }, payload.action === 'write' || payload.action === 'cache' ? 130_000 : 20_000)
     if (response?.type !== MessageType.StreamDownloadResult) throw new Error(response?.type === MessageType.Error ? response.payload.message : '本机下载流没有应答，已保留任务。')
     return response.payload
   }
-  const created = await command({ action: 'start', fileName, ...options })
+  const created = await command({ action: 'start', fileName, ...options }).catch(error => {
+    if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
+    throw error
+  })
+  if (created.info?.completed === true && Number.isSafeInteger(created.info.completedBytes)) {
+    if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
+    return Number(created.info.completedBytes)
+  }
   if (!created.token) throw new Error('本机下载流缺少写入凭据。')
   const token = created.token
   const manifest = isRecord(created.info?.manifest) ? created.info.manifest : {}
@@ -34,8 +51,8 @@ export async function nativeStreamArchive(
   }
   const metadata = (info: Partial<CachedFileInfo>): Record<string, unknown> => ({
     ...(info.totalBytes === undefined ? {} : { totalBytes: info.totalBytes }),
-    ...(info.etag === undefined ? {} : { etag: info.etag }),
-    ...(info.lastModified === undefined ? {} : { lastModified: info.lastModified })
+    ...(typeof info.etag === 'string' ? { etag: info.etag } : {}),
+    ...(typeof info.lastModified === 'string' ? { lastModified: info.lastModified } : {})
   })
   const cache: DownloadCache | undefined = created.taskId ? {
     names,
@@ -57,8 +74,6 @@ export async function nativeStreamArchive(
     async read(index, offset) { const result = await command({ action: 'cache', command: 'read', token, index, offset }); return decode(result.data ?? '') }
   } : undefined
   const context: NativeDownloadContext = { cache, taskId: created.taskId, zipCreatedAt: typeof manifest.zipCreatedAt === 'string' ? manifest.zipCreatedAt : undefined }
-  const controller = new AbortController()
-  const signal = controller.signal
   let failure: Error | null = null, productionDone = false, succeeded = false
   const untilAbort = <T>(promise: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
     const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
@@ -136,6 +151,7 @@ export async function nativeStreamArchive(
     await track
     throw failure
   } finally {
+    if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
     clearInterval(pulse)
     globalThis.removeEventListener?.('pagehide', pageGone)
     if (!succeeded) await command({ action: 'pause', token }).catch(() => {})

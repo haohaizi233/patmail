@@ -54,6 +54,188 @@ class BridgeTests(unittest.TestCase):
     def put(self, session, body, seq=0, offset=None):
         return self.request('PUT', '/stream/' + session['token'], body, seq=seq, offset=offset)[0]
 
+    def test_cumulative_metadata_limit_rejects_before_ack_and_remains_recoverable(self):
+        original = bridge.METADATA_LIMIT
+        bridge.METADATA_LIMIT = 2048
+        try:
+            s = self.create()
+            accepted = 0
+            for n in range(40):
+                status = self.put(s,b'x',seq=n)
+                if status == 507: break
+                self.assertEqual(status,200)
+                accepted += 1
+            self.assertLess(accepted,40,'cumulative checkpoint size must be checked before ACK')
+            task = self.server.tasks[s['taskId']]
+            self.assertEqual(task.data['archive']['receivedBytes'],accepted)
+            self.assertEqual(task.path().read_bytes(),b'x'*accepted)
+            self.assertFalse(task.corrupt)
+            self.stop()
+            self.start()
+            resumed = self.create(taskId=s['taskId'])
+            self.assertEqual(resumed['receivedBytes'],accepted)
+            self.assertEqual(self.request('POST','/finish/'+resumed['token'])[0],200)
+        finally: bridge.METADATA_LIMIT = original
+
+    def test_incremental_metadata_budget_matches_checkpoint_for_all_hot_operations(self):
+        s = self.create(manifest={'items':[{},{}]})
+        task = self.server.tasks[s['taskId']]
+        def check():
+            self.assertEqual(task.metadata_size,bridge.json_size({**task.data,'_journalSeq':task.journal_seq}))
+        check()
+        path = '/cache/'+s['token']+'/0'
+        operations = [('POST',path,{'etag':'a','totalBytes':3},None),
+                      ('PUT',path,b'abc',0),('POST',path,{'complete':True},None),
+                      ('POST',path,{'reset':True,'etag':'longer validator','totalBytes':None},None),
+                      ('PUT',path,b'abcd',0),
+                      ('POST','/manifest/'+s['token'],{'offset':0,'names':['名字','two']},None),
+                      ('POST','/manifest/'+s['token'],{'offset':0,'names':['名字','two']},None)]
+        for method,url,body,offset in operations:
+            self.assertEqual(self.request(method,url,body,offset=offset)[0],200)
+            check()
+        for n in range(12):
+            self.assertEqual(self.put(s,b'x',seq=n),200)
+            check()
+        with task.condition: task.rollback()
+        check()
+
+    def test_source_directory_entry_is_durable_before_metadata_journal(self):
+        s = self.create()
+        task = self.server.tasks[s['taskId']]
+        events = []
+        original_replace, original_append = bridge.durable_replace, bridge.append_journal
+        def replace(temp,path):
+            result = original_replace(temp,path)
+            if path.name == 'source-0.bin': events.append('source durable')
+            return result
+        def append(path,record):
+            events.append('metadata')
+            return original_append(path,record)
+        bridge.durable_replace, bridge.append_journal = replace, append
+        try: self.assertEqual(self.request('POST','/cache/'+s['token']+'/0',{})[0],200)
+        finally: bridge.durable_replace, bridge.append_journal = original_replace, original_append
+        self.assertEqual(events,['source durable','metadata','metadata'])
+
+    def test_large_manifest_hot_writes_use_bounded_incremental_metadata(self):
+        s = self.create(manifest={'items':[{'key':'x' * 1000} for _ in range(1607)]})
+        task = self.server.tasks[s['taskId']]
+        before = (task.directory / 'task.json').read_bytes()
+        for n in range(20):
+            self.assertEqual(self.put(s, b'x' * 65536, seq=n), 200)
+        self.assertEqual((task.directory / 'task.json').read_bytes(), before,
+                         'hot chunks must not rewrite the large manifest')
+        self.assertLess((task.directory / 'task.log').stat().st_size, 20000)
+        self.stop()
+        self.start()
+        self.assertEqual(self.create(taskId=s['taskId'])['receivedBytes'],20 * 65536)
+
+    def test_journal_torn_tail_is_truncated_but_complete_corruption_fails_closed(self):
+        s = self.create()
+        self.assertEqual(self.put(s,b'abc'),200)
+        taskdir = self.server.tasks[s['taskId']].directory
+        self.stop()
+        journal = taskdir / 'task.log'
+        self.assertTrue(journal.exists())
+        with journal.open('ab') as stream: stream.write(b'{"torn":')
+        self.start()
+        self.assertEqual(self.create(taskId=s['taskId'])['receivedBytes'],3)
+        self.stop()
+        with journal.open('ab') as stream: stream.write(b'{"corrupt":true}\n')
+        self.start()
+        self.assertEqual(self.request('POST','/sessions',{'fileName':'搜索模板.zip','taskId':s['taskId']})[0],409)
+
+    def test_legacy_checkpoint_without_journal_migrates_and_preserves_sources(self):
+        s = self.create()
+        path = '/cache/' + s['token'] + '/0'
+        self.assertEqual(self.request('POST',path,{'etag':'version-one'})[0],200)
+        self.assertEqual(self.request('PUT',path,b'abc',offset=0)[0],200)
+        task = self.server.tasks[s['taskId']]
+        with task.condition: task.persist()
+        directory = task.directory
+        self.stop()
+        record = json.loads((directory / 'task.json').read_text('utf8'))
+        record.pop('_journalSeq', None)
+        (directory / 'task.json').write_text(json.dumps(record),encoding='utf8')
+        (directory / 'task.log').unlink()
+        self.start()
+        resumed = self.create(taskId=s['taskId'])
+        self.assertEqual(self.request('GET','/cache/'+resumed['token']+'/0')[1],b'abc')
+
+    def test_journal_fsync_failure_truncates_record_and_unconfirmed_payload(self):
+        s = self.create()
+        self.assertEqual(self.put(s,b'abc'),200)
+        task = self.server.tasks[s['taskId']]
+        log = task.directory / 'task.log'
+        original = bridge.os.fsync
+        failed = [False]
+        def fail_metadata(fd):
+            # Verify the real file descriptor, so payload fsync still runs normally.
+            import os
+            if not failed[0] and os.path.samestat(os.fstat(fd), log.stat()):
+                failed[0] = True
+                raise OSError('simulated metadata disk full')
+            return original(fd)
+        bridge.os.fsync = fail_metadata
+        try: self.assertEqual(self.put(s,b'def',seq=1),507)
+        finally: bridge.os.fsync = original
+        self.assertTrue(failed[0])
+        self.assertEqual(task.path().read_bytes(),b'abc')
+        self.stop()
+        self.start()
+        self.assertEqual(self.create(taskId=s['taskId'])['receivedBytes'],3)
+
+    def test_source_and_name_updates_do_not_rewrite_large_manifest(self):
+        s = self.create(manifest={'items':[{'key':'x'*1000} for _ in range(1607)]})
+        task = self.server.tasks[s['taskId']]
+        before = (task.directory/'task.json').read_bytes()
+        path = '/cache/'+s['token']+'/0'
+        self.assertEqual(self.request('POST',path,{'totalBytes':3,'etag':'v1'})[0],200)
+        self.assertEqual(self.request('PUT',path,b'abc',offset=0)[0],200)
+        self.assertEqual(self.request('POST',path,{'complete':True})[0],200)
+        self.assertEqual(self.request('POST','/manifest/'+s['token'],{'offset':0,'names':['synthetic']})[0],200)
+        self.assertEqual((task.directory/'task.json').read_bytes(),before)
+        self.stop()
+        self.start()
+        resumed = self.create(taskId=s['taskId'])
+        info = json.loads(self.request('GET','/cache-info/'+resumed['token']+'/0')[1])
+        self.assertTrue(info['complete'])
+        self.assertEqual(info['etag'],'v1')
+        self.assertEqual(resumed['manifest']['cachedNames']['0'],['synthetic'])
+
+    def test_journal_checksum_mismatch_and_sequence_gap_fail_closed(self):
+        for damage in ('checksum', 'sequence', 'patch'):
+            with self.subTest(damage=damage):
+                s = self.create()
+                self.assertEqual(self.put(s,b'abc'),200)
+                journal = self.server.tasks[s['taskId']].directory / 'task.log'
+                self.stop()
+                record = json.loads(journal.read_text('utf8'))
+                if damage == 'checksum':
+                    record['sha256'] = '0' * 64
+                else:
+                    payload = json.loads(record['payload'])
+                    if damage == 'sequence': payload['seq'] += 1
+                    else: payload['patches'] = [['set', [], 1]]
+                    record['payload'] = json.dumps(payload)
+                    record['sha256'] = bridge.hashlib.sha256(record['payload'].encode()).hexdigest()
+                journal.write_text(json.dumps(record)+'\n',encoding='utf8')
+                self.start()
+                self.assertEqual(self.request('POST','/sessions',{'fileName':'搜索模板.zip','taskId':s['taskId']})[0],409)
+
+    def test_checkpoint_sequence_prevents_duplicate_journal_replay(self):
+        s = self.create()
+        self.assertEqual(self.put(s,b'abc'),200)
+        task = self.server.tasks[s['taskId']]
+        journal = task.directory / 'task.log'
+        self.assertTrue(journal.exists())
+        old_log = journal.read_bytes()
+        with task.condition: task.persist()
+        journal.write_bytes(old_log)  # Crash between atomic checkpoint and log truncation.
+        self.stop()
+        self.start()
+        self.assertEqual(self.create(taskId=s['taskId'])['receivedBytes'],3)
+        self.assertEqual(len(self.server.tasks[s['taskId']].data['archive']['commits']),1)
+
     def test_durable_replay_restart_and_range(self):
         s = self.create(owner='alice', manifest={'items': [{}, {}]})
         self.assertEqual(self.put(s, b'abc'), 200)
@@ -152,17 +334,17 @@ class BridgeTests(unittest.TestCase):
         s = self.create()
         self.assertEqual(self.put(s, b'abc'), 200)
         task = self.server.tasks[s['taskId']]
-        original = bridge.atomic_json
+        original = bridge.append_journal
         calls = [0]
         def fail_once(path, value):
             calls[0] += 1
             if calls[0] == 1: raise OSError('disk full')
             return original(path, value)
-        bridge.atomic_json = fail_once
+        bridge.append_journal = fail_once
         try:
             self.assertEqual(self.put(s, b'def', seq=1), 507)
         finally:
-            bridge.atomic_json = original
+            bridge.append_journal = original
         self.assertEqual(task.data['archive']['receivedBytes'], 3)
         self.assertEqual(task.path().read_bytes(), b'abc')
         self.assertTrue(task.data['paused'])
@@ -305,5 +487,100 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.request('POST','/status/'+token,{},origin='')[0],403)
         # Another thread acquiring the lease proves no nested session lock leaked.
         self.assertEqual(self.put(s,b'zip'),200)
+
+    def test_authority_revokes_other_owner_without_writer_token(self):
+        s = self.create(owner='alice')
+        c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=2)
+        c.request('GET','/download/'+s['taskId'])
+        response = c.getresponse()
+        self.put(s,b'abc')
+        self.assertEqual(response.read(3),b'abc')
+        other_origin = 'chrome-extension://' + 'b' * 32
+        self.assertEqual(self.request('POST','/authority',{'owner':'bob'},origin=other_origin)[0],200)
+        self.assertTrue(self.server.tasks[s['taskId']].authorized)
+        self.assertEqual(self.request('POST','/authority',{'owner':'bob'})[0],200)
+        with self.assertRaises(http.client.IncompleteRead): response.read()
+        c.close()
+        self.assertEqual(self.request('GET','/download/'+s['taskId'])[0],403)
+        self.assertEqual(self.put(s,b'bad'),403)
+        self.request('POST','/authority',{'owner':'alice'})
+        self.assertFalse(self.server.tasks[s['taskId']].authorized)
+        renewed = self.create(taskId=s['taskId'],owner='alice')
+        self.assertEqual(self.put(renewed,b'abcdef',offset=0),200)
+        self.assertEqual(self.request('POST','/authority',{'owner':''})[0],200)
+        self.assertFalse(self.server.tasks[s['taskId']].authorized)
+        self.assertEqual(self.request('POST','/authority',{'owner':1})[0],400)
+
+    def test_authority_revokes_all_before_any_disk_failure(self):
+        first = self.create(owner='alice')
+        second = self.create(owner='alice')
+        task = self.server.tasks[first['taskId']]
+        original = task.persist
+        def fail(): raise OSError('simulated disk full')
+        task.persist = fail
+        try:
+            self.assertEqual(self.request('POST','/authority',{'owner':''})[0],507)
+            self.assertFalse(self.server.tasks[first['taskId']].authorized)
+            self.assertFalse(self.server.tasks[second['taskId']].authorized)
+            self.assertEqual(self.request('GET','/download/'+second['taskId'])[0],403)
+        finally: task.persist = original
+
+    def test_completed_receipt_survives_restart_and_removes_payloads(self):
+        s = self.create(owner='alice')
+        token = s['token']
+        endpoint = '/complete/' + token
+        self.assertEqual(self.request('POST',endpoint,{'downloadId':42})[0],409)
+        self.request('POST','/cache/'+token+'/0',{})
+        self.request('PUT','/cache/'+token+'/0',b'source',offset=0)
+        self.put(s,b'zip-bytes')
+        self.request('POST','/finish/'+token)
+        self.assertEqual(self.request('POST',endpoint,{'downloadId':42})[0],200)
+        info = json.loads(self.request('POST','/status/'+token,{})[1])
+        self.assertTrue(info['completed'])
+        self.assertEqual(info['completedBytes'],9)
+        self.assertEqual(info['completedDownloadId'],42)
+        taskdir = Path(self.tmp.name)/s['taskId']
+        self.assertEqual([path.name for path in taskdir.iterdir()],['task.json'])
+        self.assertEqual(self.request('GET','/download/'+s['taskId'])[0],410)
+        # Simulate a crash after receipt commit but before payload deletion.
+        (taskdir/'archive.bin').write_bytes(b'orphan')
+        (taskdir/'source-0.bin').write_bytes(b'orphan')
+        self.stop()
+        self.start()
+        resumed = self.create(taskId=s['taskId'],owner='alice')
+        self.assertTrue(resumed['completed'])
+        self.assertEqual(resumed['completedBytes'],9)
+        self.assertEqual(resumed['completedDownloadId'],42)
+        self.assertFalse((taskdir/'archive.bin').exists())
+        self.assertFalse((taskdir/'source-0.bin').exists())
+        self.assertEqual(self.request('GET','/download/'+s['taskId'])[0],410)
+
+    def test_pause_task_invalidates_writer_but_preserves_replay(self):
+        s = self.create(owner='alice')
+        self.put(s,b'abc')
+        endpoint = '/pause-task/' + s['taskId']
+        self.assertEqual(self.request('POST',endpoint,{'owner':'bob'})[0],403)
+        self.assertEqual(self.request('POST',endpoint,{'owner':'alice'})[0],200)
+        task = self.server.tasks[s['taskId']]
+        self.assertTrue(task.authorized)
+        self.assertEqual(task.path().read_bytes(),b'abc')
+        self.assertEqual(self.put(s,b'def',seq=1),404)
+        renewed = self.create(taskId=s['taskId'],owner='alice')
+        self.assertEqual(self.put(renewed,b'abcdef',offset=0),200)
+
+    def test_completion_receipt_stays_readable_when_payload_cleanup_is_blocked(self):
+        s = self.create()
+        self.put(s,b'zip')
+        self.request('POST','/finish/'+s['token'])
+        original = Path.unlink
+        def blocked(path, *args, **kwargs):
+            if path.name == 'archive.bin': raise OSError('temporarily locked payload')
+            return original(path, *args, **kwargs)
+        Path.unlink = blocked
+        try:
+            self.assertEqual(self.request('POST','/complete/'+s['token'],{})[0],200)
+            self.assertTrue(self.create(taskId=s['taskId'])['completed'])
+        finally: Path.unlink = original
+        self.assertEqual(self.request('GET','/download/'+s['taskId'])[0],410)
 
 if __name__ == '__main__': unittest.main()

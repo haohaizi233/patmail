@@ -297,7 +297,10 @@ def start_stream_bridge() -> None:
     def healthy() -> bool:
         try:
             with urllib.request.urlopen(f'http://127.0.0.1:{STREAM_BRIDGE_PORT}/health', timeout=1) as response:
-                return json.load(response).get('protocol') == 'patmail-stream-v1'
+                info = json.load(response)
+                if info.get('protocol') == 'patmail-stream-v1' and (info.get('version') != 2 or 'metadata-journal' not in info.get('features', [])):
+                    raise RuntimeError('检测到旧版下载桥接。请先暂停当前下载，再关闭旧版 start.py 或旧桥接进程并重新启动，以启用增量缓存。')
+                return info.get('protocol') == 'patmail-stream-v1' and info.get('version') == 2
         except (OSError, ValueError):
             return False
 

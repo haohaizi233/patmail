@@ -27,7 +27,7 @@ function safeEntryName(value: string, used: Set<string>): string {
   return name
 }
 
-/** 六份有界正文预取，共用六个业务令牌，ZIP仍按输入顺序逐份写入。 */
+/** 六个业务令牌；持久缓存与ZIP消费分别背压，ZIP仍按输入顺序写入。 */
 export async function streamDownloadFiles(
   transport: EasyTransport, items: DownloadFileItem[], selection: FileDownloadSelection | null,
   stripAppNoDot: boolean, options: StreamDownloadOptions
@@ -85,7 +85,7 @@ export async function streamDownloadFiles(
   })().catch(fail)
 
   const used = new Set<string>()
-  type Prepared = Awaited<ReturnType<typeof prefetchFile>> & { name: string }
+  type Prepared = Awaited<ReturnType<typeof prefetchFile>> & { name: string; networkFinished: Promise<void> }
   const jobs = new Map<number, Promise<Prepared | null>>()
   const pumps = new Set<Promise<void>>()
   const open = async (index: number, generated: string): Promise<Prepared> => {
@@ -94,11 +94,15 @@ export async function streamDownloadFiles(
     const params = buildDownloadParams([item.fileNo], [name])
     if (!params) throw new Error('文件编号或生成名称无效，没有完成压缩包。')
     const cached = await options.cache?.info(index)
+    if (cached && !cached.complete && cached.totalBytes != null && cached.receivedBytes === cached.totalBytes) {
+      await options.cache!.complete(index, cached)
+      cached.complete = true
+    }
     if (cached?.complete && options.cache) {
       const file = await prefetchFile('local-cache', item.fileName, cached.receivedBytes === 0, '', null, signal,
         () => cachedFileResponse('local-cache', index, options.cache!, signal, options.fetchFile ?? globalThis.fetch.bind(globalThis)), fail)
       pumps.add(file.finished); void file.finished.then(() => pumps.delete(file.finished))
-      return { ...file, name }
+      return { ...file, name, networkFinished: Promise.resolve() }
     }
     const prepared = await scoped.post('fileDownload', params, signal)
     if (!prepared.ok) throw new Error(prepared.error.message)
@@ -108,11 +112,16 @@ export async function streamDownloadFiles(
     if (!url) throw new Error('取文件句柄无效。')
     const fetcher = options.fetchFile ?? globalThis.fetch.bind(globalThis)
     const file = await prefetchFile(url, item.fileName, handle.data.fileSize === 0, handle.data.notice,
-      budget, signal, options.cache ? target => cachedFileResponse(target, index, options.cache!, signal, fetcher) : fetcher, fail)
+      budget, signal, options.cache ? target => cachedFileResponse(target, index, options.cache!, signal, fetcher) : fetcher, fail,
+      options.cache ? offset => options.cache!.read(index, offset) : undefined)
     pumps.add(file.finished)
     void file.finished.then(() => pumps.delete(file.finished))
-    return { ...file, name }
+    return { ...file, name, networkFinished: file.finished }
   }
+  let preparing = 0
+  // 磁盘缓存可先行一批名称；网络窗口只等正文结束，不等ZIP完成。
+  // 描述符和本地回放仍有48文件上限，禁止无界预取。
+  const lookahead = options.cache ? 48 : 6
   const dispatch = (async () => {
     while (scheduled < items.length) {
       while (!queue.length && !signal.aborted) await wait()
@@ -120,12 +129,16 @@ export async function streamDownloadFiles(
       const batch = queue.shift()!
       wake()
       for (const [offset, generated] of batch.names.entries()) {
-        while (scheduled - done >= 6 && !signal.aborted) await wait()
+        while ((scheduled - done >= lookahead || preparing >= 6) && !signal.aborted) await wait()
         signal.throwIfAborted()
         const index = batch.offset + offset
         // 名称在派发顺序里分配，避免响应顺序改变重名后缀。
         const name = safeEntryName(stripAppNoDot ? stripApplicationNoDot(generated) : generated, used)
-        jobs.set(index, open(index, generated).then(file => ({ ...file, name })).catch(error => { fail(error); return null }))
+        preparing++
+        jobs.set(index, open(index, generated).then(file => {
+          void file.networkFinished.then(() => { preparing--; wake() })
+          return { ...file, name }
+        }).catch(error => { preparing--; fail(error); return null }))
         scheduled++; wake()
       }
     }

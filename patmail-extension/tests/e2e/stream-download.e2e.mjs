@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
 import { chromium } from 'playwright'
 import { distDir, resultPath, testResultsDir } from './support/paths.mjs'
-import { ensureStreamBridge } from './support/stream-bridge.mjs'
+import { ensureStreamBridge, streamBridgeBase } from './support/stream-bridge.mjs'
 
 // EASY全部由本地代理响应；127.0.0.1桥接走真实HTTP，Chrome负责原生下载与落盘。
 const count = 81
@@ -88,7 +88,7 @@ const observations = []
 const stopBridge = await ensureStreamBridge()
 let context
 try {
-  const health = await fetch('http://127.0.0.1:42843/health').then(response => response.json())
+  const health = await fetch(streamBridgeBase + '/health').then(response => response.json())
   assert.equal(health.protocol, 'patmail-stream-v1', '先启动scripts/start-stream-download.ps1')
   context = await chromium.launchPersistentContext('', { channel: 'chromium', headless: true, acceptDownloads: true,
     proxy: { server: `http://127.0.0.1:${server.address().port}`, bypass: '127.0.0.1' },

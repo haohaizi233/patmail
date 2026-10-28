@@ -81,6 +81,8 @@ export const MessageType = {
   StreamDownloadResult: 'STREAM_DOWNLOAD_RESULT',
   DiscardDownload: 'DISCARD_DOWNLOAD',
   DiscardDownloadResult: 'DISCARD_DOWNLOAD_RESULT',
+  PauseDownload: 'PAUSE_DOWNLOAD',
+  PauseDownloadResult: 'PAUSE_DOWNLOAD_RESULT',
   ExportCaseContacts: 'EXPORT_CASE_CONTACTS',
   ExportCaseContactsResult: 'EXPORT_CASE_CONTACTS_RESULT',
   ListMailProcesses: 'LIST_MAIL_PROCESSES',
@@ -177,6 +179,7 @@ type Request<T extends string> = Message<undefined> & { type: T }
 type Response<T extends string, P> = Message<P> & { type: T; payload: P }
 
 export type ContentRequest =
+  | Response<'PAUSE_DOWNLOAD', { taskId: string }>
   | Response<'DISCARD_DOWNLOAD', { taskId: string }>
   | Request<'SCAN_PAGE'> | Request<'GET_PAGE_INFO'> | Request<'SHOW_PANEL'> | Request<'PING'>
   | Request<'CHECK_SESSION'> | Request<'CANCEL_SESSION_CHECK'>
@@ -186,7 +189,7 @@ export type ContentRequest =
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
-  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true; taskId?: string }>
+  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true; taskId?: string; saveAsNew?: true }>
   | Response<'EXPORT_CASE_CONTACTS', { volumes: string[] }>
   | Response<'LIST_MAIL_PROCESSES', { query: ProcessListQuery }>
   | Response<'OPEN_EASY_FORM', { target: ProcessOpenTarget }>
@@ -235,7 +238,7 @@ export interface ExecutionLeasePayload {
   lease: { executionId: string; taskFingerprint: string; owner: string; status: string; requestSent: boolean; easyMailId: string } | null
 }
 export type StreamDownloadCommand =
-  | { action: 'start'; fileName: string; taskId?: string; manifest?: Record<string, unknown> }
+  | { action: 'start'; fileName: string; taskId?: string; manifest?: Record<string, unknown>; newCopy?: true }
   | { action: 'write'; token: string; sequence: number; offset?: number; data: string }
   | { action: 'finish' | 'abort' | 'pause' | 'status' | 'complete' | 'resume'; token: string }
   | { action: 'checkpoint'; token: string; offset: number; names: string[] }
@@ -246,6 +249,7 @@ function isArchiveName(value: unknown): value is string {
 }
 
 export type BackgroundRequest =
+  | Response<'PAUSE_DOWNLOAD', { taskId: string }>
   | Response<'DISCARD_DOWNLOAD', { taskId: string }>
   | Request<'PING'>
   | Response<'CLAIM_EXECUTION', { origin: string; operatorId: string; taskFingerprint: string }>
@@ -272,6 +276,7 @@ export type BackgroundRequest =
   | Response<'STREAM_DOWNLOAD', StreamDownloadCommand>
   | Response<'AGENT_CHAT', { action: 'probe' | 'turn'; message: string } | { action: 'turn'; message: string; plain: true } | { action: 'answer'; message: string } | { action: 'history' | 'reset' | 'facts' | 'compact' | 'stop' | 'create' } | { action: 'create'; title: string } | { action: 'open' | 'remove'; id: string } | { action: 'rename'; id: string; title: string }>
 export type BackgroundResponse =
+  | Response<'PAUSE_DOWNLOAD_RESULT', { ok: true }>
   | Response<'DISCARD_DOWNLOAD_RESULT', { ok: true }>
   | Response<'PONG', { ok: true }>
   | Response<'EXECUTION_LEASE', ExecutionLeasePayload>
@@ -383,6 +388,7 @@ export interface QuerySurfaceMenu {
 }
 
 export type ContentResponse =
+  | Response<'PAUSE_DOWNLOAD_RESULT', { ok: true }>
   | Response<'DISCARD_DOWNLOAD_RESULT', { ok: true }>
   | Response<'SCAN_RESULT', PageSnapshot>
   | Response<'PAGE_INFO', PageInfo>
@@ -477,7 +483,8 @@ function isDownloadFileItem(value: unknown): value is { fileId: string; fileNo: 
 
 function isDownloadFilesRequest(value: unknown): value is Extract<ContentRequest, { type: 'DOWNLOAD_FILES' }>['payload'] {
   if (!isRecord(value) || typeof value.stripAppNoDot !== 'boolean' ||
-    Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream', 'taskId'].includes(key)) ||
+    Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream', 'taskId', 'saveAsNew'].includes(key)) ||
+    (value.saveAsNew !== undefined && (value.saveAsNew !== true || !value.taskId)) ||
     (value.taskId !== undefined && (typeof value.taskId !== 'string' || !isQueryGuid(value.taskId))) ||
     (value.archiveName !== undefined && !isArchiveName(value.archiveName)) ||
     (value.stream !== undefined && value.stream !== true) ||
@@ -873,7 +880,8 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.StreamDownload: {
       const p = value.payload
       if (!isRecord(p)) return false
-      if (p.action === 'start') return Object.keys(p).every(key => ['action', 'fileName', 'taskId', 'manifest'].includes(key)) && isArchiveName(p.fileName) &&
+      if (p.action === 'start') return Object.keys(p).every(key => ['action', 'fileName', 'taskId', 'manifest', 'newCopy'].includes(key)) && isArchiveName(p.fileName) &&
+        (p.newCopy === undefined || (p.newCopy === true && p.taskId !== undefined)) &&
         (p.taskId === undefined || (typeof p.taskId === 'string' && isQueryGuid(p.taskId))) &&
         (p.manifest === undefined || (isRecord(p.manifest) && JSON.stringify(p.manifest).length <= 4_000_000 &&
           isDownloadFilesRequest({ items: p.manifest.items, selection: p.manifest.selection, stripAppNoDot: p.manifest.stripAppNoDot, archiveName: p.fileName }) &&
@@ -899,8 +907,10 @@ export function isMessage(value: unknown): value is AppMessage {
       }
       return ['finish', 'abort', 'pause', 'status', 'resume', 'complete'].includes(String(p.action)) && Object.keys(p).length === 2
     }
+    case MessageType.PauseDownload:
     case MessageType.DiscardDownload:
       return isRecord(value.payload) && Object.keys(value.payload).length === 1 && typeof value.payload.taskId === 'string' && isQueryGuid(value.payload.taskId)
+    case MessageType.PauseDownloadResult:
     case MessageType.DiscardDownloadResult:
       return isRecord(value.payload) && Object.keys(value.payload).length === 1 && value.payload.ok === true
     case MessageType.StreamDownloadResult:

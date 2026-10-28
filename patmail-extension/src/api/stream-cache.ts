@@ -21,6 +21,10 @@ export async function cachedFileResponse(
   fetcher: (url: string, init?: RequestInit) => Promise<Response>
 ): Promise<Response> {
   let info = await cache.info(index)
+  if (!info.complete && info.totalBytes != null && info.receivedBytes === info.totalBytes) {
+    await cache.complete(index, info)
+    info = { ...info, complete: true }
+  }
   let prefix = info.complete ? info.receivedBytes : 0
   let source: Response | undefined
   if (!info.complete) {
@@ -45,13 +49,14 @@ export async function cachedFileResponse(
     if (!accepted) {
       prefix = 0
       const size = source.headers.get('content-length')
-      info = { receivedBytes: 0, complete: false, etag: source.headers.get('etag') ?? '', lastModified: source.headers.get('last-modified') ?? '',
+      info = { receivedBytes: 0, complete: false, etag: source.headers.get('content-encoding') ? '' : source.headers.get('etag') ?? '', lastModified: source.headers.get('content-encoding') ? '' : source.headers.get('last-modified') ?? '',
         totalBytes: !source.headers.get('content-encoding') && size !== null ? Number(size) : null }
       await cache.reset(index, info)
     } else info = { ...info, totalBytes: Number(range![3]) }
   }
   const reader = source?.body?.getReader()
   let replayed = 0, received = prefix
+  let pending = new Uint8Array(), pendingOffset = 0, sourceEnded = false
   const body = new ReadableStream<Uint8Array>({
     async pull(target) {
       try {
@@ -62,19 +67,33 @@ export async function cachedFileResponse(
           replayed += chunk.length; target.enqueue(chunk); return
         }
         if (!reader) { target.close(); return }
-        const chunk = await reader.read()
-        if (chunk.done) {
+        if (sourceEnded) {
           if (info.totalBytes != null && received !== info.totalBytes) throw new Error('文件传输不完整，没有完成压缩包。')
           await cache.complete(index, { ...info, totalBytes: received })
           reader.releaseLock(); target.close(); return
         }
-        for (let offset = 0; offset < chunk.value.length; offset += 65536) {
+        const block = new Uint8Array(256 * 1024)
+        let filled = 0
+        while (filled < block.length) {
           signal.throwIfAborted()
-          const part = chunk.value.subarray(offset, offset + 65536)
-          await cache.write(index, received, part)
-          received += part.length
+          if (pendingOffset === pending.length) {
+            const chunk = await reader.read()
+            if (chunk.done) { sourceEnded = true; break }
+            pending = chunk.value; pendingOffset = 0
+          }
+          const count = Math.min(block.length - filled, pending.length - pendingOffset)
+          block.set(pending.subarray(pendingOffset, pendingOffset + count), filled)
+          filled += count; pendingOffset += count
         }
-        target.enqueue(chunk.value)
+        if (!filled) {
+          if (info.totalBytes != null && received !== info.totalBytes) throw new Error('文件传输不完整，没有完成压缩包。')
+          await cache.complete(index, { ...info, totalBytes: received })
+          reader.releaseLock(); target.close(); return
+        }
+        const part = filled === block.length ? block : block.slice(0, filled)
+        await cache.write(index, received, part)
+        received += part.length
+        target.enqueue(part)
       } catch (error) { target.error(error); await reader?.cancel(error).catch(() => {}) }
     },
     async cancel(reason) { await reader?.cancel(reason).catch(() => {}) }

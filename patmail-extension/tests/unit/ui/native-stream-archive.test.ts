@@ -1,15 +1,20 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nativeStreamArchive } from '../../../src/utils/stream-download'
-const state = vi.hoisted(() => ({ status: undefined as undefined | ((value: unknown) => void) }))
+const state = vi.hoisted(() => ({ status: undefined as undefined | ((value: unknown) => void), completed: false }))
 vi.mock('../../../src/utils/runtime', () => ({ sendToBackground: vi.fn(async message => {
   if (message.type !== 'STREAM_DOWNLOAD') return null
-  if (message.payload.action === 'start') return { type: 'STREAM_DOWNLOAD_RESULT', payload: { ok: true, token: 'a'.repeat(64) } }
+  if (message.payload.action === 'start') return { type: 'STREAM_DOWNLOAD_RESULT', payload: { ok: true, token: 'a'.repeat(64), ...(state.completed ? { info: { completed: true, completedBytes: 12345 } } : {}) } }
   if (message.payload.action === 'status') return new Promise(resolve => { state.status = resolve })
   if (message.payload.action === 'abort') state.status?.({ type: 'ERROR', payload: { message: '清理后令牌已失效' } })
   return { type: 'STREAM_DOWNLOAD_RESULT', payload: { ok: true } }
 }) }))
+afterEach(() => { state.completed = false })
 
 describe('原生流任务清理', () => {
+  it('界面错过完成消息时从持久回执恢复完成，不重新运行生产者', async () => {
+    state.completed = true
+    expect(await nativeStreamArchive('模板.zip', async () => { throw new Error('不能重下') }, () => {})).toBe(12345)
+  })
   it('生产失败时，清理导致的轮询错误不能覆盖真实根因', async () => {
     await expect(nativeStreamArchive('模板.zip', async () => { throw new Error('文件响应出错') }, () => {})).rejects.toThrow('文件响应出错')
   })
