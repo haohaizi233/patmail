@@ -13,6 +13,10 @@ import { prepareApiDocs } from '../agent/rag-store'
 import { hydrateWriteSwitch, watchWriteSwitch } from '../settings/write-switch'
 import { customerMode, hydrateCustomerMode, modeOrigin, originMatchesMode, watchCustomerMode } from '../settings/customer-mode'
 import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL } from '../shared/download-progress'
+import { LocalStreamDownloads } from './stream-download'
+import { trustedOrigin } from '../api/config'
+
+const streamDownloads = new LocalStreamDownloads(chrome.downloads)
 
 watchWriteSwitch()
 // 扩展 Service Worker 不能用顶层 await，否则 Chrome 直接拒绝启动，工具栏点击没有监听。
@@ -110,9 +114,14 @@ const connectionReady = (async () => {
 })()
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  streamDownloads.cancelTab(tabId)
   reinjected.delete(tabId)
   connection.detach(tabId)
   persistConnection()
+})
+// tabs.loading也会因EASY内部mframe加载而出现；只有真正顶层导航才销毁来源文档。
+chrome.webNavigation?.onBeforeNavigate.addListener(({ tabId, frameId }) => {
+  if (frameId === 0) streamDownloads.cancelTab(tabId)
 })
 let sessionReadTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -208,6 +217,17 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: message.payload.fileName, downloadId } }
     } catch (error: unknown) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有接住这次下载。' } }
+    }
+  }
+  if (message.type === MessageType.StreamDownload) {
+    const tabId = sender.tab?.id
+    if (tabId === undefined || !trustedOrigin(sender.url ?? sender.tab?.url ?? '')) {
+      return { type: MessageType.Error, payload: { message: '只有已连接的EASY来源页可以写入下载流。' } }
+    }
+    try {
+      return { type: MessageType.StreamDownloadResult, payload: await streamDownloads.command(message.payload, tabId) }
+    } catch (error) {
+      return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '下载流桥接失败。' } }
     }
   }
   /** 浏览器下载进度由内容脚本回读：后台只做一次状态查询，下载再多分钟也不占后台定时器。 */

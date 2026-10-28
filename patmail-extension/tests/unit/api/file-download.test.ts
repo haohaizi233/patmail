@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { buildDownloadParams, downloadArchiveName, readDownloadHandle, DOWNLOAD_MAX_ITEMS } from '../../../src/api/file-download'
+import { buildDownloadParams, downloadArchiveName, templateArchiveName, readDownloadHandle, DOWNLOAD_MAX_ITEMS } from '../../../src/api/file-download'
 
 describe('下载打包参数', () => {
+  it('压缩包使用搜索模板名，清除Windows非法字符，防止路径与保留设备名', () => {
+    expect(templateArchiveName('华峰官文')).toBe('华峰官文.zip')
+    expect(templateArchiveName('  华峰/官文:*?.zip  ')).toBe('华峰_官文___.zip')
+    expect(templateArchiveName('CON')).toBe('_CON.zip')
+    expect(templateArchiveName('')).toBe('下载文件.zip')
+    expect(templateArchiveName('...')).toBe('下载文件.zip')
+    expect(templateArchiveName('名'.repeat(200)).length).toBeLessThanOrEqual(120)
+  })
   it('照抄原站 DownLoad：file_no 和 file_name 一一对应，model 固定 FILE', () => {
     const params = buildDownloadParams(
       ['A00110397537', 'A00110352626'],

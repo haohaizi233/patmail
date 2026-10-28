@@ -5,11 +5,13 @@ import { MessageType, type ContentRequest, type ContentResponse, type MessageBri
 import type { SelectedPatentFile } from '../../../src/mail'
 import { resetTaskCheckProgress, taskCheckProgress } from '../../../src/app/check-progress'
 import { DOWNLOAD_PROGRESS_CHANNEL } from '../../../src/shared/download-progress'
+const templateLabel = vi.hoisted(() => ({ value: '模板甲' }))
+const downloadRecipe = vi.hoisted(() => ({ value: null as { newFilename: string; fileNameType: string } | null }))
 
 vi.mock('../../../src/floating/QueryTemplateSection.vue', async () => {
   const { defineComponent, h } = await import('vue')
   return { default: defineComponent({ props: ['pageSize'], emits: ['search'], setup(props, { emit, expose }) {
-    expose({ currentDownloadSelection: () => null })
+    expose({ currentDownloadSelection: () => downloadRecipe.value, currentSearchTemplateName: () => templateLabel.value })
     return () => h('button', { onClick: () => emit('search', {
       resolvedFields: { case_volume: 'AUDIT' }, pageIndex: 1, pageSize: props.pageSize
     }) }, '测试查询')
@@ -25,7 +27,7 @@ vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
 })
 
 let app: App | undefined
-afterEach(() => { app?.unmount(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => { app?.unmount(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
 async function settle() { for (let i = 0; i < 30; i++) { await Promise.resolve(); await nextTick() } }
 function button(label: string): HTMLButtonElement {
   const found = Array.from(document.querySelectorAll('button')).find(node => node.textContent?.trim() === label)
@@ -82,7 +84,8 @@ describe('文件全选的批量分页', () => {
     finishDownload!({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'a.zip', fileCount: 100, notice: '' } } })
     await settle()
   })
-  it('下载按关联ID接收真实名称与打包进度，结束后保留状态并清理监听', async () => {
+  it('命名与下载交错时只显示名称解析进度，结束后保留状态并清理监听', async () => {
+    downloadRecipe.value = { newFilename: 'file_name', fileNameType: 'colname' }
     type Listener = (message: unknown, sender: chrome.runtime.MessageSender) => void
     const listeners = new Set<Listener>()
     vi.stubGlobal('chrome', { runtime: { id: 'test-extension', onMessage: {
@@ -96,19 +99,33 @@ describe('文件全选的批量分页', () => {
     })
     button('测试查询').click(); await settle()
     button('全选所有').click(); await settle()
+    templateLabel.value = '后来选的模板乙'
     button('下载已选').click(); await settle()
     expect(taskCheckProgress.label).toBe('生成下载名称')
+    expect(download!.message.payload.archiveName).toBe('模板甲.zip')
+    expect(download!.message.payload.stream).toBe(true)
     expect(listeners.size).toBe(1)
     const progress = { channel: DOWNLOAD_PROGRESS_CHANNEL, id: download!.message.payload.progressId, progress: { phase: 'naming', done: 40, total: 100 } }
     for (const fn of listeners) fn({ ...progress, id: 'other-download' }, { id: 'test-extension' })
     expect(taskCheckProgress.done).toBe(0)
     for (const fn of listeners) fn(progress, { id: 'test-extension' })
     expect(taskCheckProgress.done).toBe(40)
-    for (const fn of listeners) fn({ ...progress, progress: { phase: 'packing', done: 0, total: 1 } }, { id: 'test-extension' })
-    expect(taskCheckProgress.label).toBe('打包压缩包')
+    const namingSnapshot = { ...taskCheckProgress }
+    for (const phase of [
+      { phase: 'packing', done: 10, total: 100 },
+      { phase: 'downloading', done: 0, total: 1, receivedBytes: 1024, totalBytes: 8192 },
+      { phase: 'saving', done: 0, total: 1 }
+    ]) {
+      for (const fn of listeners) fn({ ...progress, progress: phase }, { id: 'test-extension' })
+      expect({ ...taskCheckProgress }).toEqual(namingSnapshot)
+    }
+    for (const fn of listeners) fn({ ...progress, progress: { phase: 'naming', done: 100, total: 100 } }, { id: 'test-extension' })
+    expect(taskCheckProgress.label).toBe('生成下载名称')
+    expect(taskCheckProgress.status).toBe('done')
     download!.resolve({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'download.zip', fileCount: 100, notice: '' } } })
     await settle()
     expect(taskCheckProgress.status).toBe('done')
+    expect(taskCheckProgress.label).toBe('生成下载名称')
     expect(taskCheckProgress.visible).toBe(true)
     expect(listeners.size).toBe(0)
   })

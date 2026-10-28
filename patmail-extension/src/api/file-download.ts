@@ -80,3 +80,13 @@ export function downloadArchiveName(now: Date = new Date()): string {
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   return `下载文件-${stamp}.zip`
 }
+
+/** 包名来自查询时的搜索模板；不把路径、设备名或重复.zip后缀带给浏览器。 */
+export function templateArchiveName(templateName = ''): string {
+  let name = templateName.trim().replace(/\.zip$/i, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[. ]+|[. ]+$/g, '')
+  name = Array.from(name).slice(0, 100).join('')
+  while (name.length > 115) name = Array.from(name).slice(0, -1).join('')
+  if (!name) name = '下载文件'
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name)) name = `_${name}`
+  return `${name}.zip`
+}

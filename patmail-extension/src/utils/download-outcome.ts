@@ -1,9 +1,9 @@
 import type { FileDownloadProgress } from '../shared/download-progress'
 
-/** 浏览器下载任务的一次状态回读。字段对齐 chrome.downloads 的 DownloadItem，totalBytes 拿不到时可以是 null。 */
+/** 后台DOWNLOAD_STATE_RESULT的状态回读；后台将原生bytesReceived统一映射为receivedBytes。 */
 export interface BrowserDownloadSnapshot {
   state?: string
-  bytesReceived?: number
+  receivedBytes?: number
   totalBytes?: number | null
   error?: string
 }
@@ -64,7 +64,7 @@ export async function watchBrowserDownload(options: WatchBrowserDownloadOptions)
       continue
     }
     misses = 0
-    const receivedBytes = Number.isSafeInteger(snapshot.bytesReceived) && (snapshot.bytesReceived ?? 0) >= 0 ? snapshot.bytesReceived as number : 0
+    const receivedBytes = Number.isSafeInteger(snapshot.receivedBytes) && (snapshot.receivedBytes ?? 0) >= 0 ? snapshot.receivedBytes as number : 0
     const totalBytes = Number.isSafeInteger(snapshot.totalBytes) && (snapshot.totalBytes ?? 0) > 0 ? snapshot.totalBytes as number : null
     const error = typeof snapshot.error === 'string' ? snapshot.error.slice(0, 200) : ''
     if (snapshot.state === 'complete' || snapshot.state === 'interrupted') {

@@ -19,10 +19,10 @@ describe('浏览器下载的流式进度与终态', () => {
     vi.useFakeTimers()
     const events: FileDownloadProgress[] = []
     const { poll } = scripted([
-      { state: 'inProgress', bytesReceived: 0, totalBytes: 100 },
-      { state: 'inProgress', bytesReceived: 0, totalBytes: 100 },
-      { state: 'inProgress', bytesReceived: 40, totalBytes: 100 },
-      { state: 'complete', bytesReceived: 100, totalBytes: 100 }
+      { state: 'inProgress', receivedBytes: 0, totalBytes: 100 },
+      { state: 'inProgress', receivedBytes: 0, totalBytes: 100 },
+      { state: 'inProgress', receivedBytes: 40, totalBytes: 100 },
+      { state: 'complete', receivedBytes: 100, totalBytes: 100 }
     ])
     const pending = watchBrowserDownload({
       downloadId: 7,
@@ -44,7 +44,7 @@ describe('浏览器下载的流式进度与终态', () => {
   it('浏览器报中断时把中断当终态带回原因', async () => {
     vi.useFakeTimers()
     const events: FileDownloadProgress[] = []
-    const { poll } = scripted([{ state: 'interrupted', bytesReceived: 12, error: 'NETWORK_FAILED' }])
+    const { poll } = scripted([{ state: 'interrupted', receivedBytes: 12, error: 'NETWORK_FAILED' }])
     const pending = watchBrowserDownload({ downloadId: 8, poll, intervalMs: 1000, onProgress: progress => events.push(progress) })
     await vi.advanceTimersByTimeAsync(1000)
     await expect(pending).resolves.toEqual({ state: 'interrupted', receivedBytes: 12, totalBytes: null, error: 'NETWORK_FAILED' })
@@ -62,7 +62,7 @@ describe('浏览器下载的流式进度与终态', () => {
 
   it('单次读失败按读不到处理，之后恢复就继续跟踪', async () => {
     vi.useFakeTimers()
-    const { poll } = scripted([new Error('后台没接住'), null, { state: 'complete', bytesReceived: 5 }])
+    const { poll } = scripted([new Error('后台没接住'), null, { state: 'complete', receivedBytes: 5 }])
     const pending = watchBrowserDownload({ downloadId: 10, poll, intervalMs: 1000 })
     await vi.advanceTimersByTimeAsync(3000)
     await expect(pending).resolves.toEqual({ state: 'complete', receivedBytes: 5, totalBytes: null, error: '' })
@@ -72,9 +72,9 @@ describe('浏览器下载的流式进度与终态', () => {
   it('取消信号立即停止跟踪', async () => {
     vi.useFakeTimers()
     const controller = new AbortController()
-    const { poll } = scripted([{ state: 'inProgress', bytesReceived: 1 }, { state: 'inProgress', bytesReceived: 2 },
-      { state: 'inProgress', bytesReceived: 3 }, { state: 'inProgress', bytesReceived: 4 }, { state: 'inProgress', bytesReceived: 5 },
-      { state: 'inProgress', bytesReceived: 6 }])
+    const { poll } = scripted([{ state: 'inProgress', receivedBytes: 1 }, { state: 'inProgress', receivedBytes: 2 },
+      { state: 'inProgress', receivedBytes: 3 }, { state: 'inProgress', receivedBytes: 4 }, { state: 'inProgress', receivedBytes: 5 },
+      { state: 'inProgress', receivedBytes: 6 }])
     const pending = watchBrowserDownload({ downloadId: 11, poll, intervalMs: 1000, signal: controller.signal })
     await vi.advanceTimersByTimeAsync(2500)
     controller.abort()

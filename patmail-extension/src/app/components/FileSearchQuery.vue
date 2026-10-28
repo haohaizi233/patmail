@@ -16,6 +16,7 @@ import { DownloadNameValidationError, type FileDownloadSelection } from '../../m
 import { downloadNameText } from '../../mail/download-name'
 import { DOWNLOAD_PROGRESS_CHANNEL, isDownloadProgress } from '../../shared/download-progress'
 import { newUuid } from '../../utils/uuid'
+import { templateArchiveName } from '../../api/file-download'
 import { isRecord } from '../../shared/guards'
 
 const props = withDefaults(defineProps<{
@@ -83,6 +84,7 @@ const pageAllSelected = computed(() => {
 })
 const resultsSection = ref<HTMLElement | null>(null)
 const lastQuery = ref<FileSearchQuery | null>(null)
+const resultTemplateName = ref('')
 let generation = 0
 
 function messageForError(code: string, message: string): string {
@@ -130,7 +132,7 @@ async function showResults(): Promise<void> {
   }
 }
 
-async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs): Promise<void> {
+async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs, templateName?: string): Promise<void> {
   if (timeoutMs !== undefined) searchTimeoutMs.value = fileSearchTimeoutMs(timeoutMs)
   if (!bridge || !props.canSearch) return
   stopBulk()
@@ -153,6 +155,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     return
   }
   const current = ++generation
+  const queryTemplateName = templateName ?? (run === 'start' ? queryForm.value?.currentSearchTemplateName?.() ?? '' : resultTemplateName.value)
   const next = coerceFileSearchQuery({ ...query, resolvedFields: fields, pageIndex: query.pageIndex || 1, pageSize: query.pageSize || pageSize.value }) ?? {
     resolvedFields: fields, pageIndex: 1, pageSize: pageSize.value
   }
@@ -179,6 +182,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
       return
     }
     result.value = response.payload.data
+    resultTemplateName.value = queryTemplateName
     sourceNotice.value = response.payload.data.sourceMessage ?? ''
     if (response.payload.data.sourceCode === 'QUERY_SESSION_INVALID' || response.payload.data.sourceCode === 'QUERY_LAYOUT_CHANGED') querySessionId.value = ''
     else if (response.payload.data.querySessionId) querySessionId.value = response.payload.data.querySessionId
@@ -212,7 +216,7 @@ function refresh(): void {
 }
 function changePageSize(): void {
   if (!lastQuery.value || !props.canSearch || ![20, 50, 100].includes(pageSize.value)) return
-  void executeSearch({ ...lastQuery.value, pageIndex: 1, pageSize: pageSize.value }, 'start')
+  void executeSearch({ ...lastQuery.value, pageIndex: 1, pageSize: pageSize.value }, 'start', undefined, resultTemplateName.value)
 }
 function page(delta: number): void {
   if (!lastQuery.value || !result.value || searchState.value === 'loading') return
@@ -225,6 +229,7 @@ function clearView(): void {
   generation += 1
   result.value = null
   lastQuery.value = null
+  resultTemplateName.value = ''
   querySessionId.value = ''
   sourceNotice.value = ''
   toolbarNotice.value = ''
@@ -258,30 +263,24 @@ async function downloadSelected(): Promise<void> {
   toolbarNotice.value = '正在生成下载名称并打包…'
   const startedAt = Date.now()
   const progressId = newUuid()
-  let completed = false
-  paintTaskCheckProgress(0, files.length, startedAt, 'run', '生成下载名称')
+  resetTaskCheckProgress()
+  if (selection) paintTaskCheckProgress(0, files.length, startedAt, 'run', '生成下载名称')
   const runtime = globalThis.chrome?.runtime
+  let namedFiles = selection ? 0 : files.length
+  let packedFiles = 0
+  let nativeBytes = 0
   const onProgress = (message: unknown, sender: chrome.runtime.MessageSender): void => {
     if (disposed || sender.id !== runtime?.id || !isRecord(message) || message.channel !== DOWNLOAD_PROGRESS_CHANNEL ||
       message.id !== progressId || !isDownloadProgress(message.progress)) return
     const progress = message.progress
-    if (progress.phase === 'packing') {
-      const seconds = Math.floor((progress.elapsedMs ?? 0) / 1000)
-      const size = ((progress.receivedBytes ?? 0) / 1024).toFixed(1)
-      toolbarNotice.value = `原站正在准备压缩包，已等待 ${seconds} 秒，已收到 ${size} KB 打包响应；完成后交给浏览器下载。`
+    if (progress.phase === 'naming') namedFiles = Math.max(namedFiles, progress.done)
+    if (progress.phase === 'packing') packedFiles = Math.max(packedFiles, progress.done)
+    if (progress.phase === 'downloading') nativeBytes = Math.max(nativeBytes, progress.receivedBytes ?? 0)
+    toolbarNotice.value = `流水下载：已命名 ${namedFiles}/${files.length}，已入包 ${packedFiles}/${files.length}；浏览器已接收 ${(nativeBytes / 1024 / 1024).toFixed(1)} MB。`
+    // 流水各阶段会交错上报；彩虹条只显示名称解析，不能被入包或浏览器字节进度覆盖。
+    if (selection && progress.phase === 'naming') {
+      paintTaskCheckProgress(namedFiles, files.length, startedAt, namedFiles >= files.length ? 'done' : 'run', '生成下载名称')
     }
-    if (progress.phase === 'downloading') {
-      const received = progress.receivedBytes ?? 0
-      const total = progress.totalBytes ?? 0
-      const got = (received / 1024 / 1024).toFixed(1)
-      toolbarNotice.value = total > 0
-        ? `浏览器正在流式下载压缩包：${got} / ${(total / 1024 / 1024).toFixed(1)} MB（${Math.min(100, Math.round(received / total * 100))}%）。`
-        : `浏览器正在流式下载压缩包：已收到 ${got} MB。`
-    }
-    const label = progress.phase === 'naming' ? '生成下载名称' : progress.phase === 'packing' ? '打包压缩包' : progress.phase === 'downloading' ? '浏览器下载' : '交给浏览器'
-    // 下载阶段按字节画进度条，其余阶段按文件数。
-    if (progress.phase === 'downloading') paintTaskCheckProgress(progress.receivedBytes ?? 0, progress.totalBytes || 1, startedAt, 'run', label)
-    else paintTaskCheckProgress(progress.done, progress.total, startedAt, 'run', label)
   }
   try {
     runtime?.onMessage?.addListener(onProgress)
@@ -295,6 +294,8 @@ async function downloadSelected(): Promise<void> {
         items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })),
         selection,
         stripAppNoDot: stripAppNoDot.value,
+        archiveName: templateArchiveName(resultTemplateName.value),
+        stream: true,
         progressId
       }
     }, wait.signal)
@@ -307,7 +308,6 @@ async function downloadSelected(): Promise<void> {
       return
     }
     const data = response.payload.data
-    completed = true
     toolbarNotice.value = `${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
   } catch {
     toolbarNotice.value = '下载通信失败，请重试。'
@@ -316,9 +316,8 @@ async function downloadSelected(): Promise<void> {
     releaseDownloadProgress = null
     if (downloadWait === wait) downloadWait = null
     downloading.value = false
-    if (!disposed) {
-      if (completed) paintTaskCheckProgress(files.length, files.length, startedAt, 'done', '下载准备')
-      else paintTaskCheckProgress(taskCheckProgress.done, taskCheckProgress.total, startedAt, 'fail', taskCheckProgress.label)
+    if (!disposed && selection && namedFiles < files.length) {
+      paintTaskCheckProgress(namedFiles, files.length, startedAt, 'fail', '生成下载名称')
     }
   }
 }

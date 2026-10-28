@@ -77,6 +77,8 @@ export const MessageType = {
   SaveDownloadResult: 'SAVE_DOWNLOAD_RESULT',
   DownloadState: 'DOWNLOAD_STATE',
   DownloadStateResult: 'DOWNLOAD_STATE_RESULT',
+  StreamDownload: 'STREAM_DOWNLOAD',
+  StreamDownloadResult: 'STREAM_DOWNLOAD_RESULT',
   ExportCaseContacts: 'EXPORT_CASE_CONTACTS',
   ExportCaseContactsResult: 'EXPORT_CASE_CONTACTS_RESULT',
   ListMailProcesses: 'LIST_MAIL_PROCESSES',
@@ -181,7 +183,7 @@ export type ContentRequest =
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
-  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true }>
+  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true }>
   | Response<'EXPORT_CASE_CONTACTS', { volumes: string[] }>
   | Response<'LIST_MAIL_PROCESSES', { query: ProcessListQuery }>
   | Response<'OPEN_EASY_FORM', { target: ProcessOpenTarget }>
@@ -229,6 +231,15 @@ export interface ExecutionLeasePayload {
   reason: string
   lease: { executionId: string; taskFingerprint: string; owner: string; status: string; requestSent: boolean; easyMailId: string } | null
 }
+export type StreamDownloadCommand =
+  | { action: 'start'; fileName: string }
+  | { action: 'write'; token: string; sequence: number; data: string }
+  | { action: 'finish' | 'abort' | 'status'; token: string }
+
+function isArchiveName(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 120 && value.length > 4 && value.endsWith('.zip') && !/[\\/<>:"|?*\x00-\x1f]/.test(value)
+}
+
 export type BackgroundRequest =
   | Request<'PING'>
   | Response<'CLAIM_EXECUTION', { origin: string; operatorId: string; taskFingerprint: string }>
@@ -252,6 +263,7 @@ export type BackgroundRequest =
   | Response<'WORKSPACE', WorkspaceAction>
   | Response<'SAVE_DOWNLOAD', { url: string; fileName: string; progressId?: string }>
   | Response<'DOWNLOAD_STATE', { downloadId: number }>
+  | Response<'STREAM_DOWNLOAD', StreamDownloadCommand>
   | Response<'AGENT_CHAT', { action: 'probe' | 'turn'; message: string } | { action: 'turn'; message: string; plain: true } | { action: 'answer'; message: string } | { action: 'history' | 'reset' | 'facts' | 'compact' | 'stop' | 'create' } | { action: 'create'; title: string } | { action: 'open' | 'remove'; id: string } | { action: 'rename'; id: string; title: string }>
 export type BackgroundResponse =
   | Response<'PONG', { ok: true }>
@@ -263,6 +275,7 @@ export type BackgroundResponse =
   | Response<'WORKSPACE_RESULT', WorkspaceResultPayload>
   | Response<'SAVE_DOWNLOAD_RESULT', { ok: true; fileName: string; downloadId?: number }>
   | Response<'DOWNLOAD_STATE_RESULT', { ok: true; state: 'inProgress' | 'complete' | 'interrupted'; receivedBytes: number; totalBytes: number | null; error?: string }>
+  | Response<'STREAM_DOWNLOAD_RESULT', { ok: true; token?: string; downloadId?: number }>
   | Response<'AGENT_CHAT_RESULT', ApiResult<{ reply: string; model: string; steps: number; history: Array<{ role: 'user' | 'assistant'; content: string }>; sessions: Array<{ id: string; title: string; updatedAt: string; active: boolean }>; activeId: string }>>
   | ErrorMessage
 
@@ -454,9 +467,11 @@ function isDownloadFileItem(value: unknown): value is { fileId: string; fileNo: 
     typeof value.fileName === 'string' && value.fileName.trim().length > 0 && value.fileName.length <= 180 && !value.fileName.includes(';')
 }
 
-function isDownloadFilesRequest(value: unknown): value is { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true } {
+function isDownloadFilesRequest(value: unknown): value is Extract<ContentRequest, { type: 'DOWNLOAD_FILES' }>['payload'] {
   if (!isRecord(value) || typeof value.stripAppNoDot !== 'boolean' ||
-    Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached'].includes(key)) ||
+    Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream'].includes(key)) ||
+    (value.archiveName !== undefined && !isArchiveName(value.archiveName)) ||
+    (value.stream !== undefined && value.stream !== true) ||
     (value.detached !== undefined && (value.detached !== true || !value.progressId)) ||
     (value.progressId !== undefined && (typeof value.progressId !== 'string' || !isQueryGuid(value.progressId)))) return false
   const items = value.items
@@ -846,6 +861,19 @@ export function isMessage(value: unknown): value is AppMessage {
       return isDownloadNameResult(value.payload)
     case MessageType.DownloadFiles:
       return isDownloadFilesRequest(value.payload)
+    case MessageType.StreamDownload: {
+      const p = value.payload
+      if (!isRecord(p)) return false
+      if (p.action === 'start') return Object.keys(p).length === 2 && isArchiveName(p.fileName)
+      if (typeof p.token !== 'string' || !/^[0-9a-f]{64}$/.test(p.token)) return false
+      if (p.action === 'write') return Object.keys(p).length === 4 && Number.isSafeInteger(p.sequence) && Number(p.sequence) >= 0 &&
+        typeof p.data === 'string' && p.data.length <= 349528 && /^[A-Za-z0-9+/]*={0,2}$/.test(p.data)
+      return ['finish', 'abort', 'status'].includes(String(p.action)) && Object.keys(p).length === 2
+    }
+    case MessageType.StreamDownloadResult:
+      return isRecord(value.payload) && value.payload.ok === true && Object.keys(value.payload).every(key => ['ok', 'token', 'downloadId'].includes(key)) &&
+        (value.payload.token === undefined || (typeof value.payload.token === 'string' && /^[0-9a-f]{64}$/.test(value.payload.token))) &&
+        (value.payload.downloadId === undefined || (Number.isSafeInteger(value.payload.downloadId) && Number(value.payload.downloadId) >= 0))
     case MessageType.DownloadFilesResult:
       return isDownloadFilesResult(value.payload)
     case MessageType.DownloadFilesAccepted:

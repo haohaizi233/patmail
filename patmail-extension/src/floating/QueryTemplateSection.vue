@@ -318,7 +318,7 @@ function namePartChoices(column: string): { value: string; label: string }[] {
   return options
 }
 /** 下载是查询之后才点的：点的一刻再取一次当前值，查询后改模板/固定字符都按新的来。 */
-defineExpose({ currentDownloadSelection })
+defineExpose({ currentDownloadSelection, currentSearchTemplateName: () => baseMissing.value ? '' : baseName.value })
 function setOverride(key: string, value: string, fromText = false): void {
   temporaryActive.value = { ...temporaryActive.value, [key]: true }
   temporary.value = { ...temporary.value, [key]: value }

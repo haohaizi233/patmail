@@ -8,7 +8,7 @@ const authenticated = { ClientInfo: { IsLogin: true, Status: true, Result: true 
 
 describe('文件下载', () => {
   it('多批名称乱序返回后按原文件编号打成一个包', async () => {
-    // 101 个文件正好 3 批（40、40、21），验证 40 一批的切批、2 路并发和乱序回填。
+    // 101 个文件正好 3 批（40、40、21），不足 5 批时全部派发，乱序回填。
     const items = Array.from({ length: 101 }, (_, index) => ({
       fileId: `603ca943-a07a-4894-9461-${String(index).padStart(12, '0')}`,
       fileNo: `A${index}`,
@@ -35,9 +35,8 @@ describe('文件下载', () => {
     const runtime = new EasyRuntime('http://183.36.43.66:88', { fetcher })
     await runtime.checkSession()
     const downloaded = runtime.downloadFiles(items, { newFilename: 'file_desc', fileNameType: 'colname' }, false)
-    await vi.waitFor(() => expect(pending).toHaveLength(2))
-    pending[1]()
     await vi.waitFor(() => expect(pending).toHaveLength(3))
+    pending[1]()
     pending[0]()
     expect(packages).toHaveLength(0)
     pending[2]()

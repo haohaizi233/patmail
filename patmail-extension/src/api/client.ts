@@ -48,6 +48,7 @@ import { submitFileManageBatch, type FileManageSubmitItem, type FileManageSubmit
 import { resolveDownloadFileNames, stripApplicationNoDot, type FileDownloadSelection } from '../mail/download-name'
 import { buildDownloadParams, downloadArchiveName, readDownloadHandle, DOWNLOAD_MAX_ITEMS, type DownloadFileItem, type DownloadedArchive } from './file-download'
 import type { FileDownloadProgress } from '../shared/download-progress'
+import { streamDownloadFiles } from './stream-download'
 import { submitLimitMailBatch, type LimitMailSubmitItem, type LimitMailSubmitResult } from '../customer/limit-mail-submit'
 import { loadCaseContacts } from '../case-contact/load'
 import type { CaseContactExport } from '../case-contact/query'
@@ -731,6 +732,13 @@ export class EasyRuntime {
         }
       }
     })()
+  }
+
+  async streamFiles(items: DownloadFileItem[], selection: FileDownloadSelection | null, stripAppNoDot: boolean,
+    sink: WritableStream<Uint8Array>, signal: AbortSignal, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
+    if (!items.length || items.length > DOWNLOAD_MAX_ITEMS || items.some(item => !isQueryGuid(item.fileId) || !item.fileNo.trim() || !item.fileName.trim())) throw new Error('下载文件参数无效。')
+    if (!(await this.confirmAccountRead())) throw new Error('请先确认EASY当前登录状态。')
+    await streamDownloadFiles(this.transport, items, selection, stripAppNoDot, { sink, signal, onProgress })
   }
 
   cancelLimitMonitor(): void {

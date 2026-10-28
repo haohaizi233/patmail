@@ -3,6 +3,8 @@ import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
 import { sendToBackground } from '../utils/runtime'
 import { watchBrowserDownload } from '../utils/download-outcome'
+import { nativeStreamArchive } from '../utils/stream-download'
+import { templateArchiveName } from '../api/file-download'
 import { injectPanel } from './injector'
 import { startArchiveDownload } from './save-file'
 import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL, type FileDownloadProgress } from '../shared/download-progress'
@@ -292,8 +294,24 @@ const bridge: MessageBridge = {
             chrome.runtime.sendMessage({ channel: DOWNLOAD_PROGRESS_CHANNEL, id: message.payload.progressId, progress }, () => { void chrome.runtime.lastError })
           } catch { /* 工作台已离开或扩展已重载，不中断正在准备的下载 */ }
         }
+        if (message.payload.stream) {
+          const fileName = message.payload.archiveName ?? templateArchiveName()
+          try {
+            const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork) => easyRuntime.streamFiles(
+              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork
+            ), report)
+            return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: {
+              fileName, fileCount: message.payload.items.length, notice: `浏览器下载完成（${formatBytes(bytes)}）。`
+            } } }
+          } catch (error) {
+            return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',
+              message: (error instanceof Error ? error.message : '流水下载失败，压缩包未完成。').slice(0, 200)
+            } } }
+          }
+        }
         const downloaded = await easyRuntime.downloadFiles(message.payload.items, message.payload.selection, message.payload.stripAppNoDot, report)
         if (!downloaded.ok) return { type: MessageType.DownloadFilesResult, payload: downloaded }
+        if (message.payload.archiveName) downloaded.data.fileName = message.payload.archiveName
         report({ phase: 'saving', done: 0, total: 1 })
         // 浏览器负责落盘：走后台的 chrome.downloads 才会在下载记录里留下条目，文件名也听插件的。
         const saved = await sendToBackground({

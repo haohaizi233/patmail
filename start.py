@@ -5,6 +5,7 @@
 - 插件：每次启动先在 patmail-extension 执行一次生产构建，结果写入 dist
 - 管理端原型：项目根目录的 Vite，地址 5173
 - 插件工作台是 dist 里的扩展页面，不另开本地端口
+- 流式下载桥接：127.0.0.1:42843，仅转发本机字节流
 """
 
 from __future__ import annotations
@@ -16,16 +17,21 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
+import urllib.request
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_PORT = 5173
 FRONTEND_URL = f"http://127.0.0.1:{FRONTEND_PORT}"
 EXTENSION = ROOT / "patmail-extension"
+STREAM_BRIDGE_PORT = 42843
 
 processes: list[subprocess.Popen[str]] = []
 stopping = False
+bridge_stop = threading.Event()
 print = functools.partial(print, flush=True)
 
 
@@ -123,6 +129,7 @@ def stop() -> None:
     if stopping:
         return
     stopping = True
+    bridge_stop.set()
     print("\n正在停止服务...")
     for proc in processes:
         if proc.poll() is not None:
@@ -264,6 +271,11 @@ def main() -> None:
     print("按 Ctrl+C 停止。")
     print()
 
+    try:
+        start_stream_bridge()
+    except RuntimeError as error:
+        fail(str(error))
+    threading.Thread(target=monitor_stream_bridge, args=(bridge_stop,), daemon=True).start()
     build_extension(runner)
     frontend = start_frontend(runner)
     ready = threading.Event()
@@ -278,6 +290,46 @@ def main() -> None:
     code = frontend.wait()
     stop()
     raise SystemExit(code)
+
+
+def start_stream_bridge() -> None:
+    """复用健康桥接；启动子进程后确认就绪再允许下载。"""
+    def healthy() -> bool:
+        try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{STREAM_BRIDGE_PORT}/health', timeout=1) as response:
+                return json.load(response).get('protocol') == 'patmail-stream-v1'
+        except (OSError, ValueError):
+            return False
+
+    if healthy():
+        return
+    script = EXTENSION / 'scripts' / 'stream-download-bridge.py'
+    proc = subprocess.Popen([sys.executable, str(script), '--port', str(STREAM_BRIDGE_PORT)], cwd=EXTENSION,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+    processes.append(proc)
+    deadline = time.monotonic() + 5
+    while not bridge_stop.is_set() and time.monotonic() < deadline:
+        if healthy():
+            print(f'本机流式下载桥接已就绪 127.0.0.1:{STREAM_BRIDGE_PORT}')
+            return
+        if proc.poll() is not None:
+            break
+        bridge_stop.wait(.1)
+    if proc.poll() is None:
+        proc.terminate()
+        proc.wait(timeout=3)
+    raise RuntimeError(f'本机下载桥接启动失败，请检查 Python 和端口 {STREAM_BRIDGE_PORT}。')
+
+
+def monitor_stream_bridge(stop_event: threading.Event, interval: float = 3) -> None:
+    """启动时复用的桥接也可能被其原启动者关闭，运行期间持续补回。"""
+    while not stop_event.wait(interval):
+        try:
+            start_stream_bridge()
+        except (OSError, RuntimeError) as error:
+            if not stop_event.is_set():
+                print(f'本机下载桥接恢复失败，稍后重试：{error}')
 
 
 if __name__ == "__main__":

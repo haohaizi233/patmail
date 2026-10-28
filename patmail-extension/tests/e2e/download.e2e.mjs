@@ -17,7 +17,7 @@ const packed = {
   file_guid: '85ebabc1-cf99-490e-b5f7-298a77742012'
 }
 const calls = []
-const files = Array.from({ length: 141 }, (_, index) => ({
+const files = Array.from({ length: 241 }, (_, index) => ({
   fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
   fileNo: `A${index + 1}`, fileName: `original-${index + 1}.pdf`
 }))
@@ -129,19 +129,19 @@ try {
   console.log(JSON.stringify(report, null, 2))
   assert.equal(result.type, 'DOWNLOAD_FILES_RESULT')
   assert.equal(result.payload.ok, true)
-  assert.equal(result.payload.data.fileCount, 141)
+  assert.equal(result.payload.data.fileCount, 241)
   // 最终结果要带浏览器下载终态：压缩包保存完成才算完成，不能只报「已交给浏览器」。
   assert.match(result.payload.data.notice, /浏览器下载完成/, '最终结果要回报浏览器下载完成')
   assert(!/另存走了浏览器直接下载/.test(result.payload.data.notice), '后台应直接接住下载，不能靠 iframe 假成功')
   assert.equal(calls.filter(call => call.call === 'DownLoad').length, 1)
-  // 命名一批 40 个、并发 2 路：141 个文件是 4 批（40+40+40+21），在途峰值 2。
-  assert.equal(calls.filter(call => call.call === 'GetFileName').length, 4)
-  assert.equal(peakNames, 2)
+  // 命名一批 40 个、并发 5 路：241 个文件是 7 批（40×6+1），验证补位且在途不超过 5。
+  assert.equal(calls.filter(call => call.call === 'GetFileName').length, 7)
+  assert.equal(peakNames, 5)
   assert.equal(downloadParams.get('file_no'), files.map(file => file.fileNo).join(';'))
   assert.equal(downloadParams.get('file_name'), files.map((_, index) => `file-${index + 1}.pdf`).join(';'))
   const naming = progress.filter(item => item.phase === 'naming')
   assert.equal(naming[0].done, 0)
-  assert.equal(naming.at(-1).done, 141)
+  assert.equal(naming.at(-1).done, 241)
   assert.equal(naming.every((item, index) => index === 0 || item.done > naming[index - 1].done), true)
   assert(progress.some(item => item.phase === 'packing'))
   const received = progress.filter(item => item.phase === 'packing' && item.receivedBytes > 0).map(item => item.receivedBytes)
