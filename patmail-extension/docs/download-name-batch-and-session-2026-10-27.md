@@ -1,5 +1,7 @@
 # 命名批量 40、命名并发 2 路与掉登录误判修复（v1.4.7）
 
+> 历史记录：2026-10-28 已按用户要求将命名并发调为最多 5 路，每批仍为 40；本文的 2 路参数和验证数字保留当时事实。当前参数、连接预算边界和真实生产者消费者实验见 [后续研究](name-download-pipeline-research-2026-10-28.md)。
+
 ## 现场现象
 
 1605 个文件下载命名期间，DevTools 同屏出现 5–6 条 `CaseInfo.ashx`（`Call=GetFileName`，都在途）与多条 `Login.ashx`（`Call=GetUserModel`）；`Login.ashx` 一条挂 15–16 秒后 (canceled)。同屏还出现 `CaseInfo.ashx` 失败条目。用户结论：6 条并发打满同源 6 条连接时容易「掉线掉登录」。

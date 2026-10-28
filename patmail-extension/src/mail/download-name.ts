@@ -58,13 +58,17 @@ export interface DownloadNameOptions {
   /** 已完成的文件数；并发批次完成顺序不影响返回名称的顺序。 */
   onProgress?: (done: number, total: number) => void
   signal?: AbortSignal
+  /** 流水下载消费已生成的一批；等待消费方腾出空间后才继续派发。发文调用无需提供。 */
+  onBatch?: (offset: number, names: string[]) => Promise<void>
+  /** 首个失败立即通知流水消费者，不能等其它onBatch等待结束后才传播。 */
+  onFailure?: (failure: ApiResult<never>) => void
 }
 
 const COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/
 /** 命名一批 40 个：100 个一批单批要跑几分钟，中途一断整批重来；40 个一批是单批耗时与往返次数的折中。 */
 export const NAME_BATCH = 40
-/** 命名并发 2 路：6 路打满同源 6 条连接时，GetUserModel 这类会话检测会被饿死 15 秒掐断，界面误判掉登录。 */
-const NAME_CONCURRENCY = 2
+/** 命名最多 5 路：在常见 HTTP/1.1 同源 6 连接限制下，避免仅命名请求就占满连接；其他请求仍共享同源调度。 */
+const NAME_CONCURRENCY = 5
 
 function segments(value: string): string[] {
   return value.split(';')
@@ -232,8 +236,10 @@ export async function resolveDownloadFileNames(
   const controller = new AbortController()
   let failure: ApiResult<never> | undefined
   const stop = (result: ApiResult<never>) => {
+    const first = !failure
     failure ??= result
     controller.abort()
+    if (first) options.onFailure?.(result)
   }
   const abort = () => stop(apiError('REQUEST_ABORTED', '请求已取消。'))
   options.signal?.addEventListener('abort', abort, { once: true })
@@ -270,6 +276,7 @@ export async function resolveDownloadFileNames(
       names.splice(index, generated.length, ...generated)
       completed += batch.length
       options.onProgress?.(completed, fileIds.length)
+      await options.onBatch?.(index, generated)
     }
   }
   try {

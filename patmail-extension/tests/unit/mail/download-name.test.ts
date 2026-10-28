@@ -7,7 +7,7 @@ import {
 
 const TEMPLATE = 'd9896997-1e83-4c7d-9a49-da69ba56e7aa'
 const FILE = '603ca943-a07a-4894-9461-29dff2d60c4b'
-/** 265 个文件正好是 7 批（6 批满 40 + 25），能验证 2 路并发下第 7 批乱序补位。 */
+/** 265 个文件正好是 7 批（6 批满 40 + 25），能验证 5 路并发及后续批次乱序补位。 */
 const FILES = Array.from({ length: 265 }, (_, index) =>
   `603ca943-a07a-4894-9461-${String(index).padStart(12, '0')}`)
 const GENERATED = FILES.map((_, index) => `文件${index}.pdf`)
@@ -92,27 +92,24 @@ describe('下载名称', () => {
     expect(named).toEqual({ ok: true, data: ['PA1官文.pdf'] })
   })
 
-  it('最多同时生成两批名称，乱序完成后仍逐项对应原文件且进度按完成文件数递增', async () => {
+  it('最多同时生成五批名称，乱序完成后仍逐项对应原文件且进度按完成文件数递增', async () => {
     const { transport, pending, peak } = controlledNames()
     const progress: number[][] = []
     const named = resolveDownloadFileNames(transport, FILES, SELECTION, {
       onProgress: (done, total) => progress.push([done, total])
     })
-    await vi.waitFor(() => expect(pending).toHaveLength(2))
-    pending[1].finish()
-    await vi.waitFor(() => expect(pending).toHaveLength(3))
-    pending[0].finish()
-    await vi.waitFor(() => expect(pending).toHaveLength(4))
-    pending[3].finish()
     await vi.waitFor(() => expect(pending).toHaveLength(5))
-    pending[2].finish()
+    pending[3].finish()
     await vi.waitFor(() => expect(pending).toHaveLength(6))
-    pending[5].finish()
+    pending[1].finish()
     await vi.waitFor(() => expect(pending).toHaveLength(7))
+    pending[5].finish()
+    pending[0].finish()
+    pending[2].finish()
     pending[4].finish()
     pending[6].finish()
     expect(await named).toEqual({ ok: true, data: GENERATED })
-    expect(peak()).toBe(2)
+    expect(peak()).toBe(5)
     expect(progress).toEqual([[0, 265], [40, 265], [80, 265], [120, 265], [160, 265], [200, 265], [240, 265], [265, 265]])
   })
 
@@ -126,12 +123,12 @@ describe('下载名称', () => {
     const named = resolveDownloadFileNames(transport, FILES, SELECTION, {
       onProgress: (done, total) => progress.push([done, total])
     })
-    await vi.waitFor(() => expect(pending).toHaveLength(2))
+    await vi.waitFor(() => expect(pending).toHaveLength(5))
     pending[1].finish(response)
     await vi.waitFor(() => expect(pending[0].signal?.aborted).toBe(true))
-    pending[0].finish()
+    for (const batch of pending.filter((_, index) => index !== 1)) batch.finish()
     expect(await named).toMatchObject({ ok: false, error: { code } })
-    expect(pending).toHaveLength(2)
+    expect(pending).toHaveLength(5)
     expect(progress).toEqual([[0, 265]])
   })
 
@@ -139,12 +136,12 @@ describe('下载名称', () => {
     const { transport, pending } = controlledNames()
     const controller = new AbortController()
     const named = resolveDownloadFileNames(transport, FILES, SELECTION, { signal: controller.signal })
-    await vi.waitFor(() => expect(pending).toHaveLength(2))
+    await vi.waitFor(() => expect(pending).toHaveLength(5))
     controller.abort()
     expect(pending.every(batch => batch.signal?.aborted)).toBe(true)
     for (const batch of pending) batch.finish()
     expect(await named).toMatchObject({ ok: false, error: { code: 'REQUEST_ABORTED' } })
-    expect(pending).toHaveLength(2)
+    expect(pending).toHaveLength(5)
   })
 
   it('已取消时不再读取模板或生成名称', async () => {
