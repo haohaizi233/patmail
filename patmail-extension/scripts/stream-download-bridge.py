@@ -401,7 +401,14 @@ class Handler(BaseHTTPRequestHandler):
         s = self.session(parts[1])
         self.current_session = s
         with s.condition:
-            if parts[0] == 'touch':
+            if parts[0] == 'status' and len(parts) == 2:
+                self.json_body()
+                return self.answer(200, s.info())
+            elif parts[0] == 'cache-info' and len(parts) == 3:
+                self.json_body()
+                _, blob = self.source(s, parts[2], empty_info=True)
+                return self.answer(200, {k:v for k,v in blob.items() if k != 'commits'})
+            elif parts[0] == 'touch':
                 s.touched = time.monotonic()  # A heartbeat deliberately leaves retainedAt untouched.
             elif parts[0] in ('pause', 'revoke'):
                 s.data.update(paused=True, retainedAt=time.time())
@@ -434,6 +441,13 @@ class Handler(BaseHTTPRequestHandler):
                 s.persist()
             elif parts[0] == 'cache' and len(parts) == 3:
                 data = self.json_body()
+                if data.get('read') is True:
+                    index, blob = self.source(s, parts[2])
+                    offset = integer(data.get('offset', 0))
+                    limit = integer(data.get('limit', READ_LIMIT), READ_LIMIT)
+                    if offset > blob['receivedBytes']: raise Problem(416, 'offset_out_of_range')
+                    body = s.read_verified(index, blob, offset, min(limit, blob['receivedBytes'] - offset))
+                    return self.answer(200, body, raw=True)
                 index, blob = self.source(s, parts[2], create=True)
                 if data.get('reset'):
                     # Commit zero watermark before truncation: interruption can only leave an uncommitted tail.

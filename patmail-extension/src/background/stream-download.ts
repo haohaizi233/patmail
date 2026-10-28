@@ -55,7 +55,7 @@ export class LocalStreamDownloads {
       const taskId = durable ? data.taskId as string : undefined
       const url = BASE + (taskId ? '/download/' + taskId : '/stream/' + token)
       let existing: chrome.downloads.DownloadItem | undefined
-      if (taskId && this.downloads.search) {
+      if (taskId && this.downloads.search && !command.newCopy) {
         const items = await this.downloads.search({ urlRegex: '^' + url.replace(/[.*+?^$()|[\]\\]/g, '\\$&') + '$' })
         existing = items.sort((a, b) => b.id - a.id)[0]
       }
@@ -89,9 +89,9 @@ export class LocalStreamDownloads {
     }
     if (command.action === 'cache') {
       const path = '/cache/' + token + '/' + command.index
-      if (command.command === 'info') return { ok: true, info: await (await this.relay('/cache-info/' + token + '/' + command.index)).json() }
+      if (command.command === 'info') return { ok: true, info: await (await this.json('/cache-info/' + token + '/' + command.index)).json() }
       if (command.command === 'read') {
-        const response = await this.relay(path + '?offset=' + (command.offset ?? 0) + '&limit=65536')
+        const response = await this.json(path, { read: true, offset: command.offset ?? 0, limit: 65536 })
         return { ok: true, data: encodedBytes(new Uint8Array(await response.arrayBuffer())) }
       }
       if (command.command === 'write') {
@@ -117,7 +117,7 @@ export class LocalStreamDownloads {
       await this.resume(job)
       return { ok: true, downloadId: id }
     } else if (command.action === 'resume') {
-      const info = await (await this.relay('/status/' + token)).json()
+      const info = await (await this.json('/status/' + token)).json()
       if (!info.sealed) throw new Error('正在恢复本机压缩包，封存后才能续传到浏览器。')
       await this.resume(job)
     } else if (Date.now() - job.touched > 15_000) {
@@ -126,7 +126,8 @@ export class LocalStreamDownloads {
     return { ok: true, ...(job.id === undefined ? {} : { downloadId: job.id }) }
   }
   async discardTask(taskId: string, owner: string): Promise<void> {
-    await this.json('/discard-task/' + taskId, { owner })
+    const response = await this.fetcher(BASE + '/discard-task/' + taskId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner }), signal: AbortSignal.timeout(10000) })
+    if (!response.ok && response.status !== 404) throw new Error('本机下载任务尚未丢弃，请检查连接后重试。')
     for (const [token, job] of this.jobs) if (job.taskId === taskId) {
       if (job.id !== undefined) await this.downloads.cancel(job.id).catch(() => {})
       this.jobs.delete(token)
