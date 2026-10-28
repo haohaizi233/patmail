@@ -15,6 +15,7 @@ import { customerMode, hydrateCustomerMode, modeOrigin, originMatchesMode, watch
 import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL } from '../shared/download-progress'
 import { LocalStreamDownloads } from './stream-download'
 import { trustedOrigin } from '../api/config'
+import { handleRecoveryMessage } from './recovery'
 
 const streamDownloads = new LocalStreamDownloads(chrome.downloads)
 
@@ -41,6 +42,8 @@ function persistConnection(): void {
   if (sameConnectionSnapshot(persistedSnapshot, next)) return
   persistedSnapshot = next
   void chrome.storage.local.set({ [CONNECTION_SNAPSHOT]: next })
+  if (connection.context.sessionStatus === 'authenticated' && connection.context.operatorId) streamDownloads.revokeOtherOwners(JSON.stringify([connection.context.easyOrigin, connection.context.operatorId]))
+  else if (['expired', 'unauthenticated'].includes(connection.context.sessionStatus)) streamDownloads.revokeOtherOwners('')
 }
 
 let warming: Promise<void> | null = null
@@ -225,10 +228,27 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       return { type: MessageType.Error, payload: { message: '只有已连接的EASY来源页可以写入下载流。' } }
     }
     try {
-      return { type: MessageType.StreamDownloadResult, payload: await streamDownloads.command(message.payload, tabId) }
+      if (message.payload.action === 'start') {
+        await connectionReady
+        await recheckBoundSession(host)
+        if (connection.context.easyTabId !== tabId || connection.context.sessionStatus !== 'authenticated' || !connection.context.operatorId) {
+          return { type: MessageType.Error, payload: { message: '请先重新确认同一EASY账号，再继续下载。' } }
+        }
+      }
+      return { type: MessageType.StreamDownloadResult, payload: await streamDownloads.command(message.payload, tabId,
+        JSON.stringify([connection.context.easyOrigin, connection.context.operatorId])) }
     } catch (error) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '下载流桥接失败。' } }
     }
+  }
+  if (message.type === MessageType.DiscardDownload) {
+    await connectionReady
+    const contentOwner = sender.tab?.id === connection.context.easyTabId && trustedOrigin(sender.url ?? '') === connection.context.easyOrigin
+    if ((!fromExtensionPage(sender) && !contentOwner) || connection.context.sessionStatus !== 'authenticated' || !connection.context.operatorId) {
+      return { type: MessageType.Error, payload: { message: '请先连接原任务的EASY账号，再丢弃下载。' } }
+    }
+    await streamDownloads.discardTask(message.payload.taskId, JSON.stringify([connection.context.easyOrigin, connection.context.operatorId]))
+    return { type: MessageType.DiscardDownloadResult, payload: { ok: true } }
   }
   /** 浏览器下载进度由内容脚本回读：后台只做一次状态查询，下载再多分钟也不占后台定时器。 */
   if (message.type === MessageType.DownloadState) {
@@ -336,6 +356,7 @@ chrome.runtime.onConnect.addListener(port => {
 
 /** MV3 Service Worker 是租约、任务和证据的唯一写入方。 */
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+  if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
   if (sender.id !== chrome.runtime.id) return
   if (isRecord(message) && message.channel === RESULT_CHANNEL) return
   if (isRecord(message) && message.channel === DOWNLOAD_PROGRESS_CHANNEL) return

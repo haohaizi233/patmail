@@ -8,6 +8,12 @@ import { DOWNLOAD_PROGRESS_CHANNEL } from '../../../src/shared/download-progress
 const templateLabel = vi.hoisted(() => ({ value: '模板甲' }))
 const downloadRecipe = vi.hoisted(() => ({ value: null as { newFilename: string; fileNameType: string } | null }))
 
+const recoveryRows = vi.hoisted(() => new Map<string, unknown>())
+vi.mock('../../../src/recovery/wal-ledger', () => ({
+  recallRecovery: async (_slot: string, scope: string) => recoveryRows.get(scope) ?? null,
+  rememberRecovery: async (_slot: string, scope: string, payload: unknown) => { recoveryRows.set(scope, JSON.parse(JSON.stringify(payload))) }
+}))
+
 vi.mock('../../../src/floating/QueryTemplateSection.vue', async () => {
   const { defineComponent, h } = await import('vue')
   return { default: defineComponent({ props: ['pageSize'], emits: ['search'], setup(props, { emit, expose }) {
@@ -27,7 +33,7 @@ vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
 })
 
 let app: App | undefined
-afterEach(() => { app?.unmount(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => { app?.unmount(); recoveryRows.clear(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
 async function settle() { for (let i = 0; i < 30; i++) { await Promise.resolve(); await nextTick() } }
 function button(label: string): HTMLButtonElement {
   const found = Array.from(document.querySelectorAll('button')).find(node => node.textContent?.trim() === label)
@@ -209,5 +215,56 @@ describe('文件全选的批量分页', () => {
     for (const { message, resolve } of pending) resolve(reply(message, 900))
     await settle()
     expect(Object.keys(selected.value)).toHaveLength(0)
+  })
+})
+
+
+describe('file query durable remount', () => {
+  it('restores result/selection read-only without querying, clears orphan progress, then explicitly revalidates', async () => {
+    let queries = 0
+    const request: MessageBridge['request'] = async message => {
+      if (message.type === MessageType.SearchFiles) { queries++; return reply(message, 4) }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }
+    const selected = mount(request)
+    button('测试查询').click(); await settle()
+    button('全选本页').click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(4)
+    taskCheckProgress.label = '生成下载名称'; taskCheckProgress.status = 'run'; taskCheckProgress.visible = true
+    app!.unmount(); app = undefined; await settle(); document.body.innerHTML = ''
+    const restored = mount(request); await settle()
+    expect(queries).toBe(1)
+    expect(Object.keys(restored.value)).toHaveLength(4)
+    expect(document.body.textContent).toContain('只读工作面')
+    expect(taskCheckProgress.visible).toBe(false)
+    expect(button('下载已选').disabled).toBe(true)
+    button('刷新').click(); await settle()
+    expect(queries).toBe(2)
+    expect(Object.keys(restored.value)).toHaveLength(4)
+    expect(button('下载已选').disabled).toBe(false)
+  })
+  it('durably saves immutable task before production and restores failed attempts as paused', async () => {
+    let taskId = ''
+    const request: MessageBridge['request'] = async message => {
+      if (message.type === MessageType.SearchFiles) return reply(message, 2)
+      if (message.type === MessageType.DownloadFiles) {
+        const saved = [...recoveryRows.values()].find(value => Boolean((value as { activeTask?: unknown }).activeTask)) as { activeTask: { id: string; items: unknown[] } }
+        expect(saved.activeTask.items).toHaveLength(2)
+        expect(saved.activeTask.id).toBe(message.payload.taskId)
+        if (taskId) expect(message.payload.taskId).toBe(taskId)
+        taskId = message.payload.taskId!
+        return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'NETWORK_ERROR', message: 'interrupted' } } }
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }
+    mount(request); button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    expect(taskId).not.toBe('')
+    expect(button('继续下载').disabled).toBe(false)
+    app!.unmount(); app = undefined; await settle(); document.body.innerHTML = ''
+    mount(request); await settle()
+    expect(button('继续下载').disabled).toBe(true)
+    button('刷新').click(); await settle(); button('继续下载').click(); await settle()
+    expect(document.body.textContent).toContain('下载已暂停')
   })
 })

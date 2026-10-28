@@ -735,10 +735,11 @@ export class EasyRuntime {
   }
 
   async streamFiles(items: DownloadFileItem[], selection: FileDownloadSelection | null, stripAppNoDot: boolean,
-    sink: WritableStream<Uint8Array>, signal: AbortSignal, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
+    sink: WritableStream<Uint8Array>, signal: AbortSignal, onProgress?: (progress: FileDownloadProgress) => void,
+    recovery?: { cache?: import('./stream-cache').DownloadCache; zipCreatedAt?: string }): Promise<void> {
     if (!items.length || items.length > DOWNLOAD_MAX_ITEMS || items.some(item => !isQueryGuid(item.fileId) || !item.fileNo.trim() || !item.fileName.trim())) throw new Error('下载文件参数无效。')
     if (!(await this.confirmAccountRead())) throw new Error('请先确认EASY当前登录状态。')
-    await streamDownloadFiles(this.transport, items, selection, stripAppNoDot, { sink, signal, onProgress })
+    await streamDownloadFiles(this.transport, items, selection, stripAppNoDot, { sink, signal, onProgress, ...recovery })
   }
 
   cancelLimitMonitor(): void {
