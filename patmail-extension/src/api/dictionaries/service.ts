@@ -61,7 +61,7 @@ export class DictionaryService {
           caseBranchDept: adaptBranchDept(data.CaseBranchDept)
         }
       } }
-    })
+    }, data => Object.values(data.dictionaries).every(dictionary => dictionary.status !== 'invalid'))
   }
 
   loadFlow(userKey: string, force: boolean, signal?: AbortSignal): Promise<ApiResult<FlowDataSnapshot>> {
@@ -82,7 +82,7 @@ export class DictionaryService {
           downloadFileName: adaptDictionaryValue('downloadFileName', data.DownLoadFileName)
         }
       } }
-    })
+    }, data => Object.values(data.dictionaries).every(dictionary => dictionary.status !== 'invalid'))
   }
 
   loadFileTypes(userKey: string, caseTypeId: string, force: boolean, signal?: AbortSignal): Promise<ApiResult<FileTypeTreeSnapshot>> {
@@ -285,14 +285,14 @@ export class DictionaryService {
       for (const [name, result] of settled) {
         if (!result.ok) {
           warnings.push(`${name} 没有读到：${result.error.message}`)
-          sources[name] = null
+          sources[name] = undefined
           continue
         }
         sources[name] = result.data
       }
       const built = buildPickerCatalog(sources)
       return { ok: true, data: { kind: 'picker', dictionaries: built.dictionaries, warnings: [...warnings, ...built.warnings] } }
-    })
+    }, data => Object.values(data.dictionaries).every(dictionary => dictionary.status !== 'invalid'))
   }
 
   load(

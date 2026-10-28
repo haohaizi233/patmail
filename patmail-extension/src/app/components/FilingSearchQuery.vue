@@ -205,6 +205,8 @@ async function deleteTemplate(): Promise<void> {
 }
 const pickers = ref<Record<string, NormalizedDictionary>>({})
 const pickersReady = ref(false)
+const pickerFailed = ref(false)
+let pickerGeneration = 0
 const pageFields = ref<FileSearchFormField[]>([])
 const loadingPickers = ref(false)
 const pickerMessage = ref('')
@@ -304,9 +306,9 @@ function choices(key: string): { value: string; label: string; parent?: string }
   const dictionary = source ? pickers.value[source] : undefined
   // 原站 ChangeForApplyType 按当前案件类型收申请类型；没选案件类型时按本环境默认的专利收。
   const caseTypeId = valueOf('case_type') || CURRENT_ENVIRONMENT.caseTypeId
-  const live = dictionary && dictionary.options.length > 0 ? choicesFromDictionary(dictionary, caseTypeId) : null
+  const live = dictionary && ['ready', 'partial'].includes(optionStatus(key)) ? choicesFromDictionary(dictionary, caseTypeId) : null
   const stored = props.userId ? savedChoices(props.userId, optionCacheKey(key)) : null
-  return (live ?? stored ?? []).filter(item => item.value)
+  return (source ? (live ?? []) : (stored ?? [])).filter(item => item.value)
 }
 
 /** select 的选项：原站页面实时扫（ScanFilingForm）优先，其次接口字典/缓存，最后用抓包快照兜底。原站这几个 select 没有接口，页面没打开时只剩兜底。 */
@@ -316,7 +318,7 @@ function selectOptions(key: string): { value: string; label: string }[] {
   const scanned = (field?.options ?? []).filter(item => item.value)
   const fromDictionary = choices(key).filter(item => item.value)
   const builtin = (FILING_SELECTS[key] ?? []).filter(item => item.value)
-  const rows = scanned.length ? scanned : fromDictionary.length ? fromDictionary : builtin
+  const rows = FILING_OPTION_KEYS[key] ? fromDictionary : scanned.length ? scanned : fromDictionary.length ? fromDictionary : builtin
   return [{ value: '', label: '不限' }, ...rows.map(item => ({ value: item.value, label: item.label }))]
 }
 
@@ -338,31 +340,50 @@ function optionLabel(key: string, value: string): string {
   return option?.label ?? ''
 }
 
+function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
+  if (loadingPickers.value || (!pickersReady.value && !pickerFailed.value)) return 'loading'
+  if (pickerFailed.value) return 'invalid'
+  return pickers.value[FILING_OPTION_KEYS[key] ?? '']?.status ?? 'invalid'
+}
+function unavailableOptions(fields: Record<string, string>): string[] {
+  return Object.keys(FILING_OPTION_KEYS).filter(key => {
+    if (key === 'business_coop') return false // 原站明确允许手填签约单位。
+    const ids = (fields[key] ?? '').split(',').map(id => id.trim()).filter(Boolean)
+    return ids.length > 0 && (!['ready', 'partial'].includes(optionStatus(key)) || ids.some(id => !choices(key).some(option => option.value === id)))
+  })
+}
+const unavailableFields = computed(() => unavailableOptions(values.value))
 async function loadPickers(force: boolean): Promise<void> {
   const bridge = activeBridge()
   if (!bridge || (!props.canSearch && !props.manage) || loadingPickers.value) return
   if (!force && pickersReady.value) return
+  const pickerTicket = ++pickerGeneration
+  const userId = props.userId
+  const current = () => pickerTicket === pickerGeneration && userId === props.userId
   loadingPickers.value = true
+  pickerFailed.value = false
   pickerMessage.value = force ? '' : '正在向原网站读取递交查询下拉…'
   try {
     const [dict, form] = await Promise.all([
       bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'picker', force } }),
       bridge.request({ type: MessageType.ScanFilingForm })
     ])
+    if (!current()) return
     const notes: string[] = []
     const cached = new Set(cachedOptionKeys())
     if (dict.type === MessageType.DictionaryResult && dict.payload.ok && dict.payload.data.kind === 'picker') {
       pickers.value = dict.payload.data.dictionaries
       pickersReady.value = true
       if (props.userId) {
-        // 申请类型按案件类型收窄后单独缓存；其余下拉按表单键存进回退。空列表不会覆盖缓存。
+        // 申请类型按案件类型收窄后单独缓存；其余下拉按表单键存进回退。接口明确空会写入墓碑。
         const fields = { ...FILING_OPTION_KEYS }
         delete fields.apply_type
         rememberDictionaries(props.userId, fields, dict.payload.data.dictionaries)
-        rememberChoices(props.userId, optionCacheKey('apply_type'), choices('apply_type'))
+        rememberDictionaries(props.userId, { [optionCacheKey('apply_type')]: FILING_OPTION_KEYS.apply_type! }, dict.payload.data.dictionaries)
       }
       notes.push(describePickerReceipt(dict.payload.data.dictionaries, dict.payload.data.warnings))
     } else {
+      pickerFailed.value = true
       notes.push(dict.type === MessageType.DictionaryResult && !dict.payload.ok
         ? dict.payload.error.message
         : cached.size ? '接口下拉没有读到，先用上次读到的选项。' : '接口下拉没有读到，文本条件仍可查询。')
@@ -381,9 +402,11 @@ async function loadPickers(force: boolean): Promise<void> {
     }
     pickerMessage.value = notes.filter(Boolean).join(' ')
   } catch {
+    if (!current()) return
+    pickerFailed.value = true
     pickerMessage.value = '下拉选项没有读到，文本条件仍可查询。'
   } finally {
-    loadingPickers.value = false
+    if (current()) loadingPickers.value = false
   }
 }
 
@@ -404,6 +427,10 @@ async function showResults(): Promise<void> {
 }
 
 async function executeSearch(query: FilingSearchQuery): Promise<void> {
+  if (unavailableOptions(query.fields ?? {}).length) {
+    pickerMessage.value = '原选项当前不可用，请重新读取选项或显式清除后查询。'
+    return
+  }
   const bridge = activeBridge()
   if (!bridge) {
     searchState.value = 'error'
@@ -446,6 +473,7 @@ async function executeSearch(query: FilingSearchQuery): Promise<void> {
 }
 
 function search(): void {
+  if (unavailableFields.value.length) { pickerMessage.value = '原选项当前不可用，请重新读取选项或显式清除后查询。'; return }
   const draft = filingDraftFields(values.value)
   if (!Object.keys(draft.fields).length) {
     searchState.value = 'error'
@@ -720,8 +748,10 @@ const measureKey = computed(() => {
 watch(measureKey, () => layoutColumns(), { flush: 'post' })
 
 watch(() => props.userId, () => {
+  pickerGeneration += 1
   pickers.value = {}
   pickersReady.value = false
+  pickerFailed.value = false
   pageFields.value = []
   pickerMessage.value = ''
   loadingPickers.value = false
@@ -798,13 +828,14 @@ onBeforeUnmount(() => {
           </label>
           <label v-else-if="cell.kind === 'named'" class="query-cell">
             <span>{{ cell.label }}</span>
-            <TreeOptionSelect v-if="isMulti(cell.key) || treeChoices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" @update:model-value="setNamed(cell.key, String($event))" />
+            <TreeOptionSelect v-if="cell.key !== 'business_coop' || choices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true)" @update:model-value="setNamed(cell.key, String($event))" />
             <ThemeSelect v-else-if="choices(cell.key).length || cell.key !== 'business_coop'" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
             <input v-else :value="valueOf(cell.key)" type="text" placeholder="签约单位下拉未读到，可直接填值" @input="onText(cell.key, $event)" />
           </label>
           <label v-else-if="cell.kind === 'select'" class="query-cell">
             <span>{{ cell.label }}</span>
-            <ThemeSelect :model-value="valueOf(cell.key)" :options="selectOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+            <TreeOptionSelect v-if="FILING_OPTION_KEYS[cell.key]" :model-value="valueOf(cell.key)" :options="choices(cell.key)" :multiple="false" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true)" @update:model-value="setValue(cell.key, String($event))" />
+            <ThemeSelect v-else :model-value="valueOf(cell.key)" :options="selectOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
           </label>
           <div v-else-if="cell.kind === 'dates'" class="query-cell">
             <span>{{ cell.label }}</span>

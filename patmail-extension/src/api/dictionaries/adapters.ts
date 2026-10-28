@@ -28,7 +28,7 @@ export function adaptRows(
   mapRow: (row: Record<string, unknown>) => DictionaryOption | null
 ): NormalizedDictionary {
   if (raw === null || raw === undefined) {
-    return { key, options: [], status: 'empty', warnings: raw === undefined ? [`字典 ${key} 缺失。`] : [] }
+    return { key, options: [], status: raw === null ? 'empty' : 'invalid', warnings: raw === undefined ? [`字典 ${key} 缺失。`] : [] }
   }
   if (!Array.isArray(raw)) {
     return { key, options: [], status: 'invalid', warnings: [`字典 ${key} 不是数组。`] }

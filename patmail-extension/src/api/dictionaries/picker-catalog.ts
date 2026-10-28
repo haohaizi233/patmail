@@ -77,9 +77,9 @@ export const FILING_PICKER_FIELDS: Record<string, string> = {
 }
 
 function arrayOf(body: unknown, key: string): unknown {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined
   const value = (body as Record<string, unknown>)[key]
-  return value === undefined ? null : value
+  return value
 }
 
 function withCaseType(dictionary: NormalizedDictionary, raw: unknown): NormalizedDictionary {
@@ -131,7 +131,7 @@ function caseStatusChoices(options: DictionaryOption[]): TreeOptionChoice[] {
 function caseStatusRows(raw: unknown): unknown {
   if (!Array.isArray(raw)) return raw
   return raw.filter(row => {
-    if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return true
     const statusClass = (row as Record<string, unknown>).status_class
     const value = typeof statusClass === 'string' ? statusClass : ''
     return value === '' || value === 'ALL' || value === 'CASE'
@@ -142,7 +142,7 @@ function caseStatusRows(raw: unknown): unknown {
 function filingCaseTypeRows(raw: unknown): unknown {
   if (!Array.isArray(raw)) return raw
   return raw.filter(row => {
-    if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return true
     const code = (row as Record<string, unknown>).case_type_code
     return code !== 'O' && code !== 'S'
   })
@@ -162,7 +162,13 @@ function procTypeRows(raw: unknown): unknown {
   })
 }
 
-/** 把各只读接口的响应收成下拉字典。某个接口失败时由调用方传入 null。 */
+/** 过滤后无匹配不是源接口明确空，不能写成全字段空值墓碑。 */
+function filteredDictionary(dictionary: NormalizedDictionary, raw: unknown): NormalizedDictionary {
+  return Array.isArray(raw) && raw.length > 0 && dictionary.status === 'empty'
+    ? { ...dictionary, status: 'ready' } : dictionary
+}
+
+/** 把各只读接口的响应收成下拉字典。缺失或失败来源保持 undefined，只有预期字段的 null 才是明确空。 */
 export function buildPickerCatalog(sources: Record<string, unknown>): { dictionaries: Record<string, NormalizedDictionary>; warnings: string[] } {
   const warnings: string[] = []
   const dictionaries: Record<string, NormalizedDictionary> = {
@@ -177,13 +183,13 @@ export function buildPickerCatalog(sources: Record<string, unknown>): { dictiona
     limitProcStatus: adaptDictionaryValue('limitProcStatus', arrayOf(sources.limitInit, 'ProcStatus')),
     limitCustomerStatus: adaptDictionaryValue('limitCustomerStatus', arrayOf(sources.limitInit, 'CustomerStatus')),
     limitApplyType: withCaseType(adaptDictionaryValue('limitApplyType', arrayOf(sources.limitInit, 'apply_type')), arrayOf(sources.limitInit, 'apply_type')),
-    limitCaseStatus: withCaseType(adaptDictionaryValue('limitCaseStatus', caseStatusRows(arrayOf(sources.limitInit, 'case_status'))), caseStatusRows(arrayOf(sources.limitInit, 'case_status'))),
+    limitCaseStatus: filteredDictionary(withCaseType(adaptDictionaryValue('limitCaseStatus', caseStatusRows(arrayOf(sources.limitInit, 'case_status'))), caseStatusRows(arrayOf(sources.limitInit, 'case_status'))), arrayOf(sources.limitInit, 'case_status')),
     limitDirection: adaptDictionaryValue('limitDirection', arrayOf(sources.limitInit, 'Case_direction')),
     limitBussType: adaptBussType(arrayOf(sources.limitInit, 'BussType')),
     limitProcType: adaptDictionaryValue('limitProcType', procTypeRows(arrayOf(sources.limitInit, 'procType'))),
     limitCtrlProc: adaptNodeTree('limitCtrlProc', arrayOf(sources.limitCtrl, 'CtrlProc')),
     filingFlowNode: adaptFlowNode('filingFlowNode', arrayOf(sources.filingInit, 'ApplyFlowNode')),
-    filingCaseType: adaptCaseType(filingCaseTypeRows(arrayOf(sources.filingInit, 'CaseType'))),
+    filingCaseType: filteredDictionary(adaptCaseType(filingCaseTypeRows(arrayOf(sources.filingInit, 'CaseType'))), arrayOf(sources.filingInit, 'CaseType')),
     filingContract: adaptDictionaryValue('filingContract', arrayOf(sources.contractInit, 'table5'))
   }
   for (const [name, dictionary] of Object.entries(dictionaries)) {
@@ -214,7 +220,7 @@ export function describePickerReceipt(dictionaries: Record<string, NormalizedDic
     const count = dictionaries[key]?.options.length ?? 0
     return count > 0 ? [`${label} ${count}`] : []
   })
-  const head = got.length ? `已用原网站下拉：${got.join('、')}` : '原网站下拉没有读到选项，这些格子仍显示上次扫描的结果'
+  const head = got.length ? `已用原网站下拉：${got.join('、')}` : '原网站下拉没有可用选项，请查看各字段状态'
   return warnings.length ? `${head}。${warnings[0]}` : head
 }
 
