@@ -10,7 +10,7 @@ import { PAGE_OPTIONS, cellKeys, queryBlocks, type QueryCell, type QuerySection 
 import { cellsFromLiveFields } from '../query/live-fields'
 import { buildQueryXml } from '../query/query-xml'
 import { describeFormCheck, fallbackFields, formFieldKey, hiddenFormFields, mergeFormFields, overlayFieldOptions, pageSelectOptions } from '../query/form-page'
-import { activateOptionFallback, FILE_BASIC_OPTION_FIELDS, FILE_FLOW_OPTION_FIELDS, hydrateOptionFallback, optionFallbackEpoch, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../query/option-fallback'
+import { activateOptionFallback, FILE_BASIC_OPTION_FIELDS, FILE_FLOW_OPTION_FIELDS, hydrateOptionFallback, optionFallbackEpoch, rememberDictionaries, rememberFormFields, savedChoices, scopeSavedChoices, subscribeOptionFallback } from '../query/option-fallback'
 import FileTypePicker from './FileTypePicker.vue'
 import EmptyGuide from '../app/components/EmptyGuide.vue'
 import { peekHistoryList, readHistoryList, saveHistoryList } from '../query/history-list-cache'
@@ -32,6 +32,7 @@ import { sameOptionValue } from '../shell/components/theme-select'
 import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../shell/components/WDatePicker.vue'
 import { isMultiPickerKey } from '../shared/picker-modes'
+import { CURRENT_ENVIRONMENT } from '../api/config'
 
 const props = withDefaults(defineProps<{
   bridge?: MessageBridge
@@ -330,13 +331,17 @@ function checked(key: string): boolean {
   return value === 'on' || value === 'true' || value === '1' || value === '是'
 }
 /** 显示文案不再自己截断：一行摆得下就完整显示，放不下由 CSS 省略号或悬浮提示兜底。 */
+/** 原站文件查询页的案件类型下拉默认选中专利，查询提交空案件类型时也按默认案件类型查。案件状态下拉这类按案件类型收窄的选项同口径：没选案件类型就按当前环境默认的专利收。 */
+function effectiveCaseType(): string {
+  return formValue('case_type') || CURRENT_ENVIRONMENT.caseTypeId
+}
 function storedLabel(key: string, value: string): string {
   const page = PAGE_OPTIONS[key]?.find(item => item.value === value)
   if (page) return page.label
   const dictionary = dictionaryFor(key)
   if (dictionary) {
     const options = dictionary.dictionary.options[0]?.metadata?.caseTypeId
-      ? optionsForCaseType(dictionary.name, dictionary.dictionary.options, formValue('case_type'))
+      ? optionsForCaseType(dictionary.name, dictionary.dictionary.options, effectiveCaseType())
       : dictionary.dictionary.options
     const display = resolveInternalIdDisplay(value, options, key === 'filetype')
     if (!display.unresolved) return display.text
@@ -418,9 +423,10 @@ function dictionaryOptions(key: string): { value: string; label: string; parent?
 }
 function liveChoices(dictionary: { name: string; dictionary: NormalizedDictionary }): { value: string; label: string; parent?: string }[] {
   const rows = dictionary.dictionary.options.filter(item => !item.disabled)
-  const caseType = formValue('case_type')
   const scoped = rows.some(item => item.metadata?.caseTypeId)
-  const picked = scoped && caseType ? optionsForCaseType(dictionary.name, dictionary.dictionary.options, caseType) : rows
+  // 案件状态、申请类型、业务类型这些按案件类型收窄的选项，原站只渲染当前案件类型的那批。
+  // 没选案件类型时不能整包倒出来：158 条里「未递交」会按案件类型重复四遍，还会混进年费类的 PROC 状态。
+  const picked = scoped ? optionsForCaseType(dictionary.name, dictionary.dictionary.options, effectiveCaseType()) : rows
   return picked.map(item => ({
     value: item.value,
     label: item.label,
@@ -431,7 +437,9 @@ function optionsFor(key: string): { value: string; label: string; parent?: strin
   fallbackTick.value
   const dictionary = dictionaryFor(key)
   const live = dictionary && dictionary.dictionary.options.length > 0 ? liveChoices(dictionary) : null
-  const stored = props.userId ? savedChoices(props.userId, key) : null
+  const rawStored = props.userId ? savedChoices(props.userId, key) : null
+  // 上次缓存的选项也按当前案件类型收窄，接口没回来时的兜底和实时来源同口径。
+  const stored = rawStored ? scopeSavedChoices(key, rawStored, effectiveCaseType()) : null
   let options = live ?? [...(stored ?? pageSelectOptions(key, pageFields.value) ?? PAGE_OPTIONS[key] ?? [])]
   const current = formValue(key)
   if (current && !options.some(item => item.value === current)) {
@@ -1374,8 +1382,7 @@ watch(selectedCustomerId, () => {
             <label v-else-if="cell.kind === 'named'" :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
               <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="formValue(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
-              <ThemeSelect v-else-if="optionsFor(cell.key).length > 1" :model-value="formValue(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
-              <input v-else :value="namedShown(cell.key)" type="text" @input="onText(cell.key, $event)" />
+              <ThemeSelect v-else :model-value="formValue(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
             </label>
             <label v-else-if="cell.kind === 'select'" :class="cellClass(cell)">
               <span>{{ cell.label }}</span>

@@ -799,8 +799,8 @@ onBeforeUnmount(() => {
           <label v-else-if="cell.kind === 'named'" class="query-cell">
             <span>{{ cell.label }}</span>
             <TreeOptionSelect v-if="isMulti(cell.key) || treeChoices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" @update:model-value="setNamed(cell.key, String($event))" />
-            <ThemeSelect v-else-if="choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
-            <input v-else :value="valueOf(cell.key)" type="text" :placeholder="cell.key === 'business_coop' ? '签约单位下拉未读到，可直接填值' : ''" @input="onText(cell.key, $event)" />
+            <ThemeSelect v-else-if="choices(cell.key).length || cell.key !== 'business_coop'" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
+            <input v-else :value="valueOf(cell.key)" type="text" placeholder="签约单位下拉未读到，可直接填值" @input="onText(cell.key, $event)" />
           </label>
           <label v-else-if="cell.kind === 'select'" class="query-cell">
             <span>{{ cell.label }}</span>

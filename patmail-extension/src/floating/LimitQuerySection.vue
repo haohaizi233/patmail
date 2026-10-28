@@ -8,7 +8,7 @@ import type { HistoryQueryOption } from '../api/query-history'
 import { CURRENT_ENVIRONMENT } from '../api/config'
 import { LIMIT_BLOCKS, LIMIT_OPTION_KEYS, LIMIT_SELECTS, buildLimitQueryXml, limitColumnLabels, readLimitQueryXml } from '../api/limit-form'
 import { pageSelectOptions } from '../query/form-page'
-import { activateOptionFallback, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, savedChoices, subscribeOptionFallback } from '../query/option-fallback'
+import { activateOptionFallback, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, savedChoices, scopeSavedChoices, subscribeOptionFallback } from '../query/option-fallback'
 import type { NormalizedDictionary } from '../api/dictionaries'
 import { choicesFromDictionary, describePickerReceipt, LIMIT_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
 import { hasOptionTree } from '../query/option-tree'
@@ -126,19 +126,20 @@ function onCheck(key: string, event: Event): void {
 function dateFormatOf(cell: { start: string }): 'yyyy-MM-dd' | 'MM-dd' {
   return cell.start === 'month_day_from' ? 'MM-dd' : 'yyyy-MM-dd'
 }
-function caseTypeFor(key: string): string {
-  const selected = valueOf('case_type')
-  if (selected || key !== 'case_status_id') return selected
-  return CURRENT_ENVIRONMENT.caseTypeId
+/** 没选案件类型时按当前环境默认的专利收窄选项：原站下拉框默认选中专利，查询提交空案件类型也按默认案件类型查。 */
+function caseTypeFor(): string {
+  return valueOf('case_type') || CURRENT_ENVIRONMENT.caseTypeId
 }
 function choices(key: string): { value: string; label: string; parent?: string }[] {
   fallbackTick.value
   const source = LIMIT_PICKER_FIELDS[key]
   const dictionary = source ? pickers.value[source] : undefined
   const live = dictionary && dictionary.options.length > 0
-    ? choicesFromDictionary(dictionary, caseTypeFor(key), valueOf('country'))
+    ? choicesFromDictionary(dictionary, caseTypeFor(), valueOf('country'))
     : null
-  const stored = props.userId ? savedChoices(props.userId, key) : null
+  const rawStored = props.userId ? savedChoices(props.userId, key) : null
+  // 缓存选项也按当前案件类型收窄，接口没回来时的兜底和实时来源同口径。
+  const stored = rawStored ? scopeSavedChoices(key, rawStored, caseTypeFor()) : null
   const saved = stored ?? pageSelectOptions(LIMIT_OPTION_KEYS[key] ?? key) ?? LIMIT_SELECTS[key] ?? []
   const options = live ?? [...saved]
   const current = valueOf(key)
@@ -563,8 +564,7 @@ watch(() => [valueOf('case_type'), valueOf('proc_type'), valueOf('country')].joi
             <label v-else-if="cell.kind === 'named'" class="query-cell">
               <span>{{ cell.label }}</span>
               <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
-              <ThemeSelect v-else-if="cell.key === 'case_status_id' || choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="fieldLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
-              <input v-else :value="namedShown(cell.key)" type="text" @input="onText(cell.key, $event)" />
+              <ThemeSelect v-else :model-value="valueOf(cell.key)" :value-label="fieldLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
             </label>
             <label v-else-if="cell.kind === 'select'" class="query-cell">
               <span>{{ cell.label }}</span>

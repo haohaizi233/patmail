@@ -176,7 +176,8 @@ onBeforeUnmount(() => {
         </div>
         <div class="theme-tree-list">
           <TreeOptionNode v-for="id in tree.roots" :key="id" :node-id="id" :by-id="tree.byId" :selected="selected" :expanded="expanded" :visible="found ? found.visible : null" :trail="[]" :multiple="multiple" :input-name="radioName" @toggle="toggle" @expand="expand" />
-          <p v-if="found && found.visible.size === 0" class="theme-select-empty">没有匹配的选项。</p>
+          <p v-if="tree.roots.length === 0" class="theme-select-empty">没有可选的选项。原站没有返回这个下拉的数据。</p>
+          <p v-else-if="found && found.visible.size === 0" class="theme-select-empty">没有匹配的选项。</p>
         </div>
         <div class="theme-tree-actions">
           <button type="button" class="theme-tree-clear" @click="clearSelection">清除</button>

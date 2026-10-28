@@ -26,6 +26,10 @@ export interface SavedChoice {
   value: string
   label: string
   parent?: string
+  /** 案件类型归属。原站的案件状态、申请类型、业务类型都按当前案件类型收窄，缓存要带着这份归属才能照原站口径过滤。 */
+  caseTypeId?: string
+  /** 案件状态的分类（ALL / CASE / PROC）。原站案件状态只放 ALL 和 CASE，PROC 是年费状态，不进查询树。 */
+  statusClass?: string
 }
 
 const STORAGE_KEY = 'patmail.formOptionFallback.v1'
@@ -57,7 +61,15 @@ function touch(): void {
 
 function same(left: SavedChoice[], right: SavedChoice[]): boolean {
   if (left.length !== right.length) return false
-  return left.every((item, index) => item.value === right[index]?.value && item.label === right[index]?.label && item.parent === right[index]?.parent)
+  return left.every((item, index) => {
+    const other = right[index]
+    return Boolean(other) && item.value === other.value && item.label === other.label && item.parent === other.parent &&
+      item.caseTypeId === other.caseTypeId && item.statusClass === other.statusClass
+  })
+}
+
+function optionalId(value: unknown, limit: number): string {
+  return typeof value === 'string' && value.trim().length <= limit ? value.trim() : ''
 }
 
 function cleanChoice(value: unknown): SavedChoice | null {
@@ -69,7 +81,15 @@ function cleanChoice(value: unknown): SavedChoice | null {
   if (!id || !label || id.length > 120 || label.length > 200 || label.replace(/[\s\-—_]/g, '') === '请选择') return null
   const parent = typeof row.parent === 'string' ? row.parent.trim() : ''
   if (parent.length > 120) return null
-  return parent ? { value: id, label, parent } : { value: id, label }
+  const caseTypeId = optionalId(row.caseTypeId, 120)
+  const statusClass = optionalId(row.statusClass, 40)
+  return {
+    value: id,
+    label,
+    ...(parent ? { parent } : {}),
+    ...(caseTypeId ? { caseTypeId } : {}),
+    ...(statusClass ? { statusClass } : {})
+  }
 }
 
 function sanitize(choices: SavedChoice[]): SavedChoice[] {
@@ -199,9 +219,29 @@ export function choicesFromDictionary(dictionary: NormalizedDictionary | undefin
     return [{
       value: item.value,
       label: item.label,
-      ...(item.parentValue ? { parent: item.parentValue } : {})
+      ...(item.parentValue ? { parent: item.parentValue } : {}),
+      ...(item.metadata?.caseTypeId ? { caseTypeId: item.metadata.caseTypeId } : {}),
+      ...(item.metadata?.statusClass ? { statusClass: item.metadata.statusClass } : {})
     }]
   }))
+}
+
+const CASE_STATUS_KEYS = new Set(['case_status', 'case_status_id'])
+
+/**
+ * 按当前案件类型收窄缓存里的下拉。原站 FileSearch.js / LimitMonitor.js 都是
+ * 「status_class 为 ALL 或 CASE，且 case_type_id 等于当前案件类型」才放进案件状态树；
+ * 没选案件类型时原站下拉框默认专利，这里同口径用调用方传入的默认值。
+ * 没带案件类型归属的旧缓存原样返回，不做猜测。
+ */
+export function scopeSavedChoices(key: string, choices: SavedChoice[], caseTypeId: string): SavedChoice[] {
+  const type = caseTypeId.trim()
+  if (!type || !choices.some(item => item.caseTypeId)) return choices
+  return choices.filter(item => {
+    if (item.caseTypeId && item.caseTypeId !== type) return false
+    if (CASE_STATUS_KEYS.has(key) && item.statusClass) return item.statusClass === 'ALL' || item.statusClass === 'CASE'
+    return true
+  })
 }
 
 /** 按表单键把这次读到的非空字典写进回退。 */
