@@ -1,0 +1,23 @@
+# 依赖与 Actions 更新机器人：每周开 PR，人工审查合并。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /patmail-extension
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: deps
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: ci

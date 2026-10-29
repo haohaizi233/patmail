@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "note": "直接依赖许可策略：allowed=常规宽松许可直接放行；exceptions=按包登记的例外，必须有 reason 与 expires（到期复审）。传递依赖清单人工复审，见 docs/ci/security-policy.md。"
+  },
+  "allowed": [
+    "MIT",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Apache-2.0",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "CC-BY-4.0",
+    "BlueOak-1.0.0",
+    "Python-2.0",
+    "CC-BY-3.0"
+  ],
+  "exceptions": []
+}

@@ -19,7 +19,7 @@ function officialKind(name) {
 }
 
 function listArchive(archive) {
-  const listed = spawnSync('tar', ['-tf', archive], { encoding: 'utf8' })
+  const listed = spawnSync(process.env.TAR || 'tar', ['-tf', archive], { encoding: 'utf8' })
   if (listed.status !== 0) {
     console.error('压缩包无法列出内容。')
     process.exit(listed.status ?? 1)

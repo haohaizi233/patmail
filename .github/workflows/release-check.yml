@@ -1,0 +1,69 @@
+# 发布前校验：版本一致性、可复现构建、产物安全、测试摘要、SHA-256 清单。
+# 明确不做：Chrome Web Store 发布、CRX 签名、访问/轮换签名私钥（历史 dist.pem 只作风险登记）。
+name: Release Check
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: patmail-extension
+    shell: bash
+
+jobs:
+  release-check:
+    name: Release Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-patmail
+      - name: 测试（单元 / 集成 / 回归）
+        run: node scripts/ci-check.mjs --steps unit,integration,regression
+      - name: 两次构建比对（可复现性）
+        run: node scripts/verify-reproducible.mjs
+      - name: Manifest 与构建产物校验
+        run: node scripts/ci-check.mjs --steps manifest,dist
+      - name: 密钥扫描（交付前最后一次）
+        run: node scripts/scan-secrets.mjs
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
+      - name: E2E Smoke
+        run: node scripts/run-e2e.mjs smoke
+      - name: 打包源码与交付件（bsdtar 生成 zip）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libarchive-tools
+          TAR=bsdtar pnpm pack:source
+          TAR=bsdtar pnpm pack:delivery
+          TAR=bsdtar pnpm verify:archive
+      - name: 发布前校验（版本 / 摘要 / SHA-256 / 产物名称）
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: node scripts/release-check.mjs ${RELEASE_TAG:+--tag $RELEASE_TAG}
+      - name: 上传发布校验产物
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: release-bundle
+          path: |
+            patmail-extension/test-results/patmail-source.zip
+            patmail-extension/test-results/patmail-delivery.zip
+            patmail-extension/test-results/ci
+            patmail-extension/test-results/coverage
+          retention-days: 30

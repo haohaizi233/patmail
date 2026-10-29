@@ -80,7 +80,8 @@ try {
   }
   await app.getByText('广汽丰田案件', { exact: true }).waitFor({ timeout: 15_000 })
   await app.getByText('广汽丰田', { exact: true }).last().waitFor()
-  await app.getByText('共 1 条', { exact: true }).waitFor()
+  // 计数标签自 b347745 起就是「期限共 N 条」（src/shell/pages/LimitPage.vue），这里锁定当前真实文案。
+  await app.getByText('期限共 1 条', { exact: true }).waitFor()
   report.pass('limits query sends Report.ashx/GetLimitMonitorCaseList and renders the returned row')
 
   mock.setLimitMode('expired')

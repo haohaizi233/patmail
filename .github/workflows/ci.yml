@@ -1,0 +1,191 @@
+# PR 质量门禁主流水线（Fast Gate）。
+# 结构见 docs/ci/architecture.md：
+#   Static Checks ─┐
+#   Unit/Integration ┼─→ Build & Artifact Verification ─→ E2E Smoke ─→ CI Gate
+#   Regression ─────┤
+#   Security ───────┘
+# 权限最小化：只读 contents；不接触任何 Secret；并发取消只作用于同分支/同 PR。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: patmail-extension
+    shell: bash
+
+jobs:
+  static:
+    name: Static Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: Typecheck / Lint / Format
+        run: node scripts/ci-check.mjs --steps typecheck,lint,format
+      - name: 上传静态检查报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-static
+          path: |
+            patmail-extension/test-results/ci
+          retention-days: 14
+
+  unit-integration:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 单元 + 集成测试（JUnit 产物）
+        run: node scripts/ci-check.mjs --steps unit,integration
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-unit
+          path: |
+            patmail-extension/test-results/ci
+            patmail-extension/test-results/junit
+          retention-days: 14
+
+  regression:
+    name: Regression Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 历史业务契约回归（JUnit 产物）
+        run: node scripts/ci-check.mjs --steps regression
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-regression
+          path: |
+            patmail-extension/test-results/ci
+            patmail-extension/test-results/junit
+          retention-days: 14
+
+  security:
+    name: Security (Secrets / Licenses)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 密钥扫描（工作树）+ 许可策略
+        run: node scripts/ci-check.mjs --steps secrets,licenses
+      - name: 上传扫描报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-security
+          path: |
+            patmail-extension/test-results/ci
+          retention-days: 14
+
+  build:
+    name: Build & Artifact Verification
+    needs: [static, unit-integration, regression]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 构建 + Manifest 校验 + 产物校验
+        run: node scripts/ci-check.mjs --steps build,manifest,dist
+      - name: 上传构建产物
+        if: success()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: extension-dist
+          path: patmail-extension/dist
+          retention-days: 14
+      - name: 上传校验报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-build
+          path: |
+            patmail-extension/test-results/ci
+          retention-days: 14
+
+  e2e-smoke:
+    name: E2E Smoke
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
+      - name: 安装 Chromium（锁定 playwright 版本对应浏览器）
+        run: npx playwright install --with-deps chromium
+      - name: 下载构建产物
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: extension-dist
+          path: patmail-extension/dist
+      - name: E2E Smoke（扩展启动 / EASY 绑定 / 文件查询 / 期限查询）
+        run: node scripts/run-e2e.mjs smoke
+      - name: 上传 E2E 报告与失败证据
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-e2e-smoke
+          path: |
+            patmail-extension/test-results/ci
+            patmail-extension/test-results/*.png
+            patmail-extension/test-results/*.txt
+            patmail-extension/test-results/*.json
+          retention-days: 14
+
+  ci-gate:
+    name: CI Gate
+    needs: [static, unit-integration, regression, security, build, e2e-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: 汇总各 Job 报告
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: report-*
+          merge-multiple: true
+          path: patmail-extension/test-results
+      - name: 全部 Job 必须 success
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: >-
+          node -e "const n=JSON.parse(process.env.NEEDS_JSON);
+          const bad=Object.entries(n).filter(([,v])=>v.result!=='success');
+          if(bad.length){console.error('未通过的 Job：'+bad.map(([k,v])=>k+'='+v.result).join(', '));process.exit(1)}
+          console.log('全部 Job 通过：'+Object.keys(n).join(', '))"
+      - name: CI 报告与汇总门禁
+        run: node scripts/ci-report.mjs --gate
+      - name: 上传最终 CI 报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ci-summary
+          path: |
+            patmail-extension/test-results/ci/summary.json
+            patmail-extension/test-results/ci/summary.md
+          retention-days: 30

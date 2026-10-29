@@ -1,4 +1,5 @@
 import type { App as VueApp } from 'vue'
+import cuteScrollCss from '../shared/cute-scroll.css?inline'
 import cssText from '../floating/style.css?inline'
 import themeSelectCss from '../shell/components/theme-select.css?inline'
 import { mountFloating } from '../floating/main'
@@ -31,7 +32,7 @@ export function injectPanel(bridge: MessageBridge): void {
   host.style.cssText = 'all: initial !important; position: fixed !important; top: 0 !important; left: 0 !important; width: 0 !important; height: 0 !important; display: block !important; z-index: 2147483647 !important; pointer-events: none !important;'
   const shadow = host.attachShadow({ mode: 'closed' })
   const style = document.createElement('style')
-  style.textContent = `${cssText}\n${themeSelectCss}`
+  style.textContent = `${cuteScrollCss}\n${cssText}\n${themeSelectCss}`
   const mountPoint = document.createElement('div')
   mountPoint.id = 'patmail-app'
   shadow.append(style, mountPoint)

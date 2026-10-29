@@ -34,7 +34,10 @@ export async function waitForContentScript(worker, targetPage, { attempts = 25, 
     if (tab?.id) {
       try {
         const pong = await worker.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: 0 }), tab.id)
-        if (pong?.type === 'PONG') return tab
+        if (pong?.type === 'PONG') {
+          await openPanelShadow(worker, tab.id)
+          return tab
+        }
       } catch {
         // 内容脚本仍在启动。
       }
@@ -42,4 +45,29 @@ export async function waitForContentScript(worker, targetPage, { attempts = 25, 
     await targetPage.waitForTimeout(intervalMs)
   }
   throw new Error(`content script did not answer ${targetUrl}`)
+}
+
+/**
+ * 生产注入器用 closed shadow 封装面板（src/content/injector.ts），页面和 Playwright
+ * 都看不到里面。自动化必须能操作面板 DOM，所以在扩展的隔离世界里把 attachShadow
+ * 换成 open：只影响被测标签的 shadow 可见性，不动产品代码，也不影响主世界里的站点。
+ * 生产仍是 closed shadow，由 tests/unit/content/injector.test.ts 的契约断言守住。
+ */
+export async function openPanelShadow(worker, tabId) {
+  await worker.evaluate(async (id) => {
+    await chrome.scripting.executeScript({
+      target: { tabId: id },
+      world: 'ISOLATED',
+      func: () => {
+        const globalKey = '__patmailShadowOpened'
+        const scope = globalThis
+        if (scope[globalKey]) return
+        scope[globalKey] = true
+        const original = Element.prototype.attachShadow
+        Element.prototype.attachShadow = function (init) {
+          return original.call(this, { ...init, mode: 'open' })
+        }
+      }
+    })
+  }, tabId)
 }

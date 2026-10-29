@@ -32,6 +32,15 @@ describe('document-scoped floating host', () => {
     expect(mounts.unmounts).toBe(1)
   })
 
+  it('keeps the panel host on a closed shadow root', async () => {
+    const { injectPanel } = await import('../../../src/content/injector')
+    injectPanel(bridge)
+    const host = document.querySelector('patmail-root')
+    // closed shadow：页面脚本拿不到面板 DOM，内容也不在 light DOM 里。
+    expect(host?.shadowRoot).toBeNull()
+    expect(host?.innerHTML).toBe('')
+  })
+
   it('reattaches after a local body refresh but respects user close', async () => {
     const { injectPanel } = await import('../../../src/content/injector')
     injectPanel(bridge)

@@ -1,0 +1,64 @@
+# Scheduled Security：定期依赖审计、凭据风险检查与历史扫描。
+# PR 的快速安全门禁在 ci.yml 的 security job（工作树扫描 + 许可）；
+# 这里跑更重的历史扫描与 pnpm audit，避免历史风险卡死每个 PR。
+name: Security
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: patmail-extension
+    shell: bash
+
+jobs:
+  secret-scan:
+    name: Secret Scan（工作树 + Git 历史）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0 # 历史扫描需要完整提交历史
+      - uses: ./.github/actions/setup-patmail
+      - name: 工作树扫描
+        run: node scripts/scan-secrets.mjs
+      - name: Git 历史扫描（指纹登记见 ci/secret-allowlist.json）
+        run: node scripts/scan-secrets.mjs --history
+      - name: 上传扫描报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-secret-scan
+          path: patmail-extension/test-results/ci
+          retention-days: 30
+
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: pnpm audit（prod 依赖，high 及以上失败）
+        run: pnpm audit:deps
+      - name: 锁文件完整性（--frozen-lockfile 已在安装阶段校验）
+        run: node -e "console.log('lockfile ok:', require('./package.json').packageManager)"
+      - name: 直接依赖许可策略
+        run: node scripts/license-check.mjs
+      - name: 上传审计报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-dependency-audit
+          path: patmail-extension/test-results/ci
+          retention-days: 30

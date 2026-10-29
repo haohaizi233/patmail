@@ -35,9 +35,9 @@ processes: list[subprocess.Popen[str]] = []
 stopping = False
 bridge_stop = threading.Event()
 print = functools.partial(print, flush=True)
+recent_output: deque[str] = deque(maxlen=200)
 
 
-def registry_paths() -> list[str]:
 def reconfigure_output() -> None:
     """子进程日志里有 ➜ 这类字符，GBK 终端直接 print 会崩，统一改成可替换。"""
     for stream in (sys.stdout, sys.stderr):
@@ -48,6 +48,7 @@ def reconfigure_output() -> None:
                 pass
 
 
+def registry_paths() -> list[str]:
     if sys.platform != "win32":
         return []
     import winreg
@@ -172,8 +173,6 @@ def pipe_output(proc: subprocess.Popen[str], ready: threading.Event) -> None:
     if proc.stdout is None:
         return
     for line in proc.stdout:
-    reconfigure_output()
-    for line in proc.stdout:
         recent_output.append(line)
         if "Local:" in line:
             ready.set()
@@ -259,7 +258,6 @@ def start_logged(runner: str, args: list[str], cwd: Path) -> subprocess.Popen[st
     return proc
 
 
-def start_frontend(runner: str) -> subprocess.Popen[str]:
 def port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
@@ -432,7 +430,6 @@ def start_frontend(runner: str) -> subprocess.Popen[str]:
     )
 
 
-def main() -> None:
 def start_frontend_with_recovery(runner: str) -> subprocess.Popen[str]:
     """带容灾的启动：端口预检、失败自动修复重试一次、就绪用 HTTP 探活。"""
     for attempt in (1, 2):
@@ -459,8 +456,9 @@ def start_frontend_with_recovery(runner: str) -> subprocess.Popen[str]:
     raise AssertionError("unreachable")
 
 
-    if hasattr(sys.stdout, "reconfigure"):
+def main() -> None:
     reconfigure_output()
+    if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     signal.signal(signal.SIGINT, handle_stop)
     if sys.platform == "win32":
@@ -478,7 +476,6 @@ def start_frontend_with_recovery(runner: str) -> subprocess.Popen[str]:
     print()
 
     build_extension(runner)
-    frontend = start_frontend(runner)
     frontend = start_frontend_with_recovery(runner)
     code = frontend.wait()
     stop()

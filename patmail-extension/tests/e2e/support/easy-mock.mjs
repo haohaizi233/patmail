@@ -186,6 +186,21 @@ async function limitQueryRoute(route, request, pathName, params, authenticated, 
     await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: json({}) })
     return
   }
+
+  // 期限页加载时的其余只读字典扇出（字段列、流程节点、合同状态、案件流程）。
+  // 与上面 BaseInfo/Common 同理：合法空响应即可让页面进入可查询状态，避免 404 污染 console。
+  if (
+    (pathName === '/AjaxServers/PatentAction.ashx' && params.get('Call') === 'GetFieldColumn') ||
+    (pathName === '/AjaxServers/FilingAction.ashx' && params.get('Call') === 'GetFilingFlowNode') ||
+    (pathName === '/AjaxServers/Customer.ashx' && params.get('Call') === 'InitContractStatus') ||
+    (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'GetCaseBusFlow')
+  ) {
+    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: json({}) })
+    return
+  }
+  // Unmatched routes fall through here. Log them so fixture gaps surface loudly in
+  // the test output instead of silently becoming 404 console errors later.
+  console.warn(`[easy-mock] fixture route not found: ${pathName} Call=${params.get('Call') ?? '(none)'}`)
   await route.fulfill({ status: 404, contentType: 'text/plain; charset=utf-8', body: 'fixture route not found' })
 }
 

@@ -12,5 +12,5 @@
     "lib": ["ES2022", "DOM"],
     "types": ["chrome", "vite/client", "node"]
   },
-  "include": ["src", "tests/**/*.test.ts", "*.config.ts"]
+  "include": ["src", "tests/**/*.ts", "*.config.ts"]
 }

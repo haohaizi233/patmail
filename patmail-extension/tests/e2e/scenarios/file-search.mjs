@@ -32,7 +32,10 @@ export async function runFileSearch(ctx) {
     assert.equal(first.params.get('case_volume'), 'A+123')
     assert.equal(first.params.get('Call'), 'GetSearchFiles')
     assert.equal(first.params.get('_doneCallback'), null)
-    assert.equal([...first.params.keys()].length, 116)
+    // API/04-文件查询.md 记录 117 项顺序（含旧前端回调产物 _doneCallback，现不发送），
+    // 本所开启 JIAQUAN 后原站还会多提交 is_vip、specialtyid（见 file-search-params 单测），
+    // 因此当前真实请求为 116 + 2 = 118 键，这里锁定真实契约。
+    assert.equal([...first.params.keys()].length, 118)
     const pageSize = easyPage.locator('patmail-root').getByRole('combobox', { name: '每页数量' })
     await pageSize.click()
     assert.deepEqual(await easyPage.locator('patmail-root').getByRole('option').allTextContents(), ['20', '50', '100'])

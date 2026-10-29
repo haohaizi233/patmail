@@ -1,0 +1,23 @@
+# 构建与依赖产物
+node_modules/
+dist/
+delivery/
+test-results/
+coverage/
+*.pyc
+__pycache__/
+
+# 大型业务数据与自动生成 JSON：不纳入格式门禁
+src/assets/sme-customers.json
+package-lock.json
+
+# 文档正文（Markdown 由人工排版）
+docs/
+*.md
+
+# 历史兼容脚本（Python 桥接、PowerShell）
+*.py
+*.ps1
+
+# 静态夹具（HTML 夹具保持人工结构，避免无意义重排）
+tests/fixtures/

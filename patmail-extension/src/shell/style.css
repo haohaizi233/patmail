@@ -1,3 +1,4 @@
+@import '../shared/cute-scroll.css';
 @import './components/theme-select.css';
 @import './components/w-date-picker.css';
 :root {

@@ -31,12 +31,12 @@ if (rejected.length > 0) {
   console.error(`构建目录里有 ${rejected.length} 个不能交付的文件名，已停止。`)
   process.exit(1)
 }
-const packed = spawnSync('tar', ['-a', '-c', '-f', output, ...candidates], { cwd: root, encoding: 'utf8' })
+const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, ...candidates], { cwd: root, encoding: 'utf8' })
 if (packed.status !== 0) {
   console.error(packed.stderr || '交付包没有生成。')
   process.exit(packed.status ?? 1)
 }
-const listed = spawnSync('tar', ['-tf', output], { cwd: root, encoding: 'utf8' })
+const listed = spawnSync(process.env.TAR || 'tar', ['-tf', output], { cwd: root, encoding: 'utf8' })
 if (listed.status !== 0) {
   console.error('交付包无法列出内容。')
   process.exit(listed.status ?? 1)

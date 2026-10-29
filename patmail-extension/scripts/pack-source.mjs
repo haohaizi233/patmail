@@ -30,12 +30,12 @@ if (present.some(name => name.toLowerCase().endsWith('.pem'))) {
   process.exit(1)
 }
 
-const packed = spawnSync('tar', ['-a', '-c', '-f', output, ...present], { cwd: root, encoding: 'utf8' })
+const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, ...present], { cwd: root, encoding: 'utf8' })
 if (packed.status !== 0) {
   console.error(packed.stderr || '源码包没有生成。')
   process.exit(packed.status ?? 1)
 }
-const listed = spawnSync('tar', ['-tf', output], { cwd: root, encoding: 'utf8' })
+const listed = spawnSync(process.env.TAR || 'tar', ['-tf', output], { cwd: root, encoding: 'utf8' })
 if (listed.status !== 0) {
   console.error('源码包无法列出内容。')
   process.exit(listed.status ?? 1)

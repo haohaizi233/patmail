@@ -1,0 +1,169 @@
+# Full Gate：main 推送 / 手动触发的完整验证。
+# 覆盖：完整测试产物、全量浏览器回归、下载故障注入与续传、旧桥接协议兼容、覆盖率、构建可复现性。
+name: E2E Full
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: patmail-extension
+    shell: bash
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 构建
+        run: node scripts/ci-check.mjs --steps build,manifest,dist
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: extension-dist
+          path: patmail-extension/dist
+          retention-days: 14
+
+  e2e-full:
+    name: E2E Full（下载 / 取消 / 续传 / 分页 / 故障注入）
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: extension-dist
+          path: patmail-extension/dist
+      - name: 执行 Full E2E
+        run: node scripts/run-e2e.mjs full
+      - name: 上传报告与失败证据
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-e2e-full
+          path: |
+            patmail-extension/test-results
+          retention-days: 14
+
+  e2e-legacy:
+    name: Legacy Compatibility（旧桥接下载协议）
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 安装 Python（桥接协议与 ZIP 校验）
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: extension-dist
+          path: patmail-extension/dist
+      - name: 执行 Legacy E2E + Python 桥接单测
+        run: node scripts/run-e2e.mjs legacy
+      - name: 上传报告与失败证据
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-e2e-legacy
+          path: |
+            patmail-extension/test-results
+          retention-days: 14
+
+  coverage:
+    name: Coverage
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 全量测试 + 覆盖率
+        run: pnpm test:coverage
+      - name: 覆盖率防退化门禁
+        run: node scripts/ci-report.mjs --coverage-gate
+      - name: 上传覆盖率
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-coverage
+          path: |
+            patmail-extension/test-results/coverage
+            patmail-extension/test-results/ci
+          retention-days: 14
+
+  reproducible-build:
+    name: Reproducible Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: ./.github/actions/setup-patmail
+      - name: 两次独立构建比对 Hash
+        run: node scripts/verify-reproducible.mjs
+      - name: 上传可复现性报告
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: report-repro
+          path: |
+            patmail-extension/test-results/ci
+          retention-days: 14
+
+  e2e-gate:
+    name: Full Gate
+    needs: [build, e2e-full, e2e-legacy, coverage, reproducible-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: report-*
+          merge-multiple: true
+          path: patmail-extension/test-results
+      - name: 全部 Job 必须 success
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: >-
+          node -e "const n=JSON.parse(process.env.NEEDS_JSON);
+          const bad=Object.entries(n).filter(([,v])=>v.result!=='success');
+          if(bad.length){console.error('未通过的 Job：'+bad.map(([k,v])=>k+'='+v.result).join(', '));process.exit(1)}
+          console.log('全部 Job 通过：'+Object.keys(n).join(', '))"
+      - name: CI 报告与汇总门禁
+        run: node scripts/ci-report.mjs --gate
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
+        with:
+          name: full-gate-summary
+          path: |
+            patmail-extension/test-results/ci/summary.json
+            patmail-extension/test-results/ci/summary.md
+          retention-days: 30

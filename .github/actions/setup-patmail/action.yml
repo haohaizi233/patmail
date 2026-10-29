@@ -1,0 +1,22 @@
+name: Setup PatMail 工具链
+description: >
+  统一安装 Node 与 pnpm 并以 --frozen-lockfile 安装依赖。
+  版本真值来源：patmail-extension/package.json 的 packageManager（pnpm）与 engines（Node）；
+  Node 这里固定取 22 LTS 线，避免开发机与 Runner 漂移。
+runs:
+  using: composite
+  steps:
+    - name: 安装 pnpm（锁定 packageManager 版本）
+      uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      with:
+        package_json_file: patmail-extension/package.json
+    - name: 安装 Node 22 LTS
+      uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: patmail-extension/pnpm-lock.yaml
+    - name: 安装依赖（禁止改写锁文件）
+      shell: bash
+      working-directory: patmail-extension
+      run: pnpm install --frozen-lockfile
