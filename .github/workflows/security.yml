@@ -27,7 +27,7 @@ jobs:
     name: Secret Scan（工作树 + Git 历史）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # 历史扫描需要完整提交历史
       - uses: ./.github/actions/setup-patmail
@@ -47,7 +47,7 @@ jobs:
     name: Dependency Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: pnpm audit（prod 依赖，high 及以上失败）
         run: pnpm audit:deps
