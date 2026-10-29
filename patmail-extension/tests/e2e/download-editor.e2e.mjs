@@ -2,10 +2,9 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js'
-import { launchExtensionContext, extensionWorker, waitForContentScript } from './support/browser.mjs'
+import { launchExtensionContext, extensionWorker, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
 import { installEasyMock, easyFixtureUrl } from './support/easy-mock.mjs'
 import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
-import { ensureStreamBridge } from './support/stream-bridge.mjs'
 
 const templateId = 'd9896997-1e83-4c7d-9a49-da69ba56e7aa'
 const recipe = { new_filename: 'app_no;-;case_name;-;file_desc', file_name_type: 'colname;txt;colname;txt;colname' }
@@ -18,9 +17,16 @@ let app
 let completeDownloads = false
 const pdf = Buffer.from('%PDF-1.4\nRepeat download fixture\n%%EOF')
 const info = { IsLogin: true, Status: true, Result: true }
-const stopBridge = await ensureStreamBridge()
+const recoveryScope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1111-1111-111111111111', 'workspace-files'])
 try {
   async function installRoutes(context) {
+  await context.addInitScript(() => {
+    window.__pickerCount = 0
+    window.showSaveFilePicker = async () => {
+      const count = ++window.__pickerCount
+      return (await navigator.storage.getDirectory()).getFileHandle(`editor-output-${count}.zip`, { create: true })
+    }
+  })
   await installEasyMock(context, { fixtureHtml: '<!doctype html><title>下载名称回归</title>', profile: 'extension' })
   await context.route('http://183.36.43.66:88/**', async route => {
     const params = new URLSearchParams(route.request().postData() ?? '')
@@ -93,19 +99,25 @@ try {
   completeDownloads = true
   const verifiedDownloads = []
   for (const separator of ['-', '再次']) {
+    const previousTask = await app.evaluate(async scope => (await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })).value.payload?.activeTask?.id, recoveryScope)
     await row.locator('.download-part-text').first().fill(separator)
     await app.getByRole('button', { name: '下载已选', exact: true }).click()
-    await app.getByText('浏览器下载完成', { exact: false }).waitFor({ timeout: 30000 })
-    const downloads = await worker.evaluate(() => chrome.downloads.search({}).then(items => items.filter(item => item.state === 'complete')))
-    assert.equal(downloads.length, verifiedDownloads.length + 1)
-    const latest = downloads.find(item => !verifiedDownloads.some(prior => prior.id === item.id))
-    const reader = new ZipReader(new Uint8ArrayReader(await readFile(latest.filename)))
+    await waitForPageCondition(app, async ({ scope, previousTask }) => {
+      const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
+      const task = reply.value.payload?.activeTask
+      return reply.ok && task?.id !== previousTask && task?.status === 'done'
+    }, { scope: recoveryScope, previousTask }, { timeout: 30000 })
+    const saved = await app.evaluate(async () => {
+      const file = await (await (await navigator.storage.getDirectory()).getFileHandle(`editor-output-${window.__pickerCount}.zip`)).getFile()
+      return { id: window.__pickerCount, data: Array.from(new Uint8Array(await file.arrayBuffer())) }
+    })
+    const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(saved.data)))
     try {
       const entries = await reader.getEntries()
       assert.deepEqual(entries.map(entry => entry.filename), [`配方${separator}验收.pdf`])
       assert.deepEqual(Buffer.from(await entries[0].getData(new Uint8ArrayWriter(), { checkSignature: true })), pdf)
     } finally { await reader.close() }
-    verifiedDownloads.push({ id: latest.id, entry: `配方${separator}验收.pdf` })
+    verifiedDownloads.push({ id: saved.id, entry: `配方${separator}验收.pdf` })
     assert.equal((await app.locator('.check-rainbow').getAttribute('aria-valuetext')).includes('生成下载名称'), true)
   }
   assert.deepEqual(calls.slice(1), [
@@ -118,7 +130,7 @@ try {
   assert.equal(await tag.getByRole('button', { name: '全选', exact: true }).count(), 0)
   const scope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1111-1111-111111111111', 'workspace-files'])
   // 等待真实事务提交，再重载整页；不能用固定等待掩盖保护尚未落盘。
-  await app.waitForFunction(async scope => {
+  await waitForPageCondition(app, async scope => {
     const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
     return reply.ok && reply.value.payload?.activeTask?.status === 'done' && Object.keys(reply.value.payload.selected ?? {}).length === 1
   }, scope)
@@ -149,4 +161,4 @@ try {
 } catch (error) {
   await writeFile(resultPath('recovery-editor-error.json'), JSON.stringify({ error: String(error), metadataCalls, body: await app?.locator('body').innerText().catch(() => '页面已关闭') }, null, 2))
   throw error
-} finally { await context.close(); stopBridge() }
+} finally { await context.close() }

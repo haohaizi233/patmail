@@ -1,0 +1,207 @@
+import { describe, expect, it } from 'vitest'
+import { BrowserStreamDownloads } from '../../../src/background/browser-download'
+import type { BrowserDownloadStore, BrowserDownloadTask, BrowserBlob, BrowserFileRequest, BrowserFileReply } from '../../../src/browser-download/types'
+import type { CachedFileInfo } from '../../../src/api/stream-cache'
+import { isMessage, MessageType } from '../../../src/shared/message'
+
+function fixture() {
+  const tasks = new Map<string, BrowserDownloadTask>(), blobs = new Map<string, Uint8Array>(), infos = new Map<string, CachedFileInfo>(), names = new Map<string, Record<string, string[]>>()
+  const key = (id: string, blob: BrowserBlob) => `${id}/${blob}`
+  const store: BrowserDownloadStore = {
+    async create(task) { tasks.set(task.taskId, structuredClone(task)) },
+    async get(id) { return structuredClone(tasks.get(id) ?? null) },
+    async update(id, patch) { Object.assign(tasks.get(id)!, patch) },
+    async info(id, blob) { return { complete: false, ...infos.get(key(id, blob)), receivedBytes: blobs.get(key(id, blob))?.length ?? 0 } },
+    async reset(id, blob, meta) { blobs.set(key(id, blob), new Uint8Array()); infos.set(key(id, blob), { ...meta, receivedBytes: 0, complete: false }) },
+    async append(id, blob, offset, bytes) {
+      const old = blobs.get(key(id, blob)) ?? new Uint8Array()
+      if (offset > old.length) throw Error('gap')
+      for (let i = 0; i < Math.min(bytes.length, old.length - offset); i++) if (old[offset + i] !== bytes[i]) throw Error('prefix mismatch')
+      const next = new Uint8Array(Math.max(old.length, offset + bytes.length)); next.set(old); next.set(bytes, offset); blobs.set(key(id, blob), next)
+    },
+    async finishBlob(id, blob, meta) { infos.set(key(id, blob), { ...await store.info(id, blob), ...meta, complete: true }) },
+    async read(id, blob, offset, limit = 262144) { return (blobs.get(key(id, blob)) ?? new Uint8Array()).slice(offset, offset + limit) },
+    async saveNames(id, offset, list) { const saved = names.get(id) ?? {}; saved[offset] = list.slice(); names.set(id, saved) },
+    async names(id) { return structuredClone(names.get(id) ?? {}) },
+    async complete(id, bytes) { Object.assign(tasks.get(id)!, { state: 'done', completedBytes: bytes }); for (const name of blobs.keys()) if (name.startsWith(id + '/')) blobs.delete(name) },
+    async discard(id) { tasks.delete(id); for (const name of blobs.keys()) if (name.startsWith(id + '/')) blobs.delete(name) }
+  }
+  const calls: BrowserFileRequest[] = []
+  let handler = async (_request: BrowserFileRequest): Promise<BrowserFileReply> => ({ ok: true })
+  const host = async (request: BrowserFileRequest) => { calls.push(request); return handler(request) }
+  const broker = new BrowserStreamDownloads(store, host)
+  const start = (extra = {}) => broker.command({ action: 'start', fileName: 'test.zip', manifest: { ids: [1] }, targetId: 'target', ...extra }, 10, 'owner')
+  return { store, broker, host, calls, start, tasks, blobs, handler: (next: typeof handler) => { handler = next } }
+}
+
+describe('browser stream broker', () => {
+  it('does not reload a large manifest or naming batches for source blocks and status polling', async () => {
+    const f = fixture(), a = await f.start(), token = a.token!
+    f.store.get = async () => { throw new Error('unexpected full manifest read') }
+    f.store.names = async () => { throw new Error('unexpected naming batch read') }
+    await f.broker.command({ action: 'cache', command: 'write', index: 0, token, offset: 0, data: 'YQ==' }, 10, 'owner')
+    expect((await f.broker.command({ action: 'cache', command: 'info', index: 0, token }, 10, 'owner')).info?.receivedBytes).toBe(1)
+    await f.broker.command({ action: 'write', token, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    const status = await f.broker.command({ action: 'status', token }, 10, 'owner')
+    expect(status.info).toMatchObject({ state: 'inProgress', receivedBytes: 1, sealed: false })
+    expect(status.info).not.toHaveProperty('manifest')
+    await f.broker.command({ action: 'finish', token }, 10, 'owner')
+    await f.broker.command({ action: 'complete', token }, 10, 'owner')
+    expect((await f.broker.command({ action: 'status', token }, 10, 'owner')).info).toMatchObject({ completed: true, completedBytes: 1, state: 'complete' })
+  })
+  it('pauses the persisted target after restart, reports close failure, and can retry a departed host', async () => {
+    const f = fixture(), a = await f.start()
+    const restarted = new BrowserStreamDownloads(f.store, f.host)
+    f.handler(async () => ({ ok: false, error: 'close still pending' }))
+    await expect(restarted.pauseTask(a.taskId!, 'owner')).rejects.toThrow('close still pending')
+    expect(f.calls.at(-1)).toMatchObject({ action: 'pause', targetId: 'target', taskId: a.taskId, owner: 'owner' })
+    expect(await f.store.get(a.taskId!)).toMatchObject({ state: 'paused', activeTargetId: 'target' })
+    f.handler(async () => ({ ok: false, error: 'page departed', code: 'HOST_GONE' }))
+    expect(await restarted.pauseTask(a.taskId!, 'owner')).toEqual([])
+  })
+  it('retains the persisted writer and cache when discard cannot close after restart', async () => {
+    const f = fixture(), a = await f.start()
+    await f.broker.command({ action: 'write', token: a.token!, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    const restarted = new BrowserStreamDownloads(f.store, f.host)
+    f.handler(async () => ({ ok: false, error: 'close failed' }))
+    await expect(restarted.discardTask(a.taskId!, 'owner')).rejects.toThrow('close failed')
+    expect(f.calls.at(-1)).toMatchObject({ action: 'pause', targetId: 'target', taskId: a.taskId })
+    expect(await f.store.get(a.taskId!)).toMatchObject({ activeTargetId: 'target' })
+    expect((await f.store.info(a.taskId!, 'archive')).receivedBytes).toBe(1)
+    f.handler(async () => ({ ok: false, error: 'page departed', code: 'HOST_GONE' }))
+    await restarted.discardTask(a.taskId!, 'owner')
+    expect(await f.store.get(a.taskId!)).toBeNull()
+  })
+  it('accepts only an explicit HOST_GONE during old-target pause after the workbench refreshes', async () => {
+    const f = fixture(), a = await f.start()
+    f.handler(async request => request.action === 'pause' && request.targetId === 'target'
+      ? { ok: false, error: 'old page gone', code: 'HOST_GONE' } : { ok: true })
+    const b = await f.start({ taskId: a.taskId, targetId: 'new-page' })
+    expect(b.token).toBeTruthy()
+    expect(f.calls.slice(-2).map(c => [c.action, c.targetId])).toEqual([['pause', 'target'], ['open', 'new-page']])
+    f.handler(async () => ({ ok: false, error: 'new page gone', code: 'HOST_GONE' }))
+    await expect(f.broker.command({ action: 'write', token: b.token!, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')).rejects.toThrow('new page gone')
+    await expect(f.start({ taskId: a.taskId, targetId: 'third-page' })).rejects.toThrow('new page gone')
+  })
+  it('persists target identity before opening and closes the previous writer after a service worker restart', async () => {
+    const f = fixture()
+    f.handler(async request => {
+      if (request.action === 'open') expect((await f.store.get(request.taskId))?.activeTargetId).toBe(request.targetId)
+      return { ok: true }
+    })
+    const a = await f.start()
+    const restarted = new BrowserStreamDownloads(f.store, f.host)
+    await restarted.command({ action: 'start', taskId: a.taskId, fileName: 'test.zip', targetId: 'new-worker' }, 10, 'owner')
+    expect(f.calls.map(c => [c.action, c.targetId])).toEqual([['open', 'target'], ['pause', 'target'], ['open', 'new-worker']])
+  })
+  it('does not open a replacement after restart when the persisted old writer cannot close', async () => {
+    const f = fixture(), a = await f.start()
+    f.handler(async request => request.action === 'pause' ? { ok: false, error: 'close denied' } : { ok: true })
+    const restarted = new BrowserStreamDownloads(f.store, f.host)
+    await expect(restarted.command({ action: 'start', taskId: a.taskId, fileName: 'test.zip', targetId: 'new-worker' }, 10, 'owner')).rejects.toThrow('close denied')
+    expect(f.calls.filter(c => c.action === 'open')).toHaveLength(1)
+  })
+  it('issues tokens accepted by the shared runtime message contract', async () => {
+    const f = fixture(), created = await f.start()
+    expect(isMessage({ type: MessageType.StreamDownloadResult, payload: created })).toBe(true)
+    expect(isMessage({ type: MessageType.BrowserStreamDownload, payload: { action: 'write', token: created.token, sequence: 0, offset: 0, data: 'YQ==' } })).toBe(true)
+  })
+  it('requires a failed old-host close to be acknowledged before any later takeover opens', async () => {
+    const f = fixture(), a = await f.start()
+    f.handler(async request => request.action === 'pause' ? { ok: false, error: 'close failed' } : { ok: true })
+    await expect(f.start({ taskId: a.taskId, targetId: 'next' })).rejects.toThrow('close failed')
+    f.handler(async () => ({ ok: true }))
+    await f.start({ taskId: a.taskId, targetId: 'next' })
+    expect(f.calls.map(c => [c.action, c.targetId])).toEqual([['open', 'target'], ['pause', 'target'], ['pause', 'target'], ['open', 'next']])
+  })
+  it('cancels an in-flight start before it can gain a lease after tab/account departure', async () => {
+    for (const mode of ['tab', 'owner']) {
+      const f = fixture(); const pending = f.start()
+      if (mode === 'tab') f.broker.cancelTab(10); else f.broker.revokeOtherOwners('next-owner')
+      await expect(pending).rejects.toThrow()
+      expect(f.calls.filter(c => c.action === 'open')).toHaveLength(0)
+    }
+  })
+  it('retains a failed target write and retries exactly that block after a concrete host error', async () => {
+    const f = fixture(), a = await f.start()
+    const write = { action: 'write' as const, token: a.token!, sequence: 0, offset: 0, data: 'YQ==' }
+    f.handler(async request => request.action === 'write' ? { ok: false, error: 'disk full' } : { ok: true })
+    await expect(f.broker.command(write, 10, 'owner')).rejects.toThrow('disk full')
+    expect((await f.store.info(a.taskId!, 'archive')).receivedBytes).toBe(1)
+    f.handler(async () => ({ ok: true })); await f.broker.command(write, 10, 'owner')
+    await f.broker.command({ action: 'finish', token: a.token! }, 10, 'owner')
+    expect((await f.broker.command({ action: 'status', token: a.token! }, 10, 'owner')).info?.state).toBe('complete')
+  })
+  it('freezes manifest, rotates leases and keeps stable task and ZIP time', async () => {
+    const f = fixture(), original = { ids: [1] }, a = await f.start({ manifest: original })
+    original.ids.push(2)
+    await f.broker.command({ action: 'checkpoint', token: a.token!, offset: 0, names: ['x'] }, 10, 'owner')
+    const b = await f.start({ taskId: a.taskId })
+    expect(b.taskId).toBe(a.taskId); expect(b.token).not.toBe(a.token)
+    expect(b.info?.manifest).toMatchObject({ ids: [1], cachedNames: { 0: ['x'] } })
+    expect(b.info?.zipCreatedAt).toBe(a.info?.zipCreatedAt)
+    await expect(f.broker.command({ action: 'status', token: a.token! }, 10, 'owner')).rejects.toThrow()
+    await expect(f.start({ taskId: a.taskId, manifest: { ids: [2] } })).rejects.toThrow()
+    await expect(f.start({ taskId: 'missing', manifest: undefined })).rejects.toThrow()
+  })
+  it('requires matching owner and source tab for every command', async () => {
+    const f = fixture(), a = await f.start()
+    for (const [tab, owner] of [[11, 'owner'], [10, 'other']] as const) await expect(f.broker.command({ action: 'write', token: a.token!, sequence: 0, offset: 0, data: 'YQ==' }, tab, owner)).rejects.toThrow()
+    await expect(f.start({ taskId: a.taskId, fileName: 'different.zip' })).rejects.toThrow()
+    await expect(f.broker.pauseTask(a.taskId!, 'other')).rejects.toThrow()
+  })
+  it('durably stores writes, accepts only exact last-block retries and rejects sequence gaps', async () => {
+    const f = fixture(), a = await f.start(), write = { action: 'write' as const, token: a.token!, sequence: 0, offset: 0, data: 'YWJj' }
+    f.handler(async request => { if (request.action === 'write') expect((await f.store.info(a.taskId!, 'archive')).receivedBytes).toBe(3); return { ok: true } })
+    await f.broker.command(write, 10, 'owner'); await f.broker.command(write, 10, 'owner')
+    expect(f.calls.filter(c => c.action === 'write')).toHaveLength(1)
+    await expect(f.broker.command({ ...write, sequence: 2 }, 10, 'owner')).rejects.toThrow()
+    await expect(f.broker.command({ ...write, data: 'eHl6' }, 10, 'owner')).rejects.toThrow()
+  })
+  it('keeps cache when target close fails and replays a sealed archive from zero on restart', async () => {
+    const f = fixture(), a = await f.start()
+    await f.broker.command({ action: 'write', token: a.token!, sequence: 0, offset: 0, data: 'YWJj' }, 10, 'owner')
+    f.handler(async request => request.action === 'finish' ? { ok: false, error: 'permission revoked' } : { ok: true })
+    await expect(f.broker.command({ action: 'finish', token: a.token! }, 10, 'owner')).rejects.toThrow('permission revoked')
+    expect((await f.store.info(a.taskId!, 'archive')).receivedBytes).toBe(3)
+    await expect(f.broker.command({ action: 'complete', token: a.token! }, 10, 'owner')).rejects.toThrow()
+    f.handler(async () => ({ ok: true }))
+    const b = await f.start({ taskId: a.taskId }); const before = f.calls.length
+    await f.broker.command({ action: 'resume', token: b.token! }, 10, 'owner')
+    expect(f.calls.slice(before).map(c => c.action)).toEqual(['write', 'finish'])
+    expect(f.calls.at(-2)).toMatchObject({ offset: 0, data: 'YWJj' })
+    expect((await f.broker.command({ action: 'status', token: b.token! }, 10, 'owner')).info).toMatchObject({ state: 'complete', sealed: true, receivedBytes: 3 })
+    await f.broker.command({ action: 'complete', token: b.token! }, 10, 'owner')
+    expect((await f.start({ taskId: a.taskId })).info).toMatchObject({ completed: true, completedBytes: 3 })
+  })
+  it('source cache and naming commands stay in the store without writing target', async () => {
+    const f = fixture(), a = await f.start(), token = a.token!
+    await f.broker.command({ action: 'cache', command: 'reset', index: 0, token, metadata: { etag: 'v1' } }, 10, 'owner')
+    await f.broker.command({ action: 'cache', command: 'write', index: 0, token, offset: 0, data: 'YQ==' }, 10, 'owner')
+    await f.broker.command({ action: 'cache', command: 'complete', index: 0, token }, 10, 'owner')
+    expect((await f.broker.command({ action: 'cache', command: 'read', index: 0, token, offset: 0 }, 10, 'owner')).data).toBe('YQ==')
+    expect((await f.broker.command({ action: 'cache', command: 'info', index: 0, token }, 10, 'owner')).info).toMatchObject({ complete: true, receivedBytes: 1, etag: 'v1' })
+    expect(f.calls.map(c => c.action)).toEqual(['open'])
+  })
+  it('pause/discard and tab/account revocation invalidate tokens and retain paused bytes', async () => {
+    const f = fixture(), a = await f.start()
+    await f.broker.command({ action: 'write', token: a.token!, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    expect(await f.broker.pauseTask(a.taskId!, 'owner')).toEqual([10])
+    expect((await f.store.info(a.taskId!, 'archive')).receivedBytes).toBe(1)
+    await expect(f.broker.command({ action: 'status', token: a.token! }, 10, 'owner')).rejects.toThrow()
+    const b = await f.start({ taskId: a.taskId }); f.broker.cancelTab(10)
+    await expect(f.broker.command({ action: 'status', token: b.token! }, 10, 'owner')).rejects.toThrow()
+    const c = await f.start({ taskId: a.taskId }); f.broker.revokeOtherOwners('other')
+    await expect(f.broker.command({ action: 'status', token: c.token! }, 10, 'owner')).rejects.toThrow()
+    await f.broker.discardTask(a.taskId!, 'owner'); expect(await f.store.get(a.taskId!)).toBeNull()
+  })
+  it('serializes concurrent takeover: old close precedes new open, stale queued writes fail', async () => {
+    const f = fixture(), a = await f.start(); let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    f.handler(async request => { if (request.action === 'pause') await gate; return { ok: true } })
+    const takeover = f.start({ taskId: a.taskId, targetId: 'next' })
+    const stale = f.broker.command({ action: 'write', token: a.token!, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    const rejected = expect(stale).rejects.toThrow(); release(); await takeover; await rejected
+    expect(f.calls.map(c => [c.action, c.targetId])).toEqual([['open', 'target'], ['pause', 'target'], ['open', 'next']])
+  })
+})

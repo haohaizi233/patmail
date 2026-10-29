@@ -16,6 +16,16 @@ export async function extensionWorker(context) {
   return context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
 }
 
+/** Playwright waitForFunction treats an async predicate's Promise as truthy. Await RPCs in Node. */
+export async function waitForPageCondition(page, predicate, arg, { timeout = 30000 } = {}) {
+  const deadline = Date.now() + timeout
+  do {
+    if (await page.evaluate(predicate, arg)) return
+    await page.waitForTimeout(100)
+  } while (Date.now() < deadline)
+  throw new Error('等待页面异步状态超时。')
+}
+
 /** 等目标标签上的内容脚本完成 PING/PONG 握手；轮询节奏由调用方按场景指定。 */
 export async function waitForContentScript(worker, targetPage, { attempts = 25, intervalMs = 200 } = {}) {
   const targetUrl = targetPage.url()

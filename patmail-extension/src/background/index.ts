@@ -16,8 +16,21 @@ import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL } from '../shared/do
 import { LocalStreamDownloads } from './stream-download'
 import { trustedOrigin } from '../api/config'
 import { handleRecoveryMessage } from './recovery'
+import { BrowserStreamDownloads } from './browser-download'
+import { createBrowserDownloadStore } from '../browser-download/store'
+import { BROWSER_FILE_CHANNEL, type BrowserFileReply } from '../browser-download/types'
 
 const streamDownloads = new LocalStreamDownloads(chrome.downloads)
+let legacyStreamsUsed = false
+const browserDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), request => new Promise<BrowserFileReply>((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('保存文件的工作台没有响应，缓存仍保留。')), 120_000)
+  chrome.runtime.sendMessage(request, (response: BrowserFileReply | undefined) => {
+    clearTimeout(timer)
+    const error = chrome.runtime.lastError?.message
+    if (error || !response) resolve({ ok: false, code: 'HOST_GONE', error: '请保持选择保存文件的工作台打开，再继续下载。' })
+    else resolve(response)
+  })
+}))
 
 watchWriteSwitch()
 // 扩展 Service Worker 不能用顶层 await，否则 Chrome 直接拒绝启动，工具栏点击没有监听。
@@ -42,8 +55,14 @@ function persistConnection(): void {
   if (sameConnectionSnapshot(persistedSnapshot, next)) return
   persistedSnapshot = next
   void chrome.storage.local.set({ [CONNECTION_SNAPSHOT]: next })
-  if (connection.context.sessionStatus === 'authenticated' && connection.context.operatorId) streamDownloads.revokeOtherOwners(JSON.stringify([connection.context.easyOrigin, connection.context.operatorId]))
-  else if (['expired', 'unauthenticated'].includes(connection.context.sessionStatus)) streamDownloads.revokeOtherOwners('')
+  if (connection.context.sessionStatus === 'authenticated' && connection.context.operatorId) {
+    const owner = JSON.stringify([connection.context.easyOrigin, connection.context.operatorId])
+    browserDownloads.revokeOtherOwners(owner)
+    if (legacyStreamsUsed) streamDownloads.revokeOtherOwners(owner)
+  } else if (['expired', 'unauthenticated'].includes(connection.context.sessionStatus)) {
+    browserDownloads.revokeOtherOwners('')
+    if (legacyStreamsUsed) streamDownloads.revokeOtherOwners('')
+  }
 }
 
 let warming: Promise<void> | null = null
@@ -118,13 +137,14 @@ const connectionReady = (async () => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   streamDownloads.cancelTab(tabId)
+  browserDownloads.cancelTab(tabId)
   reinjected.delete(tabId)
   connection.detach(tabId)
   persistConnection()
 })
 // tabs.loading也会因EASY内部mframe加载而出现；只有真正顶层导航才销毁来源文档。
 chrome.webNavigation?.onBeforeNavigate.addListener(({ tabId, frameId }) => {
-  if (frameId === 0) streamDownloads.cancelTab(tabId)
+  if (frameId === 0) { streamDownloads.cancelTab(tabId); browserDownloads.cancelTab(tabId) }
 })
 let sessionReadTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -222,7 +242,7 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有接住这次下载。' } }
     }
   }
-  if (message.type === MessageType.StreamDownload) {
+  if (message.type === MessageType.StreamDownload || message.type === MessageType.BrowserStreamDownload) {
     const tabId = sender.tab?.id
     if (tabId === undefined || !trustedOrigin(sender.url ?? sender.tab?.url ?? '')) {
       return { type: MessageType.Error, payload: { message: '只有已连接的EASY来源页可以写入下载流。' } }
@@ -235,7 +255,9 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
           return { type: MessageType.Error, payload: { message: '请先重新确认同一EASY账号，再继续下载。' } }
         }
       }
-      return { type: MessageType.StreamDownloadResult, payload: await streamDownloads.command(message.payload, tabId,
+      if (message.type === MessageType.StreamDownload) legacyStreamsUsed = true
+      const downloads = message.type === MessageType.BrowserStreamDownload ? browserDownloads : streamDownloads
+      return { type: MessageType.StreamDownloadResult, payload: await downloads.command(message.payload, tabId,
         JSON.stringify([connection.context.easyOrigin, connection.context.operatorId])) }
     } catch (error) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '下载流桥接失败。' } }
@@ -247,7 +269,8 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
     if ((!fromExtensionPage(sender) && !contentOwner) || connection.context.sessionStatus !== 'authenticated' || !connection.context.operatorId) {
       return { type: MessageType.Error, payload: { message: '请先连接原任务的EASY账号，再丢弃下载。' } }
     }
-    await streamDownloads.discardTask(message.payload.taskId, JSON.stringify([connection.context.easyOrigin, connection.context.operatorId]))
+    const downloads = message.payload.backend === 'browser' ? browserDownloads : streamDownloads
+    await downloads.discardTask(message.payload.taskId, JSON.stringify([connection.context.easyOrigin, connection.context.operatorId]))
     return { type: MessageType.DiscardDownloadResult, payload: { ok: true } }
   }
   if (message.type === MessageType.PauseDownload) {
@@ -256,7 +279,8 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
     const contentOwner = sender.tab?.id === context.easyTabId && trustedOrigin(sender.url ?? '') === context.easyOrigin
     const owner = context.operatorId || context.lastOperatorId
     if ((!fromExtensionPage(sender) && !contentOwner) || !owner) return { type: MessageType.Error, payload: { message: '下载任务账号范围无法确认。' } }
-    const tabs = await streamDownloads.pauseTask(message.payload.taskId, JSON.stringify([context.easyOrigin, owner]))
+    const downloads = message.payload.backend === 'browser' ? browserDownloads : streamDownloads
+    const tabs = await downloads.pauseTask(message.payload.taskId, JSON.stringify([context.easyOrigin, owner]))
     if (context.easyTabId != null) tabs.push(context.easyTabId)
     await Promise.all([...new Set(tabs)].map(id => chrome.tabs.sendMessage(id, message).catch(() => {})))
     return { type: MessageType.PauseDownloadResult, payload: { ok: true } }
@@ -367,6 +391,7 @@ chrome.runtime.onConnect.addListener(port => {
 
 /** MV3 Service Worker 是租约、任务和证据的唯一写入方。 */
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+  if (isRecord(message) && message.channel === BROWSER_FILE_CHANNEL) return
   if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
   if (sender.id !== chrome.runtime.id) return
   if (isRecord(message) && message.channel === RESULT_CHANNEL) return

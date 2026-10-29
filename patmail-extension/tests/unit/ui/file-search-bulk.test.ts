@@ -7,6 +7,11 @@ import { resetTaskCheckProgress, taskCheckProgress } from '../../../src/app/chec
 import { DOWNLOAD_PROGRESS_CHANNEL } from '../../../src/shared/download-progress'
 const templateLabel = vi.hoisted(() => ({ value: '模板甲' }))
 const downloadRecipe = vi.hoisted(() => ({ value: null as { newFilename: string; fileNameType: string } | null }))
+const targetPicker = vi.hoisted(() => ({ cancel: false, calls: 0 }))
+vi.mock('../../../src/browser-download/target', () => ({
+  chooseBrowserDownloadTarget: async () => { targetPicker.calls++; if (targetPicker.cancel) throw new DOMException('cancel', 'AbortError'); return '22222222-2222-4222-8222-222222222222' },
+  releaseBrowserDownloadTarget: async () => {}
+}))
 
 const recoveryRows = vi.hoisted(() => new Map<string, unknown>())
 const recoveryGate = vi.hoisted(() => ({ wait: null as Promise<void> | null, read: null as Promise<void> | null }))
@@ -34,7 +39,7 @@ vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
 })
 
 let app: App | undefined
-afterEach(() => { recoveryGate.wait = null; recoveryGate.read = null; app?.unmount(); recoveryRows.clear(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => { targetPicker.cancel = false; targetPicker.calls = 0; recoveryGate.wait = null; recoveryGate.read = null; app?.unmount(); recoveryRows.clear(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
 async function settle() { for (let i = 0; i < 30; i++) { await Promise.resolve(); await nextTick() } }
 function button(label: string): HTMLButtonElement {
   const found = Array.from(document.querySelectorAll('button')).find(node => node.textContent?.trim() === label)
@@ -65,6 +70,16 @@ function mount(request: MessageBridge['request'], allowed = ref(true), epoch = r
 }
 
 describe('文件全选的批量分页', () => {
+  it('用户取消保存位置时，不建立下载任务也不请求原站下载', async () => {
+    const messages: ContentRequest[] = []
+    mount(async message => { messages.push(message); return message.type === MessageType.SearchFiles ? reply(message, 1) : { type: MessageType.Error, payload: { message: 'unused' } } })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    targetPicker.cancel = true
+    button('下载已选').click(); await settle()
+    expect(targetPicker.calls).toBe(1)
+    expect(messages.some(message => message.type === MessageType.DownloadFiles)).toBe(false)
+    expect([...recoveryRows.values()].some(value => Boolean((value as { activeTask?: unknown }).activeTask))).toBe(false)
+  })
   it.each(['unmount', 'session'] as const)('WAL ACK 等待期间发生 %s 后不能启动旧下载', async event => {
     const messages: ContentRequest[] = []
     const allowed = ref(true)
@@ -100,7 +115,7 @@ describe('文件全选的批量分页', () => {
     const task = messages.find(message => message.type === MessageType.DownloadFiles)!
     if (event === 'unmount') { app?.unmount(); app = undefined } else allowed.value = false
     await settle()
-    expect(messages).toContainEqual({ type: MessageType.PauseDownload, payload: { taskId: task.payload.taskId } })
+    expect(messages).toContainEqual({ type: MessageType.PauseDownload, payload: { taskId: task.payload.taskId, backend: 'browser' } })
     finish({ type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'NETWORK_ERROR', message: '暂停' } } }); await settle()
   })
   it('下载期间不能重试漏页，避免两个任务争用彩虹条', async () => {

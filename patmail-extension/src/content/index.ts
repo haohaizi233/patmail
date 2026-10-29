@@ -299,12 +299,14 @@ const bridge: MessageBridge = {
           try {
             const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork, context) => easyRuntime.streamFiles(
               message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, context
-            ), report, { taskId: message.payload.taskId, ...(message.payload.saveAsNew ? { newCopy: true as const } : {}), manifest: {
+            ), report, { taskId: message.payload.taskId,
+              ...(message.payload.browserTarget ? { backend: 'browser' as const, targetId: message.payload.browserTarget } : {}),
+              ...(message.payload.saveAsNew ? { newCopy: true as const } : {}), manifest: {
               items: message.payload.items, selection: message.payload.selection,
               stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName
             } })
             return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: {
-              fileName, fileCount: message.payload.items.length, notice: `浏览器下载完成（${formatBytes(bytes)}）。`
+              fileName, fileCount: message.payload.items.length, notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。`
             } } }
           } catch (error) {
             return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',

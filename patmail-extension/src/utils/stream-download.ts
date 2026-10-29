@@ -16,25 +16,28 @@ const encode = (bytes: Uint8Array) => {
 }
 const decode = (data: string) => Uint8Array.from(atob(data), char => char.charCodeAt(0))
 
-/** 首轮流式200；中断保留任务，封存后对同一浏览器记录发起Range续传。 */
+/** 共用有界生产者；浏览器模式直接写已选目标，旧模式保留HTTP续传兼容。 */
 export async function nativeStreamArchive(
   fileName: string,
   produce: (sink: WritableStream<Uint8Array>, signal: AbortSignal, onWork: (progress: FileDownloadProgress) => void, context: NativeDownloadContext) => Promise<void>,
   report: (progress: FileDownloadProgress) => void,
-  options: { taskId?: string; manifest?: Record<string, unknown>; newCopy?: true } = {}
+  options: { taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; backend?: 'browser'; targetId?: string } = {}
 ): Promise<number> {
   const controller = new AbortController()
   const signal = controller.signal
+  const { backend, ...startOptions } = options
+  const browser = backend === 'browser'
   if (options.taskId) {
     activeProducers.get(options.taskId)?.abort(new Error('任务已由新的恢复请求接管。'))
     activeProducers.set(options.taskId, controller)
   }
   const command = async (payload: StreamDownloadCommand) => {
-    const response = await sendToBackground({ type: MessageType.StreamDownload, payload }, payload.action === 'write' || payload.action === 'cache' ? 130_000 : 20_000)
+    const response = await sendToBackground({ type: browser ? MessageType.BrowserStreamDownload : MessageType.StreamDownload, payload },
+      payload.action === 'write' || payload.action === 'cache' || (browser && payload.action === 'finish') ? 130_000 : 20_000)
     if (response?.type !== MessageType.StreamDownloadResult) throw new Error(response?.type === MessageType.Error ? response.payload.message : '本机下载流没有应答，已保留任务。')
     return response.payload
   }
-  const created = await command({ action: 'start', fileName, ...options }).catch(error => {
+  const created = await command({ action: 'start', fileName, ...startOptions }).catch(error => {
     if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
     throw error
   })
@@ -108,6 +111,16 @@ export async function nativeStreamArchive(
     let downloadId = created.downloadId
     try {
       while (!signal.aborted) {
+        if (browser) {
+          const result = await untilAbort(command({ action: 'status', token }))
+          const info = result.info
+          if (!info || !Number.isSafeInteger(info.receivedBytes)) throw new Error('浏览器文件写入状态无效，缓存仍保留。')
+          const receivedBytes = Number(info.receivedBytes)
+          report({ phase: 'downloading', done: 0, total: 1, receivedBytes })
+          if (info.state === 'complete' && productionDone) return receivedBytes
+          await untilAbort(new Promise<void>(resolve => setTimeout(resolve, 500)))
+          continue
+        }
         if (downloadId === undefined) downloadId = (await untilAbort(command({ action: 'status', token }))).downloadId
         if (downloadId !== undefined) {
           const response = await untilAbort(sendToBackground({ type: MessageType.DownloadState, payload: { downloadId } }, 15_000))

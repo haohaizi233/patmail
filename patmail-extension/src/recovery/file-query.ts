@@ -3,6 +3,7 @@ import type { FileSearchResult } from '../api/file-search-types'
 import type { SelectedPatentFile } from '../mail'
 import type { FileDownloadSelection } from '../mail/download-name'
 export interface FileQueryTask {
+  backend?: 'browser'
   id: string
   items: Array<{ fileId: string; fileNo: string; fileName: string }>
   selection: FileDownloadSelection | null

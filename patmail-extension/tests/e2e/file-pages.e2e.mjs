@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { launchExtensionContext, extensionWorker, waitForContentScript } from './support/browser.mjs'
+import { launchExtensionContext, extensionWorker, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
 import { installEasyMock, easyFixtureUrl } from './support/easy-mock.mjs'
 import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
 
@@ -82,7 +82,7 @@ try {
   await app.waitForTimeout(2500) // 有意跨过旧版2秒清除时间，验证完成进度保留。
   const progressRetained = await app.getByRole('progressbar').isVisible()
   const scope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1111-1111-111111111111', 'workspace-files'])
-  await app.waitForFunction(async ({ scope, total }) => {
+  await waitForPageCondition(app, async ({ scope, total }) => {
     const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
     return reply.ok && Object.keys(reply.value.payload?.selected ?? {}).length === total
   }, { scope, total })
