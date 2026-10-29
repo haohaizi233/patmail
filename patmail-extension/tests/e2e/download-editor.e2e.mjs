@@ -126,11 +126,13 @@ try {
       assert.deepEqual(Buffer.from(await entries[0].getData(new Uint8ArrayWriter(), { checkSignature: true })), pdf)
     } finally { await reader.close() }
     verifiedDownloads.push({ id: downloadIndex, file, entry: `配方${separator}验收.pdf` })
-    assert.equal((await app.locator('.check-rainbow').getAttribute('aria-valuetext')).includes('生成下载名称'), true)
-    assert.equal(await exportPanel.getByRole('progressbar').getAttribute('aria-valuenow'), '100')
+    assert.equal((await app.locator('.check-rainbow').getAttribute('aria-valuetext')).includes('下载文件'), true)
+    assert.equal(await app.locator('.check-rainbow').getAttribute('aria-valuenow'), '100')
+    assert.equal(await exportPanel.getByRole('progressbar').count(), 0, '下载进度只使用顶部彩虹条')
     assert.equal(await exportPanel.getByText('导出完成', { exact: true }).count(), 1)
   }
   await app.getByRole('region', { name: '查询结果', exact: true }).screenshot({ path: resultPath('file-export-complete.png') })
+  await app.screenshot({ path: resultPath('file-export-top-rainbow.png') })
   assert.deepEqual(calls.slice(1), [
     { newFilename: recipe.new_filename, fileNameType: recipe.file_name_type },
     { newFilename: 'app_no;再次;case_name;-;file_desc', fileNameType: recipe.file_name_type }

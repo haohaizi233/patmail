@@ -171,19 +171,19 @@ function pickerOptions(key: string): { value: string; label: string; parent?: st
 function showPicker(key: string): boolean {
   return Boolean(LIMIT_PICKER_FIELDS[key]) || isMultiPickerKey(key) || treeChoices(key).length > 0
 }
-function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
-  if (!LIMIT_PICKER_FIELDS[key]) return 'ready'
-  // 有账本的字段走静默校对：拉取期间照常可选，拉不到也用账本兜底，不进 loading/失败态。
-  if (props.userId && hasSavedChoices(props.userId, key)) return choices(key).length ? 'ready' : 'empty'
-  if (checking.value || (!pickersReady.value && !pickerFailed.value)) return 'loading'
-  if (pickerFailed.value) return 'invalid'
-  return pickers.value[LIMIT_PICKER_FIELDS[key] ?? '']?.status ?? 'invalid'
-}
-/** 只要有任一字段存过非空选项，这轮拉取就整体走静默：不挡界面、拉不到用账本兜底。 */
+/** 只要有任一字段存过非空选项，这轮拉取就整个界面走静默：不挡界面、非空才更新、拉不到用账本兜底。 */
 const ledgerPresent = computed(() => {
   fallbackTick.value
   return Boolean(props.userId) && Object.keys(LIMIT_PICKER_FIELDS).some(key => hasSavedChoices(props.userId, key))
 })
+function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
+  if (!LIMIT_PICKER_FIELDS[key]) return 'ready'
+  // 账号有账本就整个界面走静默校对：拉取期间所有字段照常可选，拉不到也用账本兜底，不进 loading/失败态。
+  if (ledgerPresent.value) return choices(key).length ? 'ready' : 'empty'
+  if (checking.value || (!pickersReady.value && !pickerFailed.value)) return 'loading'
+  if (pickerFailed.value) return 'invalid'
+  return pickers.value[LIMIT_PICKER_FIELDS[key] ?? '']?.status ?? 'invalid'
+}
 const LIMIT_CELL_LABELS: Record<string, string> = Object.fromEntries(LIMIT_BLOCKS.flatMap(block => block.cells.flatMap(cell => {
   const keys: string[] = cell.kind === 'dates'
     ? [cell.start, cell.end, cell.empty].filter((key): key is string => Boolean(key))

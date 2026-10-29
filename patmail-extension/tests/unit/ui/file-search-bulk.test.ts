@@ -1,6 +1,7 @@
 import { createApp, h, nextTick, ref, type App } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import FileSearchQuery from '../../../src/app/components/FileSearchQuery.vue'
+import CheckRainbow from '../../../src/app/components/CheckRainbow.vue'
 import { MessageType, type ContentRequest, type ContentResponse, type MessageBridge } from '../../../src/shared/message'
 import type { SelectedPatentFile } from '../../../src/mail'
 import { resetTaskCheckProgress, taskCheckProgress } from '../../../src/app/check-progress'
@@ -59,10 +60,10 @@ function reply(message: Extract<ContentRequest, { type: 'SEARCH_FILES' }>, total
 }
 function mount(request: MessageBridge['request'], allowed = ref(true), epoch = ref(0)) {
   const selected = ref<Record<string, SelectedPatentFile>>({})
-  app = createApp({ render: () => h(FileSearchQuery, {
+  app = createApp({ render: () => h('div', [h(CheckRainbow), h(FileSearchQuery, {
     userId: 'test', origin: 'http://183.36.43.66:88', canSearch: allowed.value, selectable: true, epoch: epoch.value,
     selected: selected.value, 'onUpdate:selected': value => { selected.value = value }
-  }) })
+  })]) })
   app.provide('bridge', { request })
   app.directive('hint', {})
   app.mount(document.body.appendChild(document.createElement('div')))
@@ -144,7 +145,7 @@ describe('文件全选的批量分页', () => {
     finishDownload!({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'a.zip', fileCount: 100, notice: '' } } })
     await settle()
   })
-  it('命名与下载交错时只显示名称解析进度，结束后保留状态并清理监听', async () => {
+  it('顶部彩虹条持续显示下载进度，命名结束不提前完成，保存后才到100%', async () => {
     downloadRecipe.value = { newFilename: 'file_name', fileNameType: 'colname' }
     type Listener = (message: unknown, sender: chrome.runtime.MessageSender) => void
     const listeners = new Set<Listener>()
@@ -161,43 +162,48 @@ describe('文件全选的批量分页', () => {
     button('全选所有').click(); await settle()
     templateLabel.value = '后来选的模板乙'
     button('下载已选').click(); await settle()
-    expect(taskCheckProgress.label).toBe('生成下载名称')
+    expect(taskCheckProgress.label).toBe('下载文件')
     expect(download!.message.payload.archiveName).toBe('模板甲.zip')
     expect(download!.message.payload.stream).toBe(true)
     expect(listeners.size).toBe(1)
     const panel = document.querySelector('[aria-label="文件导出"]')!
     expect(panel.closest('[aria-label="查询结果"]')).not.toBeNull()
-    expect(panel.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('0')
+    expect(panel.querySelector('[role="progressbar"]')).toBeNull()
+    expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('0')
     expect(button('暂停下载').closest('[aria-label="文件导出"]')).toBe(panel)
     const progress = { channel: DOWNLOAD_PROGRESS_CHANNEL, id: download!.message.payload.progressId, progress: { phase: 'naming', done: 40, total: 100 } }
     for (const fn of listeners) fn({ ...progress, id: 'other-download' }, { id: 'test-extension' })
     expect(taskCheckProgress.done).toBe(0)
     for (const fn of listeners) fn(progress, { id: 'test-extension' })
-    expect(taskCheckProgress.done).toBe(40)
-    const namingSnapshot = { ...taskCheckProgress }
+    expect(taskCheckProgress.done).toBe(0)
     for (const phase of [
       { phase: 'packing', done: 10, total: 100 },
       { phase: 'downloading', done: 0, total: 1, receivedBytes: 1024, totalBytes: 8192 },
       { phase: 'saving', done: 0, total: 1 }
     ]) {
       for (const fn of listeners) fn({ ...progress, progress: phase }, { id: 'test-extension' })
-      expect({ ...taskCheckProgress }).toEqual(namingSnapshot)
+      expect(taskCheckProgress.done).toBe(10)
+      expect(taskCheckProgress.status).toBe('run')
     }
     await settle()
     expect(panel.textContent).toContain('已入包 10 / 100')
     expect(panel.textContent).toContain('已命名 40 / 100')
-    expect(panel.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('10')
+    expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('10')
     for (const fn of listeners) fn({ ...progress, progress: { phase: 'naming', done: 100, total: 100 } }, { id: 'test-extension' })
-    expect(taskCheckProgress.label).toBe('生成下载名称')
-    expect(taskCheckProgress.status).toBe('done')
+    expect(taskCheckProgress.label).toBe('下载文件')
+    expect(taskCheckProgress.status).toBe('run')
+    for (const fn of listeners) fn({ ...progress, progress: { phase: 'packing', done: 100, total: 100 } }, { id: 'test-extension' })
+    await settle()
+    expect(taskCheckProgress.percent).toBe(99)
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('正在保存压缩包')
     download!.resolve({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'download.zip', fileCount: 100, notice: '' } } })
     await settle()
     expect(taskCheckProgress.status).toBe('done')
-    expect(taskCheckProgress.label).toBe('生成下载名称')
+    expect(taskCheckProgress.label).toBe('下载文件')
     expect(taskCheckProgress.visible).toBe(true)
     expect(listeners.size).toBe(0)
     expect(panel.textContent).toContain('导出完成')
-    expect(panel.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('100')
+    expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('100')
   })
   it('原名下载也显示入包进度，暂停保留计数且拒绝迟到的进度', async () => {
     type Listener = (message: unknown, sender: chrome.runtime.MessageSender) => void
@@ -219,13 +225,14 @@ describe('文件全选的批量分页', () => {
     const listener = [...listeners][0]
     const progress = { channel: DOWNLOAD_PROGRESS_CHANNEL, id: payload!.progressId, progress: { phase: 'packing', done: 2, total: 4 } }
     listener(progress, { id: 'test-extension' }); await settle()
-    expect(panel.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('50')
+    expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('50')
     expect(panel.textContent).toContain('使用附件原名')
     button('暂停下载').click(); await settle()
     expect(panel.textContent).toContain('下载已暂停')
-    expect(panel.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('50')
+    expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('50')
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('下载已暂停')
     listener({ ...progress, progress: { phase: 'packing', done: 4, total: 4 } }, { id: 'test-extension' }); await settle()
-    expect(panel.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('50')
+    expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('50')
     expect(button('下载已选').disabled).toBe(true)
     expect(button('继续下载').disabled).toBe(false)
     expect(listeners.size).toBe(0)
@@ -361,7 +368,7 @@ describe('file query durable remount', () => {
     button('测试查询').click(); await settle()
     button('全选本页').click(); await settle()
     expect(Object.keys(selected.value)).toHaveLength(4)
-    taskCheckProgress.label = '生成下载名称'; taskCheckProgress.status = 'run'; taskCheckProgress.visible = true
+    taskCheckProgress.label = '下载文件'; taskCheckProgress.status = 'run'; taskCheckProgress.visible = true
     app!.unmount(); app = undefined; await settle(); document.body.innerHTML = ''
     const restored = mount(request); await settle()
     expect(queries).toBe(1)

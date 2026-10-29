@@ -496,21 +496,21 @@ function pickerOptions(key: string): { value: string; label: string; parent?: st
 function showPicker(key: string): boolean {
   return Boolean(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key]) || isMultiPickerKey(key) || treeChoices(key).length > 0
 }
-function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
-  if (!(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key])) return 'ready'
-  // 有账本的字段走静默校对：拉取期间照常可选，拉不到也用账本兜底，不进 loading/失败态。
-  if (props.userId && hasSavedChoices(props.userId, key)) return mergedRows(key).length ? 'ready' : 'empty'
-  if (dictionaryLoading.value || !dictionariesRead.value) return 'loading'
-  const kind = FILE_BASIC_OPTION_FIELDS[key] ? 'basic' : FILE_FLOW_OPTION_FIELDS[key] ? 'flow' : 'picker'
-  if (failedDictionaryKinds.value.includes(kind)) return 'invalid'
-  return dictionaryFor(key)?.dictionary.status ?? 'invalid'
-}
-/** 只要有任一字段存过非空选项，这轮拉取就整体走静默：不挡界面、拉不到用账本兜底。 */
+/** 只要有任一字段存过非空选项，这轮拉取就整个界面走静默：不挡界面、非空才更新、拉不到用账本兜底。 */
 const ledgerPresent = computed(() => {
   fallbackTick.value
   return Boolean(props.userId) && Object.keys({ ...FILE_BASIC_OPTION_FIELDS, ...FILE_FLOW_OPTION_FIELDS, ...FILE_PICKER_FIELDS })
     .some(key => hasSavedChoices(props.userId, key))
 })
+function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
+  if (!(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key])) return 'ready'
+  // 账号有账本就整个界面走静默校对：拉取期间所有字段照常可选，拉不到也用账本兜底，不进 loading/失败态。
+  if (ledgerPresent.value) return mergedRows(key).length ? 'ready' : 'empty'
+  if (dictionaryLoading.value || !dictionariesRead.value) return 'loading'
+  const kind = FILE_BASIC_OPTION_FIELDS[key] ? 'basic' : FILE_FLOW_OPTION_FIELDS[key] ? 'flow' : 'picker'
+  if (failedDictionaryKinds.value.includes(kind)) return 'invalid'
+  return dictionaryFor(key)?.dictionary.status ?? 'invalid'
+}
 const cellLabels = computed(() => {
   const map: Record<string, string> = {}
   for (const block of formSections.value) {
@@ -1231,7 +1231,8 @@ async function checkAgainstPage(): Promise<void> {
     return
   }
   checkingForm.value = true
-  checkMessage.value = '正在读取查询页上的字段，并向原网站要下拉…'
+  // 静默校对不放进度文案：字段照常可选，完成后只在有更新或拉不到时说话。
+  checkMessage.value = ledgerPresent.value ? '' : '正在读取查询页上的字段，并向原网站要下拉…'
   try {
     const ticket = loads.begin()
     const caseTypeId = formValue('case_type').trim()

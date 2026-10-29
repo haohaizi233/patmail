@@ -6,6 +6,7 @@ import { taskCheckProgress } from '../check-progress'
 const caption = computed(() => {
   const progress = taskCheckProgress
   const percent = Number.isInteger(progress.percent) ? String(progress.percent) : progress.percent.toFixed(1)
+  if (progress.detail) return `${progress.label} ${percent}%（${progress.done}/${progress.total}） ${progress.detail}`
   const head = `已${progress.label} ${percent}%（${progress.done}/${progress.total}）`
   if (progress.status === 'hold') return `${head} 登录中断，接回后继续`
   if (progress.status === 'done') return `${head} ${progress.label}结束`

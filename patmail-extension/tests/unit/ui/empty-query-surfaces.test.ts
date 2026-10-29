@@ -5,10 +5,11 @@ import LimitQuerySection from '../../../src/floating/LimitQuerySection.vue'
 import FilingSearchQuery from '../../../src/app/components/FilingSearchQuery.vue'
 import { MessageType, type ContentResponse, type MessageBridge } from '../../../src/shared/message'
 import { buildPickerCatalog } from '../../../src/api/dictionaries/picker-catalog'
+const account = vi.hoisted(() => ({ userId: 'empty-surfaces' }))
 vi.mock('../../../src/app/composables/useWorkspace', async () => {
   const { ref } = await import('vue')
-  return { useWorkspace: () => ({ connection: ref({ operatorId: 'empty-surfaces' }), call: async () => ({
-    connection: { operatorId: 'empty-surfaces' }, customers: [], templates: [{
+  return { useWorkspace: () => ({ connection: ref({ operatorId: account.userId }), call: async () => ({
+    connection: { operatorId: account.userId }, customers: [], templates: [{
       id: 'historical', name: '历史条件', source: 'local', queryType: 'FilingSearch',
       fields: { audit_user_id: OLD, case_volume: 'test' }, version: 1
     }]
@@ -44,9 +45,11 @@ for (const surface of ['文件', '期限', '递交'] as const) {
       return { type: MessageType.Error, payload: { message: 'unused' } }
     }
     const component = surface === '文件' ? QueryTemplateSection : surface === '期限' ? LimitQuerySection : FilingSearchQuery
+    // 每个界面用独立账号：选项账本按账号分区，串了会让后面的界面误以为已有账本。
+    account.userId = surface === '文件' ? 'empty-file' : surface === '期限' ? 'empty-limit' : 'empty-filing'
     const host = document.body.appendChild(document.createElement('div'))
     app = createApp({ render: () => h(component as any, {
-      bridge: { request }, userId: 'empty-surfaces', canSearch: true, mode: 'history', pageSize: 20,
+      bridge: { request }, userId: account.userId, canSearch: true, mode: 'history', pageSize: 20,
       seed: { apply_tags_id: OLD, case_volume: 'test' }, seedToken: 1, onSearch: search, onSearched: search
     }) })
     app.directive('hint', {}); app.provide('bridge', { request }); app.mount(host); await settle()

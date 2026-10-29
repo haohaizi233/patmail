@@ -117,6 +117,18 @@ const exportStatus = computed(() => pauseConfirmation.value?.taskId === activeTa
   : activeTask.value?.status === 'done' ? '导出完成'
   : activeTask.value?.status === 'paused' ? '下载已暂停'
   : exportProgress.value.packed >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…' : '正在打包下载…')
+watch([exportProgress, () => activeTask.value?.status, () => pauseConfirmation.value?.pending], () => {
+  const task = activeTask.value
+  const progress = exportProgress.value
+  if (!task || !progress.startedAt || !props.canSearch || disposed) return
+  const total = task.items.length
+  const named = task.status === 'done' ? total : progress.named
+  const detail = `${exportStatus.value} · ${task.selection ? `已命名 ${named}/${total}` : '附件原名'} · 已接收 ${(progress.bytes / 1024 / 1024).toFixed(1)} MB${exportEta.value ? ` · 预计 ${exportEta.value} 入包完成` : ''}`
+  paintTaskCheckProgress(task.status === 'done' ? total : progress.packed, total, progress.startedAt,
+    task.status === 'done' ? 'done' : task.status === 'paused' ? 'hold' : 'run', '下载文件', Date.now(), detail)
+  // 入包结束还需等待浏览器确认保存，顶部彩虹条不能提前到100%。
+  taskCheckProgress.percent = exportPercent.value
+}, { flush: 'sync' })
 const readPages = ref<number[]>([])
 let recoveryReady = false
 let recoveryGeneration = 0
@@ -201,7 +213,7 @@ watch(() => props.canSearch, allowed => {
   downloadWait?.abort()
   if (activeTask.value?.status === 'running') activeTask.value.status = 'paused'
   needsRevalidation.value = Boolean(result.value)
-  if (taskCheckProgress.label === '生成下载名称' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
+  if (taskCheckProgress.label === '下载文件' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
   scheduleSurface()
 })
 defineExpose({ protectSurface })
@@ -411,10 +423,9 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   const wait = downloadWait = new AbortController()
   toolbarNotice.value = '正在生成下载名称并打包…'
   const startedAt = Date.now()
+  resetTaskCheckProgress()
   exportProgress.value = { named: selection ? 0 : files.length, packed: 0, bytes: 0, startedAt }
   const progressId = newUuid()
-  resetTaskCheckProgress()
-  if (selection) paintTaskCheckProgress(0, files.length, startedAt, 'run', '生成下载名称')
   const runtime = globalThis.chrome?.runtime
   const removeProgress = () => { try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 页面已关闭 */ } }
   let namedFiles = selection ? 0 : files.length
@@ -429,10 +440,6 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     if (progress.phase === 'downloading') nativeBytes = Math.max(nativeBytes, progress.receivedBytes ?? 0)
     exportProgress.value = { named: namedFiles, packed: packedFiles, bytes: nativeBytes, startedAt }
     toolbarNotice.value = `流水下载：已命名 ${namedFiles}/${files.length}，已入包 ${packedFiles}/${files.length}；浏览器已接收 ${(nativeBytes / 1024 / 1024).toFixed(1)} MB。`
-    // 流水各阶段会交错上报；彩虹条只显示名称解析，不能被入包或浏览器字节进度覆盖。
-    if (selection && progress.phase === 'naming') {
-      paintTaskCheckProgress(namedFiles, files.length, startedAt, namedFiles >= files.length ? 'done' : 'run', '生成下载名称')
-    }
   }
   try {
     runtime?.onMessage?.addListener(onProgress)
@@ -462,7 +469,6 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
       return
     }
     task.status = 'done'
-    if (selection) paintTaskCheckProgress(files.length, files.length, startedAt, 'done', '生成下载名称')
     const data = response.payload.data
     toolbarNotice.value = `${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
   } catch (error) {
@@ -480,9 +486,6 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     if (task.status !== 'done') task.status = 'paused'
     task.notice = toolbarNotice.value
     void protectSurface().catch(() => {})
-    if (!disposed && selection && namedFiles < files.length && task.status !== 'done') {
-      paintTaskCheckProgress(namedFiles, files.length, startedAt, 'fail', '生成下载名称')
-    }
   }
 }
 
@@ -498,6 +501,7 @@ async function discardDownloadTask(): Promise<void> {
       return
     }
     activeTask.value = null
+    if (taskCheckProgress.label === '下载文件') resetTaskCheckProgress()
     await releaseBrowserDownloadTarget(task.id).catch(() => {})
     await protectSurface()
     toolbarNotice.value = '下载任务已丢弃。'
@@ -746,7 +750,7 @@ watch(snapshotIdentity, async scope => {
   pauseActiveDownload()
   downloadWait?.abort()
   downloading.value = false
-  if (taskCheckProgress.label === '生成下载名称') resetTaskCheckProgress()
+  if (taskCheckProgress.label === '下载文件') resetTaskCheckProgress()
   if (recoveryReady && snapshotScope) void protectSurface().catch(() => {})
   recoveryReady = false
   snapshotScope = scope
@@ -809,7 +813,7 @@ onBeforeUnmount(() => {
   pauseActiveDownload()
   if (activeTask.value) void releaseBrowserDownloadTarget(activeTask.value.id).catch(() => {})
   void protectSurface().catch(() => {})
-  if (taskCheckProgress.label === '生成下载名称' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
+  if (taskCheckProgress.label === '下载文件' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
   disposed = true
   downloadWait?.abort()
   downloadWait = null
@@ -870,9 +874,8 @@ onBeforeUnmount(() => {
             <button type="button" class="ghost file-export-discard" :disabled="!canSearch || downloading || choosingTarget || pauseBlocked" @click="discardDownloadTask">丢弃下载任务</button>
           </template>
         </div>
-        <div v-if="activeTask" class="file-export-progress" :class="{ 'is-paused': activeTask.status === 'paused' }">
-          <div class="file-export-summary"><strong>{{ exportStatus }}</strong><span>{{ exportPercent }}%</span></div>
-          <div class="file-export-track" role="progressbar" aria-label="文件入包进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="exportPercent" :aria-valuetext="`${exportStatus}，已入包 ${activeTask.status === 'done' ? activeTask.items.length : exportProgress.packed} / ${activeTask.items.length}`"><span :style="{ width: exportPercent + '%' }"></span></div>
+        <div v-if="activeTask" class="file-export-progress">
+          <div class="file-export-summary"><strong>{{ exportStatus }}</strong></div>
           <div class="file-export-metrics">
             <span>{{ activeTask.selection ? `已命名 ${activeTask.status === 'done' ? activeTask.items.length : exportProgress.named} / ${activeTask.items.length}` : '使用附件原名' }}</span>
             <span>已入包 {{ activeTask.status === 'done' ? activeTask.items.length : exportProgress.packed }} / {{ activeTask.items.length }}</span>
@@ -941,7 +944,6 @@ onBeforeUnmount(() => {
 .file-export {
   --export-tint: color-mix(in srgb, var(--pink, #ff4f93) 7%, var(--card, #fff));
   --export-line: color-mix(in srgb, var(--pink, #ff4f93) 24%, var(--card, #fff));
-  --export-track: color-mix(in srgb, var(--pink, #ff4f93) 14%, var(--card, #fff));
   --export-radius: 16px;
   display: grid; gap: 12px; margin: 12px 0; padding: 16px; min-width: 0;
   border: 1px solid var(--export-line); border-radius: var(--export-radius); background: var(--export-tint);
@@ -961,11 +963,7 @@ onBeforeUnmount(() => {
 .file-export-actions button:not(:disabled):hover { filter: brightness(.97); }
 .file-export-progress { display: grid; gap: 8px; }
 .file-export-summary { justify-content: space-between; font-size: 12px; color: var(--pink, #ff4f93); }
-.file-export-track { height: 12px; border-radius: var(--export-radius); background: var(--export-track); overflow: hidden; }
-.file-export-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pink, #ff4f93), var(--export-line)); transition: width .25s ease; }
-.is-paused .file-export-track > span { background: var(--sub, #8d97b0); }
 .file-export-metrics { column-gap: 18px; row-gap: 4px; font-size: 12px; color: var(--sub, #8d97b0); }
 .file-export-notice { margin: 0; color: var(--text, #243056); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .file-export { padding: 12px; } .file-export-count { margin-left: 48px; } .file-export-actions .download-opt { width: 100%; } }
-@media (prefers-reduced-motion: reduce) { .file-export-track > span { transition: none; } }
 </style>

@@ -342,13 +342,13 @@ function cachedOptionKeys(): string[] {
   const keys = new Set([...Object.keys(FILING_OPTION_KEYS), ...SELECT_KEYS])
   return [...keys].filter(key => savedChoices(props.userId, optionCacheKey(key)))
 }
-/** 只要有任一字段存过非空选项，这轮拉取就整体走静默：不挡界面、拉不到用账本兜底。 */
+/** 只要有任一字段存过非空选项，这轮拉取就整个界面走静默：不挡界面、非空才更新、拉不到用账本兜底。 */
 const ledgerPresent = computed(() => {
   fallbackTick.value
   return Boolean(props.userId) && Object.keys(FILING_OPTION_KEYS).some(key => hasSavedChoices(props.userId, optionCacheKey(key)))
 })
 const FILING_CELL_LABELS: Record<string, string> = Object.fromEntries(FILING_BLOCKS.flatMap(cell => filingCellKeys(cell).map(key => [key, cell.label] as [string, string])))
-function filingFieldLabel(key: string): string {
+function optionFieldLabel(key: string): string {
   const base = key.split(':')[0]!
   return FILING_CELL_LABELS[key] ?? FILING_CELL_LABELS[base] ?? key
 }
@@ -365,8 +365,8 @@ function optionLabel(key: string, value: string): string {
 }
 
 function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
-  // 有账本的字段走静默校对：拉取期间照常可选，拉不到也用账本兜底，不进 loading/失败态。
-  if (props.userId && hasSavedChoices(props.userId, optionCacheKey(key))) return choices(key).length ? 'ready' : 'empty'
+  // 账号有账本就整个界面走静默校对：拉取期间所有字段照常可选，拉不到也用账本兜底，不进 loading/失败态。
+  if (ledgerPresent.value) return choices(key).length ? 'ready' : 'empty'
   if (loadingPickers.value || (!pickersReady.value && !pickerFailed.value)) return 'loading'
   if (pickerFailed.value) return 'invalid'
   return pickers.value[FILING_OPTION_KEYS[key] ?? '']?.status ?? 'invalid'
@@ -410,6 +410,8 @@ async function loadPickers(force: boolean, manual = false): Promise<void> {
           ...rememberDictionaries(props.userId, { [optionCacheKey('apply_type')]: FILING_OPTION_KEYS.apply_type! }, dict.payload.data.dictionaries, true)
         ]
       }
+    } else {
+      pickerFailed.value = true
       failures.push(dict.type === MessageType.DictionaryResult && !dict.payload.ok
         ? dict.payload.error.message
         : cachedOptionKeys().length ? '接口下拉没有读到，先用上次读到的选项。' : '接口下拉没有读到，文本条件仍可查询。')
@@ -423,7 +425,7 @@ async function loadPickers(force: boolean, manual = false): Promise<void> {
       }
     }
     pickerMessage.value = describeOptionPull({
-      updatedLabels: [...new Set(changed)].map(filingFieldLabel),
+      updatedLabels: [...new Set(changed)].map(optionFieldLabel),
       failures,
       manual,
       hasLedger: ledgerPresent.value
