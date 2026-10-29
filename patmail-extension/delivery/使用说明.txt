@@ -1,4 +1,4 @@
-PatMail v1.6.1
+PatMail v1.6.2
 
 完整dist目录可独立使用，不需安装Python、Node或运行启动脚本。
 

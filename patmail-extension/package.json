@@ -1,7 +1,7 @@
 {
   "name": "patmail-extension",
   "private": true,
-  "version": "1.6.1",
+  "version": "1.6.2",
   "type": "module",
   "packageManager": "pnpm@12.16.1",
   "engines": {
@@ -24,6 +24,7 @@
     "test:e2e:download-editor": "node tests/e2e/download-editor.e2e.mjs",
     "test:e2e:durable-download": "node tests/e2e/durable-download.e2e.mjs",
     "test:e2e:browser-download": "node tests/e2e/native-browser-download.e2e.mjs",
+    "test:e2e:pipeline-fault": "node tests/e2e/native-pipeline-fault.e2e.mjs",
     "test:e2e:browser-store": "node tests/e2e/browser-download-store.e2e.mjs",
     "test:e2e:limits": "node tests/e2e/limit-query.e2e.mjs",
     "test:e2e:docs": "node tests/e2e/docs.e2e.mjs",
