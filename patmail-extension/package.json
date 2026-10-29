@@ -1,7 +1,7 @@
 {
   "name": "patmail-extension",
   "private": true,
-  "version": "1.5.1",
+  "version": "1.6.0",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -13,14 +13,16 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:regression": "vitest run tests/regression",
-    "test:all": "vitest run && node tests/e2e/extension.e2e.mjs && node tests/e2e/limit-query.e2e.mjs && node tests/e2e/download.e2e.mjs && node tests/e2e/stream-download.e2e.mjs && node tests/e2e/file-pages.e2e.mjs",
-    "test:e2e": "node tests/e2e/extension.e2e.mjs && node tests/e2e/limit-query.e2e.mjs && node tests/e2e/download.e2e.mjs && node tests/e2e/stream-download.e2e.mjs && node tests/e2e/file-pages.e2e.mjs",
+    "test:all": "vitest run && node tests/e2e/extension.e2e.mjs && node tests/e2e/limit-query.e2e.mjs && node tests/e2e/download.e2e.mjs && node tests/e2e/browser-download.e2e.mjs && node tests/e2e/file-pages.e2e.mjs",
+    "test:e2e": "node tests/e2e/extension.e2e.mjs && node tests/e2e/limit-query.e2e.mjs && node tests/e2e/download.e2e.mjs && node tests/e2e/browser-download.e2e.mjs && node tests/e2e/file-pages.e2e.mjs",
     "test:e2e:files": "node tests/e2e/file-pages.e2e.mjs",
     "test:e2e:download": "node tests/e2e/download.e2e.mjs",
     "test:e2e:stream-download": "node tests/e2e/stream-download.e2e.mjs",
     "test:stream-bridge": "python -m unittest discover -s tests -p *bridge_test.py",
     "test:e2e:download-editor": "node tests/e2e/download-editor.e2e.mjs",
     "test:e2e:durable-download": "node tests/e2e/durable-download.e2e.mjs",
+    "test:e2e:browser-download": "node tests/e2e/browser-download.e2e.mjs",
+    "test:e2e:browser-store": "node tests/e2e/browser-download-store.e2e.mjs",
     "test:e2e:limits": "node tests/e2e/limit-query.e2e.mjs",
     "test:e2e:docs": "node tests/e2e/docs.e2e.mjs",
     "pack:source": "node scripts/pack-source.mjs",

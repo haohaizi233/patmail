@@ -59,6 +59,8 @@ npm run test:all              # Vitest 全量 + 浏览器 E2E（extension + limi
 
 ## 浏览器 E2E
 
+当前默认下载回归是纯浏览器模式：`npm run test:e2e:browser-download` 和 `npm run test:e2e:browser-store`，无需Python。旧`test:e2e:stream-download`/`test:e2e:durable-download`仅保留旧HTTP桥接兼容回归，不是交付依赖。
+
 测试默认把构建复制到独立的 `test-results/extension-*` 路径，隔离扩展 Origin，避免夹具账号影响正在使用的扩展下载授权。`PATMAIL_TEST_DIST` 可指定已准备的隔离构建；不要指向用户正在使用的扩展路径并行测试。
 
 下载回归可设置 `PATMAIL_TEST_BRIDGE_PORT` 使用独立端口；测试会为对应扩展副本替换本机地址，并创建独立磁盘缓存，保留真实用户桥接继续运行。性能合成对照：`python tests/stream_bridge_metadata_benchmark.py --chunks 100`。
