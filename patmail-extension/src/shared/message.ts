@@ -476,26 +476,34 @@ function isDownloadNameResult(value: unknown): value is ApiResult<{ names: strin
   return names.length <= DOWNLOAD_MAX_ITEMS && names.every(name => typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';'))
 }
 
-function isDownloadFileItem(value: unknown): value is { fileId: string; fileNo: string; fileName: string } {
-  return isRecord(value) && Object.keys(value).length === 3 &&
-    typeof value.fileId === 'string' && isQueryGuid(value.fileId) &&
-    typeof value.fileNo === 'string' && value.fileNo.trim().length > 0 && value.fileNo.length <= 40 && !value.fileNo.includes(';') &&
-    typeof value.fileName === 'string' && value.fileName.trim().length > 0 && value.fileName.length <= 180 && !value.fileName.includes(';')
+/** 原名是类型识别元数据；有命名配方时，真正提交的名称另由生成名称护栏校验。 */
+export function downloadFilesRequestIssue(value: unknown): string {
+  if (!isRecord(value)) return '下载参数不是有效对象。'
+  if (Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream', 'taskId', 'saveAsNew', 'browserTarget'].includes(key))) return '下载参数包含不支持的字段。'
+  if (typeof value.stripAppNoDot !== 'boolean') return '下载名称中的申请号小数点设置无效。'
+  if (value.taskId !== undefined && (typeof value.taskId !== 'string' || !isQueryGuid(value.taskId))) return '下载任务编号无效。'
+  if (value.browserTarget !== undefined && (typeof value.browserTarget !== 'string' || !isQueryGuid(value.browserTarget) || !value.taskId || value.stream !== true)) return '浏览器下载目标无效或缺少流式任务编号。'
+  if (value.saveAsNew !== undefined && (value.saveAsNew !== true || !value.taskId)) return '另存下载缺少有效任务编号。'
+  if (value.archiveName !== undefined && !isArchiveName(value.archiveName)) return '压缩包名称无效，请使用不含路径且不超过120字的ZIP名称。'
+  if (value.stream !== undefined && value.stream !== true) return '流式下载设置无效。'
+  if (value.detached !== undefined && (value.detached !== true || !value.progressId)) return '后台下载缺少有效进度编号。'
+  if (value.progressId !== undefined && (typeof value.progressId !== 'string' || !isQueryGuid(value.progressId))) return '下载进度编号无效。'
+  if (value.selection !== null && !isFileDownloadSelection(value.selection)) return '下载名称配方无效，请重新设置下载名称。'
+  const items = value.items
+  if (!Array.isArray(items) || !items.length || items.length > DOWNLOAD_MAX_ITEMS) return `请选择1至${DOWNLOAD_MAX_ITEMS}个附件下载。`
+  for (const [index, item] of items.entries()) {
+    const prefix = `第${index + 1}个附件`
+    if (!isRecord(item) || Object.keys(item).length !== 3) return `${prefix}的下载数据不完整。`
+    if (typeof item.fileId !== 'string' || !isQueryGuid(item.fileId)) return `${prefix}的文件标识无效，请重新查询文件。`
+    if (typeof item.fileNo !== 'string' || !item.fileNo.trim() || item.fileNo.length > 40 || item.fileNo.includes(';')) return `${prefix}的文件编号无效，请重新查询文件。`
+    if (typeof item.fileName !== 'string' || !item.fileName.trim() || item.fileName.length > 4096) return `${prefix}的原文件名为空或超过4096字。`
+    if (value.selection === null && (item.fileName.length > 180 || item.fileName.includes(';'))) return `${prefix}的原文件名超过180字或包含分号，请设置下载名称后再下载。`
+  }
+  return ''
 }
 
 function isDownloadFilesRequest(value: unknown): value is Extract<ContentRequest, { type: 'DOWNLOAD_FILES' }>['payload'] {
-  if (!isRecord(value) || typeof value.stripAppNoDot !== 'boolean' ||
-    Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream', 'taskId', 'saveAsNew', 'browserTarget'].includes(key)) ||
-    (value.browserTarget !== undefined && (typeof value.browserTarget !== 'string' || !isQueryGuid(value.browserTarget) || !value.taskId || value.stream !== true)) ||
-    (value.saveAsNew !== undefined && (value.saveAsNew !== true || !value.taskId)) ||
-    (value.taskId !== undefined && (typeof value.taskId !== 'string' || !isQueryGuid(value.taskId))) ||
-    (value.archiveName !== undefined && !isArchiveName(value.archiveName)) ||
-    (value.stream !== undefined && value.stream !== true) ||
-    (value.detached !== undefined && (value.detached !== true || !value.progressId)) ||
-    (value.progressId !== undefined && (typeof value.progressId !== 'string' || !isQueryGuid(value.progressId)))) return false
-  const items = value.items
-  if (!Array.isArray(items) || !items.length || items.length > DOWNLOAD_MAX_ITEMS || !items.every(isDownloadFileItem)) return false
-  return value.selection === null || isFileDownloadSelection(value.selection)
+  return downloadFilesRequestIssue(value) === ''
 }
 
 function isDownloadFilesResult(value: unknown): value is ApiResult<{ fileName: string; fileCount: number; notice: string }> {

@@ -35,5 +35,6 @@ export interface BrowserFileRequest {
   action: 'open' | 'write' | 'finish' | 'pause'
   offset?: number
   data?: string
+  fileName?: string
 }
 export type BrowserFileReply = { ok: true } | { ok: false; error: string; code?: 'HOST_GONE' }

@@ -85,7 +85,7 @@ export async function streamDownloadFiles(
   })().catch(fail)
 
   const used = new Set<string>()
-  type Prepared = Awaited<ReturnType<typeof prefetchFile>> & { name: string; networkFinished: Promise<void> }
+  type Prepared = { content: () => Promise<Awaited<ReturnType<typeof prefetchFile>>>; name: string; networkFinished: Promise<void> }
   const jobs = new Map<number, Promise<Prepared | null>>()
   const pumps = new Set<Promise<void>>()
   const open = async (index: number, generated: string): Promise<Prepared> => {
@@ -99,10 +99,14 @@ export async function streamDownloadFiles(
       cached.complete = true
     }
     if (cached?.complete && options.cache) {
-      const file = await prefetchFile('local-cache', item.fileName, cached.receivedBytes === 0, '', null, signal,
-        () => cachedFileResponse('local-cache', index, options.cache!, signal, options.fetchFile ?? globalThis.fetch.bind(globalThis)), fail)
-      pumps.add(file.finished); void file.finished.then(() => pumps.delete(file.finished))
-      return { ...file, name, networkFinished: Promise.resolve() }
+      // 完整磁盘缓存无需占用网络窗口，也无需提前分配正文缓冲。
+      return { name, networkFinished: Promise.resolve(), content: async () => {
+        signal.throwIfAborted()
+        const file = await prefetchFile('local-cache', item.fileName, cached.receivedBytes === 0, '', null, signal,
+          () => cachedFileResponse('local-cache', index, options.cache!, signal, options.fetchFile ?? globalThis.fetch.bind(globalThis)), fail)
+        pumps.add(file.finished); void file.finished.then(() => pumps.delete(file.finished))
+        return file
+      } }
     }
     const prepared = await scoped.post('fileDownload', params, signal)
     if (!prepared.ok) throw new Error(prepared.error.message)
@@ -116,12 +120,12 @@ export async function streamDownloadFiles(
       options.cache ? offset => options.cache!.read(index, offset) : undefined)
     pumps.add(file.finished)
     void file.finished.then(() => pumps.delete(file.finished))
-    return { ...file, name, networkFinished: file.finished }
+    return { content: async () => file, name, networkFinished: file.finished }
   }
   let preparing = 0
-  // 磁盘缓存可先行一批名称；网络窗口只等正文结束，不等ZIP完成。
-  // 描述符和本地回放仍有48文件上限，禁止无界预取。
-  const lookahead = options.cache ? 48 : 6
+  // 持久模式仅保留每个附件的小描述符，正文留在磁盘；完成的附件不能
+  // 继续占住网络窗口。内存模式仍限制六个256KiB正文缓冲。
+  const lookahead = options.cache ? items.length : 6
   const dispatch = (async () => {
     while (scheduled < items.length) {
       while (!queue.length && !signal.aborted) await wait()
@@ -159,8 +163,9 @@ export async function streamDownloadFiles(
       const file = await jobs.get(done)!
       signal.throwIfAborted()
       if (!file) throw failure
-      await untilAbort(archive.add(file.name, file.body, { signal }))
-      await file.finished
+      const content = await file.content()
+      await untilAbort(archive.add(file.name, content.body, { signal }))
+      await content.finished
       jobs.delete(done)
       done++; wake()
       options.onProgress?.({ phase: 'packing', done, total: items.length })

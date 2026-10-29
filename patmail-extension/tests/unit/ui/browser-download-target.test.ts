@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { chooseBrowserDownloadTarget, handleBrowserFileMessage, releaseBrowserDownloadTarget } from '../../../src/browser-download/target'
+import { chooseDirectBrowserDownloadTarget as chooseBrowserDownloadTarget, handleBrowserFileMessage, releaseBrowserDownloadTarget } from '../../../src/browser-download/target'
 import { BROWSER_FILE_CHANNEL, type BrowserFileReply } from '../../../src/browser-download/types'
 
 const taskId = '11111111-1111-4111-8111-111111111111'

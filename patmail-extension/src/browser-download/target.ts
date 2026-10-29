@@ -1,5 +1,6 @@
 import { newUuid } from '../utils/uuid'
 import { BROWSER_FILE_CHANNEL, type BrowserFileReply, type BrowserFileRequest } from './types'
+import { registerNativeDownloadTarget, releaseNativeDownloadTarget } from './native-navigation'
 
 interface Target {
   taskId: string
@@ -14,7 +15,12 @@ const targets = new Map<string, Target>()
 let listeningRuntime: unknown
 
 /** 调用方必须直接从用户点击进入，不能先等待WAL或网络。 */
-export async function chooseBrowserDownloadTarget(taskId: string, owner: string, fileName: string): Promise<string> {
+export async function chooseBrowserDownloadTarget(taskId: string, owner: string, _fileName: string): Promise<string> {
+  await releaseBrowserDownloadTarget(taskId)
+  return registerNativeDownloadTarget(taskId, owner)
+}
+
+export async function chooseDirectBrowserDownloadTarget(taskId: string, owner: string, fileName: string): Promise<string> {
   const picker = (globalThis as typeof globalThis & { showSaveFilePicker?: (options: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker
   if (!picker) throw new Error('请在 Chrome 或 Edge 的插件工作台中选择保存位置；当前页面不支持直接保存。')
   const handle = await picker.call(globalThis, { suggestedName: fileName, types: [{ description: 'ZIP压缩包', accept: { 'application/zip': ['.zip'] } }] })
@@ -75,6 +81,7 @@ export function handleBrowserFileMessage(message: unknown, sender: chrome.runtim
 }
 
 export async function releaseBrowserDownloadTarget(taskId: string): Promise<void> {
+  releaseNativeDownloadTarget(taskId)
   await Promise.all([...targets.entries()].filter(([, target]) => target.taskId === taskId).map(async ([id, target]) => {
     target.released = true
     await target.tail.catch(() => {})

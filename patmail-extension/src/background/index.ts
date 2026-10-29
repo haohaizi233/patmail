@@ -8,7 +8,7 @@ import { EasyConnectionController, sameConnectionSnapshot, tabOrigin, type Conne
 import { handleWorkspaceMessage, openWorkspaceTab, recheckBoundSession, resumeEasySession, type WorkspaceHost } from './workspace'
 import { isRecord } from '../shared/guards'
 import { prepareForwardedSearch } from '../api/message-guards'
-import { isMessage, MessageType, type AppMessage, type BackgroundResponse } from '../shared/message'
+import { downloadFilesRequestIssue, isMessage, MessageType, type AppMessage, type BackgroundResponse } from '../shared/message'
 import { prepareApiDocs } from '../agent/rag-store'
 import { hydrateWriteSwitch, watchWriteSwitch } from '../settings/write-switch'
 import { customerMode, hydrateCustomerMode, modeOrigin, originMatchesMode, watchCustomerMode } from '../settings/customer-mode'
@@ -19,18 +19,28 @@ import { handleRecoveryMessage } from './recovery'
 import { BrowserStreamDownloads } from './browser-download'
 import { createBrowserDownloadStore } from '../browser-download/store'
 import { BROWSER_FILE_CHANNEL, type BrowserFileReply } from '../browser-download/types'
+import { createNativeDownloadTarget, type NativeFetchEvent } from './native-download-target'
+import { NATIVE_NAVIGATION_CHANNEL } from '../browser-download/native-navigation'
 
 const streamDownloads = new LocalStreamDownloads(chrome.downloads)
 let legacyStreamsUsed = false
-const browserDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), request => new Promise<BrowserFileReply>((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error('保存文件的工作台没有响应，缓存仍保留。')), 120_000)
-  chrome.runtime.sendMessage(request, (response: BrowserFileReply | undefined) => {
+const nativeTarget = createNativeDownloadTarget({ openNavigation: (url, request) => new Promise<void>((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('下载工作台没有响应，缓存仍保留。')), 15_000)
+  chrome.runtime.sendMessage({ channel: NATIVE_NAVIGATION_CHANNEL, url, taskId: request.taskId, targetId: request.targetId, owner: request.owner }, (response: BrowserFileReply | undefined) => {
     clearTimeout(timer)
     const error = chrome.runtime.lastError?.message
-    if (error || !response) resolve({ ok: false, code: 'HOST_GONE', error: '请保持选择保存文件的工作台打开，再继续下载。' })
-    else resolve(response)
+    if (error || !response || !response.ok) reject(new Error(response && !response.ok ? response.error : '请保持下载工作台打开，再继续下载。'))
+    else resolve()
   })
-}))
+}) })
+const workerScope = globalThis as unknown as {
+  clients: { claim(): Promise<void> }
+  addEventListener(type: 'fetch', listener: (event: NativeFetchEvent) => void): void
+  addEventListener(type: 'activate', listener: (event: { waitUntil(promise: Promise<void>): void }) => void): void
+}
+workerScope.addEventListener('fetch', event => { nativeTarget.handleFetch(event) })
+workerScope.addEventListener('activate', event => { event.waitUntil(workerScope.clients.claim()) })
+const browserDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), nativeTarget.host, nativeTarget.status)
 
 watchWriteSwitch()
 // 扩展 Service Worker 不能用顶层 await，否则 Chrome 直接拒绝启动，工具栏点击没有监听。
@@ -206,6 +216,13 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       && (message as { payload?: { action?: unknown; message?: { type?: unknown } } }).payload?.action === 'forward'
       ? String((message as { payload?: { message?: { type?: unknown } } }).payload?.message?.type ?? '')
       : ''
+    const envelope = isRecord(message) && isRecord(message.payload) ? message.payload : undefined
+    const downloadPayload = type === MessageType.DownloadFiles ? envelope
+      : inner === MessageType.DownloadFiles && isRecord(envelope?.message) ? envelope.message.payload : undefined
+    if (type === MessageType.DownloadFiles || inner === MessageType.DownloadFiles) {
+      const issue = downloadFilesRequestIssue(downloadPayload)
+      if (issue) return { type: MessageType.Error, payload: { message: `下载尚未启动：${issue}` } }
+    }
     return { type: MessageType.Error, payload: { message: `后台没有接住${inner ? `转发 ${inner}` : type}。请在扩展管理页重新加载后再试。` } }
   }
   if (message.type === MessageType.Ping) {
@@ -391,7 +408,7 @@ chrome.runtime.onConnect.addListener(port => {
 
 /** MV3 Service Worker 是租约、任务和证据的唯一写入方。 */
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  if (isRecord(message) && message.channel === BROWSER_FILE_CHANNEL) return
+  if (isRecord(message) && (message.channel === BROWSER_FILE_CHANNEL || message.channel === NATIVE_NAVIGATION_CHANNEL)) return
   if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
   if (sender.id !== chrome.runtime.id) return
   if (isRecord(message) && message.channel === RESULT_CHANNEL) return

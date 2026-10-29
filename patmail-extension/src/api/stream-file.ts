@@ -39,7 +39,9 @@ export async function prefetchFile(
     void reader.cancel(failure).catch(() => {})
     wake()
   }
-  const body = new ReadableStream<Uint8Array>({
+  // ZIP按序消费时才创建回放流，提前完成的磁盘附件只保留水位与描述符。
+  let body: ReadableStream<Uint8Array> | undefined
+  const createBody = () => new ReadableStream<Uint8Array>({
     start(controller) { bodyController = controller },
     async pull(controller) {
       if (replay) {
@@ -119,5 +121,5 @@ export async function prefetchFile(
     await reader.cancel().catch(() => {})
     reader.releaseLock()
   })
-  return { body, finished, get bufferedBytes() { return bufferedBytes } }
+  return { get body() { return body ??= createBody() }, finished, get bufferedBytes() { return bufferedBytes } }
 }

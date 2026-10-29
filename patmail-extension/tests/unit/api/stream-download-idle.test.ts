@@ -27,8 +27,32 @@ function memoryCache() {
 }
 
 describe('持久流水的空转回归', () => {
+  it('恢复已完整缓存的附件时，ZIP阻塞不应预热后续正文到内存', async () => {
+    const items = Array.from({ length: 60 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, fileNo: String(index), fileName: `${index}.pdf` }))
+    const setup = memoryCache()
+    const bytes = new Uint8Array(512 * 1024); bytes.set(new TextEncoder().encode('%PDF cached'))
+    for (let index = 0; index < items.length; index++) {
+      await setup.cache.write(index, 0, bytes)
+      await setup.cache.complete(index, { totalBytes: bytes.length })
+    }
+    const read = setup.cache.read
+    const readFiles = new Set<number>()
+    setup.cache.read = async (index, offset) => { readFiles.add(index); return read(index, offset) }
+    let release!: () => void, blocked!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const writing = new Promise<void>(resolve => { blocked = resolve })
+    const running = streamDownloadFiles({ post: async () => { throw new Error('完整缓存不应请求源站') } } as unknown as EasyTransport, items, null, false, {
+      cache: setup.cache, sink: new WritableStream({ async write() { blocked(); await gate } })
+    })
+    try {
+      await writing
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect([...readFiles]).toEqual([0])
+    } finally { release(); await running }
+  })
+
   it('ZIP输出阻塞时，完整缓存应释放网络窗口并继续取后面的文件', async () => {
-    const items = Array.from({ length: 12 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, fileNo: String(index), fileName: `${index}.pdf` }))
+    const items = Array.from({ length: 60 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, fileNo: String(index), fileName: `${index}.pdf` }))
     const setup = memoryCache()
     const transport = { post: async (_operation: string, params: URLSearchParams) => ({ ok: true, data: {
       ClientInfo: { IsLogin: true, Status: true }, file_guid: items[Number(params.get('file_no'))].fileId
@@ -50,8 +74,8 @@ describe('持久流水的空转回归', () => {
       }
     })
     try {
-      for (let i = 0; i < 200 && setup.completed() < 12; i++) await new Promise(resolve => setTimeout(resolve, 5))
-      expect(setup.completed()).toBe(12)
+      for (let i = 0; i < 200 && setup.completed() < 60; i++) await new Promise(resolve => setTimeout(resolve, 5))
+      expect(setup.completed()).toBe(60)
       expect(active).toBe(0)
       expect(peak).toBe(6)
     } finally { release(); await running }
@@ -66,3 +90,4 @@ describe('持久流水的空转回归', () => {
     } finally { await reader.close() }
   }, 15000)
 })
+

@@ -11,7 +11,7 @@ import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress } fro
 import { runPagedFetch, type PageFetchResult } from '../page-pool'
 import QueryTemplateSection from '../../floating/QueryTemplateSection.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
-import { MessageType, type MessageBridge } from '../../shared/message'
+import { downloadFilesRequestIssue, MessageType, type MessageBridge } from '../../shared/message'
 import { DownloadNameValidationError, type FileDownloadSelection } from '../../mail/download-name'
 import { downloadNameText } from '../../mail/download-name'
 import { DOWNLOAD_PROGRESS_CHANNEL, isDownloadProgress } from '../../shared/download-progress'
@@ -344,12 +344,14 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   }
   const task: FileQueryTask = frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' }
   const startingScope = snapshotScope
+  const issue = downloadFilesRequestIssue({ items: task.items, selection, stripAppNoDot: task.stripAppNoDot })
+  if (issue) { toolbarNotice.value = issue; return }
   const startingGeneration = generation
   let browserTarget: string
   choosingTarget.value = true
   try { browserTarget = await chooseBrowserDownloadTarget(task.id, JSON.stringify([new URL(props.origin).origin, props.userId]), task.archiveName) }
   catch (error) {
-    if (!(error instanceof DOMException && error.name === 'AbortError')) toolbarNotice.value = error instanceof Error ? error.message : '没有选择保存位置。'
+    if (!(error instanceof DOMException && error.name === 'AbortError')) toolbarNotice.value = error instanceof Error ? error.message : '浏览器下载尚未启动。'
     return
   } finally { choosingTarget.value = false }
   if (disposed || !props.canSearch || snapshotScope !== startingScope || generation !== startingGeneration) { void releaseBrowserDownloadTarget(task.id).catch(() => {}); return }

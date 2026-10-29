@@ -4,7 +4,7 @@ import type { BrowserDownloadStore, BrowserDownloadTask, BrowserBlob, BrowserFil
 import type { CachedFileInfo } from '../../../src/api/stream-cache'
 import { isMessage, MessageType } from '../../../src/shared/message'
 
-function fixture() {
+function fixture(nativeStatus?: (targetId: string) => Promise<{ state: 'inProgress' | 'complete'; receivedBytes: number } | undefined>) {
   const tasks = new Map<string, BrowserDownloadTask>(), blobs = new Map<string, Uint8Array>(), infos = new Map<string, CachedFileInfo>(), names = new Map<string, Record<string, string[]>>()
   const key = (id: string, blob: BrowserBlob) => `${id}/${blob}`
   const store: BrowserDownloadStore = {
@@ -29,12 +29,22 @@ function fixture() {
   const calls: BrowserFileRequest[] = []
   let handler = async (_request: BrowserFileRequest): Promise<BrowserFileReply> => ({ ok: true })
   const host = async (request: BrowserFileRequest) => { calls.push(request); return handler(request) }
-  const broker = new BrowserStreamDownloads(store, host)
+  const broker = new BrowserStreamDownloads(store, host, nativeStatus)
   const start = (extra = {}) => broker.command({ action: 'start', fileName: 'test.zip', manifest: { ids: [1] }, targetId: 'target', ...extra }, 10, 'owner')
   return { store, broker, host, calls, start, tasks, blobs, handler: (next: typeof handler) => { handler = next } }
 }
 
 describe('browser stream broker', () => {
+  it('reports Chrome received bytes rather than cached archive bytes and propagates native cancellation', async () => {
+    let cancelled = false
+    const f = fixture(async () => { if (cancelled) throw new Error('Chrome 下载已取消'); return { state: 'inProgress', receivedBytes: 2 } })
+    const started = await f.start(), token = started.token!
+    await f.broker.command({ action: 'write', token, sequence: 0, offset: 0, data: 'YWJj' }, 10, 'owner')
+    expect((await f.broker.command({ action: 'status', token }, 10, 'owner')).info?.receivedBytes).toBe(2)
+    cancelled = true
+    await expect(f.broker.command({ action: 'status', token }, 10, 'owner')).rejects.toThrow('Chrome 下载已取消')
+    expect((await f.store.info(started.taskId!, 'archive')).receivedBytes).toBe(3)
+  })
   it('does not reload a large manifest or naming batches for source blocks and status polling', async () => {
     const f = fixture(), a = await f.start(), token = a.token!
     f.store.get = async () => { throw new Error('unexpected full manifest read') }

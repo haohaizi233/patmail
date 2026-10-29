@@ -42,7 +42,8 @@ export class BrowserStreamDownloads {
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly tabEpochs = new Map<number, number>()
   private currentOwner: string | undefined
-  constructor(private readonly store: BrowserDownloadStore, private readonly host: (request: BrowserFileRequest) => Promise<BrowserFileReply>) {}
+  constructor(private readonly store: BrowserDownloadStore, private readonly host: (request: BrowserFileRequest) => Promise<BrowserFileReply>,
+    private readonly nativeStatus?: (targetId: string) => Promise<{ state: 'inProgress' | 'complete'; receivedBytes: number; totalBytes?: number } | undefined>) {}
 
   private queue<T>(taskId: string, work: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(taskId) ?? Promise.resolve()
@@ -61,7 +62,7 @@ export class BrowserStreamDownloads {
   }
   private async target(lease: Lease, action: BrowserFileRequest['action'], extra: Pick<BrowserFileRequest, 'offset' | 'data'> = {}): Promise<void> {
     let reply: BrowserFileReply
-    try { reply = await this.host({ channel: BROWSER_FILE_CHANNEL, taskId: lease.taskId, targetId: lease.targetId, owner: lease.owner, action, ...extra }) }
+    try { reply = await this.host({ channel: BROWSER_FILE_CHANNEL, taskId: lease.taskId, targetId: lease.targetId, owner: lease.owner, fileName: lease.task.fileName, action, ...extra }) }
     catch (error) { throw new Error('保存文件工作台未响应，缓存已保留：' + (error instanceof Error ? error.message : String(error))) }
     // The background distinguishes an absent target registry from a failed or timed-out close.
     if (action === 'pause' && reply?.ok === false && reply.code === 'HOST_GONE') return
@@ -94,6 +95,10 @@ export class BrowserStreamDownloads {
       receivedBytes: task.completedBytes ?? archive.receivedBytes,
       sealed: archive.complete || task.state === 'sealed' || task.state === 'done',
       completed: task.state === 'done', ...(task.completedBytes === undefined ? {} : { completedBytes: task.completedBytes }) }
+    if (lease && task.state !== 'done' && this.nativeStatus) {
+      const native = await this.nativeStatus(lease.targetId)
+      if (native) Object.assign(snapshot, native)
+    }
     if (!includeManifest) return snapshot
     const cachedNames = await this.store.names(task.taskId)
     return { ...snapshot,
