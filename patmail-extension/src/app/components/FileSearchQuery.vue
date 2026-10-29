@@ -823,7 +823,7 @@ onBeforeUnmount(() => {
           <button v-if="failedPages.length" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
           <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" />申请号去点</label>
-          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '正在打包下载…' : '下载已选' }}</button>
+          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '准备浏览器下载…' : downloading ? '正在打包下载…' : '下载已选' }}</button>
         </div>
         <p v-if="toolbarNotice" class="hint" role="status">{{ toolbarNotice }}</p>
         <div class="table-scroll">

@@ -13,7 +13,7 @@ const files = Array.from({ length: 6 }, (_, index) => ({ fileId: `00000000-0000-
 const templateId = 'd9896997-1e83-4c7d-9a49-da69ba56e7aa'
 const info = { IsLogin: true, Status: true, Result: true }
 const source = index => { const bytes = Buffer.alloc(512 * 1024, index); bytes.write('%PDF pure TS fixture'); return bytes }
-let names = 0, failed = false, releaseFailure, releaseSix
+let names = 0, failed = false, gatewayRetried = false, releaseFailure, releaseSix
 let activeBodies = 0, peakBodies = 0
 const failureGate = new Promise(resolve => { releaseFailure = resolve })
 const sixGate = new Promise(resolve => { releaseSix = resolve })
@@ -31,7 +31,10 @@ const server = http.createServer(async (req, res) => {
   if (call === 'GetFlowdirection') return json({ DownLoadFileName: [{ value: 'file_name', text_zh_cn: '附件名称' }] })
   if (call === 'GetSearchFiles') return json({ TableRowsCount: '6', TableRows: files.map(file => ({ file_id: file.fileId, file_no: file.fileNo, file_name: file.fileName, case_volume: 'AUDIT' })) })
   if (call === 'GetFileName') { names++; return json({ file_names: params.get('file_ids').split(';').map(id => `202610026334.9-${files.findIndex(file => file.fileId === id)}.pdf`).join(';') }) }
-  if (call === 'DownLoad') return json({ file_guid: files.find(file => file.fileNo === params.get('file_no')).fileId, file_size: 524288 })
+  if (call === 'DownLoad') {
+    if (params.get('file_no') === 'B4' && !gatewayRetried) { gatewayRetried = true; res.writeHead(502); return res.end('temporary gateway failure') }
+    return json({ file_guid: files.find(file => file.fileNo === params.get('file_no')).fileId, file_size: 524288 })
+  }
   if (url.pathname.endsWith('FileHandler.ashx')) {
     const index = files.findIndex(file => file.fileId === url.searchParams.get('guid'))
     fetches.push(index)
@@ -69,20 +72,14 @@ async function launch() {
     args: [`--disable-extensions-except=${distDir}`, `--load-extension=${distDir}`] })
   console.log('stage: Chromium started')
   context.on('request', request => { if (/127\.0\.0\.1:42843/.test(request.url())) violations.push(request.url()) })
+  context.on('close', () => console.log('event: context closed'))
+  context.browser()?.on('disconnected', () => console.log('event: browser disconnected'))
   context.on('page', page => { page.on('pageerror', error => console.error('fixture page error', String(error))); page.on('download', download => downloads.push(download)) })
   await context.addInitScript(() => {
-    window.__pickerCalls = 0; window.__savedBytes = 0; window.__pickerGesture = false; window.__legacyCalls = 0
-    // 保存选择器由夹具提供真实OPFS句柄，所有write/close仍走Chrome文件系统实现。
+    window.__pickerCalls = 0; window.__legacyCalls = 0
     window.showSaveFilePicker = async () => {
+      window.__pickerCalls++
       throw new Error('原生下载不允许调用文件选择器')
-      window.__pickerCalls++; window.__pickerGesture = navigator.userActivation.isActive
-      const directory = await navigator.storage.getDirectory()
-      const handle = await directory.getFileHandle('direct-output.zip', { create: true })
-      return { createWritable: async options => {
-        const writer = await handle.createWritable(options)
-        return { async write(bytes) { await writer.write(bytes); window.__savedBytes += bytes.length },
-          async close() { await writer.close() }, async abort(reason) { await writer.abort(reason) } }
-      } }
     }
     if (location.protocol === 'chrome-extension:' && globalThis.chrome?.runtime) chrome.runtime.onMessage.addListener(message => {
       if (message?.type === 'STREAM_DOWNLOAD') window.__legacyCalls++
@@ -93,6 +90,8 @@ async function launch() {
   const easy = await context.newPage(); await easy.goto('http://183.36.43.66:88/fixture')
   await waitForContentScript(worker, easy)
   app = await context.newPage(); await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
+  app.on('close', () => console.log('event: app closed'))
+  app.on('crash', () => console.log('event: app crashed'))
   console.log('stage: workbench ready')
   return worker
 }
@@ -119,6 +118,7 @@ try {
   }, recoveryScope, { timeout: 30000 })
   assert.equal(await app.evaluate(() => window.__pickerCalls), 0, '原生下载不调用文件选择器')
   assert.equal(peakBodies, 6)
+  for (const download of downloads) await download.failure()
   await context.close(); context = null
   downloads = []
   console.log('stage: browser closed for recovery')
@@ -146,16 +146,17 @@ try {
     for (const [index, entry] of entries.entries()) assert.deepEqual(Buffer.from(await entry.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })), source(index))
   } finally { await reader.close() }
   assert.equal(names, 1)
+  assert.equal(gatewayRetried, true, '单附件准备必须从临时502恢复')
   assert.equal(fetches.filter(index => index === 0).length, 1)
   assert(ranges.some(item => item.index === 1 && item.offset === 262144))
   assert.equal(saved.legacyCalls, 0)
   assert.equal(violations.length, 0)
   const nativeDownloads = await worker.evaluate(() => chrome.downloads.search({}))
   assert(nativeDownloads.some(item => item.state === 'complete' && item.bytesReceived === archive.length), '原生下载必须确认完整字节')
-  const report = { passed: true, pureBrowser: true, coldRestarted: true, peakBodies, sourceFetches: fetches, ranges, names, bytes: archive.length, crc: true, nativeDownloads: nativeDownloads.map(item => ({ state: item.state, receivedBytes: item.bytesReceived })), loopbackRequests: 0 }
+  const report = { passed: true, pureBrowser: true, coldRestarted: true, gatewayRetried, peakBodies, sourceFetches: fetches, ranges, names, bytes: archive.length, crc: true, nativeDownloads: nativeDownloads.map(item => ({ state: item.state, receivedBytes: item.bytesReceived })), loopbackRequests: 0 }
   await writeFile(resultPath('native-browser-download.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))
 } catch (error) {
-  console.error(JSON.stringify({ error: String(error), fetches, ranges, names, peakBodies, body: await app?.locator('body').innerText().catch(() => '') }))
+  console.error(JSON.stringify({ error: String(error), appClosed: app?.isClosed(), connected: context?.browser()?.isConnected(), pages: context?.pages().map(page => page.url()), fetches, ranges, names, peakBodies, body: await app?.locator('body').innerText().catch(() => '') }))
   throw error
 } finally { releaseFailure(); releaseSix(); await context?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }

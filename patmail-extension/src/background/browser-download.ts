@@ -7,7 +7,8 @@ interface Lease {
   token: string; taskId: string; targetId: string; owner: string; tabId: number
   task: BrowserDownloadTask
   active: boolean; sequence: number; offset: number; cursor: number; closed: boolean
-  last?: { sequence: number; offset: number; data: string }
+  output: Promise<void>
+  last?: { sequence: number; offset: number; data: string; settled?: Promise<void>; failed?: boolean }
 }
 type Reply = { ok: true; token?: string; taskId?: string; info?: Record<string, unknown>; data?: string }
 const encode = (bytes: Uint8Array): string => {
@@ -57,6 +58,12 @@ export class BrowserStreamDownloads {
     this.leases.delete(lease.token)
     if (this.tasks.get(lease.taskId) === lease) this.tasks.delete(lease.taskId)
   }
+  private output(lease: Lease, work: () => Promise<void>): Promise<void> {
+    const next = lease.output.then(async () => { this.assertLease(lease); await work() })
+    lease.output = next
+    void next.catch(() => {})
+    return next
+  }
   private assertLease(lease: Lease, tabId = lease.tabId, owner = lease.owner): void {
     if (!lease.active || this.leases.get(lease.token) !== lease || lease.tabId !== tabId || lease.owner !== owner) throw new Error('下载凭据已失效或不属于当前账号和来源页面。')
   }
@@ -85,7 +92,7 @@ export class BrowserStreamDownloads {
     if (task.activeTargetId && !targets.has(task.activeTargetId)) {
       // A restarted worker knows the host identity but cannot reconstruct a source capability.
       targets.set(task.activeTargetId, { token: '', taskId: task.taskId, targetId: task.activeTargetId,
-        owner: task.owner, task, tabId: -1, active: false, sequence: 0, offset: 0, cursor: 0, closed: false })
+        owner: task.owner, task, tabId: -1, active: false, sequence: 0, offset: 0, cursor: 0, closed: false, output: Promise.resolve() })
     }
     return [...targets.values()]
   }
@@ -115,7 +122,7 @@ export class BrowserStreamDownloads {
       const assertSource = () => {
         if ((this.tabEpochs.get(tabId) ?? 0) !== tabEpoch || (this.currentOwner !== undefined && this.currentOwner !== owner)) throw new Error('来源页面或账号已离开，下载已暂停。')
       }
-      if (!owner || !targetId || !command.fileName) throw new Error('请先在工作台选择保存文件。')
+      if (!owner || !targetId || !command.fileName) throw new Error('请先在工作台启动浏览器下载。')
       return this.queue(taskId, async () => {
         assertSource()
         let task = await this.owned(taskId, owner)
@@ -139,7 +146,7 @@ export class BrowserStreamDownloads {
           for (const previous of previousTargets) await this.closeTarget(previous)
         }
         assertSource()
-        const lease: Lease = { token: capabilityToken(), taskId, targetId, owner, tabId, task, active: true, sequence: 0, offset: 0, cursor: 0, closed: false }
+        const lease: Lease = { token: capabilityToken(), taskId, targetId, owner, tabId, task, active: true, sequence: 0, offset: 0, cursor: 0, closed: false, output: Promise.resolve() }
         this.leases.set(lease.token, lease); this.tasks.set(taskId, lease)
         try {
           await this.store.update(taskId, { activeTargetId: targetId, updatedAt: Date.now() })
@@ -160,7 +167,8 @@ export class BrowserStreamDownloads {
     const lease = this.leases.get(command.token)
     if (!lease) throw new Error('下载凭据已失效。')
     this.assertLease(lease, tabId, owner)
-    return this.queue(lease.taskId, async () => {
+    let settled: Promise<void> | undefined
+    const result = await this.queue<Reply>(lease.taskId, async () => {
       this.assertLease(lease, tabId, owner)
       // Ownership and frozen metadata were checked at start. Store mutations still validate their
       // durable task record; reading the full manifest for every 256KiB block would amplify disk IO.
@@ -203,16 +211,36 @@ export class BrowserStreamDownloads {
         natural(command.sequence)
         const offset = command.offset ?? lease.offset; natural(offset)
         const retry = lease.last?.sequence === command.sequence && lease.last.offset === offset && lease.last.data === command.data
-        if (retry) return { ok: true }
+        if (retry) {
+          const last = lease.last!
+          if (last.failed) {
+            // Retry only the most recently reserved block, after its concrete failure.
+            // A duplicate still in flight waits for the original consumption ACK.
+            lease.output = Promise.resolve()
+            last.failed = false
+            settled = last.settled = this.output(lease, async () => {
+              await this.target(lease, 'write', { offset, data: command.data })
+              this.assertLease(lease); lease.cursor = offset + decode(command.data).length
+            })
+            void settled.catch(() => { last.failed = true })
+          } else settled = last.settled
+          return { ok: true }
+        }
         if (command.sequence !== lease.sequence || offset !== lease.offset) throw new Error('下载流顺序或位置不一致。')
         const bytes = decode(command.data)
         if (!bytes.length) throw new Error('下载流块为空。')
         await this.store.append(task.taskId, 'archive', offset, bytes)
         this.assertLease(lease)
-        await this.target(lease, 'write', { offset, data: command.data })
-        this.assertLease(lease)
-        lease.cursor = offset + bytes.length; lease.offset = lease.cursor; lease.sequence++
-        lease.last = { sequence: command.sequence, offset, data: command.data }
+        // Reserve durable positions under the metadata queue, but never hold it while
+        // waiting for Chrome to pull bytes. Cache RPCs, status and pause must remain runnable.
+        settled = this.output(lease, async () => {
+          await this.target(lease, 'write', { offset, data: command.data })
+          this.assertLease(lease); lease.cursor = offset + bytes.length
+        })
+        lease.offset = offset + bytes.length; lease.sequence++
+        lease.last = { sequence: command.sequence, offset, data: command.data, settled }
+        const last = lease.last
+        void settled.catch(() => { last.failed = true })
       } else if (command.action === 'finish' || command.action === 'resume') {
         if (lease.closed) return { ok: true }
         let archive = await this.store.info(task.taskId, 'archive')
@@ -224,19 +252,24 @@ export class BrowserStreamDownloads {
           task.state = 'sealed'
           archive = await this.store.info(task.taskId, 'archive')
         }
-        while (lease.cursor < archive.receivedBytes) {
-          this.assertLease(lease)
-          const bytes = await this.store.read(task.taskId, 'archive', lease.cursor, Math.min(BLOCK, archive.receivedBytes - lease.cursor))
-          if (!bytes.length || bytes.length > BLOCK || lease.cursor + bytes.length > archive.receivedBytes) throw new Error('压缩包缓存不完整，已保留任务。')
-          this.assertLease(lease)
-          await this.target(lease, 'write', { offset: lease.cursor, data: encode(bytes) })
-          this.assertLease(lease); lease.cursor += bytes.length
-        }
-        this.assertLease(lease); await this.target(lease, 'finish'); this.assertLease(lease)
-        lease.closed = true
+        const receivedBytes = archive.receivedBytes
+        settled = this.output(lease, async () => {
+          while (lease.cursor < receivedBytes) {
+            this.assertLease(lease)
+            const bytes = await this.store.read(task.taskId, 'archive', lease.cursor, Math.min(BLOCK, receivedBytes - lease.cursor))
+            if (!bytes.length || bytes.length > BLOCK || lease.cursor + bytes.length > receivedBytes) throw new Error('压缩包缓存不完整，已保留任务。')
+            this.assertLease(lease)
+            await this.target(lease, 'write', { offset: lease.cursor, data: encode(bytes) })
+            this.assertLease(lease); lease.cursor += bytes.length
+          }
+          this.assertLease(lease); await this.target(lease, 'finish'); this.assertLease(lease)
+          lease.closed = true
+        })
       }
       return { ok: true }
     })
+    await settled
+    return result
   }
   async pauseTask(taskId: string, owner: string): Promise<number[]> {
     return this.queue(taskId, async () => {

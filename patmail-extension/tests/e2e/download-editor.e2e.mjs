@@ -21,11 +21,7 @@ const recoveryScope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1
 try {
   async function installRoutes(context) {
   await context.addInitScript(() => {
-    window.__pickerCount = 0
-    window.showSaveFilePicker = async () => {
-      const count = ++window.__pickerCount
-      return (await navigator.storage.getDirectory()).getFileHandle(`editor-output-${count}.zip`, { create: true })
-    }
+    window.showSaveFilePicker = async () => { throw new Error('原生下载不使用文件选择器') }
   })
   await installEasyMock(context, { fixtureHtml: '<!doctype html><title>下载名称回归</title>', profile: 'extension' })
   await context.route('http://183.36.43.66:88/**', async route => {
@@ -67,9 +63,6 @@ try {
   await waitForContentScript(worker, easy)
   app = await context.newPage()
   await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
-  const downloadPath = await mkdtemp(join(testResultsDir, 'repeat-download-'))
-  const cdp = await context.newCDPSession(app)
-  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath, eventsEnabled: true })
   const row = app.locator('.download-name-row')
   const template = row.locator('.download-template-select [role="combobox"]')
   await app.getByText('当前账号未配置专利标签', { exact: true }).waitFor()
@@ -101,23 +94,24 @@ try {
   for (const separator of ['-', '再次']) {
     const previousTask = await app.evaluate(async scope => (await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })).value.payload?.activeTask?.id, recoveryScope)
     await row.locator('.download-part-text').first().fill(separator)
+    const incoming = app.waitForEvent('download')
     await app.getByRole('button', { name: '下载已选', exact: true }).click()
     await waitForPageCondition(app, async ({ scope, previousTask }) => {
       const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
       const task = reply.value.payload?.activeTask
       return reply.ok && task?.id !== previousTask && task?.status === 'done'
     }, { scope: recoveryScope, previousTask }, { timeout: 30000 })
-    const saved = await app.evaluate(async () => {
-      const file = await (await (await navigator.storage.getDirectory()).getFileHandle(`editor-output-${window.__pickerCount}.zip`)).getFile()
-      return { id: window.__pickerCount, data: Array.from(new Uint8Array(await file.arrayBuffer())) }
-    })
-    const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(saved.data)))
+    const download = await incoming
+    const file = resultPath(`editor-native-${verifiedDownloads.length}.zip`)
+    await download.saveAs(file)
+    assert.equal(await download.failure(), null)
+    const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(await readFile(file))))
     try {
       const entries = await reader.getEntries()
       assert.deepEqual(entries.map(entry => entry.filename), [`配方${separator}验收.pdf`])
       assert.deepEqual(Buffer.from(await entries[0].getData(new Uint8ArrayWriter(), { checkSignature: true })), pdf)
     } finally { await reader.close() }
-    verifiedDownloads.push({ id: saved.id, entry: `配方${separator}验收.pdf` })
+    verifiedDownloads.push({ file, entry: `配方${separator}验收.pdf` })
     assert.equal((await app.locator('.check-rainbow').getAttribute('aria-valuetext')).includes('生成下载名称'), true)
   }
   assert.deepEqual(calls.slice(1), [

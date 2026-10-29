@@ -50,6 +50,17 @@ function output() {
 }
 
 describe('流水单ZIP下载', () => {
+  it('单附件准备遇到临时网关502后重新取得句柄，正文只下载一次', async () => {
+    const result = output()
+    let prepares = 0, bodies = 0
+    const transport = { post: async () => ++prepares === 1 ? { ok: false, error: { code: 'HTTP_ERROR', message: 'EASY 网关异常。', status: 502 } }
+      : { ok: true, data: { ClientInfo: { IsLogin: true, Status: true }, file_guid: files[0].fileId } }, fileDownloadUrl: () => 'https://easy.test/file' } as unknown as EasyTransport
+    await streamDownloadFiles(transport, files.slice(0, 1), null, false, { sink: result.sink,
+      fetchFile: async () => { bodies++; return new Response('%PDF retry') } })
+    expect(prepares).toBe(2)
+    expect(bodies).toBe(1)
+    expect(result.closed()).toBe(true)
+  })
   it.each([false, true])('慢首文件与后续大正文填满缓冲，取消=%s，保持顺序或清理全部请求', async cancelled => {
     const setup = fixture(), result = output(), controller = new AbortController()
     let release!: () => void
