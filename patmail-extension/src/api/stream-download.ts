@@ -108,7 +108,14 @@ export async function streamDownloadFiles(
         return file
       } }
     }
-    const prepared = await scoped.post('fileDownload', params, signal)
+    let prepared = await scoped.post('fileDownload', params, signal)
+    // This producer prepares one attachment at a time, never a server-side bulk ZIP.
+    // A gateway failure can retry its handle without repeating any mail/write operation.
+    for (let attempt = 1; !prepared.ok && [502, 503, 504].includes(prepared.error.status ?? 0) && attempt < 3; attempt++) {
+      await untilAbort(new Promise<void>(resolve => setTimeout(resolve, attempt * 200)))
+      signal.throwIfAborted()
+      prepared = await scoped.post('fileDownload', params, signal)
+    }
     if (!prepared.ok) throw new Error(prepared.error.message)
     const handle = readDownloadHandle(prepared.data)
     if (!handle.ok) throw new Error(handle.error.message)

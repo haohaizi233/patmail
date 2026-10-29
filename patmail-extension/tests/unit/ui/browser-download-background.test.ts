@@ -35,6 +35,27 @@ function fixture(nativeStatus?: (targetId: string) => Promise<{ state: 'inProgre
 }
 
 describe('browser stream broker', () => {
+  it('keeps cache RPCs and pause responsive while the native consumer has not pulled ZIP bytes', async () => {
+    const f = fixture(), started = await f.start(), token = started.token!
+    let entered!: () => void, rejectWrite!: (error: Error) => void
+    const writing = new Promise<void>(resolve => { entered = resolve })
+    f.handler(async request => {
+      if (request.action === 'write') { entered(); await new Promise<void>((_resolve, reject) => { rejectWrite = reject }) }
+      if (request.action === 'pause') rejectWrite(new Error('native paused'))
+      return { ok: true }
+    })
+    const output = f.broker.command({ action: 'write', token, sequence: 0, offset: 0, data: 'YWJj' }, 10, 'owner')
+    const rejected = expect(output).rejects.toThrow('native paused')
+    await writing
+    const cache = f.broker.command({ action: 'cache', command: 'write', token, index: 1, offset: 0, data: 'YQ==' }, 10, 'owner')
+    const completed = await Promise.race([cache.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 100))])
+    if (!completed) { rejectWrite(new Error('native paused')); await rejected }
+    expect(completed).toBe(true)
+    await f.broker.pauseTask(started.taskId!, 'owner')
+    await rejected
+    expect((await f.store.info(started.taskId!, 1)).receivedBytes).toBe(1)
+    expect((await f.store.info(started.taskId!, 'archive')).receivedBytes).toBe(3)
+  })
   it('reports Chrome received bytes rather than cached archive bytes and propagates native cancellation', async () => {
     let cancelled = false
     const f = fixture(async () => { if (cancelled) throw new Error('Chrome 下载已取消'); return { state: 'inProgress', receivedBytes: 2 } })

@@ -107,24 +107,25 @@ try {
     const downloadIndex = downloads.length
     const previousTask = await app.evaluate(async scope => (await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })).value.payload?.activeTask?.id, recoveryScope)
     await row.locator('.download-part-text').first().fill(separator)
+    const incoming = app.waitForEvent('download')
     await app.getByRole('button', { name: '下载已选', exact: true }).click()
     await waitForPageCondition(app, async ({ scope, previousTask }) => {
       const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
       const task = reply.value.payload?.activeTask
       return reply.ok && task?.id !== previousTask && task?.status === 'done'
     }, { scope: recoveryScope, previousTask }, { timeout: 30000 })
+    const download = await incoming
     assert.equal(downloads.length, downloadIndex + 1, '每个任务只启动一次原生下载')
-    const download = downloads[downloadIndex]
+    const file = resultPath(`editor-native-${verifiedDownloads.length}.zip`)
+    await download.saveAs(file)
     assert.equal(await download.failure(), null)
-    const savedPath = await download.path()
-    assert(savedPath, '浏览器保存完成后必须能读取实际ZIP')
-    const reader = new ZipReader(new Uint8ArrayReader(await readFile(savedPath)))
+    const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(await readFile(file))))
     try {
       const entries = await reader.getEntries()
       assert.deepEqual(entries.map(entry => entry.filename), [`配方${separator}验收.pdf`])
       assert.deepEqual(Buffer.from(await entries[0].getData(new Uint8ArrayWriter(), { checkSignature: true })), pdf)
     } finally { await reader.close() }
-    verifiedDownloads.push({ id: downloadIndex, entry: `配方${separator}验收.pdf` })
+    verifiedDownloads.push({ id: downloadIndex, file, entry: `配方${separator}验收.pdf` })
     assert.equal((await app.locator('.check-rainbow').getAttribute('aria-valuetext')).includes('生成下载名称'), true)
     assert.equal(await exportPanel.getByRole('progressbar').getAttribute('aria-valuenow'), '100')
     assert.equal(await exportPanel.getByText('导出完成', { exact: true }).count(), 1)
