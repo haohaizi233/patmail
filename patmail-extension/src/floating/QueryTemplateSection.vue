@@ -9,8 +9,9 @@ import { fieldGroup, fieldLabel, parseQueryXml, resolveQueryTemplate } from '../
 import { PAGE_OPTIONS, cellKeys, queryBlocks, type QueryCell, type QuerySection } from '../query/form-layout'
 import { cellsFromLiveFields } from '../query/live-fields'
 import { buildQueryXml } from '../query/query-xml'
-import { describeFormCheck, fallbackFields, formFieldKey, hiddenFormFields, mergeFormFields, overlayFieldOptions, pageSelectOptions } from '../query/form-page'
-import { activateOptionFallback, FILE_BASIC_OPTION_FIELDS, FILE_FLOW_OPTION_FIELDS, hydrateOptionFallback, optionFallbackEpoch, rememberDictionaries, rememberFormFields, savedChoices, scopeSavedChoices, subscribeOptionFallback } from '../query/option-fallback'
+import { fallbackFields, formCheckDiff, formFieldKey, hiddenFormFields, mergeFormFields, overlayFieldOptions, pageSelectOptions } from '../query/form-page'
+import { activateOptionFallback, FILE_BASIC_OPTION_FIELDS, FILE_FLOW_OPTION_FIELDS, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberDictionaries, rememberFormFields, savedChoices, scopeSavedChoices, subscribeOptionFallback } from '../query/option-fallback'
+import { describeOptionPull, describeOptionUpdate, OPTION_PULL_FALLBACK, OPTION_PULL_UNCHANGED } from '../query/option-pull-notes'
 import FileTypePicker from './FileTypePicker.vue'
 import EmptyGuide from '../app/components/EmptyGuide.vue'
 import { peekHistoryList, readHistoryList, saveHistoryList } from '../query/history-list-cache'
@@ -25,7 +26,7 @@ import { scopeFromConnection, type ExpectedAccountScope } from '../shared/connec
 import { MessageType, type FileSearchFormField, type MessageBridge } from '../shared/message'
 import { useWorkspace } from '../app/composables/useWorkspace'
 import { hasOptionTree } from '../query/option-tree'
-import { describePickerReceipt, FILE_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
+import { FILE_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
 import { downloadNameParts, selectionFromNameParts, selectionFromControls, type DownloadNamePart, type FileDownloadSelection } from '../mail/download-name'
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import { sameOptionValue } from '../shell/components/theme-select'
@@ -458,15 +459,27 @@ function liveChoices(dictionary: { name: string; dictionary: NormalizedDictionar
     ...(item.parentValue ? { parent: item.parentValue } : {})
   }))
 }
+function ledgerChoices(key: string): { value: string; label: string; parent?: string }[] | null {
+  const rawStored = props.userId ? savedChoices(props.userId, key) : null
+  return rawStored ? scopeSavedChoices(key, rawStored, effectiveCaseType()) : null
+}
+function liveRows(key: string): { value: string; label: string; parent?: string }[] | null {
+  const dictionary = dictionaryFor(key)
+  if (!dictionary || dictionary.dictionary.status === 'invalid') return null
+  return liveChoices(dictionary)
+}
+/** 静默校对：接口回了非空就换上；空结果和读取失败都继续用账本上的选项，界面不跟着抖。 */
+function mergedRows(key: string): { value: string; label: string; parent?: string }[] {
+  const dictionary = dictionaryFor(key)
+  const live = liveRows(key)
+  if (dictionary && (dictionary.dictionary.status === 'ready' || dictionary.dictionary.status === 'partial')) return live ?? []
+  const stored = ledgerChoices(key)
+  return stored?.length ? stored : (live ?? [])
+}
 function optionsFor(key: string): { value: string; label: string; parent?: string }[] {
   fallbackTick.value
-  const dictionary = dictionaryFor(key)
   const mapped = Boolean(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key])
-  const state = optionStatus(key)
-  const live = dictionary && (state === 'ready' || state === 'partial') ? liveChoices(dictionary) : null
-  const rawStored = props.userId ? savedChoices(props.userId, key) : null
-  const stored = rawStored ? scopeSavedChoices(key, rawStored, effectiveCaseType()) : null
-  const options = mapped ? (live ?? []) : [...(stored ?? pageSelectOptions(key, pageFields.value) ?? PAGE_OPTIONS[key] ?? [])]
+  const options = mapped ? mergedRows(key) : [...(ledgerChoices(key) ?? pageSelectOptions(key, pageFields.value) ?? PAGE_OPTIONS[key] ?? [])]
   if (key === 'is_close') return [{ value: '', label: '是' }, { value: '1', label: '否' }]
   return [{ value: '', label: '不限' }, ...options]
 }
@@ -485,10 +498,32 @@ function showPicker(key: string): boolean {
 }
 function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
   if (!(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key])) return 'ready'
+  // 有账本的字段走静默校对：拉取期间照常可选，拉不到也用账本兜底，不进 loading/失败态。
+  if (props.userId && hasSavedChoices(props.userId, key)) return mergedRows(key).length ? 'ready' : 'empty'
   if (dictionaryLoading.value || !dictionariesRead.value) return 'loading'
   const kind = FILE_BASIC_OPTION_FIELDS[key] ? 'basic' : FILE_FLOW_OPTION_FIELDS[key] ? 'flow' : 'picker'
   if (failedDictionaryKinds.value.includes(kind)) return 'invalid'
   return dictionaryFor(key)?.dictionary.status ?? 'invalid'
+}
+/** 只要有任一字段存过非空选项，这轮拉取就整体走静默：不挡界面、拉不到用账本兜底。 */
+const ledgerPresent = computed(() => {
+  fallbackTick.value
+  return Boolean(props.userId) && Object.keys({ ...FILE_BASIC_OPTION_FIELDS, ...FILE_FLOW_OPTION_FIELDS, ...FILE_PICKER_FIELDS })
+    .some(key => hasSavedChoices(props.userId, key))
+})
+const cellLabels = computed(() => {
+  const map: Record<string, string> = {}
+  for (const block of formSections.value) {
+    for (const cell of [...block.cells, ...block.extra]) {
+      const label = 'label' in cell ? cell.label : ''
+      if (!label) continue
+      for (const key of cellKeys(cell)) map[key] = label
+    }
+  }
+  return map
+})
+function optionLabelOf(key: string): string {
+  return cellLabels.value[key] ?? fieldLabel(key)
 }
 const unavailableFields = computed(() => Object.keys({ ...FILE_BASIC_OPTION_FIELDS, ...FILE_FLOW_OPTION_FIELDS, ...FILE_PICKER_FIELDS }).filter(key => {
   const ids = formValue(key).split(',').map(id => id.trim()).filter(Boolean)
@@ -576,14 +611,15 @@ async function loadFileTypes(caseTypeId: string): Promise<void> {
   fileTypeRoots.value = response.payload.data.rootIds
   if (response.payload.data.rootIds.length === 0) fileTypeMessage.value = '这个案件类型下面没有文件描述。'
 }
-async function loadDictionaries(ticketId: number, signal: AbortSignal, force = false): Promise<void> {
-  if (!props.bridge) return
+async function loadDictionaries(ticketId: number, signal: AbortSignal, force = false): Promise<{ changed: string[]; problems: string[] }> {
+  const summary = { changed: [] as string[], problems: [] as string[] }
+  if (!props.bridge) return summary
   dictionaryLoading.value = true
   failedDictionaryKinds.value = []
   const settled = await Promise.allSettled((['basic', 'flow', 'picker'] as const).map(kind => props.bridge!.request({
     type: MessageType.LoadDictionary, payload: { kind, force }
   }, signal)))
-  if (!loads.isCurrent(ticketId)) return
+  if (!loads.isCurrent(ticketId)) return summary
   dictionaryLoading.value = false
   dictionariesRead.value = true
   dictionaryNote.value = ''
@@ -609,16 +645,16 @@ async function loadDictionaries(ticketId: number, signal: AbortSignal, force = f
     if (response.payload.data.kind === 'picker') {
       pickers.value = response.payload.data.dictionaries
       pickerWarnings.value = response.payload.data.warnings
-      dictionaryNote.value = describePickerReceipt(response.payload.data.dictionaries, response.payload.data.warnings)
     }
   }
+  // 非空才更新：静默校对时空结果不覆盖账本上已有的选项。
   if (props.userId) {
-    rememberDictionaries(props.userId, FILE_FLOW_OPTION_FIELDS, flowDictionaries.value)
-    rememberDictionaries(props.userId, FILE_BASIC_OPTION_FIELDS, basicDictionaries.value)
-    rememberDictionaries(props.userId, FILE_PICKER_FIELDS, pickers.value)
+    summary.changed.push(...rememberDictionaries(props.userId, FILE_FLOW_OPTION_FIELDS, flowDictionaries.value, true))
+    summary.changed.push(...rememberDictionaries(props.userId, FILE_BASIC_OPTION_FIELDS, basicDictionaries.value, true))
+    summary.changed.push(...rememberDictionaries(props.userId, FILE_PICKER_FIELDS, pickers.value, true))
   }
-  if (!dictionaryNote.value && problems.length) dictionaryNote.value = problems[0]
-  else if (problems.length) dictionaryNote.value = `${dictionaryNote.value}。${problems[0]}`
+  summary.problems = problems
+  return summary
 }
 function pickTemplate(id: string): void {
   recoveredForm = false
@@ -666,8 +702,14 @@ async function loadHistory(force: boolean): Promise<void> {
     rememberHistory(response.payload.data)
     if (response.payload.data.length === 0 && localTemplates.value.length === 0 && props.mode === 'history' && current) historyMessage.value = '当前账号还没有查询模板。'
     if (!current) return
-    await loadDictionaries(ticket.id, ticket.signal)
+    const summary = await loadDictionaries(ticket.id, ticket.signal)
     if (!loads.isCurrent(ticket.id)) return
+    dictionaryNote.value = describeOptionPull({
+      updatedLabels: summary.changed.map(optionLabelOf),
+      failures: summary.problems,
+      manual: false,
+      hasLedger: ledgerPresent.value
+    })
     if (recoveredForm) return
     if (props.mode === 'customer' && selectedCustomer.value) await applyBase(selectedCustomer.value.baseTemplateId, ticket)
     else if (selectedBaseId.value) await applyBase(selectedBaseId.value, ticket)
@@ -1047,11 +1089,17 @@ async function runHotFields(openAfter: boolean): Promise<void> {
   hotLoading.value = true
   hotNote.value = '正在从原网站读取下面的查询字段…'
   try {
-    const [response] = await Promise.all([
+    const [response, summary] = await Promise.all([
       props.bridge.request({ type: MessageType.ScanFileSearchForm }, ticket.signal),
       loadDictionaries(loadId, ticket.signal, true)
     ])
     if (hotAbort !== ticket || !loads.isCurrent(loadId)) return
+    dictionaryNote.value = describeOptionPull({
+      updatedLabels: summary.changed.map(optionLabelOf),
+      failures: summary.problems,
+      manual: false,
+      hasLedger: ledgerPresent.value
+    })
     if (response.type !== MessageType.FileSearchFormResult) {
       hotNote.value = response.type === MessageType.Error ? response.payload.message : '没有读到原网站的查询字段。'
       return
@@ -1187,31 +1235,40 @@ async function checkAgainstPage(): Promise<void> {
   try {
     const ticket = loads.begin()
     const caseTypeId = formValue('case_type').trim()
-    const [response] = await Promise.all([
+    const [response, summary] = await Promise.all([
       props.bridge.request({ type: MessageType.ScanFileSearchForm }, ticket.signal),
       loadDictionaries(ticket.id, ticket.signal, true),
       /^[0-9a-f-]{36}$/i.test(caseTypeId) ? loadFileTypes(caseTypeId) : Promise.resolve()
     ])
     if (!loads.isCurrent(ticket.id)) return
     if (response.type !== MessageType.FileSearchFormResult) {
-      checkMessage.value = response.type === MessageType.Error ? response.payload.message : '没有读到原网站的查询表。'
+      checkMessage.value = describeOptionPull({
+        updatedLabels: summary.changed.map(optionLabelOf),
+        failures: [...summary.problems, response.type === MessageType.Error ? response.payload.message : '没有读到原网站的查询表。'],
+        manual: true,
+        hasLedger: ledgerPresent.value
+      })
       return
     }
     const previous = fallbackFields()
     const checked = overlayFieldOptions(response.payload.fields, dictionaryOptions)
     const fields = checked.length ? mergeFormFields(checked, previous) : undefined
     if (fields) pageFields.value = fields
-    if (props.userId) {
-      rememberFormFields(props.userId, checked.map(field => ({ ...field, id: formFieldKey(field.id) })))
-      rememberDictionaries(props.userId, FILE_FLOW_OPTION_FIELDS, flowDictionaries.value)
-      rememberDictionaries(props.userId, FILE_BASIC_OPTION_FIELDS, basicDictionaries.value)
-      rememberDictionaries(props.userId, FILE_PICKER_FIELDS, pickers.value)
-    }
-    const lines = describeFormCheck(fields ?? checked, previous)
-    if (pickerWarnings.value.length) lines.push(pickerWarnings.value[0])
-    checkMessage.value = lines.join('')
+    const formChanged = props.userId
+      ? rememberFormFields(props.userId, checked.map(field => ({ ...field, id: formFieldKey(field.id) })))
+      : []
+    const diff = formCheckDiff(fields ?? checked, previous)
+    const updatedLabels = [...new Set([...summary.changed, ...formChanged].map(optionLabelOf).concat(diff.optionsChanged))]
+    const parts: string[] = []
+    const updated = describeOptionUpdate(updatedLabels)
+    if (updated) parts.push(updated)
+    if (summary.problems.length) parts.push(ledgerPresent.value ? OPTION_PULL_FALLBACK : summary.problems[0]!)
+    if (diff.hiddenNow.length) parts.push(`新藏起来的：${diff.hiddenNow.join('，')}。`)
+    if (diff.shownNow.length) parts.push(`现在能看到的：${diff.shownNow.join('，')}。`)
+    if (!parts.length) parts.push(OPTION_PULL_UNCHANGED)
+    checkMessage.value = parts.join('')
   } catch {
-    checkMessage.value = '对照原网站查询页失败。'
+    checkMessage.value = ledgerPresent.value ? OPTION_PULL_FALLBACK : '对照原网站查询页失败。'
   } finally {
     checkingForm.value = false
   }

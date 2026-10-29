@@ -196,13 +196,23 @@ export function savedChoices(userId: string, key: string): SavedChoice[] | null 
   return rows ? rows.map(item => ({ ...item })) : null
 }
 
-/** 扫描空列表不覆盖旧值；接口确认的空列表写为墓碑，直至读到新的真实选项。 */
-export function rememberChoices(userId: string, key: string, choices: SavedChoice[], confirmedEmpty = false): boolean {
+/** 这个字段已经存下非空选项才算有账本。有账本的字段走静默校对：拉取不挡界面，拉不到用账本兜底。 */
+export function hasSavedChoices(userId: string, key: string): boolean {
+  return (memory.get(userId)?.get(key)?.length ?? 0) > 0
+}
+
+/**
+ * 扫描空列表不覆盖旧值；接口确认的空列表写为墓碑，直至读到新的真实选项。
+ * `nonEmptyOnly` 用于静默校对：账本上已有非空选项时，空结果一律不写回（非空才更新）。
+ * 返回这次真正写进去的键有没有变化。
+ */
+export function rememberChoices(userId: string, key: string, choices: SavedChoice[], confirmedEmpty = false, nonEmptyOnly = false): boolean {
   if (!userId || !key || key.length > 80) return false
   const clean = sanitize(choices)
   if (!clean.length && !confirmedEmpty) return false
   const bag = memory.get(userId) ?? new Map<string, SavedChoice[]>()
   const previous = bag.get(key)
+  if (nonEmptyOnly && !clean.length && (previous?.length ?? 0) > 0) return false
   if (previous && same(previous, clean)) return false
   bag.set(key, clean)
   memory.set(userId, bag)
@@ -244,24 +254,29 @@ export function scopeSavedChoices(key: string, choices: SavedChoice[], caseTypeI
   })
 }
 
-/** 按表单键保存成功字典；明确空写墓碑，失败来源不改变已有缓存。 */
+/** 按表单键保存成功字典；明确空写墓碑，失败来源不改变已有缓存。返回这次有变化的表单键。 */
 export function rememberDictionaries(
   userId: string,
   formToDictionary: Record<string, string>,
-  dictionaries: Record<string, NormalizedDictionary>
-): void {
+  dictionaries: Record<string, NormalizedDictionary>,
+  nonEmptyOnly = false
+): string[] {
+  const changed: string[] = []
   for (const [formKey, name] of Object.entries(formToDictionary)) {
     const dictionary = dictionaries[name]
     if (!dictionary || dictionary.status === 'invalid') continue
-    rememberChoices(userId, formKey, choicesFromDictionary(dictionary), dictionary.status === 'empty')
+    if (rememberChoices(userId, formKey, choicesFromDictionary(dictionary), dictionary.status === 'empty', nonEmptyOnly)) changed.push(formKey)
   }
+  return changed
 }
 
-/** 脚本扫到的下拉只有带选项时才覆盖回退。调用方传入已经换成表单键的字段。 */
-export function rememberFormFields(userId: string, fields: FileSearchFormField[]): void {
+/** 脚本扫到的下拉只有带选项时才覆盖回退。调用方传入已经换成表单键的字段。返回这次有变化的字段键。 */
+export function rememberFormFields(userId: string, fields: FileSearchFormField[]): string[] {
+  const changed: string[] = []
   for (const field of fields) {
     if ((field.control !== 'select' && field.control !== 'picker') || !field.options.length) continue
     if (savedChoices(userId, field.id)?.length === 0) continue
-    rememberChoices(userId, field.id, field.options)
+    if (rememberChoices(userId, field.id, field.options)) changed.push(field.id)
   }
+  return changed
 }

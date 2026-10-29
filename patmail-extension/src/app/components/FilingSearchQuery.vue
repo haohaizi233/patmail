@@ -3,7 +3,7 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CURRENT_ENVIRONMENT } from '../../api/config'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
-import { choicesFromDictionary, describePickerReceipt, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
+import { choicesFromDictionary, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
 import { FILING_OPTION_KEYS, FILING_SELECTS, FILING_BLOCKS, filingCellKeys, filingDateDefaults, filingDraftFields, filingFieldLabel, type FilingCell } from '../../api/filing-form'
 import type { FilingSearchQuery } from '../../api/filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from '../../api/filing-search-types'
@@ -11,7 +11,8 @@ import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
 import { filingTemplateValues, filingTemplatesOf, applyFilingBuiltin, FILING_BUILTIN_TEMPLATES, FILING_TEMPLATE_TYPE, type FilingBuiltinTemplate } from '../../query/filing-templates'
 import type { QueryTemplate } from '../../query/query-types'
 import { hasOptionTree } from '../../query/option-tree'
-import { activateOptionFallback, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
+import { activateOptionFallback, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
+import { describeOptionPull } from '../../query/option-pull-notes'
 import { fitColumnWidths, type ColumnFit } from '../../shell/column-fit'
 import { createTextRuler } from '../../shell/text-width'
 import { isMultiPickerKey } from '../../shared/picker-modes'
@@ -300,15 +301,28 @@ function optionCacheKey(key: string): string {
   return caseTypeId ? `${key}:${caseTypeId}` : key
 }
 
-function choices(key: string): { value: string; label: string; parent?: string }[] {
-  fallbackTick.value
+function ledgerChoices(key: string): { value: string; label: string; parent?: string }[] | null {
+  return props.userId ? savedChoices(props.userId, optionCacheKey(key)) : null
+}
+function liveRows(key: string): { value: string; label: string; parent?: string }[] | null {
   const source = FILING_OPTION_KEYS[key]
   const dictionary = source ? pickers.value[source] : undefined
+  if (!dictionary || dictionary.status === 'invalid') return null
   // 原站 ChangeForApplyType 按当前案件类型收申请类型；没选案件类型时按本环境默认的专利收。
-  const caseTypeId = valueOf('case_type') || CURRENT_ENVIRONMENT.caseTypeId
-  const live = dictionary && ['ready', 'partial'].includes(optionStatus(key)) ? choicesFromDictionary(dictionary, caseTypeId) : null
-  const stored = props.userId ? savedChoices(props.userId, optionCacheKey(key)) : null
-  return (source ? (live ?? []) : (stored ?? [])).filter(item => item.value)
+  return choicesFromDictionary(dictionary, valueOf('case_type') || CURRENT_ENVIRONMENT.caseTypeId)
+}
+/** 静默校对：接口回了非空就换上；空结果和读取失败都继续用账本上的选项，界面不跟着抖。 */
+function mergedRows(key: string): { value: string; label: string; parent?: string }[] {
+  const source = FILING_OPTION_KEYS[key]
+  const dictionary = source ? pickers.value[source] : undefined
+  const live = liveRows(key)
+  if (dictionary && (dictionary.status === 'ready' || dictionary.status === 'partial')) return live ?? []
+  const stored = ledgerChoices(key)
+  return stored?.length ? stored : (live ?? [])
+}
+function choices(key: string): { value: string; label: string; parent?: string }[] {
+  fallbackTick.value
+  return (FILING_OPTION_KEYS[key] ? mergedRows(key) : (ledgerChoices(key) ?? [])).filter(item => item.value)
 }
 
 /** select 的选项：原站页面实时扫（ScanFilingForm）优先，其次接口字典/缓存，最后用抓包快照兜底。原站这几个 select 没有接口，页面没打开时只剩兜底。 */
@@ -328,6 +342,16 @@ function cachedOptionKeys(): string[] {
   const keys = new Set([...Object.keys(FILING_OPTION_KEYS), ...SELECT_KEYS])
   return [...keys].filter(key => savedChoices(props.userId, optionCacheKey(key)))
 }
+/** 只要有任一字段存过非空选项，这轮拉取就整体走静默：不挡界面、拉不到用账本兜底。 */
+const ledgerPresent = computed(() => {
+  fallbackTick.value
+  return Boolean(props.userId) && Object.keys(FILING_OPTION_KEYS).some(key => hasSavedChoices(props.userId, optionCacheKey(key)))
+})
+const FILING_CELL_LABELS: Record<string, string> = Object.fromEntries(FILING_BLOCKS.flatMap(cell => filingCellKeys(cell).map(key => [key, cell.label] as [string, string])))
+function filingFieldLabel(key: string): string {
+  const base = key.split(':')[0]!
+  return FILING_CELL_LABELS[key] ?? FILING_CELL_LABELS[base] ?? key
+}
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
   const options = choices(key)
   return hasOptionTree(options) ? options : []
@@ -341,6 +365,8 @@ function optionLabel(key: string, value: string): string {
 }
 
 function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
+  // 有账本的字段走静默校对：拉取期间照常可选，拉不到也用账本兜底，不进 loading/失败态。
+  if (props.userId && hasSavedChoices(props.userId, optionCacheKey(key))) return choices(key).length ? 'ready' : 'empty'
   if (loadingPickers.value || (!pickersReady.value && !pickerFailed.value)) return 'loading'
   if (pickerFailed.value) return 'invalid'
   return pickers.value[FILING_OPTION_KEYS[key] ?? '']?.status ?? 'invalid'
@@ -353,7 +379,7 @@ function unavailableOptions(fields: Record<string, string>): string[] {
   })
 }
 const unavailableFields = computed(() => unavailableOptions(values.value))
-async function loadPickers(force: boolean): Promise<void> {
+async function loadPickers(force: boolean, manual = false): Promise<void> {
   const bridge = activeBridge()
   if (!bridge || (!props.canSearch && !props.manage) || loadingPickers.value) return
   if (!force && pickersReady.value) return
@@ -362,49 +388,50 @@ async function loadPickers(force: boolean): Promise<void> {
   const current = () => pickerTicket === pickerGeneration && userId === props.userId
   loadingPickers.value = true
   pickerFailed.value = false
-  pickerMessage.value = force ? '' : '正在向原网站读取递交查询下拉…'
+  // 静默拉取不放进度文案：字段照常可选，完成后只在有更新或拉不到时说话。
+  pickerMessage.value = ''
   try {
     const [dict, form] = await Promise.all([
       bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'picker', force } }),
       bridge.request({ type: MessageType.ScanFilingForm })
     ])
     if (!current()) return
-    const notes: string[] = []
-    const cached = new Set(cachedOptionKeys())
+    let changed: string[] = []
+    const failures: string[] = []
     if (dict.type === MessageType.DictionaryResult && dict.payload.ok && dict.payload.data.kind === 'picker') {
       pickers.value = dict.payload.data.dictionaries
       pickersReady.value = true
       if (props.userId) {
-        // 申请类型按案件类型收窄后单独缓存；其余下拉按表单键存进回退。接口明确空会写入墓碑。
+        // 申请类型按案件类型收窄后单独缓存；其余下拉按表单键存进回退。非空才更新：空结果不覆盖账本上已有的选项。
         const fields = { ...FILING_OPTION_KEYS }
         delete fields.apply_type
-        rememberDictionaries(props.userId, fields, dict.payload.data.dictionaries)
-        rememberDictionaries(props.userId, { [optionCacheKey('apply_type')]: FILING_OPTION_KEYS.apply_type! }, dict.payload.data.dictionaries)
+        changed = [
+          ...rememberDictionaries(props.userId, fields, dict.payload.data.dictionaries, true),
+          ...rememberDictionaries(props.userId, { [optionCacheKey('apply_type')]: FILING_OPTION_KEYS.apply_type! }, dict.payload.data.dictionaries, true)
+        ]
       }
-      notes.push(describePickerReceipt(dict.payload.data.dictionaries, dict.payload.data.warnings))
-    } else {
-      pickerFailed.value = true
-      notes.push(dict.type === MessageType.DictionaryResult && !dict.payload.ok
+      failures.push(dict.type === MessageType.DictionaryResult && !dict.payload.ok
         ? dict.payload.error.message
-        : cached.size ? '接口下拉没有读到，先用上次读到的选项。' : '接口下拉没有读到，文本条件仍可查询。')
+        : cachedOptionKeys().length ? '接口下拉没有读到，先用上次读到的选项。' : '接口下拉没有读到，文本条件仍可查询。')
     }
     if (form.type === MessageType.FilingFormResult) {
       // 空扫描结果不覆盖上一次读到的下拉；只有扫到非空选项才更新缓存。
       const scanned = form.payload.fields
       if (scanned.length) {
         pageFields.value = scanned
-        if (props.userId) rememberFormFields(props.userId, scanned)
+        if (props.userId) changed.push(...rememberFormFields(props.userId, scanned))
       }
-      const selects = scanned.filter(item => item.control === 'select' && item.options.length > 0)
-      notes.push(selects.length > 0
-        ? `原站页面下拉：${selects.map(item => `${item.label} ${item.options.length}`).join('、')}。`
-        : '原站递交列表页的下拉没有扫到，先用缓存和内置选项。点「校对最新字段」会打开原站的递交查询页再读一次。')
     }
-    pickerMessage.value = notes.filter(Boolean).join(' ')
+    pickerMessage.value = describeOptionPull({
+      updatedLabels: [...new Set(changed)].map(filingFieldLabel),
+      failures,
+      manual,
+      hasLedger: ledgerPresent.value
+    })
   } catch {
     if (!current()) return
     pickerFailed.value = true
-    pickerMessage.value = '下拉选项没有读到，文本条件仍可查询。'
+    pickerMessage.value = describeOptionPull({ updatedLabels: [], failures: ['下拉选项没有读到，文本条件仍可查询。'], manual, hasLedger: ledgerPresent.value })
   } finally {
     if (current()) loadingPickers.value = false
   }
@@ -798,7 +825,7 @@ onBeforeUnmount(() => {
           <label class="query-timeout">超时时间
             <ThemeSelect v-model="queryTimeoutMs" :options="timeoutOptions" />
           </label>
-          <button type="button" class="text-button" :disabled="(!canSearch && !manage) || loadingPickers" @click="loadPickers(true)">校对最新字段</button>
+          <button type="button" class="text-button" :disabled="(!canSearch && !manage) || loadingPickers" @click="loadPickers(true, true)">校对最新字段</button>
         </span>
       </div>
       <ul v-if="templateCards.length" class="template-picks" aria-label="递交查询模板">
@@ -816,7 +843,7 @@ onBeforeUnmount(() => {
       </div>
       <p v-if="templateMessage" class="hint">{{ templateMessage }}</p>
       <p class="hint">递交查询模板只存在本机：原站没有模板功能，保存和删除都不会写原网站。</p>
-      <p v-if="loadingPickers && !pickersReady" class="hint">正在向原网站读取递交查询下拉…</p>
+      <p v-if="loadingPickers && !pickersReady && !ledgerPresent" class="hint">正在向原网站读取递交查询下拉…</p>
       <p v-else-if="pickerMessage" class="hint">{{ pickerMessage }}</p>
       <div class="query-grid">
         <template v-for="cell in FILING_BLOCKS" :key="filingCellKeys(cell).join('-')">
@@ -828,13 +855,13 @@ onBeforeUnmount(() => {
           </label>
           <label v-else-if="cell.kind === 'named'" class="query-cell">
             <span>{{ cell.label }}</span>
-            <TreeOptionSelect v-if="cell.key !== 'business_coop' || choices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true)" @update:model-value="setNamed(cell.key, String($event))" />
+            <TreeOptionSelect v-if="cell.key !== 'business_coop' || choices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true, true)" @update:model-value="setNamed(cell.key, String($event))" />
             <ThemeSelect v-else-if="choices(cell.key).length || cell.key !== 'business_coop'" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
             <input v-else :value="valueOf(cell.key)" type="text" placeholder="签约单位下拉未读到，可直接填值" @input="onText(cell.key, $event)" />
           </label>
           <label v-else-if="cell.kind === 'select'" class="query-cell">
             <span>{{ cell.label }}</span>
-            <TreeOptionSelect v-if="FILING_OPTION_KEYS[cell.key]" :model-value="valueOf(cell.key)" :options="choices(cell.key)" :multiple="false" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true)" @update:model-value="setValue(cell.key, String($event))" />
+            <TreeOptionSelect v-if="FILING_OPTION_KEYS[cell.key]" :model-value="valueOf(cell.key)" :options="choices(cell.key)" :multiple="false" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true, true)" @update:model-value="setValue(cell.key, String($event))" />
             <ThemeSelect v-else :model-value="valueOf(cell.key)" :options="selectOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
           </label>
           <div v-else-if="cell.kind === 'dates'" class="query-cell">

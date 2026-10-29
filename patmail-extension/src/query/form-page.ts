@@ -66,7 +66,14 @@ export function mergeFormFields(live: FileSearchFormField[], previous: FileSearc
   })
 }
 
-export function describeFormCheck(live: FileSearchFormField[], previous: FileSearchFormField[] = fallbackFields()): string[] {
+export interface FormCheckDiff {
+  hiddenNow: string[]
+  shownNow: string[]
+  optionsChanged: string[]
+  stillHidden: FileSearchFormField[]
+}
+
+export function formCheckDiff(live: FileSearchFormField[], previous: FileSearchFormField[] = fallbackFields()): FormCheckDiff {
   const before = new Map(previous.map(item => [item.id, item]))
   const hiddenNow: string[] = []
   const shownNow: string[] = []
@@ -78,12 +85,16 @@ export function describeFormCheck(live: FileSearchFormField[], previous: FileSea
     if (!older.visible && field.visible) shownNow.push(field.label)
     if ((field.control === 'select' || field.control === 'picker') && JSON.stringify(field.options) !== JSON.stringify(older.options)) optionsChanged.push(field.label)
   }
+  return { hiddenNow, shownNow, optionsChanged, stillHidden: live.filter(item => !item.visible && item.label && item.label !== item.id) }
+}
+
+export function describeFormCheck(live: FileSearchFormField[], previous: FileSearchFormField[] = fallbackFields()): string[] {
+  const { hiddenNow, shownNow, optionsChanged, stillHidden } = formCheckDiff(live, previous)
   const lines = ['已打开原网站的文件查询页，对照上次保存的字段记录。']
   if (!hiddenNow.length && !shownNow.length && !optionsChanged.length) lines.push('藏起来的条件和下拉选项都没有变化。')
   if (hiddenNow.length) lines.push(`新藏起来的：${hiddenNow.join('，')}。`)
   if (shownNow.length) lines.push(`现在能看到的：${shownNow.join('，')}。`)
   if (optionsChanged.length) lines.push(`下拉选项有变化：${optionsChanged.join('，')}。`)
-  const stillHidden = live.filter(item => !item.visible && item.label && item.label !== item.id)
   if (stillHidden.length) lines.push(`页面上仍然藏着 ${stillHidden.length} 项，例如${stillHidden.slice(0, 4).map(item => item.label).join('、')}。这些不会出现在查询表里。`)
   return lines
 }
