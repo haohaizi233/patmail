@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, nextTick, onBeforeUnmount, ref, watch, computed } from 'vue'
+import { inject, nextTick, onBeforeUnmount, ref, reactive, watch, computed } from 'vue'
 import type { FileSearchQuery } from '../../api/file-search-params'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import { assessQueryScope, fileSearchValueLimit, isFileSearchBusinessField } from '../../api/file-search-params'
@@ -7,7 +7,7 @@ import { coerceFileSearchQuery } from '../../api/message-guards'
 import type { FileSearchResult, PatentFile } from '../../api/file-search-types'
 import { selectPage, toSelectedFile, toggleSelected, type SelectedPatentFile } from '../../mail'
 import { fieldLabel } from '../../query/field-registry'
-import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress } from '../check-progress'
+import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress, taskCheckSnapshot } from '../check-progress'
 import { runPagedFetch, type PageFetchResult } from '../page-pool'
 import QueryTemplateSection from '../../floating/QueryTemplateSection.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
@@ -97,6 +97,26 @@ let searchGeneration = 0
 const recoveryNotice = ref('')
 const needsRevalidation = ref(false)
 const activeTask = ref<FileQueryTask | null>(null)
+const pauseConfirmation = ref<{ taskId: string; pending: boolean; problem: string } | null>(null)
+const pauseBlocked = computed(() => Boolean(pauseConfirmation.value?.taskId === activeTask.value?.id &&
+  (pauseConfirmation.value?.pending || pauseConfirmation.value?.problem)))
+const exportProgress = ref({ named: 0, packed: 0, bytes: 0, startedAt: 0 })
+const exportPercent = computed(() => {
+  const task = activeTask.value
+  if (!task) return 0
+  if (task.status === 'done') return 100
+  return Math.min(99, Math.round(exportProgress.value.packed / task.items.length * 1000) / 10)
+})
+const exportEta = computed(() => {
+  const task = activeTask.value
+  const progress = exportProgress.value
+  return task?.status === 'running' && progress.startedAt
+    ? taskCheckSnapshot(progress.packed, task.items.length, progress.startedAt, Date.now(), 'run').eta : ''
+})
+const exportStatus = computed(() => pauseConfirmation.value?.taskId === activeTask.value?.id && pauseConfirmation.value?.pending ? '正在暂停下载…'
+  : activeTask.value?.status === 'done' ? '导出完成'
+  : activeTask.value?.status === 'paused' ? '下载已暂停'
+  : exportProgress.value.packed >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…' : '正在打包下载…')
 const readPages = ref<number[]>([])
 let recoveryReady = false
 let recoveryGeneration = 0
@@ -132,12 +152,36 @@ function scheduleSurface(): void {
 }
 watch(selected, () => { if (recoveryReady) void protectSurface().catch(() => {}) }, { deep: true })
 watch([stripAppNoDot, downloadSelection], scheduleSurface, { deep: true })
+async function confirmDownloadPause(): Promise<void> {
+  const task = activeTask.value
+  if (!task || !bridge) return
+  const confirmation = reactive({ taskId: task.id, pending: true, problem: '' })
+  pauseConfirmation.value = confirmation
+  try {
+    const response = await bridge.request({ type: MessageType.PauseDownload, payload: { taskId: task.id, ...(task.backend ? { backend: task.backend } : {}) } })
+    if (response.type !== MessageType.PauseDownloadResult || !response.payload.ok) {
+      throw new Error(response.type === MessageType.Error ? response.payload.message : '后台没有确认暂停。')
+    }
+    if (activeTask.value?.id !== task.id || pauseConfirmation.value !== confirmation) return
+    toolbarNotice.value = '下载已暂停，浏览器缓存已保留。可以继续下载。'
+  } catch (error) {
+    if (activeTask.value?.id !== task.id || pauseConfirmation.value !== confirmation) return
+    confirmation.problem = error instanceof Error ? error.message : '后台没有确认暂停。'
+    toolbarNotice.value = `${confirmation.problem} 请重新确认暂停，确认后可继续下载；缓存已保留。`
+  } finally {
+    confirmation.pending = false
+    if (activeTask.value?.id === task.id && pauseConfirmation.value === confirmation) {
+      task.notice = toolbarNotice.value
+      void protectSurface().catch(() => {})
+    }
+  }
+}
 function pauseActiveDownload(): void {
   const task = activeTask.value
   if (!task || task.status !== 'running') return
   task.status = 'paused'
   void protectSurface().catch(() => {})
-  if (bridge) void bridge.request({ type: MessageType.PauseDownload, payload: { taskId: task.id, ...(task.backend ? { backend: task.backend } : {}) } }).catch(() => {})
+  void confirmDownloadPause()
 }
 function pauseDownload(): void {
   pauseActiveDownload()
@@ -145,7 +189,9 @@ function pauseDownload(): void {
   downloadWait?.abort()
   releaseDownloadProgress?.(); releaseDownloadProgress = null
   downloading.value = false
-  toolbarNotice.value = '下载已暂停，浏览器缓存已保留。继续时请重新确认保存位置。'
+  toolbarNotice.value = '正在确认暂停，浏览器缓存会保留。'
+  if (activeTask.value) activeTask.value.notice = toolbarNotice.value
+  void protectSurface().catch(() => {})
 }
 watch(() => props.canSearch, allowed => {
   if (allowed) return
@@ -328,7 +374,7 @@ function onDownloadName(selection: FileDownloadSelection | null, problem = ''): 
 async function downloadSelected(resume = false, saveAsNew = false): Promise<void> {
   const frozen = resume ? activeTask.value : null
   const files = frozen ? frozen.items : Object.values(selected.value)
-  if (!bridge || !props.canSearch || needsRevalidation.value || !files.length || downloading.value || choosingTarget.value || selectingAll.value) return
+  if (!bridge || !props.canSearch || needsRevalidation.value || !files.length || downloading.value || choosingTarget.value || selectingAll.value || pauseBlocked.value) return
   if (frozen && frozen.backend !== 'browser') { toolbarNotice.value = '这是旧版下载任务，不能在新模式直接继续。请保留旧版完成，或丢弃后重新下载；旧缓存不会自动迁入浏览器。'; return }
   if (!resume && activeTask.value && activeTask.value.status !== 'done') { toolbarNotice.value = '还有暂停的下载，请先继续或丢弃该任务。'; return }
   if (files.some(file => !file.fileNo?.trim())) {
@@ -342,7 +388,7 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     toolbarNotice.value = error instanceof DownloadNameValidationError ? error.message : '没有读到下载名称，请重新选择。'
     return
   }
-  const task: FileQueryTask = frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' }
+  const task = reactive<FileQueryTask>(frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' })
   const startingScope = snapshotScope
   const issue = downloadFilesRequestIssue({ items: task.items, selection, stripAppNoDot: task.stripAppNoDot })
   if (issue) { toolbarNotice.value = issue; return }
@@ -365,6 +411,7 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   const wait = downloadWait = new AbortController()
   toolbarNotice.value = '正在生成下载名称并打包…'
   const startedAt = Date.now()
+  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, bytes: 0, startedAt }
   const progressId = newUuid()
   resetTaskCheckProgress()
   if (selection) paintTaskCheckProgress(0, files.length, startedAt, 'run', '生成下载名称')
@@ -374,12 +421,13 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   let packedFiles = 0
   let nativeBytes = 0
   const onProgress = (message: unknown, sender: chrome.runtime.MessageSender): void => {
-    if (disposed || sender.id !== runtime?.id || !isRecord(message) || message.channel !== DOWNLOAD_PROGRESS_CHANNEL ||
+    if (disposed || wait.signal.aborted || downloadAttempt !== attempt || activeTask.value?.id !== task.id || sender.id !== runtime?.id || !isRecord(message) || message.channel !== DOWNLOAD_PROGRESS_CHANNEL ||
       message.id !== progressId || !isDownloadProgress(message.progress)) return
     const progress = message.progress
     if (progress.phase === 'naming') namedFiles = Math.max(namedFiles, progress.done)
     if (progress.phase === 'packing') packedFiles = Math.max(packedFiles, progress.done)
     if (progress.phase === 'downloading') nativeBytes = Math.max(nativeBytes, progress.receivedBytes ?? 0)
+    exportProgress.value = { named: namedFiles, packed: packedFiles, bytes: nativeBytes, startedAt }
     toolbarNotice.value = `流水下载：已命名 ${namedFiles}/${files.length}，已入包 ${packedFiles}/${files.length}；浏览器已接收 ${(nativeBytes / 1024 / 1024).toFixed(1)} MB。`
     // 流水各阶段会交错上报；彩虹条只显示名称解析，不能被入包或浏览器字节进度覆盖。
     if (selection && progress.phase === 'naming') {
@@ -417,9 +465,9 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     if (selection) paintTaskCheckProgress(files.length, files.length, startedAt, 'done', '生成下载名称')
     const data = response.payload.data
     toolbarNotice.value = `${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
-  } catch {
+  } catch (error) {
     if (disposed || downloadAttempt !== attempt || activeTask.value?.id !== task.id) return
-    toolbarNotice.value = '下载通信失败，请重试。'
+    toolbarNotice.value = error instanceof Error ? `${error.message} 缓存已保留，请继续下载。` : '下载通信中断，缓存已保留，请继续下载。'
   } finally {
     removeProgress()
     if (releaseDownloadProgress === removeProgress) releaseDownloadProgress = null
@@ -440,7 +488,7 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
 
 async function discardDownloadTask(): Promise<void> {
   const task = activeTask.value
-  if (!bridge || !task || downloading.value || !props.canSearch) return
+  if (!bridge || !task || downloading.value || !props.canSearch || pauseBlocked.value) return
   try {
     const response = task.backend === 'browser'
       ? await bridge.request({ type: MessageType.DiscardDownload, payload: { taskId: task.id, backend: task.backend } })
@@ -706,6 +754,7 @@ watch(snapshotIdentity, async scope => {
   if (!scope) return
   clearView()
   activeTask.value = null
+  exportProgress.value = { named: 0, packed: 0, bytes: 0, startedAt: 0 }
   readPages.value = []
   try {
     const initialGeneration = searchGeneration
@@ -721,6 +770,9 @@ watch(snapshotIdentity, async scope => {
       stripAppNoDot.value = restored.stripAppNoDot ?? true
       downloadSelection.value = restored.downloadSelection
       activeTask.value = restored.activeTask
+      if (restored.activeTask?.status === 'paused' && /正在确认暂停|重新确认暂停/.test(restored.activeTask.notice)) {
+        pauseConfirmation.value = { taskId: restored.activeTask.id, pending: false, problem: '上次暂停尚未确认。' }
+      }
       readPages.value = restored.readPages ?? []
       querySessionId.value = ''
       searchState.value = restored.result ? (restored.result.total ? 'success' : 'empty') : 'idle'
@@ -773,13 +825,6 @@ onBeforeUnmount(() => {
   <div class="file-search-query">
     <p v-if="recoveryNotice" class="hint" role="alert">工作面未保护：{{ recoveryNotice }}</p>
     <p v-if="needsRevalidation" class="hint" role="status">已恢复本地查询与选择，当前为只读工作面。请确认同一账号后点击刷新重新验证查询；不会自动查询或发文。</p>
-    <p v-if="activeTask && activeTask.status !== 'done'" class="hint" role="status">
-      {{ activeTask.status === 'running' ? '下载进行中' : '下载已暂停' }}，任务包含 {{ activeTask.items.length }} 个文件。{{ activeTask.notice }}
-      <button v-if="activeTask.status === 'running'" type="button" @click="pauseDownload">暂停下载</button>
-      <button type="button" :disabled="!canSearch || needsRevalidation || downloading || choosingTarget" @click="downloadSelected(true)">继续下载</button>
-      <button v-if="/不支持原记录续传|原下载记录已被清除|无法读取浏览器下载记录/.test(activeTask.notice)" type="button" :disabled="!canSearch || needsRevalidation || downloading" @click="downloadSelected(true, true)">从缓存另存为新文件</button>
-      <button type="button" :disabled="!canSearch || downloading" @click="discardDownloadTask">丢弃下载任务</button>
-    </p>
     <p class="hint">结案默认包含在结果里。更多案件条件里的「是否包含结案」选「否」，结案文件才不会出现。不要把那种空结果当成库里没有。</p>
     <QueryTemplateSection
       ref="queryForm"
@@ -808,6 +853,36 @@ onBeforeUnmount(() => {
       <div v-if="result" class="result-toolbar">
         <span>共 {{ result.total }} 个文件</span>
       </div>
+      <section v-if="selectable && (result || activeTask)" class="file-export" aria-label="文件导出">
+        <div class="file-export-heading">
+          <span class="file-export-mascot" aria-hidden="true">୨୧</span>
+          <div class="file-export-title"><strong>文件导出</strong><span>{{ activeTask ? activeTask.archiveName : '把选好的文件，装进一个小包裹' }}</span></div>
+          <span class="file-export-count">{{ activeTask && activeTask.status !== 'done' ? '本次任务 ' + activeTask.items.length + ' 个文件' : '已选 ' + Object.keys(selected).length + ' 个文件' }}</span>
+        </div>
+        <div class="file-export-actions">
+          <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" :disabled="Boolean(activeTask && activeTask.status !== 'done') || choosingTarget" />申请号去点</label>
+          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '正在打包下载…' : '下载已选' }}</button>
+          <template v-if="activeTask && activeTask.status !== 'done'">
+            <button v-if="activeTask.status === 'running'" type="button" class="ghost" @click="pauseDownload">暂停下载</button>
+            <button v-else type="button" class="ghost" :disabled="!canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || pauseBlocked" @click="downloadSelected(true)">继续下载</button>
+            <button v-if="/不支持原记录续传|原下载记录已被清除|无法读取浏览器下载记录/.test(activeTask.notice)" type="button" class="ghost" :disabled="!canSearch || needsRevalidation || downloading || choosingTarget || selectingAll" @click="downloadSelected(true, true)">从缓存另存为新文件</button>
+            <button v-if="pauseConfirmation?.taskId === activeTask.id && pauseConfirmation.problem" type="button" class="ghost" :disabled="pauseConfirmation.pending || !canSearch" @click="confirmDownloadPause">重新确认暂停</button>
+            <button type="button" class="ghost file-export-discard" :disabled="!canSearch || downloading || choosingTarget || pauseBlocked" @click="discardDownloadTask">丢弃下载任务</button>
+          </template>
+        </div>
+        <div v-if="activeTask" class="file-export-progress" :class="{ 'is-paused': activeTask.status === 'paused' }">
+          <div class="file-export-summary"><strong>{{ exportStatus }}</strong><span>{{ exportPercent }}%</span></div>
+          <div class="file-export-track" role="progressbar" aria-label="文件入包进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="exportPercent" :aria-valuetext="`${exportStatus}，已入包 ${activeTask.status === 'done' ? activeTask.items.length : exportProgress.packed} / ${activeTask.items.length}`"><span :style="{ width: exportPercent + '%' }"></span></div>
+          <div class="file-export-metrics">
+            <span>{{ activeTask.selection ? `已命名 ${activeTask.status === 'done' ? activeTask.items.length : exportProgress.named} / ${activeTask.items.length}` : '使用附件原名' }}</span>
+            <span>已入包 {{ activeTask.status === 'done' ? activeTask.items.length : exportProgress.packed }} / {{ activeTask.items.length }}</span>
+            <span>已接收 {{ (exportProgress.bytes / 1024 / 1024).toFixed(1) }} MB</span>
+            <span v-if="exportEta">预计 {{ exportEta }} 入包完成</span>
+          </div>
+          <p v-if="!exportProgress.startedAt && activeTask.status === 'paused'" class="hint">缓存已保留，继续下载后同步进度。</p>
+        </div>
+        <p v-if="toolbarNotice || activeTask?.notice" class="file-export-notice" role="status">{{ toolbarNotice || activeTask?.notice }}</p>
+      </section>
       <p v-if="searchState === 'idle'" class="hint">输入条件后查询文件。</p>
       <p v-else-if="searchState === 'loading'" class="hint" role="status">正在查询…</p>
       <p v-else-if="searchState === 'error'" class="error" role="alert">{{ searchMessage }}</p>
@@ -822,10 +897,7 @@ onBeforeUnmount(() => {
           <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
           <button v-if="failedPages.length" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
-          <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" />申请号去点</label>
-          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '正在打包下载…' : '下载已选' }}</button>
         </div>
-        <p v-if="toolbarNotice" class="hint" role="status">{{ toolbarNotice }}</p>
         <div class="table-scroll">
           <table class="grid">
             <colgroup>
@@ -864,3 +936,36 @@ onBeforeUnmount(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+.file-export {
+  --export-tint: color-mix(in srgb, var(--pink, #ff4f93) 7%, var(--card, #fff));
+  --export-line: color-mix(in srgb, var(--pink, #ff4f93) 24%, var(--card, #fff));
+  --export-track: color-mix(in srgb, var(--pink, #ff4f93) 14%, var(--card, #fff));
+  --export-radius: 16px;
+  display: grid; gap: 12px; margin: 12px 0; padding: 16px; min-width: 0;
+  border: 1px solid var(--export-line); border-radius: var(--export-radius); background: var(--export-tint);
+}
+.file-export-heading, .file-export-actions, .file-export-summary, .file-export-metrics { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.file-export-mascot { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; color: var(--pink, #ff4f93); background: var(--card, #fff); font-size: 23px; flex: none; }
+.file-export-title { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.file-export-title strong { color: var(--text, #243056); font-size: 14px; }
+.file-export-title > span { overflow-wrap: anywhere; color: var(--sub, #8d97b0); font-size: 12px; }
+.file-export-count { color: var(--pink, #ff4f93); background: var(--card, #fff); border-radius: var(--export-radius); padding: 5px 10px; font-size: 12px; }
+.file-export-actions .download-opt { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; font-size: 12px; }
+.file-export-actions button { border-radius: var(--export-radius); min-height: 34px; padding: 0 16px; font: inherit; font-size: 12px; font-weight: 700; }
+.file-export-actions .ghost { border: 1px solid var(--export-line); background: var(--card, #fff); color: var(--pink, #ff4f93); }
+.file-export-actions .file-export-discard { color: var(--sub, #8d97b0); }
+.file-export-actions button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+.file-export-actions button:focus-visible { outline: 2px solid var(--focus, #9b3060); outline-offset: 3px; }
+.file-export-actions button:not(:disabled):hover { filter: brightness(.97); }
+.file-export-progress { display: grid; gap: 8px; }
+.file-export-summary { justify-content: space-between; font-size: 12px; color: var(--pink, #ff4f93); }
+.file-export-track { height: 12px; border-radius: var(--export-radius); background: var(--export-track); overflow: hidden; }
+.file-export-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pink, #ff4f93), var(--export-line)); transition: width .25s ease; }
+.is-paused .file-export-track > span { background: var(--sub, #8d97b0); }
+.file-export-metrics { column-gap: 18px; row-gap: 4px; font-size: 12px; color: var(--sub, #8d97b0); }
+.file-export-notice { margin: 0; color: var(--text, #243056); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .file-export { padding: 12px; } .file-export-count { margin-left: 48px; } .file-export-actions .download-opt { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .file-export-track > span { transition: none; } }
+</style>

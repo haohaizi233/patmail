@@ -39,6 +39,8 @@ export class BrowserStreamDownloads {
   private readonly leases = new Map<string, Lease>()
   private readonly tasks = new Map<string, Lease>()
   private readonly pendingCloses = new Map<string, Lease>()
+  private readonly closingTargets = new Map<Lease, Promise<void>>()
+  private readonly closedTargets = new WeakSet<Lease>()
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly tabEpochs = new Map<number, number>()
   private currentOwner: string | undefined
@@ -74,9 +76,18 @@ export class BrowserStreamDownloads {
     return task
   }
   private async closeTarget(lease: Lease): Promise<void> {
+    if (this.closedTargets.has(lease)) return
+    const existing = this.closingTargets.get(lease)
+    if (existing) return existing
     this.pendingCloses.set(lease.taskId, lease)
-    await this.target(lease, 'pause')
-    if (this.pendingCloses.get(lease.taskId) === lease) this.pendingCloses.delete(lease.taskId)
+    const closing = this.target(lease, 'pause').then(() => {
+      this.closedTargets.add(lease)
+      if (this.pendingCloses.get(lease.taskId) === lease) this.pendingCloses.delete(lease.taskId)
+    }).finally(() => {
+      if (this.closingTargets.get(lease) === closing) this.closingTargets.delete(lease)
+    })
+    this.closingTargets.set(lease, closing)
+    return closing
   }
   private previousTargets(task: BrowserDownloadTask): Lease[] {
     const targets = new Map<string, Lease>()
@@ -160,19 +171,23 @@ export class BrowserStreamDownloads {
     const lease = this.leases.get(command.token)
     if (!lease) throw new Error('下载凭据已失效。')
     this.assertLease(lease, tabId, owner)
+    // Status is read-only. It must remain observable while a queued write is
+    // waiting for the browser sink to pull and acknowledge its bytes.
+    if (command.action === 'status') {
+      const info = await this.info(lease.task, lease)
+      this.assertLease(lease, tabId, owner)
+      return { ok: true, info }
+    }
+    if (command.action === 'pause' || command.action === 'abort') {
+      await this.pauseTask(lease.taskId, owner)
+      return { ok: true }
+    }
     return this.queue(lease.taskId, async () => {
       this.assertLease(lease, tabId, owner)
       // Ownership and frozen metadata were checked at start. Store mutations still validate their
       // durable task record; reading the full manifest for every 256KiB block would amplify disk IO.
       const task = lease.task
       this.assertLease(lease)
-      if (command.action === 'status') return { ok: true, info: await this.info(task, lease) }
-      if (command.action === 'pause' || command.action === 'abort') {
-        this.invalidate(lease)
-        if (task.state !== 'done') await this.store.update(task.taskId, { state: 'paused', updatedAt: Date.now() })
-        await this.closeTarget(lease).catch(() => {})
-        return { ok: true }
-      }
       if (command.action === 'complete') {
         if (task.state !== 'done') {
           const archive = await this.store.info(task.taskId, 'archive')
@@ -239,13 +254,26 @@ export class BrowserStreamDownloads {
     })
   }
   async pauseTask(taskId: string, owner: string): Promise<number[]> {
+    // The archive writer can be blocked on a native sink acknowledgement. Ask
+    // the target to cancel that pending write before waiting for the task queue.
+    const active = this.tasks.get(taskId)
+    const preempted = active ? [active] : []
+    let preemptedClose: Promise<void> | undefined
+    if (active) {
+      if (active.owner !== owner) throw new Error('下载任务不属于当前账号。')
+      this.invalidate(active)
+      preemptedClose = this.closeTarget(active)
+      void preemptedClose.catch(() => {})
+    }
     return this.queue(taskId, async () => {
       const task = await this.owned(taskId, owner)
       if (!task) return []
-      const targets = this.previousTargets(task)
+      const targetsById = new Map(preempted.map(lease => [lease.targetId, lease]))
+      for (const lease of this.previousTargets(task)) if (!targetsById.has(lease.targetId)) targetsById.set(lease.targetId, lease)
+      const targets = [...targetsById.values()]
       for (const lease of targets) this.invalidate(lease)
       if (task.state !== 'done') await this.store.update(taskId, { state: 'paused', updatedAt: Date.now() })
-      for (const lease of targets) await this.closeTarget(lease)
+      for (const lease of targets) await (lease === active && preemptedClose ? preemptedClose : this.closeTarget(lease))
       return [...new Set(targets.map(lease => lease.tabId).filter(tabId => tabId >= 0))]
     })
   }

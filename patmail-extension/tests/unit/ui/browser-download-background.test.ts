@@ -45,6 +45,100 @@ describe('browser stream broker', () => {
     await expect(f.broker.command({ action: 'status', token }, 10, 'owner')).rejects.toThrow('Chrome 下载已取消')
     expect((await f.store.info(started.taskId!, 'archive')).receivedBytes).toBe(3)
   })
+  it('answers status while an archive write is waiting for the browser sink', async () => {
+    const f = fixture(), started = await f.start(), token = started.token!
+    let releaseWrite!: () => void, notifyWrite!: () => void
+    const writeEntered = new Promise<void>(resolve => { notifyWrite = resolve })
+    const writeGate = new Promise<void>(resolve => { releaseWrite = resolve })
+    f.handler(async request => {
+      if (request.action === 'write') { notifyWrite(); await writeGate }
+      return { ok: true }
+    })
+    const write = f.broker.command({ action: 'write', token, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    await writeEntered
+    try {
+      const status = f.broker.command({ action: 'status', token }, 10, 'owner')
+      const result = await Promise.race([
+        status.then(value => ({ completed: true as const, value })),
+        new Promise<{ completed: false }>(resolve => setTimeout(() => resolve({ completed: false }), 100))
+      ])
+      expect(result.completed).toBe(true)
+      if (result.completed) expect(result.value.info?.state).toBe('inProgress')
+    } finally {
+      releaseWrite()
+      await write
+    }
+  })
+  it('preempts a sink-blocked write on pause and retains the cached archive bytes', async () => {
+    const f = fixture(), started = await f.start(), token = started.token!
+    let abortWrite!: () => void, notifyWrite!: () => void
+    const writeEntered = new Promise<void>(resolve => { notifyWrite = resolve })
+    const writeGate = new Promise<void>((_, reject) => { abortWrite = () => reject(new Error('target paused')) })
+    f.handler(async request => {
+      if (request.action === 'write') { notifyWrite(); await writeGate }
+      if (request.action === 'pause') abortWrite()
+      return { ok: true }
+    })
+    const write = f.broker.command({ action: 'write', token, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    await writeEntered
+    const pause = f.broker.pauseTask(started.taskId!, 'owner').then(tabs => ({ completed: true as const, tabs }))
+    const result = await Promise.race([
+      pause,
+      new Promise<{ completed: false }>(resolve => setTimeout(() => resolve({ completed: false }), 100))
+    ])
+    const preemptedBeforeFallback = result.completed
+    if (!result.completed) abortWrite()
+    await expect(write).rejects.toThrow()
+    const pauseResult = result.completed ? result : await pause
+    expect(preemptedBeforeFallback).toBe(true)
+    expect(pauseResult.completed).toBe(true)
+    if (pauseResult.completed) expect(pauseResult.tabs).toEqual([10])
+    expect(await f.store.get(started.taskId!)).toMatchObject({ state: 'paused' })
+    expect((await f.store.info(started.taskId!, 'archive')).receivedBytes).toBe(1)
+  })
+  it.each(['pause', 'abort'] as const)('preempts a blocked write for the token %s command', async action => {
+    const f = fixture(), started = await f.start(), token = started.token!
+    let abortWrite!: () => void, notifyWrite!: () => void
+    const writeEntered = new Promise<void>(resolve => { notifyWrite = resolve })
+    const writeGate = new Promise<void>((_, reject) => { abortWrite = () => reject(new Error('target paused')) })
+    f.handler(async request => {
+      if (request.action === 'write') { notifyWrite(); await writeGate }
+      if (request.action === 'pause') abortWrite()
+      return { ok: true }
+    })
+    const write = f.broker.command({ action: 'write', token, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    await writeEntered
+    const pause = f.broker.command({ action, token }, 10, 'owner').then(reply => ({ completed: true as const, reply }))
+    const result = await Promise.race([
+      pause,
+      new Promise<{ completed: false }>(resolve => setTimeout(() => resolve({ completed: false }), 100))
+    ])
+    const preemptedBeforeFallback = result.completed
+    if (!result.completed) abortWrite()
+    await expect(write).rejects.toThrow()
+    const pauseResult = result.completed ? result : await pause
+    expect(preemptedBeforeFallback).toBe(true)
+    expect(pauseResult.reply).toEqual({ ok: true })
+    expect(await f.store.get(started.taskId!)).toMatchObject({ state: 'paused' })
+    expect((await f.store.info(started.taskId!, 'archive')).receivedBytes).toBe(1)
+  })
+  it('keeps cached archive and a retryable close when token pause cannot close the target', async () => {
+    const f = fixture(), started = await f.start(), token = started.token!
+    await f.broker.command({ action: 'write', token, sequence: 0, offset: 0, data: 'YQ==' }, 10, 'owner')
+    let closeAttempts = 0
+    f.handler(async request => {
+      if (request.action === 'pause') { closeAttempts++; return { ok: false, error: 'close failed' } }
+      return { ok: true }
+    })
+    await expect(f.broker.command({ action: 'pause', token }, 10, 'owner')).rejects.toThrow('close failed')
+    expect(closeAttempts).toBe(1)
+    expect(await f.store.get(started.taskId!)).toMatchObject({ state: 'paused', activeTargetId: 'target' })
+    expect((await f.store.info(started.taskId!, 'archive')).receivedBytes).toBe(1)
+    f.handler(async () => ({ ok: true }))
+    expect(await f.broker.pauseTask(started.taskId!, 'owner')).toEqual([10])
+    expect(closeAttempts).toBe(1)
+    expect((await f.store.info(started.taskId!, 'archive')).receivedBytes).toBe(1)
+  })
   it('does not reload a large manifest or naming batches for source blocks and status polling', async () => {
     const f = fixture(), a = await f.start(), token = a.token!
     f.store.get = async () => { throw new Error('unexpected full manifest read') }
@@ -156,7 +250,10 @@ describe('browser stream broker', () => {
   })
   it('requires matching owner and source tab for every command', async () => {
     const f = fixture(), a = await f.start()
-    for (const [tab, owner] of [[11, 'owner'], [10, 'other']] as const) await expect(f.broker.command({ action: 'write', token: a.token!, sequence: 0, offset: 0, data: 'YQ==' }, tab, owner)).rejects.toThrow()
+    for (const [tab, owner] of [[11, 'owner'], [10, 'other']] as const) {
+      await expect(f.broker.command({ action: 'write', token: a.token!, sequence: 0, offset: 0, data: 'YQ==' }, tab, owner)).rejects.toThrow()
+      for (const action of ['pause', 'abort'] as const) await expect(f.broker.command({ action, token: a.token! }, tab, owner)).rejects.toThrow()
+    }
     await expect(f.start({ taskId: a.taskId, fileName: 'different.zip' })).rejects.toThrow()
     await expect(f.broker.pauseTask(a.taskId!, 'other')).rejects.toThrow()
   })

@@ -14,6 +14,7 @@ import functools
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -21,6 +22,7 @@ import time
 import webbrowser
 import urllib.request
 import json
+from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -36,6 +38,16 @@ print = functools.partial(print, flush=True)
 
 
 def registry_paths() -> list[str]:
+def reconfigure_output() -> None:
+    """子进程日志里有 ➜ 这类字符，GBK 终端直接 print 会崩，统一改成可替换。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
     if sys.platform != "win32":
         return []
     import winreg
@@ -98,6 +110,7 @@ def tool_env() -> dict[str, str]:
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
+    reconfigure_output()
     if processes:
         stop()
     if sys.platform == "win32" and sys.stdin.isatty():
@@ -159,10 +172,15 @@ def pipe_output(proc: subprocess.Popen[str], ready: threading.Event) -> None:
     if proc.stdout is None:
         return
     for line in proc.stdout:
-        print(line, end="")
+    reconfigure_output()
+    for line in proc.stdout:
+        recent_output.append(line)
         if "Local:" in line:
             ready.set()
-
+        try:
+            print(line, end="")
+        except UnicodeEncodeError:
+            print(line.encode("utf-8", "replace").decode("utf-8"), end="")
 
 def user_env_value(name: str) -> str:
     """用户级环境变量。setx 之后，已经在跑的终端（含它新开的页签）拿不到新值，所以直接读注册表。"""
@@ -242,10 +260,171 @@ def start_logged(runner: str, args: list[str], cwd: Path) -> subprocess.Popen[st
 
 
 def start_frontend(runner: str) -> subprocess.Popen[str]:
+def port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return True
+    return False
+
+
+def port_owners(port: int) -> list[tuple[int, str]]:
+    """监听该端口的进程（PID，进程名）。非 Windows 直接返回空，退化为只报端口状态。"""
+    if sys.platform != "win32":
+        return []
+    listing = subprocess.run(
+        ["netstat", "-ano", "-p", "TCP"],
+        capture_output=True, text=True, errors="replace", check=False,
+    )
+    pids: list[int] = []
+    for line in listing.stdout.splitlines():
+        parts = line.split()
+        if (
+            len(parts) >= 5
+            and parts[0].upper() == "TCP"
+            and parts[3].upper() == "LISTENING"
+            and parts[1].rsplit(":", 1)[-1] == str(port)
+        ):
+            pid = int(parts[4])
+            if pid not in pids:
+                pids.append(pid)
+    owners: list[tuple[int, str]] = []
+    for pid in pids:
+        name = "未知进程"
+        task = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, errors="replace", check=False,
+        )
+        first = task.stdout.splitlines()[0] if task.stdout.strip() else ""
+        if first.startswith('"'):
+            name = first.split('","', 1)[0].strip('"')
+        owners.append((pid, name))
+    return owners
+
+
+def process_command_line(pid: int) -> str:
+    if sys.platform != "win32":
+        return ""
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
+        capture_output=True, text=True, errors="replace", check=False,
+    )
+    return result.stdout.strip()
+
+
+def is_ours(pid: int) -> bool:
+    """命令行里带着本项目路径，就是上次没退干净的残留进程。"""
+    return str(ROOT).lower() in process_command_line(pid).lower()
+
+
+def kill_pid(pid: int) -> None:
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+    else:
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            pass
+
+
+def wait_port_free(port: int, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not port_in_use(port):
+            return True
+        time.sleep(0.2)
+    return port_in_use(port) is False
+
+
+def reclaim_frontend_port() -> None:
+    """端口预检：本项目残留进程直接清掉，别的程序占用就把话说清楚再退出。"""
+    if not port_in_use(FRONTEND_PORT):
+        return
+    owners = port_owners(FRONTEND_PORT)
+    ours = [(pid, name) for pid, name in owners if is_ours(pid)]
+    if ours:
+        for pid, name in ours:
+            print(f"端口 {FRONTEND_PORT} 被上一次的残留进程占用（{name}，PID {pid}），自动清理...")
+            kill_pid(pid)
+        if wait_port_free(FRONTEND_PORT):
+            return
+    if not port_in_use(FRONTEND_PORT):
+        return
+    remaining = port_owners(FRONTEND_PORT)
+    detail = "、".join(f"{name}（PID {pid}）" for pid, name in remaining) or "未知进程"
+    fail(
+        f"端口 {FRONTEND_PORT} 被占用：{detail}。\n"
+        f"这是别的程序，不会自动结束它。请先关闭它，或改 start.py 里的 FRONTEND_PORT 后重试。"
+    )
+
+
+def http_ready(url: str, timeout: float = 5.0) -> bool:
+    """探活。首次请求 Vite 要做依赖预构建，超时给宽一点。"""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(url, timeout=timeout) as response:
+            return response.status < 500
+    except OSError:
+        return False
+
+
+DEPENDENCY_ERROR_TOKENS = ("ERR_MODULE_NOT_FOUND", "Cannot find package", "Cannot find module", "ERR_PACKAGE_PATH")
+PORT_ERROR_TOKENS = ("EADDRINUSE", "already in use", "address already in use")
+
+
+def output_has(tokens: tuple[str, ...]) -> bool:
+    return any(token in line for line in recent_output for token in tokens)
+
+
+def recoverable_failure() -> bool:
+    """依赖损坏或端口冲突都可以自动修一次再试。"""
+    return output_has(DEPENDENCY_ERROR_TOKENS) or output_has(PORT_ERROR_TOKENS)
+
+
+def repair_frontend(runner: str) -> None:
+    if output_has(DEPENDENCY_ERROR_TOKENS):
+        print("管理端依赖损坏（缺包），正在按锁文件自动修复...")
+        result = subprocess.run(
+            [runner, "install", "--frozen-lockfile", "--ignore-workspace"],
+            cwd=ROOT,
+            env=tool_env(),
+            check=False,
+        )
+        if result.returncode != 0:
+            fail("管理端依赖自动修复失败。请在项目根目录手动运行 pnpm install 查看原因。")
+        print("依赖修复完成，重试启动。")
+    else:
+        print("端口疑似被残留进程占用，清理后重试启动...")
+
+
+def frontend_failure_message(returncode: int | None) -> str:
+    lines = [f"管理端启动失败，退出码 {returncode}。"]
+    owners = port_owners(FRONTEND_PORT)
+    if owners:
+        detail = "、".join(f"{name}（PID {pid}）" for pid, name in owners)
+        lines.append(f"端口 {FRONTEND_PORT} 当前被占用：{detail}。")
+        if any(is_ours(pid) for pid, _ in owners):
+            lines.append("占用者是本项目的残留进程，再运行一次 start.py 会自动清理。")
+        else:
+            lines.append(f"请先关闭占用该端口的程序，或改 start.py 里的 FRONTEND_PORT（当前 {FRONTEND_PORT}）。")
+    else:
+        lines.append(f"端口 {FRONTEND_PORT} 当前空闲，问题更可能出在依赖或 Vite 配置。")
+    tail = [line.rstrip() for line in recent_output if line.strip()][-15:]
+    if tail:
+        lines.append("管理端最近输出：")
+        lines.extend(f"  {line}" for line in tail)
+    return "\n".join(lines)
+
+
+def start_frontend(runner: str) -> subprocess.Popen[str]:
     if not (ROOT / "package.json").is_file():
         fail("项目根目录没有 package.json，无法启动管理端。")
     ensure_frontend(runner)
-    print(f"启动管理端  {FRONTEND_URL}")
+    reclaim_frontend_port()
     return start_logged(
         runner,
         ["exec", "vite", "--host", "127.0.0.1", "--port", str(FRONTEND_PORT), "--strictPort"],
@@ -254,7 +433,34 @@ def start_frontend(runner: str) -> subprocess.Popen[str]:
 
 
 def main() -> None:
+def start_frontend_with_recovery(runner: str) -> subprocess.Popen[str]:
+    """带容灾的启动：端口预检、失败自动修复重试一次、就绪用 HTTP 探活。"""
+    for attempt in (1, 2):
+        recent_output.clear()
+        frontend = start_frontend(runner)
+        ready = threading.Event()
+        threading.Thread(target=pipe_output, args=(frontend, ready), daemon=True).start()
+        if ready.wait(timeout=40) and frontend.poll() is None:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not http_ready(FRONTEND_URL):
+                time.sleep(0.5)
+            if http_ready(FRONTEND_URL):
+                webbrowser.open(FRONTEND_URL)
+            else:
+                print(f"管理端进程在跑，但 {FRONTEND_URL} 暂时探不通，请看上方日志。")
+            return frontend
+        if frontend.poll() is None:
+            print("管理端还没有打印访问地址，请查看上方日志。")
+            return frontend
+        if attempt == 1 and recoverable_failure():
+            repair_frontend(runner)
+            continue
+        fail(frontend_failure_message(frontend.returncode))
+    raise AssertionError("unreachable")
+
+
     if hasattr(sys.stdout, "reconfigure"):
+    reconfigure_output()
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     signal.signal(signal.SIGINT, handle_stop)
     if sys.platform == "win32":
@@ -273,15 +479,7 @@ def main() -> None:
 
     build_extension(runner)
     frontend = start_frontend(runner)
-    ready = threading.Event()
-    threading.Thread(target=pipe_output, args=(frontend, ready), daemon=True).start()
-    if ready.wait(timeout=40) and frontend.poll() is None:
-        webbrowser.open(FRONTEND_URL)
-    elif frontend.poll() is not None:
-        fail(f"管理端启动失败，退出码 {frontend.returncode}。端口 {FRONTEND_PORT} 可能已被占用。")
-    else:
-        print("管理端还没有打印访问地址，请查看上方日志。")
-
+    frontend = start_frontend_with_recovery(runner)
     code = frontend.wait()
     stop()
     raise SystemExit(code)

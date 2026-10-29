@@ -13,6 +13,7 @@ const browserOptions = { viewport: { width: 1600, height: 1000 }, acceptDownload
 let context = await launchExtensionContext(distDir, browserOptions)
 const calls = []
 const metadataCalls = []
+const downloads = []
 let app
 let completeDownloads = false
 const pdf = Buffer.from('%PDF-1.4\nRepeat download fixture\n%%EOF')
@@ -20,12 +21,9 @@ const info = { IsLogin: true, Status: true, Result: true }
 const recoveryScope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1111-1111-111111111111', 'workspace-files'])
 try {
   async function installRoutes(context) {
+  context.on('page', page => page.on('download', download => downloads.push(download)))
   await context.addInitScript(() => {
-    window.__pickerCount = 0
-    window.showSaveFilePicker = async () => {
-      const count = ++window.__pickerCount
-      return (await navigator.storage.getDirectory()).getFileHandle(`editor-output-${count}.zip`, { create: true })
-    }
+    window.showSaveFilePicker = async () => { throw new Error('原生下载不应调用旧版文件选择器') }
   })
   await installEasyMock(context, { fixtureHtml: '<!doctype html><title>下载名称回归</title>', profile: 'extension' })
   await context.route('http://183.36.43.66:88/**', async route => {
@@ -67,9 +65,6 @@ try {
   await waitForContentScript(worker, easy)
   app = await context.newPage()
   await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
-  const downloadPath = await mkdtemp(join(testResultsDir, 'repeat-download-'))
-  const cdp = await context.newCDPSession(app)
-  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath, eventsEnabled: true })
   const row = app.locator('.download-name-row')
   const template = row.locator('.download-template-select [role="combobox"]')
   await app.getByText('当前账号未配置专利标签', { exact: true }).waitFor()
@@ -90,6 +85,12 @@ try {
   await row.locator('.download-part-text').first().fill('_')
   await app.getByRole('button', { name: '下载已选', exact: true }).click()
   await app.getByText('配方回归在打包处停止', { exact: true }).waitFor()
+  const exportPanel = app.getByRole('region', { name: '文件导出', exact: true })
+  assert.equal(await app.getByRole('region', { name: '查询结果', exact: true }).locator('.file-export').count(), 1, '导出控制必须在查询结果区域')
+  assert.equal(await exportPanel.getByRole('button', { name: '继续下载', exact: true }).isEnabled(), true)
+  assert.equal(await exportPanel.getByRole('button', { name: '下载已选', exact: true }).isDisabled(), true, '暂停任务不能误开新的下载')
+  await mkdir(testResultsDir, { recursive: true })
+  await app.getByRole('region', { name: '查询结果', exact: true }).screenshot({ path: resultPath('file-export-paused.png') })
   assert.deepEqual(calls, [{ newFilename: 'app_no;_;case_name;-;file_desc', fileNameType: recipe.file_name_type }])
   await app.getByRole('button', { name: '丢弃下载任务', exact: true }).click()
   await app.getByText('下载任务已丢弃。', { exact: true }).waitFor()
@@ -99,6 +100,7 @@ try {
   completeDownloads = true
   const verifiedDownloads = []
   for (const separator of ['-', '再次']) {
+    const downloadIndex = downloads.length
     const previousTask = await app.evaluate(async scope => (await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })).value.payload?.activeTask?.id, recoveryScope)
     await row.locator('.download-part-text').first().fill(separator)
     await app.getByRole('button', { name: '下载已选', exact: true }).click()
@@ -107,19 +109,23 @@ try {
       const task = reply.value.payload?.activeTask
       return reply.ok && task?.id !== previousTask && task?.status === 'done'
     }, { scope: recoveryScope, previousTask }, { timeout: 30000 })
-    const saved = await app.evaluate(async () => {
-      const file = await (await (await navigator.storage.getDirectory()).getFileHandle(`editor-output-${window.__pickerCount}.zip`)).getFile()
-      return { id: window.__pickerCount, data: Array.from(new Uint8Array(await file.arrayBuffer())) }
-    })
-    const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(saved.data)))
+    assert.equal(downloads.length, downloadIndex + 1, '每个任务只启动一次原生下载')
+    const download = downloads[downloadIndex]
+    assert.equal(await download.failure(), null)
+    const savedPath = await download.path()
+    assert(savedPath, '浏览器保存完成后必须能读取实际ZIP')
+    const reader = new ZipReader(new Uint8ArrayReader(await readFile(savedPath)))
     try {
       const entries = await reader.getEntries()
       assert.deepEqual(entries.map(entry => entry.filename), [`配方${separator}验收.pdf`])
       assert.deepEqual(Buffer.from(await entries[0].getData(new Uint8ArrayWriter(), { checkSignature: true })), pdf)
     } finally { await reader.close() }
-    verifiedDownloads.push({ id: saved.id, entry: `配方${separator}验收.pdf` })
+    verifiedDownloads.push({ id: downloadIndex, entry: `配方${separator}验收.pdf` })
     assert.equal((await app.locator('.check-rainbow').getAttribute('aria-valuetext')).includes('生成下载名称'), true)
+    assert.equal(await exportPanel.getByRole('progressbar').getAttribute('aria-valuenow'), '100')
+    assert.equal(await exportPanel.getByText('导出完成', { exact: true }).count(), 1)
   }
+  await app.getByRole('region', { name: '查询结果', exact: true }).screenshot({ path: resultPath('file-export-complete.png') })
   assert.deepEqual(calls.slice(1), [
     { newFilename: recipe.new_filename, fileNameType: recipe.file_name_type },
     { newFilename: 'app_no;再次;case_name;-;file_desc', fileNameType: recipe.file_name_type }

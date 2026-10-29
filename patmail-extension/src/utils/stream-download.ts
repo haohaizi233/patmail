@@ -31,11 +31,32 @@ export async function nativeStreamArchive(
     activeProducers.get(options.taskId)?.abort(new Error('任务已由新的恢复请求接管。'))
     activeProducers.set(options.taskId, controller)
   }
+  const untilAbort = <T>(promise: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
+    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true })
+    promise.then(value => { signal.removeEventListener('abort', abort); resolve(value) }, error => { signal.removeEventListener('abort', abort); reject(error) })
+  })
+  const retryDelay = (ms: number) => new Promise<void>((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason) }
+    const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, ms)
+    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true })
+  })
   const command = async (payload: StreamDownloadCommand) => {
-    const response = await sendToBackground({ type: browser ? MessageType.BrowserStreamDownload : MessageType.StreamDownload, payload },
-      payload.action === 'write' || payload.action === 'cache' || (browser && payload.action === 'finish') ? 130_000 : 20_000)
-    if (response?.type !== MessageType.StreamDownloadResult) throw new Error(response?.type === MessageType.Error ? response.payload.message : '本机下载流没有应答，已保留任务。')
-    return response.payload
+    // 只重试无副作用的读取；写入/封存的应答丢失时，不能猜测后台是否已经提交。
+    const retryable = payload.action === 'status' || (payload.action === 'cache' && (payload.command === 'info' || payload.command === 'read'))
+    const cleanup = payload.action === 'pause' || payload.action === 'abort'
+    for (let attempt = 0; ; attempt++) {
+      if (!cleanup) signal.throwIfAborted()
+      const request = sendToBackground({ type: browser ? MessageType.BrowserStreamDownload : MessageType.StreamDownload, payload },
+        payload.action === 'write' || payload.action === 'cache' || (browser && payload.action === 'finish') ? 130_000 : 20_000)
+      const response = await (cleanup ? request : untilAbort(request))
+      if (response?.type === MessageType.StreamDownloadResult) return response.payload
+      const reason = response?.type === MessageType.Error ? response.payload.message : '本机下载流没有应答。'
+      const transient = !response || /扩展后台没有在时限内返回|扩展后台没有答上|message port closed|receiving end does not exist|service worker/i.test(reason)
+      if (!transient) throw new Error(reason)
+      if (!retryable || attempt >= 2) throw new Error(`${reason} 下载已暂停，缓存已保留；请点击「继续下载」恢复。`)
+      await retryDelay(500 * (attempt + 1))
+    }
   }
   const created = await command({ action: 'start', fileName, ...startOptions }).catch(error => {
     if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
@@ -78,11 +99,6 @@ export async function nativeStreamArchive(
   } : undefined
   const context: NativeDownloadContext = { cache, taskId: created.taskId, zipCreatedAt: typeof manifest.zipCreatedAt === 'string' ? manifest.zipCreatedAt : undefined }
   let failure: Error | null = null, productionDone = false, succeeded = false
-  const untilAbort = <T>(promise: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
-    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
-    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true })
-    promise.then(value => { signal.removeEventListener('abort', abort); resolve(value) }, error => { signal.removeEventListener('abort', abort); reject(error) })
-  })
   const pageGone = () => controller.abort(new Error('EASY来源页面已离开，下载已暂停并保留缓存。'))
   globalThis.addEventListener?.('pagehide', pageGone, { once: true })
   let sequence = 0, offset = 0, filled = 0
@@ -144,7 +160,7 @@ export async function nativeStreamArchive(
   let lastWork: FileDownloadProgress = { phase: 'naming', done: 0, total: 1 }
   const onWork = (progress: FileDownloadProgress) => { lastWork = progress; report(progress) }
   const pulse = setInterval(() => {
-    void command({ action: 'status', token }).catch(error => { failure ??= error; controller.abort(error) })
+    // track 独占状态轮询和重试，心跳只回报最近进度，避免重复轮询积压。
     if (!productionDone) report({ ...lastWork, elapsedMs: Date.now() - startedAt })
   }, 15000)
   try {

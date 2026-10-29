@@ -90,8 +90,12 @@ async function launch() {
   })
   const worker = await extensionWorker(context)
   console.log('stage: service worker ready', worker.url())
-  const easy = await context.newPage(); await easy.goto('http://183.36.43.66:88/fixture')
+  const easy = await context.newPage()
+  console.log('stage: opening fixture')
+  await easy.goto('http://183.36.43.66:88/fixture')
+  console.log('stage: fixture loaded')
   await waitForContentScript(worker, easy)
+  console.log('stage: content script ready')
   app = await context.newPage(); await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
   console.log('stage: workbench ready')
   return worker
@@ -117,6 +121,11 @@ try {
     const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
     return reply.ok && reply.value.payload?.activeTask?.status === 'paused'
   }, recoveryScope, { timeout: 30000 })
+  const exportPanel = app.getByRole('region', { name: '文件导出', exact: true })
+  assert.equal(await app.getByRole('region', { name: '查询结果', exact: true }).locator('.file-export').count(), 1)
+  assert.equal(await exportPanel.getByRole('button', { name: '继续下载', exact: true }).isEnabled(), true)
+  assert(Number(await exportPanel.getByRole('progressbar').getAttribute('aria-valuenow')) < 100, '中断不能报导出完成')
+  await app.getByRole('region', { name: '查询结果', exact: true }).screenshot({ path: resultPath('file-export-six-paused.png') })
   assert.equal(await app.evaluate(() => window.__pickerCalls), 0, '原生下载不调用文件选择器')
   assert.equal(peakBodies, 6)
   await context.close(); context = null
@@ -133,6 +142,10 @@ try {
     return reply.ok && reply.value.payload?.activeTask?.status === 'done'
   }, recoveryScope, { timeout: 120000 })
   console.log('stage: final file and ledger committed')
+  const completePanel = app.getByRole('region', { name: '文件导出', exact: true })
+  assert.equal(await completePanel.getByRole('progressbar').getAttribute('aria-valuenow'), '100')
+  assert.equal(await completePanel.getByText('导出完成', { exact: true }).count(), 1)
+  await app.getByRole('region', { name: '查询结果', exact: true }).screenshot({ path: resultPath('file-export-six-complete.png') })
   assert.equal(downloads.length, 1)
   assert.equal(await downloads[0].failure(), null)
   const output = resultPath('native-browser-recovered.zip')
