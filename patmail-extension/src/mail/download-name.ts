@@ -55,6 +55,9 @@ export function selectionFromNameParts(parts: DownloadNamePart[], label = ''): F
 }
 
 export interface DownloadNameOptions {
+  /** 流水下载共享预算时可借用六路；其它调用保持默认五路。 */
+  concurrency?: number
+  resolvedBatches?: Record<string, string[]>
   /** 已完成的文件数；并发批次完成顺序不影响返回名称的顺序。 */
   onProgress?: (done: number, total: number) => void
   signal?: AbortSignal
@@ -256,7 +259,10 @@ export async function resolveDownloadFileNames(
         stop(apiError('INVALID_QUERY', '下载名称参数无效，没有发文。'))
         return
       }
-      const response = await transport.post('getFileName', params, controller.signal)
+      const cached = options.resolvedBatches?.[String(index)]
+      const response = cached?.length === batch.length
+        ? { ok: true as const, data: { file_names: cached.join(';') } }
+        : await transport.post('getFileName', params, controller.signal)
       if (failure) return
       if (!response.ok) {
         stop(response)
@@ -267,20 +273,23 @@ export async function resolveDownloadFileNames(
         stop(apiError('SESSION_EXPIRED', 'EASY 登录状态已失效。'))
         return
       }
-      const generated = readGeneratedFileNames(response.data, batch.length)
+      const generated = cached?.length === batch.length
+        ? cached.every(name => typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';')) ? cached.slice() : null
+        : readGeneratedFileNames(response.data, batch.length)
       if (!generated) {
         stop(apiError('INVALID_RESPONSE', '下载名称没有生成完整的文件名，没有按原文件名发文。'))
         return
       }
       // 原站只给分号分隔的名称，没有 ID；必须按请求的原偏移落位。
       names.splice(index, generated.length, ...generated)
+      await options.onBatch?.(index, generated)
       completed += batch.length
       options.onProgress?.(completed, fileIds.length)
-      await options.onBatch?.(index, generated)
     }
   }
   try {
-    await Promise.all(Array.from({ length: Math.min(NAME_CONCURRENCY, Math.ceil(fileIds.length / NAME_BATCH)) }, worker))
+    const concurrency = Math.max(1, Math.min(6, Math.floor(options.concurrency ?? NAME_CONCURRENCY)))
+    await Promise.all(Array.from({ length: Math.min(concurrency, Math.ceil(fileIds.length / NAME_BATCH)) }, worker))
     return failure ?? { ok: true, data: names }
   } finally {
     options.signal?.removeEventListener('abort', abort)

@@ -47,7 +47,7 @@ describe('基础字典', () => {
       calls += 1
       const call = new URLSearchParams(String(init?.body)).get('Call')
       const body = call === 'IPGetBasicData'
-        ? { ...client, CaseType: [{ case_type_id: guid('bbbbbbbb'), case_type: '专利', case_type_code: 'P' }], Country: null }
+        ? { ...client, CaseType: [{ case_type_id: guid('bbbbbbbb'), case_type: '专利', case_type_code: 'P' }], Country: null, CaseStatus: null, ApplyType: null, BussType: null, customer_status: null, CtrlProc: null, ProcStatus: null, Case_direction: null, CaseBranchDept: null }
         : { ...client, FileStatus: [{ value: 'UN', text_zh_cn: '未处理' }], ProcStatus: null, Case_direction: null, CaseBranchDept: null, DownLoadFileName: null }
       return new Response(JSON.stringify(body), { status: 200 })
     }

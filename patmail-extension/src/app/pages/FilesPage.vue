@@ -30,7 +30,7 @@ function onSearched(query: FileSearchQuery): void {
     <h2>文件查询</h2>
     <p class="empty">尚未连接 EASY。文件查询会通过已绑定的原网站标签页读取会话，不会使用本页地址。</p>
   </section>
-  <template v-else>
+  <template v-if="connection.easyOrigin">
     <p class="hint">先套模板，再手工改条件。文件描述和发文类型是一对一，对照表在「发文映射」，可以直接看，也可以随时改。</p>
     <FileSearchPanel :page-origin="connection.easyOrigin" :show-session="false" @searched="onSearched" @download-name="onDownloadName">
       <BindQueryBar surface="file" :fields="fields" :download-name="downloadName" :download-name-problem="downloadNameProblem" />

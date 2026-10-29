@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { basename, join } from 'node:path'
 import { chromium } from 'playwright'
 import { distDir, resultPath, testResultsDir } from './support/paths.mjs'
-import { ensureStreamBridge } from './support/stream-bridge.mjs'
+import { ensureStreamBridge, streamBridgeBase } from './support/stream-bridge.mjs'
 
 // EASY全部由本地代理响应；127.0.0.1桥接走真实HTTP，Chrome负责原生下载与落盘。
 const count = 81
@@ -17,14 +17,28 @@ const info = { IsLogin: true, Status: true, Result: true }
 const bodyFor = index => { const body = Buffer.alloc(256 * 1024, index); body.write('%PDF sample'); return body }
 let namesCompleted = 0, allNamedAt = null, firstPrepareAt = null
 let prepares = 0, streams = 0
+let activeRequests = 0, peakRequests = 0, activeBodies = 0, peakBodies = 0
+const requestTrace = []
 let slowTransfer = false
+let proveSix = false, releaseSix
+const sixBodies = new Promise(resolve => { releaseSix = resolve })
 let releaseLastNames
 let releasedLastNames = false
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://183.36.43.66:88')
   let body = ''; for await (const chunk of req) body += chunk
   const params = new URLSearchParams(body), call = params.get('Call')
-  const json = data => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ClientInfo: info, ...data })) }
+  const isBody = url.pathname.endsWith('FileHandler.ashx')
+  let finishRequest = () => {}
+  if (isBody || call === 'GetFileName' || call === 'DownLoad') {
+    activeRequests++; peakRequests = Math.max(peakRequests, activeRequests)
+    if (isBody) { activeBodies++; peakBodies = Math.max(peakBodies, activeBodies) }
+    requestTrace.push({ at: Date.now(), activeRequests, activeBodies })
+    let counted = true
+    finishRequest = () => { if (counted) { counted = false; activeRequests--; if (isBody) activeBodies-- } }
+    res.once('close', finishRequest)
+  }
+  const json = data => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ClientInfo: info, ...data })); finishRequest() }
   if (call === 'GetUserModel') return json({ UserModel: { user_id: '11111111-1111-4111-8111-111111111111', user_name: 'fixture', Name: 'Fixture' } })
   if (call === 'GetFileName') {
     const ids = params.get('file_ids').split(';')
@@ -40,7 +54,7 @@ const server = http.createServer(async (req, res) => {
     firstPrepareAt ??= Date.now(); prepares++
     assert.equal(params.get('file_no').includes(';'), false)
     const index = files.findIndex(file => file.fileNo === params.get('file_no'))
-    assert.equal(params.get('file_name'), slowTransfer ? `old-${index}.pdf` : `2026100263349-file-${index}.pdf`)
+    assert.equal(params.get('file_name'), slowTransfer || proveSix ? `old-${index}.pdf` : `2026100263349-file-${index}.pdf`)
     return json({ file_guid: files[index].fileId, ClientInfo: { ...info, Result: false }, error: true,
       error_message: '文件不存在或权限不足,您共1个文件下载失败！' })
   }
@@ -49,12 +63,18 @@ const server = http.createServer(async (req, res) => {
     const index = files.findIndex(file => file.fileId === url.searchParams.get('guid'))
     const payload = bodyFor(index)
     res.setHeader('Content-Type', 'application/pdf'); res.setHeader('Content-Length', payload.length)
+    if (proveSix) {
+      res.flushHeaders()
+      if (activeBodies === 6) releaseSix()
+      await sixBodies
+    }
     for (let offset = 0; offset < payload.length; offset += 65536) {
       if (res.destroyed) return
       res.write(payload.subarray(offset, offset + 65536))
-      await new Promise(resolve => setTimeout(resolve, slowTransfer ? 700 : 8))
+      // 正文窗口要足够长，才能在真实浏览器/本机IPC负载下观察网络重叠。
+      if (offset + 65536 < payload.length) await new Promise(resolve => setTimeout(resolve, slowTransfer ? 700 : 40))
     }
-    return res.end()
+    res.end(); finishRequest(); return
   }
   if (url.pathname === '/fixture') {
     if (url.searchParams.has('metadata-frame')) await new Promise(resolve => setTimeout(resolve, 2500))
@@ -68,7 +88,7 @@ const observations = []
 const stopBridge = await ensureStreamBridge()
 let context
 try {
-  const health = await fetch('http://127.0.0.1:42843/health').then(response => response.json())
+  const health = await fetch(streamBridgeBase + '/health').then(response => response.json())
   assert.equal(health.protocol, 'patmail-stream-v1', '先启动scripts/start-stream-download.ps1')
   context = await chromium.launchPersistentContext('', { channel: 'chromium', headless: true, acceptDownloads: true,
     proxy: { server: `http://127.0.0.1:${server.address().port}`, bypass: '127.0.0.1' },
@@ -121,10 +141,12 @@ try {
   }
   assert.equal(result?.payload?.ok, true, JSON.stringify(result))
   const downloads = observations.at(-1).downloads
-  await writeFile(resultPath('stream-download-e2e-pending.json'), JSON.stringify({ result, downloads, observations, allNamedAt, firstPrepareAt }, null, 2))
+  await writeFile(resultPath('stream-download-e2e-pending.json'), JSON.stringify({ result, downloads, observations, allNamedAt, firstPrepareAt, peakRequests, peakBodies, requestTrace }, null, 2))
   assert.equal(downloads.length, 1)
   assert.equal(downloads[0].state, 'complete')
   assert.equal(basename(downloads[0].filename), '华峰官文查询.zip')
+  assert(peakRequests <= 6, '业务请求不能超过六个额度')
+  assert(peakBodies > 1, '正文必须实际并行传输')
   assert(firstPrepareAt < allNamedAt, 'DownLoad必须早于全部命名完成')
   const early = observations.filter(item => item.at < allNamedAt && item.downloads[0]?.state === 'in_progress' && item.downloads[0].bytesReceived > 0)
   assert(early.length >= 2, '全部命名结束前，必须真实看到原生下载在途且字节增长')
@@ -134,9 +156,26 @@ try {
   const progress = await app.evaluate(() => window.__progress)
   assert(progress.some(item => item.phase === 'downloading' && item.state === 'inProgress' && item.receivedBytes > 0))
   const report = { passed: true, fileCount: count, archiveName: basename(downloads[0].filename), prepares, streams,
+    peakRequests, peakBodies, requestTrace, elapsedMs: Date.now() - started,
     archiveBytes: (await readFile(downloads[0].filename)).length, firstPrepareAt, allNamedAt,
     earlyNativeBytes: [early[0].downloads[0].bytesReceived, early.at(-1).downloads[0].bytesReceived],
     nativeDownloads: downloads.length, metadataIframePreserved: iframeLoaded, validation: JSON.parse(stdout), observations }
+  // 六份正文先各自挂起首块：第六条连接到达才放行，排除短响应的采样误差。
+  proveSix = true
+  const sixId = '33333333-3333-4333-8333-333333333333'
+  await worker.evaluate(({ tabId, items, id }) => chrome.tabs.sendMessage(tabId, { type: 'DOWNLOAD_FILES', payload: {
+    items, selection: null, stripAppNoDot: false, archiveName: '六路连接验收.zip', stream: true, progressId: id, detached: true
+  } }), { tabId: tab.id, items: files.slice(0, 6), id: sixId })
+  await app.waitForFunction(id => Boolean(window.__results[id]), sixId, { timeout: 30000 })
+  const sixResult = await app.evaluate(id => window.__results[id], sixId)
+  assert.equal(sixResult.payload.ok, true, JSON.stringify(sixResult))
+  assert.equal(peakRequests, 6)
+  assert.equal(peakBodies, 6)
+  const sixDownload = await worker.evaluate(firstId => chrome.downloads.search({}).then(items => items.find(item => item.id !== firstId && item.state === 'complete')), downloads[0].id)
+  report.sixConnectionCheck = { passed: true, peakRequests, peakBodies, complete: true }
+  // 排除已完成的第二个下载，后续中断用例仍只选正在传输的任务。
+  assert(sixDownload)
+  proveSix = false
   slowTransfer = true
   const cancelId = '22222222-2222-4222-8222-222222222222'
   await worker.evaluate(({ tabId, items, id }) => chrome.tabs.sendMessage(tabId, { type: 'DOWNLOAD_FILES', payload: {

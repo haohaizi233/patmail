@@ -111,7 +111,7 @@ function parseBag(value: unknown): Map<string, SavedChoice[]> {
   for (const [key, rows] of Object.entries(value as Record<string, unknown>)) {
     if (!key || key.length > 80 || !Array.isArray(rows)) continue
     const choices = sanitize(rows as SavedChoice[])
-    if (choices.length) bag.set(key, choices)
+    if (choices.length || rows.length === 0) bag.set(key, choices)
     if (bag.size >= 400) break
   }
   return bag
@@ -193,14 +193,14 @@ export async function hydrateOptionFallback(userId: string): Promise<void> {
 
 export function savedChoices(userId: string, key: string): SavedChoice[] | null {
   const rows = memory.get(userId)?.get(key)
-  return rows?.length ? rows.map(item => ({ ...item })) : null
+  return rows ? rows.map(item => ({ ...item })) : null
 }
 
-/** 只有非空新列表才覆盖上次保存的选项。空结果保持原样。 */
-export function rememberChoices(userId: string, key: string, choices: SavedChoice[]): boolean {
+/** 扫描空列表不覆盖旧值；接口确认的空列表写为墓碑，直至读到新的真实选项。 */
+export function rememberChoices(userId: string, key: string, choices: SavedChoice[], confirmedEmpty = false): boolean {
   if (!userId || !key || key.length > 80) return false
   const clean = sanitize(choices)
-  if (!clean.length) return false
+  if (!clean.length && !confirmedEmpty) return false
   const bag = memory.get(userId) ?? new Map<string, SavedChoice[]>()
   const previous = bag.get(key)
   if (previous && same(previous, clean)) return false
@@ -244,14 +244,16 @@ export function scopeSavedChoices(key: string, choices: SavedChoice[], caseTypeI
   })
 }
 
-/** 按表单键把这次读到的非空字典写进回退。 */
+/** 按表单键保存成功字典；明确空写墓碑，失败来源不改变已有缓存。 */
 export function rememberDictionaries(
   userId: string,
   formToDictionary: Record<string, string>,
   dictionaries: Record<string, NormalizedDictionary>
 ): void {
   for (const [formKey, name] of Object.entries(formToDictionary)) {
-    rememberChoices(userId, formKey, choicesFromDictionary(dictionaries[name]))
+    const dictionary = dictionaries[name]
+    if (!dictionary || dictionary.status === 'invalid') continue
+    rememberChoices(userId, formKey, choicesFromDictionary(dictionary), dictionary.status === 'empty')
   }
 }
 
@@ -259,6 +261,7 @@ export function rememberDictionaries(
 export function rememberFormFields(userId: string, fields: FileSearchFormField[]): void {
   for (const field of fields) {
     if ((field.control !== 'select' && field.control !== 'picker') || !field.options.length) continue
+    if (savedChoices(userId, field.id)?.length === 0) continue
     rememberChoices(userId, field.id, field.options)
   }
 }

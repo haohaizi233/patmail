@@ -5,7 +5,7 @@
 - 插件：每次启动先在 patmail-extension 执行一次生产构建，结果写入 dist
 - 管理端原型：项目根目录的 Vite，地址 5173
 - 插件工作台是 dist 里的扩展页面，不另开本地端口
-- 流式下载桥接：127.0.0.1:42843，仅转发本机字节流
+- 下载由扩展在浏览器内完成，此开发启动器不启动下载桥接
 """
 
 from __future__ import annotations
@@ -271,11 +271,6 @@ def main() -> None:
     print("按 Ctrl+C 停止。")
     print()
 
-    try:
-        start_stream_bridge()
-    except RuntimeError as error:
-        fail(str(error))
-    threading.Thread(target=monitor_stream_bridge, args=(bridge_stop,), daemon=True).start()
     build_extension(runner)
     frontend = start_frontend(runner)
     ready = threading.Event()
@@ -297,7 +292,10 @@ def start_stream_bridge() -> None:
     def healthy() -> bool:
         try:
             with urllib.request.urlopen(f'http://127.0.0.1:{STREAM_BRIDGE_PORT}/health', timeout=1) as response:
-                return json.load(response).get('protocol') == 'patmail-stream-v1'
+                info = json.load(response)
+                if info.get('protocol') == 'patmail-stream-v1' and (info.get('version') != 2 or 'metadata-journal' not in info.get('features', [])):
+                    raise RuntimeError('检测到旧版下载桥接。请先暂停当前下载，再关闭旧版 start.py 或旧桥接进程并重新启动，以启用增量缓存。')
+                return info.get('protocol') == 'patmail-stream-v1' and info.get('version') == 2
         except (OSError, ValueError):
             return False
 

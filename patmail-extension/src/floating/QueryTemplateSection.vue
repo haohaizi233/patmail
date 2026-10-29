@@ -49,6 +49,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   search: [query: FileSearchQuery, timeoutMs: FileSearchTimeoutMs]
   'download-name': [selection: FileDownloadSelection | null, problem: string]
+  'recovery-change': []
 }>()
 
 const TIMEOUT_KEY = 'patmail.fileSearch.timeoutMs'
@@ -132,6 +133,9 @@ const basicDictionaries = ref<Record<string, NormalizedDictionary>>({})
 const flowDictionaries = ref<Record<string, NormalizedDictionary>>({})
 const pickers = ref<Record<string, NormalizedDictionary>>({})
 const pickerWarnings = ref<string[]>([])
+const dictionaryLoading = ref(false)
+const dictionariesRead = ref(false)
+const failedDictionaryKinds = ref<string[]>([])
 const loads = new TemplateLoadCoordinator()
 const workspace = useWorkspace()
 onBeforeUnmount(() => {
@@ -210,11 +214,12 @@ const accountTemplates = computed(() => [
 ])
 const canSubmit = computed(() => props.canSearch && !baseMissing.value &&
   (props.mode !== 'customer' || Boolean(selectedCustomer.value?.enabled)) &&
-  hasExplicitFileSearchFilter(resolved.value.fields))
+  hasExplicitFileSearchFilter(resolved.value.fields) && unavailableFields.value.length === 0)
 
 /** 查询按钮点不动时，把缺什么直接说清楚，不再只靠按钮变色。 */
 const submitHint = computed(() => {
   if (!props.canSearch) return ''
+  if (unavailableFields.value.length) return '原选项当前不可用，请重新读取选项或显式清除后查询。'
   if (baseMissing.value) return '基础模板不存在或无法解析，换一个模板再查询。'
   if (props.mode === 'customer' && !selectedCustomer.value?.enabled) return '这位客户的发文配置还没启用，先到客户管理里启用再查。'
   return '还缺一项能定位的查询条件：我方文号、申请号、客户名称、文件描述、附件名称或日期起止，任填一项才能查询。'
@@ -319,7 +324,27 @@ function namePartChoices(column: string): { value: string; label: string }[] {
   return options
 }
 /** 下载是查询之后才点的：点的一刻再取一次当前值，查询后改模板/固定字符都按新的来。 */
-defineExpose({ currentDownloadSelection, currentSearchTemplateName: () => baseMissing.value ? '' : baseName.value })
+let recoveredForm = false
+let restoringForm = false
+const recoveryRefs = { selectedBaseId, selectedCustomerId, baseFields, displayValues, unknownFields, baseMissing, baseName, temporary, temporaryActive, typedKeys, nameParts, namePartsEdited }
+function recoveryState(): unknown {
+  return JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(recoveryRefs).map(([key, value]) => [key, value.value]))))
+}
+function restoreRecoveryState(state: unknown): void {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return
+  const saved = state as Record<string, unknown>
+  recoveredForm = true
+  restoringForm = true
+  for (const [key, field] of Object.entries(recoveryRefs)) {
+    const value = saved[key]
+    if (value === undefined || typeof value !== typeof field.value || Array.isArray(value) !== Array.isArray(field.value)) continue
+    // Snapshot values are local evidence only; query submission revalidates dictionary IDs and scope.
+    ;(field as { value: unknown }).value = JSON.parse(JSON.stringify(value))
+  }
+  restoringForm = false
+}
+watch(() => Object.values(recoveryRefs).map(field => field.value), () => emit('recovery-change'), { deep: true })
+defineExpose({ currentDownloadSelection, currentSearchTemplateName: () => baseMissing.value ? '' : baseName.value, recoveryState, restoreRecoveryState })
 function setOverride(key: string, value: string, fromText = false): void {
   temporaryActive.value = { ...temporaryActive.value, [key]: true }
   temporary.value = { ...temporary.value, [key]: value }
@@ -436,15 +461,12 @@ function liveChoices(dictionary: { name: string; dictionary: NormalizedDictionar
 function optionsFor(key: string): { value: string; label: string; parent?: string }[] {
   fallbackTick.value
   const dictionary = dictionaryFor(key)
-  const live = dictionary && dictionary.dictionary.options.length > 0 ? liveChoices(dictionary) : null
+  const mapped = Boolean(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key])
+  const state = optionStatus(key)
+  const live = dictionary && (state === 'ready' || state === 'partial') ? liveChoices(dictionary) : null
   const rawStored = props.userId ? savedChoices(props.userId, key) : null
-  // 上次缓存的选项也按当前案件类型收窄，接口没回来时的兜底和实时来源同口径。
   const stored = rawStored ? scopeSavedChoices(key, rawStored, effectiveCaseType()) : null
-  let options = live ?? [...(stored ?? pageSelectOptions(key, pageFields.value) ?? PAGE_OPTIONS[key] ?? [])]
-  const current = formValue(key)
-  if (current && !options.some(item => item.value === current)) {
-    options = [{ value: current, label: storedLabel(key, current) }, ...options]
-  }
+  const options = mapped ? (live ?? []) : [...(stored ?? pageSelectOptions(key, pageFields.value) ?? PAGE_OPTIONS[key] ?? [])]
   if (key === 'is_close') return [{ value: '', label: '是' }, { value: '1', label: '否' }]
   return [{ value: '', label: '不限' }, ...options]
 }
@@ -459,8 +481,19 @@ function pickerOptions(key: string): { value: string; label: string; parent?: st
 }
 /** 原站 TreeUser 的字段（多选或层级树）都换成树形框；平铺单选仍用原生下拉。 */
 function showPicker(key: string): boolean {
-  return isMultiPickerKey(key) || treeChoices(key).length > 0
+  return Boolean(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key]) || isMultiPickerKey(key) || treeChoices(key).length > 0
 }
+function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
+  if (!(FILE_BASIC_OPTION_FIELDS[key] || FILE_FLOW_OPTION_FIELDS[key] || FILE_PICKER_FIELDS[key])) return 'ready'
+  if (dictionaryLoading.value || !dictionariesRead.value) return 'loading'
+  const kind = FILE_BASIC_OPTION_FIELDS[key] ? 'basic' : FILE_FLOW_OPTION_FIELDS[key] ? 'flow' : 'picker'
+  if (failedDictionaryKinds.value.includes(kind)) return 'invalid'
+  return dictionaryFor(key)?.dictionary.status ?? 'invalid'
+}
+const unavailableFields = computed(() => Object.keys({ ...FILE_BASIC_OPTION_FIELDS, ...FILE_FLOW_OPTION_FIELDS, ...FILE_PICKER_FIELDS }).filter(key => {
+  const ids = formValue(key).split(',').map(id => id.trim()).filter(Boolean)
+  return ids.length > 0 && (!['ready', 'partial'].includes(optionStatus(key)) || ids.some(id => !optionsFor(key).some(option => option.value === id)))
+}))
 function onText(key: string, event: Event): void {
   setOverride(key, (event.target as HTMLInputElement).value, true)
 }
@@ -545,13 +578,19 @@ async function loadFileTypes(caseTypeId: string): Promise<void> {
 }
 async function loadDictionaries(ticketId: number, signal: AbortSignal, force = false): Promise<void> {
   if (!props.bridge) return
+  dictionaryLoading.value = true
+  failedDictionaryKinds.value = []
   const settled = await Promise.allSettled((['basic', 'flow', 'picker'] as const).map(kind => props.bridge!.request({
     type: MessageType.LoadDictionary, payload: { kind, force }
   }, signal)))
   if (!loads.isCurrent(ticketId)) return
+  dictionaryLoading.value = false
+  dictionariesRead.value = true
   dictionaryNote.value = ''
   const problems: string[] = []
-  for (const item of settled) {
+  for (const [index, item] of settled.entries()) {
+    const kind = ['basic', 'flow', 'picker'][index]!
+    if (item.status !== 'fulfilled' || item.value.type !== MessageType.DictionaryResult || !item.value.payload.ok) failedDictionaryKinds.value.push(kind)
     if (item.status !== 'fulfilled') {
       problems.push('有一组下拉没有回传到页面。')
       continue
@@ -582,6 +621,7 @@ async function loadDictionaries(ticketId: number, signal: AbortSignal, force = f
   else if (problems.length) dictionaryNote.value = `${dictionaryNote.value}。${problems[0]}`
 }
 function pickTemplate(id: string): void {
+  recoveredForm = false
   selectedBaseId.value = id
   startApply(id)
 }
@@ -628,6 +668,7 @@ async function loadHistory(force: boolean): Promise<void> {
     if (!current) return
     await loadDictionaries(ticket.id, ticket.signal)
     if (!loads.isCurrent(ticket.id)) return
+    if (recoveredForm) return
     if (props.mode === 'customer' && selectedCustomer.value) await applyBase(selectedCustomer.value.baseTemplateId, ticket)
     else if (selectedBaseId.value) await applyBase(selectedBaseId.value, ticket)
   } catch {
@@ -650,6 +691,7 @@ function resetBase(): void {
   restoreTemplate()
 }
 function startApply(id: string): void {
+  recoveredForm = false
   void applyBase(id, loads.begin())
 }
 async function applyBase(id: string, ticket: { id: number; signal: AbortSignal } = loads.begin()): Promise<void> {
@@ -1176,6 +1218,7 @@ async function checkAgainstPage(): Promise<void> {
 }
 function search(): void {
   if (!canSubmit.value) return
+  if (unavailableFields.value.length) return
   const fields = { ...resolved.value.fields }
   cleanFileDescription(fields)
   if (fields.is_close !== undefined) fields.is_close = fields.is_close.trim() === '1' || fields.is_close.trim() === '否' ? '1' : ''
@@ -1213,6 +1256,9 @@ function applySeed(): void {
 }
 
 watch(() => [props.userId, props.mode, props.origin] as const, () => {
+  dictionaryLoading.value = false
+  dictionariesRead.value = false
+  failedDictionaryKinds.value = []
   historyOptions.value = props.userId ? peekHistoryList(props.userId, 'file') : []
   historyMessage.value = ''
   basicDictionaries.value = {}
@@ -1257,11 +1303,13 @@ watch(resolved, (next) => {
   if (changed) openExtra.value = copy
 })
 watch(selectedCustomerId, () => {
+  if (restoringForm) return
+  recoveredForm = false
   const profile = selectedCustomer.value
   resetBase()
   if (!profile) return
   void applyBase(profile.baseTemplateId)
-})
+}, { flush: 'sync' })
 </script>
 
 <template>
@@ -1381,12 +1429,12 @@ watch(selectedCustomerId, () => {
             </label>
             <label v-else-if="cell.kind === 'named'" :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="formValue(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="formValue(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="checkAgainstPage" @update:model-value="setOverride(cell.key, String($event))" />
               <ThemeSelect v-else :model-value="formValue(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
             </label>
             <label v-else-if="cell.kind === 'select'" :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="formValue(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="formValue(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="checkAgainstPage" @update:model-value="setOverride(cell.key, String($event))" />
               <ThemeSelect v-else :model-value="formValue(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setOverride(cell.key, String($event))" />
             </label>
             <div v-else-if="cell.kind === 'dates'" :class="cellClass(cell)">

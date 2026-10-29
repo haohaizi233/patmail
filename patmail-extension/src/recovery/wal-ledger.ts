@@ -1,11 +1,11 @@
 import initSqlJs, { type SqlStatic } from 'sql.js'
-import { runWhenIdle } from '../utils/idle'
+import { createRecoveryClient } from './client'
 
 type SqlDatabase = InstanceType<SqlStatic['Database']>
 import wasmAsset from 'sql.js/dist/sql-wasm.wasm?url'
 
 /** 工作面、查询结果、发文账本、流程执行记录、递交导出行档。登录掉了也按这个槽位装回去。 */
-export type RecoverySlot = 'workflow-desk' | 'limit-query' | 'limit-mail' | 'file-mail' | 'file-desk' | 'workflow-exec' | 'mail-exec' | 'filing-export'
+export type RecoverySlot = 'workflow-desk' | 'limit-query' | 'limit-mail' | 'file-mail' | 'file-desk' | 'workflow-exec' | 'mail-exec' | 'filing-export' | 'file-query'
 
 export interface StoredFrame {
   seq: number
@@ -18,6 +18,7 @@ export interface StoredFrame {
 export interface RecoveryStore {
   readCheckpoint(): Promise<Uint8Array | null>
   writeCheckpoint(bytes: Uint8Array): Promise<void>
+  commitCheckpoint?(bytes: Uint8Array, through: number): Promise<void>
   appendFrame(frame: StoredFrame): Promise<void>
   readFrames(): Promise<StoredFrame[]>
   dropFramesThrough(seq: number): Promise<void>
@@ -27,9 +28,10 @@ export interface RecoveryHead {
   scope: string
   payload: unknown
   at: string
+  revision?: number
 }
 
-const SLOTS = new Set<RecoverySlot>(['workflow-desk', 'limit-query', 'limit-mail', 'file-mail', 'file-desk', 'workflow-exec', 'mail-exec', 'filing-export'])
+const SLOTS = new Set<RecoverySlot>(['workflow-desk', 'limit-query', 'limit-mail', 'file-mail', 'file-desk', 'workflow-exec', 'mail-exec', 'filing-export', 'file-query'])
 
 /** 两个系统各留一份。origin 用站点地址，leaf 是页面里的槽。 */
 export function systemScope(origin: string, leaf: string): string {
@@ -60,7 +62,7 @@ function sqlEngine(): Promise<SqlStatic> {
   return engine
 }
 
-function isSlot(value: string): value is RecoverySlot {
+export function isSlot(value: string): value is RecoverySlot {
   return SLOTS.has(value as RecoverySlot)
 }
 
@@ -128,65 +130,42 @@ export function indexedRecoveryStore(factory: IDBFactory | undefined = globalThi
     })
     return opened
   }
-  return {
-    async readCheckpoint() {
-      const database = await open()
-      return await new Promise((resolve, reject) => {
-        const request = database.transaction(CHECKPOINT, 'readonly').objectStore(CHECKPOINT).get(CHECKPOINT_KEY)
-        request.onsuccess = () => resolve(request.result instanceof Uint8Array ? request.result : null)
-        request.onerror = () => reject(request.error ?? new Error('恢复账本没有读到。'))
-      })
-    },
-    async writeCheckpoint(bytes) {
-      const database = await open()
-      await new Promise<void>((resolve, reject) => {
-        const request = database.transaction(CHECKPOINT, 'readwrite').objectStore(CHECKPOINT).put(bytes, CHECKPOINT_KEY)
-        request.onsuccess = () => resolve()
-        request.onerror = () => reject(request.error ?? new Error('恢复账本没有写入。'))
-      })
-    },
-    async appendFrame(frame) {
-      const database = await open()
-      await new Promise<void>((resolve, reject) => {
-        const request = database.transaction(WAL, 'readwrite').objectStore(WAL).put(frame, frame.seq)
-        request.onsuccess = () => resolve()
-        request.onerror = () => reject(request.error ?? new Error('恢复账本没有记下这一笔。'))
-      })
-    },
-    async readFrames() {
-      const database = await open()
-      return await new Promise((resolve, reject) => {
-        const request = database.transaction(WAL, 'readonly').objectStore(WAL).getAll()
-        request.onsuccess = () => {
-          const rows = Array.isArray(request.result) ? request.result : []
-          resolve(rows.flatMap(item => {
-            if (!item || typeof item !== 'object') return []
-            const frame = item as StoredFrame
-            return Number.isInteger(frame.seq) && isSlot(frame.slot) && typeof frame.scope === 'string' && typeof frame.payload === 'string'
-              ? [{ ...frame }]
-              : []
-          }))
-        }
-        request.onerror = () => reject(request.error ?? new Error('恢复账本没有读到未完成的笔。'))
-      })
-    },
-    async dropFramesThrough(seq) {
-      const database = await open()
-      await new Promise<void>((resolve, reject) => {
-        const store = database.transaction(WAL, 'readwrite').objectStore(WAL)
-        const request = store.openCursor()
-        request.onsuccess = () => {
-          const cursor = request.result
-          if (!cursor) {
-            resolve()
-            return
-          }
-          if (typeof cursor.key === 'number' && cursor.key <= seq) cursor.delete()
-          cursor.continue()
-        }
-        request.onerror = () => reject(request.error ?? new Error('恢复账本没有收起已完成的笔。'))
-      })
+  async function transaction<T>(names: string | string[], mode: IDBTransactionMode, work: (tx: IDBTransaction, result: (value: T) => void) => void): Promise<T> {
+    const database = await open()
+    return new Promise<T>((resolve, reject) => {
+      const tx = database.transaction(names, mode)
+      let value: T
+      tx.oncomplete = () => resolve(value)
+      tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('恢复账本事务未提交。'))
+      try { work(tx, next => { value = next }) } catch (error) { tx.abort(); reject(error) }
+    })
+  }
+  function removeThrough(tx: IDBTransaction, through: number): void {
+    const request = tx.objectStore(WAL).openCursor()
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      if (typeof cursor.key === 'number' && cursor.key <= through) cursor.delete()
+      cursor.continue()
     }
+  }
+  return {
+    readCheckpoint: () => transaction<Uint8Array | null>(CHECKPOINT, 'readonly', (tx, result) => {
+      const request = tx.objectStore(CHECKPOINT).get(CHECKPOINT_KEY)
+      request.onsuccess = () => result(request.result instanceof Uint8Array ? request.result : null)
+    }),
+    writeCheckpoint: bytes => transaction<void>(CHECKPOINT, 'readwrite', tx => { tx.objectStore(CHECKPOINT).put(bytes, CHECKPOINT_KEY) }),
+    commitCheckpoint: (bytes, through) => transaction<void>([CHECKPOINT, WAL], 'readwrite', tx => {
+      tx.objectStore(CHECKPOINT).put(bytes, CHECKPOINT_KEY)
+      removeThrough(tx, through)
+    }),
+    appendFrame: frame => transaction<void>(WAL, 'readwrite', tx => { tx.objectStore(WAL).add(frame, frame.seq) }),
+    readFrames: () => transaction<StoredFrame[]>(WAL, 'readonly', (tx, result) => {
+      const request = tx.objectStore(WAL).getAll()
+      request.onsuccess = () => result((request.result as StoredFrame[]).filter(frame =>
+        Number.isSafeInteger(frame?.seq) && isSlot(frame.slot) && typeof frame.scope === 'string' && typeof frame.payload === 'string'))
+    }),
+    dropFramesThrough: seq => transaction<void>(WAL, 'readwrite', tx => removeThrough(tx, seq))
   }
 }
 
@@ -270,8 +249,8 @@ export class RecoveryLedger {
     this.checkpointSeq = this.foldedSeq
   }
 
-  put(slot: RecoverySlot, scope: string, payload: unknown): Promise<void> {
-    return this.enqueue(() => this.write(slot, scope, payload))
+  put(slot: RecoverySlot, scope: string, payload: unknown, expectedRevision?: number): Promise<void> {
+    return this.enqueue(() => this.write(slot, scope, payload, expectedRevision))
   }
 
   /** 把攒着的笔一把折进库文件：整库导出只做一次，不跟着每一笔跑。 */
@@ -284,30 +263,43 @@ export class RecoveryLedger {
   }
 
   async get(slot: RecoverySlot, scope: string): Promise<unknown | null> {
+    await this.chain
     const rows = this.db.exec(`SELECT payload FROM head WHERE slot=${quote(slot)} AND scope=${quote(scope)}`)
     const raw = rows[0]?.values[0]?.[0]
     return typeof raw === 'string' ? readPayload(raw) : null
   }
 
   async latest(slot: RecoverySlot): Promise<RecoveryHead | null> {
-    const table = this.db.exec(`SELECT scope, payload, at FROM head WHERE slot=${quote(slot)} ORDER BY seq DESC`)[0]
+    await this.chain
+    const table = this.db.exec(`SELECT scope, payload, at, seq FROM head WHERE slot=${quote(slot)} ORDER BY seq DESC`)[0]
     if (!table) return null
     for (const row of table.values) {
       const payload = readPayload(text(cell(row, table.columns, 'payload')))
       if (payload == null) continue
-      return { scope: text(cell(row, table.columns, 'scope')), payload, at: text(cell(row, table.columns, 'at')) }
+      return { scope: text(cell(row, table.columns, 'scope')), payload, at: text(cell(row, table.columns, 'at')), revision: Number(cell(row, table.columns, 'seq')) }
     }
     return null
   }
 
   async heads(slot: RecoverySlot): Promise<RecoveryHead[]> {
-    const table = this.db.exec(`SELECT scope, payload, at FROM head WHERE slot=${quote(slot)} ORDER BY seq`)[0]
+    await this.chain
+    const table = this.db.exec(`SELECT scope, payload, at, seq FROM head WHERE slot=${quote(slot)} ORDER BY seq`)[0]
     if (!table) return []
     return table.values.flatMap(row => {
       const payload = readPayload(text(cell(row, table.columns, 'payload')))
       if (payload == null) return []
-      return [{ scope: text(cell(row, table.columns, 'scope')), payload, at: text(cell(row, table.columns, 'at')) }]
+      return [{ scope: text(cell(row, table.columns, 'scope')), payload, at: text(cell(row, table.columns, 'at')), revision: Number(cell(row, table.columns, 'seq')) }]
     })
+  }
+
+  async revision(slot: RecoverySlot, scope: string): Promise<number> {
+    await this.chain
+    return this.currentRevision(slot, scope)
+  }
+
+  private currentRevision(slot: RecoverySlot, scope: string): number {
+    const value = this.db.exec(`SELECT seq FROM head WHERE slot=${quote(slot)} AND scope=${quote(scope)}`)[0]?.values[0]?.[0]
+    return typeof value === 'number' ? value : 0
   }
 
   private enqueue<T>(work: () => Promise<T>): Promise<T> {
@@ -316,8 +308,9 @@ export class RecoveryLedger {
     return run
   }
 
-  private async write(slot: RecoverySlot, scope: string, payload: unknown): Promise<void> {
-    if (!scope || scope.length > 200) throw new Error('恢复账本的范围不对。')
+  private async write(slot: RecoverySlot, scope: string, payload: unknown, expectedRevision?: number): Promise<void> {
+    if (expectedRevision !== undefined && this.currentRevision(slot, scope) !== expectedRevision) throw new Error('RECOVERY_CONFLICT：工作面已被其它页面更新，请重新载入后合并。')
+    if (!isSlot(slot) || !scope || scope.length > 16384) throw new Error('恢复账本的范围不对。')
     if (hasSecret(payload)) throw new Error('恢复账本不保存登录凭据。')
     const frame: StoredFrame = {
       seq: maxSeq(this.db) + 1,
@@ -355,8 +348,7 @@ export class RecoveryLedger {
     if (through <= this.checkpointSeq) return
     compactWal(this.db, through)
     foldJournal(this.db)
-    await this.store.writeCheckpoint(this.db.export())
-    await this.store.dropFramesThrough(through)
+    await persistCheckpoint(this.store, this.db.export(), through)
     this.checkpointSeq = through
   }
 }
@@ -364,6 +356,11 @@ export class RecoveryLedger {
 /** 折库节拍：停手 500ms 折一次，攒够 120 笔不等节拍直接折。 */
 const CHECKPOINT_WAIT = 500
 const CHECKPOINT_BATCH = 120
+
+async function persistCheckpoint(store: RecoveryStore, bytes: Uint8Array, through: number): Promise<void> {
+  if (store.commitCheckpoint) await store.commitCheckpoint(bytes, through)
+  else { await store.writeCheckpoint(bytes); await store.dropFramesThrough(through) }
+}
 
 async function replay(store: RecoveryStore, db: SqlDatabase): Promise<void> {
   const frames = (await store.readFrames()).sort((a, b) => a.seq - b.seq)
@@ -376,8 +373,7 @@ async function replay(store: RecoveryStore, db: SqlDatabase): Promise<void> {
   if (applied) {
     compactWal(db, applied)
     foldJournal(db)
-    await store.writeCheckpoint(db.export())
-    await store.dropFramesThrough(applied)
+    await persistCheckpoint(store, db.export(), applied)
   }
 }
 
@@ -390,35 +386,10 @@ export async function openRecoveryLedger(store: RecoveryStore): Promise<Recovery
   return new RecoveryLedger(store, db, journal)
 }
 
-let opening: Promise<RecoveryLedger | null> | null = null
-
-function openNow(store: RecoveryStore): Promise<RecoveryLedger | null> {
-  opening ??= openRecoveryLedger(store).then(
-    ledger => ledger,
-    () => {
-      opening = null
-      return null
-    }
-  )
-  return opening
-}
-
-/** 读账本：开库要编译 WASM、解析整库，排到空闲里做，不跟首屏抢主线程。 */
-export function recoveryLedger(): Promise<RecoveryLedger | null> {
-  const store = indexedRecoveryStore()
-  if (!store) return Promise.resolve(null)
-  if (opening) return opening
-  return new Promise(resolve => {
-    runWhenIdle(() => { openNow(store).then(resolve) })
-  })
-}
-
-/** 写账本不等空闲：落盘的事宁可占主线程也不能丢，关页前的抢救写走这条。 */
-export function recoveryLedgerNow(): Promise<RecoveryLedger | null> {
-  const store = indexedRecoveryStore()
-  if (!store) return Promise.resolve(null)
-  return openNow(store)
-}
+// Production pages never open their own SQLite copy. One service worker owns sequence allocation.
+const remote = createRecoveryClient()
+export async function recoveryLedger() { return remote }
+export async function recoveryLedgerNow() { return remote }
 
 export async function rememberRecovery(slot: RecoverySlot, scope: string, payload: unknown): Promise<void> {
   // 写不等空闲：这一笔要落盘，等空闲反而可能等不到（关页前的抢救写）。
@@ -511,6 +482,6 @@ if (typeof window !== 'undefined') {
       void commitScheduled(key, item)
     }
     // 攒着还没折库的笔趁关页前折掉；折不完也没事，帧还在账本里，下次打开补上。
-    void opening?.then(ledger => ledger?.checkpoint()).catch(() => { /* 关页太快，下次打开再折 */ })
+    void remote.checkpoint().catch(() => { /* 持久帧由后台保留 */ })
   })
 }

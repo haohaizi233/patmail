@@ -1,8 +1,8 @@
 import { chromium } from 'playwright'
 
 /** 带扩展的持久化上下文；viewport 不传时保持 Playwright 默认（1280×720）。 */
-export async function launchExtensionContext(dist, { viewport, acceptDownloads } = {}) {
-  return await chromium.launchPersistentContext('', {
+export async function launchExtensionContext(dist, { viewport, acceptDownloads, userDataDir = '' } = {}) {
+  return await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
     headless: true,
     ...(viewport ? { viewport } : {}),
@@ -14,6 +14,16 @@ export async function launchExtensionContext(dist, { viewport, acceptDownloads }
 /** 扩展后台 Service Worker（必要时等它启动），扩展 ID 从 worker URL 取。 */
 export async function extensionWorker(context) {
   return context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
+}
+
+/** Playwright waitForFunction treats an async predicate's Promise as truthy. Await RPCs in Node. */
+export async function waitForPageCondition(page, predicate, arg, { timeout = 30000 } = {}) {
+  const deadline = Date.now() + timeout
+  do {
+    if (await page.evaluate(predicate, arg)) return
+    await page.waitForTimeout(100)
+  } while (Date.now() < deadline)
+  throw new Error('等待页面异步状态超时。')
 }
 
 /** 等目标标签上的内容脚本完成 PING/PONG 握手；轮询节奏由调用方按场景指定。 */

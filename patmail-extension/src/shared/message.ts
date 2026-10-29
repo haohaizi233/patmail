@@ -78,7 +78,12 @@ export const MessageType = {
   DownloadState: 'DOWNLOAD_STATE',
   DownloadStateResult: 'DOWNLOAD_STATE_RESULT',
   StreamDownload: 'STREAM_DOWNLOAD',
+  BrowserStreamDownload: 'BROWSER_STREAM_DOWNLOAD',
   StreamDownloadResult: 'STREAM_DOWNLOAD_RESULT',
+  DiscardDownload: 'DISCARD_DOWNLOAD',
+  DiscardDownloadResult: 'DISCARD_DOWNLOAD_RESULT',
+  PauseDownload: 'PAUSE_DOWNLOAD',
+  PauseDownloadResult: 'PAUSE_DOWNLOAD_RESULT',
   ExportCaseContacts: 'EXPORT_CASE_CONTACTS',
   ExportCaseContactsResult: 'EXPORT_CASE_CONTACTS_RESULT',
   ListMailProcesses: 'LIST_MAIL_PROCESSES',
@@ -175,6 +180,8 @@ type Request<T extends string> = Message<undefined> & { type: T }
 type Response<T extends string, P> = Message<P> & { type: T; payload: P }
 
 export type ContentRequest =
+  | Response<'PAUSE_DOWNLOAD', { taskId: string; backend?: 'browser' }>
+  | Response<'DISCARD_DOWNLOAD', { taskId: string; backend?: 'browser' }>
   | Request<'SCAN_PAGE'> | Request<'GET_PAGE_INFO'> | Request<'SHOW_PANEL'> | Request<'PING'>
   | Request<'CHECK_SESSION'> | Request<'CANCEL_SESSION_CHECK'>
   | Request<'CANCEL_FILE_SEARCH'> | Request<'CANCEL_LIMIT_MONITOR'> | Response<'SEARCH_FILES', { query: FileSearchQuery; continuation?: { querySessionId: string }; timeoutMs?: number; batch?: true }>
@@ -183,7 +190,7 @@ export type ContentRequest =
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
-  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true }>
+  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true; taskId?: string; saveAsNew?: true; browserTarget?: string }>
   | Response<'EXPORT_CASE_CONTACTS', { volumes: string[] }>
   | Response<'LIST_MAIL_PROCESSES', { query: ProcessListQuery }>
   | Response<'OPEN_EASY_FORM', { target: ProcessOpenTarget }>
@@ -232,15 +239,19 @@ export interface ExecutionLeasePayload {
   lease: { executionId: string; taskFingerprint: string; owner: string; status: string; requestSent: boolean; easyMailId: string } | null
 }
 export type StreamDownloadCommand =
-  | { action: 'start'; fileName: string }
-  | { action: 'write'; token: string; sequence: number; data: string }
-  | { action: 'finish' | 'abort' | 'status'; token: string }
+  | { action: 'start'; fileName: string; taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; targetId?: string }
+  | { action: 'write'; token: string; sequence: number; offset?: number; data: string }
+  | { action: 'finish' | 'abort' | 'pause' | 'status' | 'complete' | 'resume'; token: string }
+  | { action: 'checkpoint'; token: string; offset: number; names: string[] }
+  | { action: 'cache'; token: string; index: number; command: 'info' | 'read' | 'write' | 'reset' | 'complete'; offset?: number; data?: string; metadata?: Record<string, unknown> }
 
 function isArchiveName(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 120 && value.length > 4 && value.endsWith('.zip') && !/[\\/<>:"|?*\x00-\x1f]/.test(value)
 }
 
 export type BackgroundRequest =
+  | Response<'PAUSE_DOWNLOAD', { taskId: string; backend?: 'browser' }>
+  | Response<'DISCARD_DOWNLOAD', { taskId: string; backend?: 'browser' }>
   | Request<'PING'>
   | Response<'CLAIM_EXECUTION', { origin: string; operatorId: string; taskFingerprint: string }>
   | Response<'MARK_EXECUTION_PREPARED', LeaseCommand>
@@ -264,8 +275,11 @@ export type BackgroundRequest =
   | Response<'SAVE_DOWNLOAD', { url: string; fileName: string; progressId?: string }>
   | Response<'DOWNLOAD_STATE', { downloadId: number }>
   | Response<'STREAM_DOWNLOAD', StreamDownloadCommand>
+  | Response<'BROWSER_STREAM_DOWNLOAD', StreamDownloadCommand>
   | Response<'AGENT_CHAT', { action: 'probe' | 'turn'; message: string } | { action: 'turn'; message: string; plain: true } | { action: 'answer'; message: string } | { action: 'history' | 'reset' | 'facts' | 'compact' | 'stop' | 'create' } | { action: 'create'; title: string } | { action: 'open' | 'remove'; id: string } | { action: 'rename'; id: string; title: string }>
 export type BackgroundResponse =
+  | Response<'PAUSE_DOWNLOAD_RESULT', { ok: true }>
+  | Response<'DISCARD_DOWNLOAD_RESULT', { ok: true }>
   | Response<'PONG', { ok: true }>
   | Response<'EXECUTION_LEASE', ExecutionLeasePayload>
   | Response<'EXECUTION_RECOVERED', { leases: ExecutionLeasePayload['lease'][] }>
@@ -275,7 +289,7 @@ export type BackgroundResponse =
   | Response<'WORKSPACE_RESULT', WorkspaceResultPayload>
   | Response<'SAVE_DOWNLOAD_RESULT', { ok: true; fileName: string; downloadId?: number }>
   | Response<'DOWNLOAD_STATE_RESULT', { ok: true; state: 'inProgress' | 'complete' | 'interrupted'; receivedBytes: number; totalBytes: number | null; error?: string }>
-  | Response<'STREAM_DOWNLOAD_RESULT', { ok: true; token?: string; downloadId?: number }>
+  | Response<'STREAM_DOWNLOAD_RESULT', { ok: true; token?: string; downloadId?: number; taskId?: string; info?: Record<string, unknown>; data?: string }>
   | Response<'AGENT_CHAT_RESULT', ApiResult<{ reply: string; model: string; steps: number; history: Array<{ role: 'user' | 'assistant'; content: string }>; sessions: Array<{ id: string; title: string; updatedAt: string; active: boolean }>; activeId: string }>>
   | ErrorMessage
 
@@ -376,6 +390,8 @@ export interface QuerySurfaceMenu {
 }
 
 export type ContentResponse =
+  | Response<'PAUSE_DOWNLOAD_RESULT', { ok: true }>
+  | Response<'DISCARD_DOWNLOAD_RESULT', { ok: true }>
   | Response<'SCAN_RESULT', PageSnapshot>
   | Response<'PAGE_INFO', PageInfo>
   | Response<'PANEL_SHOWN', { ok: true }>
@@ -460,23 +476,34 @@ function isDownloadNameResult(value: unknown): value is ApiResult<{ names: strin
   return names.length <= DOWNLOAD_MAX_ITEMS && names.every(name => typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';'))
 }
 
-function isDownloadFileItem(value: unknown): value is { fileId: string; fileNo: string; fileName: string } {
-  return isRecord(value) && Object.keys(value).length === 3 &&
-    typeof value.fileId === 'string' && isQueryGuid(value.fileId) &&
-    typeof value.fileNo === 'string' && value.fileNo.trim().length > 0 && value.fileNo.length <= 40 && !value.fileNo.includes(';') &&
-    typeof value.fileName === 'string' && value.fileName.trim().length > 0 && value.fileName.length <= 180 && !value.fileName.includes(';')
+/** 原名是类型识别元数据；有命名配方时，真正提交的名称另由生成名称护栏校验。 */
+export function downloadFilesRequestIssue(value: unknown): string {
+  if (!isRecord(value)) return '下载参数不是有效对象。'
+  if (Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream', 'taskId', 'saveAsNew', 'browserTarget'].includes(key))) return '下载参数包含不支持的字段。'
+  if (typeof value.stripAppNoDot !== 'boolean') return '下载名称中的申请号小数点设置无效。'
+  if (value.taskId !== undefined && (typeof value.taskId !== 'string' || !isQueryGuid(value.taskId))) return '下载任务编号无效。'
+  if (value.browserTarget !== undefined && (typeof value.browserTarget !== 'string' || !isQueryGuid(value.browserTarget) || !value.taskId || value.stream !== true)) return '浏览器下载目标无效或缺少流式任务编号。'
+  if (value.saveAsNew !== undefined && (value.saveAsNew !== true || !value.taskId)) return '另存下载缺少有效任务编号。'
+  if (value.archiveName !== undefined && !isArchiveName(value.archiveName)) return '压缩包名称无效，请使用不含路径且不超过120字的ZIP名称。'
+  if (value.stream !== undefined && value.stream !== true) return '流式下载设置无效。'
+  if (value.detached !== undefined && (value.detached !== true || !value.progressId)) return '后台下载缺少有效进度编号。'
+  if (value.progressId !== undefined && (typeof value.progressId !== 'string' || !isQueryGuid(value.progressId))) return '下载进度编号无效。'
+  if (value.selection !== null && !isFileDownloadSelection(value.selection)) return '下载名称配方无效，请重新设置下载名称。'
+  const items = value.items
+  if (!Array.isArray(items) || !items.length || items.length > DOWNLOAD_MAX_ITEMS) return `请选择1至${DOWNLOAD_MAX_ITEMS}个附件下载。`
+  for (const [index, item] of items.entries()) {
+    const prefix = `第${index + 1}个附件`
+    if (!isRecord(item) || Object.keys(item).length !== 3) return `${prefix}的下载数据不完整。`
+    if (typeof item.fileId !== 'string' || !isQueryGuid(item.fileId)) return `${prefix}的文件标识无效，请重新查询文件。`
+    if (typeof item.fileNo !== 'string' || !item.fileNo.trim() || item.fileNo.length > 40 || item.fileNo.includes(';')) return `${prefix}的文件编号无效，请重新查询文件。`
+    if (typeof item.fileName !== 'string' || !item.fileName.trim() || item.fileName.length > 4096) return `${prefix}的原文件名为空或超过4096字。`
+    if (value.selection === null && (item.fileName.length > 180 || item.fileName.includes(';'))) return `${prefix}的原文件名超过180字或包含分号，请设置下载名称后再下载。`
+  }
+  return ''
 }
 
 function isDownloadFilesRequest(value: unknown): value is Extract<ContentRequest, { type: 'DOWNLOAD_FILES' }>['payload'] {
-  if (!isRecord(value) || typeof value.stripAppNoDot !== 'boolean' ||
-    Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream'].includes(key)) ||
-    (value.archiveName !== undefined && !isArchiveName(value.archiveName)) ||
-    (value.stream !== undefined && value.stream !== true) ||
-    (value.detached !== undefined && (value.detached !== true || !value.progressId)) ||
-    (value.progressId !== undefined && (typeof value.progressId !== 'string' || !isQueryGuid(value.progressId)))) return false
-  const items = value.items
-  if (!Array.isArray(items) || !items.length || items.length > DOWNLOAD_MAX_ITEMS || !items.every(isDownloadFileItem)) return false
-  return value.selection === null || isFileDownloadSelection(value.selection)
+  return downloadFilesRequestIssue(value) === ''
 }
 
 function isDownloadFilesResult(value: unknown): value is ApiResult<{ fileName: string; fileCount: number; notice: string }> {
@@ -861,17 +888,50 @@ export function isMessage(value: unknown): value is AppMessage {
       return isDownloadNameResult(value.payload)
     case MessageType.DownloadFiles:
       return isDownloadFilesRequest(value.payload)
+    case MessageType.BrowserStreamDownload:
     case MessageType.StreamDownload: {
       const p = value.payload
       if (!isRecord(p)) return false
-      if (p.action === 'start') return Object.keys(p).length === 2 && isArchiveName(p.fileName)
+      if (p.action === 'start') return Object.keys(p).every(key => ['action', 'fileName', 'taskId', 'manifest', 'newCopy', 'targetId'].includes(key)) && isArchiveName(p.fileName) &&
+        (p.targetId === undefined || (typeof p.targetId === 'string' && isQueryGuid(p.targetId))) &&
+        (p.newCopy === undefined || (p.newCopy === true && p.taskId !== undefined)) &&
+        (p.taskId === undefined || (typeof p.taskId === 'string' && isQueryGuid(p.taskId))) &&
+        (p.manifest === undefined || (isRecord(p.manifest) && JSON.stringify(p.manifest).length <= 4_000_000 &&
+          isDownloadFilesRequest({ items: p.manifest.items, selection: p.manifest.selection, stripAppNoDot: p.manifest.stripAppNoDot, archiveName: p.fileName }) &&
+          Object.keys(p.manifest).every(key => ['items', 'selection', 'stripAppNoDot', 'archiveName'].includes(key))))
       if (typeof p.token !== 'string' || !/^[0-9a-f]{64}$/.test(p.token)) return false
-      if (p.action === 'write') return Object.keys(p).length === 4 && Number.isSafeInteger(p.sequence) && Number(p.sequence) >= 0 &&
+      if (p.action === 'write') return Object.keys(p).every(key => ['action', 'token', 'sequence', 'offset', 'data'].includes(key)) && Number.isSafeInteger(p.sequence) && Number(p.sequence) >= 0 &&
+        (p.offset === undefined || (Number.isSafeInteger(p.offset) && Number(p.offset) >= 0)) &&
         typeof p.data === 'string' && p.data.length <= 349528 && /^[A-Za-z0-9+/]*={0,2}$/.test(p.data)
-      return ['finish', 'abort', 'status'].includes(String(p.action)) && Object.keys(p).length === 2
+      if (p.action === 'checkpoint') return Object.keys(p).every(key => ['action', 'token', 'offset', 'names'].includes(key)) &&
+        Number.isSafeInteger(p.offset) && Number(p.offset) >= 0 && Array.isArray(p.names) && p.names.length <= 40 && p.names.length > 0 &&
+        p.names.every(name => typeof name === 'string' && name.length > 0 && name.length <= 180 && !name.includes(';'))
+      if (p.action === 'cache') {
+        const metadata = p.metadata
+        return Object.keys(p).every(key => ['action', 'token', 'index', 'command', 'offset', 'data', 'metadata'].includes(key)) &&
+        Number.isSafeInteger(p.index) && Number(p.index) >= 0 && Number(p.index) < DOWNLOAD_MAX_ITEMS &&
+        ['info', 'read', 'write', 'reset', 'complete'].includes(String(p.command)) &&
+        (p.offset === undefined || (Number.isSafeInteger(p.offset) && Number(p.offset) >= 0)) &&
+        (p.data === undefined || (typeof p.data === 'string' && p.data.length <= 349528 && /^[A-Za-z0-9+/]*={0,2}$/.test(p.data))) &&
+        (p.command !== 'write' || (typeof p.data === 'string' && p.offset !== undefined)) &&
+        (metadata === undefined || (isRecord(metadata) && Object.keys(metadata).every(key => ['totalBytes', 'etag', 'lastModified'].includes(key)) &&
+          (metadata.totalBytes == null || (Number.isSafeInteger(metadata.totalBytes) && Number(metadata.totalBytes) >= 0)) &&
+          ['etag', 'lastModified'].every(key => metadata[key] === undefined || (typeof metadata[key] === 'string' && String(metadata[key]).length <= 1024))))
+      }
+      return ['finish', 'abort', 'pause', 'status', 'resume', 'complete'].includes(String(p.action)) && Object.keys(p).length === 2
     }
+    case MessageType.PauseDownload:
+    case MessageType.DiscardDownload:
+      return isRecord(value.payload) && Object.keys(value.payload).every(key => ['taskId', 'backend'].includes(key)) &&
+        (value.payload.backend === undefined || value.payload.backend === 'browser') && typeof value.payload.taskId === 'string' && isQueryGuid(value.payload.taskId)
+    case MessageType.PauseDownloadResult:
+    case MessageType.DiscardDownloadResult:
+      return isRecord(value.payload) && Object.keys(value.payload).length === 1 && value.payload.ok === true
     case MessageType.StreamDownloadResult:
-      return isRecord(value.payload) && value.payload.ok === true && Object.keys(value.payload).every(key => ['ok', 'token', 'downloadId'].includes(key)) &&
+      return isRecord(value.payload) && value.payload.ok === true && Object.keys(value.payload).every(key => ['ok', 'token', 'downloadId', 'taskId', 'info', 'data'].includes(key)) &&
+        (value.payload.taskId === undefined || (typeof value.payload.taskId === 'string' && isQueryGuid(value.payload.taskId))) &&
+        (value.payload.info === undefined || isRecord(value.payload.info)) &&
+        (value.payload.data === undefined || (typeof value.payload.data === 'string' && value.payload.data.length <= 349528)) &&
         (value.payload.token === undefined || (typeof value.payload.token === 'string' && /^[0-9a-f]{64}$/.test(value.payload.token))) &&
         (value.payload.downloadId === undefined || (Number.isSafeInteger(value.payload.downloadId) && Number(value.payload.downloadId) >= 0))
     case MessageType.DownloadFilesResult:

@@ -8,10 +8,12 @@ const props = withDefaults(defineProps<{
   modelValue?: string
   options: TreeOption[]
   disabled?: boolean
+  status?: 'loading' | 'ready' | 'empty' | 'partial' | 'invalid'
+  emptyText?: string
   /** 多选（checkbox，带「全选」）或单选（radio，选中即收起）。对应原站 TreeUser 的 SelectType。 */
   multiple?: boolean
 }>(), { modelValue: '', disabled: false, multiple: true })
-const emit = defineEmits<{ 'update:modelValue': [value: string]; open: [] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: string]; open: []; retry: [] }>()
 
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
@@ -29,6 +31,11 @@ const tree = computed(() => buildOptionTree(props.options.filter(item => item.va
 const selected = computed(() => props.modelValue.split(',').map(item => item.trim()).filter(Boolean))
 const found = computed(() => applied.value.trim() ? searchOptionTree(tree.value, applied.value) : null)
 const expanded = computed(() => found.value ? { ...manualExpanded.value, ...Object.fromEntries([...found.value.expand].map(id => [id, true])) } : manualExpanded.value)
+const state = computed(() => props.status ?? (tree.value.roots.length ? 'ready' : 'empty'))
+const available = computed(() => (state.value === 'ready' || state.value === 'partial') && tree.value.roots.length > 0)
+const unresolved = computed(() => selected.value.filter(id => !available.value || !tree.value.byId.has(id)))
+const statusText = computed(() => state.value === 'loading' ? '正在读取选项…' : state.value === 'invalid' ? '选项读取失败' : state.value === 'empty' ? props.emptyText || '当前账号未配置此字段选项' : '当前条件下没有可选项')
+watch(available, value => { if (!value) close() })
 const summary = computed(() => {
   const names = selected.value.map(id => tree.value.byId.get(id)?.label).filter((item): item is string => Boolean(item))
   if (names.length === 0) return selected.value.length ? `已选 ${selected.value.length} 项` : '不限'
@@ -64,7 +71,7 @@ function updatePosition(): void {
 }
 
 function show(): void {
-  if (props.disabled || opened.value) return
+  if (props.disabled || opened.value || !available.value) return
   portal.value = resolvePortal()
   opened.value = true
   emit('open')
@@ -164,12 +171,14 @@ onBeforeUnmount(() => {
 
 <template>
   <span ref="root" class="theme-select" @keydown="onKey">
-    <button ref="trigger" type="button" class="theme-select-trigger" :class="{ 'is-open': opened }" :disabled="disabled" aria-haspopup="tree" :aria-expanded="opened" @click="opened ? close() : show()">
+    <span v-if="!available" class="theme-select-status" role="status">{{ statusText }} <button v-if="state === 'invalid'" type="button" @click="emit('retry')">重试</button></span>
+    <button v-else ref="trigger" type="button" class="theme-select-trigger" :class="{ 'is-open': opened }" :disabled="disabled" aria-haspopup="tree" :aria-expanded="opened" @click="opened ? close() : show()">
       <span class="theme-select-value" :class="{ 'is-placeholder': summary === '不限' }">{{ summary }}</span>
       <svg class="theme-select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.2 6 8l4-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
+    <span v-if="unresolved.length" class="theme-select-unresolved" role="alert">原选项当前不可用：{{ unresolved.join('、') }} <button type="button" @click="emit('update:modelValue', selected.filter(id => !unresolved.includes(id)).join(','))">清除原选项</button></span>
     <Teleport :to="portal">
-      <div v-if="opened" ref="menu" class="theme-select-menu theme-tree-menu" role="tree" :style="menuStyle">
+      <div v-if="opened && available" ref="menu" class="theme-select-menu theme-tree-menu" role="tree" :style="menuStyle">
         <div class="theme-tree-search">
           <input ref="searchBox" v-model="draft" type="search" placeholder="搜索" aria-label="搜索" @keydown.enter.prevent="search" />
           <button type="button" class="theme-tree-query" @click="search">查询</button>

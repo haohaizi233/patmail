@@ -11,11 +11,7 @@ export function copyManifestPlugin(): Plugin {
       const to = resolve(__dirname, 'dist/manifest.json')
       mkdirSync(dirname(to), { recursive: true })
       copyFileSync(from, to)
-      const bridgeDir = resolve(__dirname, 'dist/local-download')
-      mkdirSync(bridgeDir, { recursive: true })
-      for (const name of ['stream-download-bridge.py', 'start-stream-download.ps1']) {
-        copyFileSync(resolve(__dirname, 'scripts', name), resolve(bridgeDir, name))
-      }
+      copyFileSync(resolve(__dirname, 'delivery/使用说明.txt'), resolve(__dirname, 'dist/使用说明.txt'))
       const licenseDir = resolve(__dirname, 'dist/licenses')
       mkdirSync(licenseDir, { recursive: true })
       copyFileSync(resolve(__dirname, 'node_modules/@zip.js/zip.js/LICENSE'), resolve(licenseDir, 'zip.js.txt'))

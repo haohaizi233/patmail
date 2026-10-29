@@ -66,6 +66,8 @@ const checking = ref(false)
 const checkMessage = ref('')
 const pickers = ref<Record<string, NormalizedDictionary>>({})
 const pickersReady = ref(false)
+const pickerFailed = ref(false)
+let pickerGeneration = 0
 const fallbackTick = ref(0)
 const stopFallbackWatch = subscribeOptionFallback(() => { fallbackTick.value = optionFallbackEpoch() })
 const loads = new TemplateLoadCoordinator()
@@ -134,25 +136,11 @@ function choices(key: string): { value: string; label: string; parent?: string }
   fallbackTick.value
   const source = LIMIT_PICKER_FIELDS[key]
   const dictionary = source ? pickers.value[source] : undefined
-  const live = dictionary && dictionary.options.length > 0
-    ? choicesFromDictionary(dictionary, caseTypeFor(), valueOf('country'))
-    : null
+  const state = optionStatus(key)
+  const live = dictionary && ['ready', 'partial'].includes(state) ? choicesFromDictionary(dictionary, caseTypeFor(), valueOf('country')) : null
   const rawStored = props.userId ? savedChoices(props.userId, key) : null
-  // 缓存选项也按当前案件类型收窄，接口没回来时的兜底和实时来源同口径。
   const stored = rawStored ? scopeSavedChoices(key, rawStored, caseTypeFor()) : null
-  const saved = stored ?? pageSelectOptions(LIMIT_OPTION_KEYS[key] ?? key) ?? LIMIT_SELECTS[key] ?? []
-  const options = live ?? [...saved]
-  const current = valueOf(key)
-  if (key === 'ctrl_proc') {
-    const ids = splitCtrlProcIds(current)
-    const labels = (displayValues.value[key] ?? '').split(/[,，]/).map(item => item.trim())
-    ids.forEach((id, index) => {
-      if (!options.some(item => item.value === id)) options.unshift({ value: id, label: labels[index] || '已选择' })
-    })
-  } else if (current && isQueryGuid(current) && !options.some(item => item.value === current)) {
-    const remembered = displayValues.value[key]?.trim()
-    options.unshift({ value: current, label: remembered || '已选择' })
-  }
+  const options = source ? (live ?? []) : [...(stored ?? pageSelectOptions(LIMIT_OPTION_KEYS[key] ?? key) ?? LIMIT_SELECTS[key] ?? [])]
   return options.filter(item => item.value)
 }
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
@@ -166,8 +154,18 @@ function pickerOptions(key: string): { value: string; label: string; parent?: st
 }
 /** 原站 TreeUser 的字段（多选或层级树）都换成树形框；平铺单选仍用原生下拉。 */
 function showPicker(key: string): boolean {
-  return isMultiPickerKey(key) || treeChoices(key).length > 0
+  return Boolean(LIMIT_PICKER_FIELDS[key]) || isMultiPickerKey(key) || treeChoices(key).length > 0
 }
+function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
+  if (!LIMIT_PICKER_FIELDS[key]) return 'ready'
+  if (checking.value || (!pickersReady.value && !pickerFailed.value)) return 'loading'
+  if (pickerFailed.value) return 'invalid'
+  return pickers.value[LIMIT_PICKER_FIELDS[key] ?? '']?.status ?? 'invalid'
+}
+const unavailableFields = computed(() => Object.keys(LIMIT_PICKER_FIELDS).filter(key => {
+  const ids = valueOf(key).split(',').map(id => id.trim()).filter(Boolean)
+  return ids.length > 0 && (!['ready', 'partial'].includes(optionStatus(key)) || ids.some(id => !choices(key).some(option => option.value === id)))
+}))
 function optionsFor(key: string): { value: string; label: string; parent?: string }[] {
   return [{ value: '', label: '不限' }, ...choices(key)]
 }
@@ -375,6 +373,7 @@ async function deleteTemplate(): Promise<void> {
 
 function search(): void {
   if (!props.canSearch) return
+  if (unavailableFields.value.length) { message.value = '原选项当前不可用，请重新读取选项或显式清除后查询。'; return }
   const fields: Record<string, string> = {}
   for (const [key, value] of Object.entries(values.value)) {
     if (isLimitMonitorInputField(key)) fields[key] = value
@@ -417,13 +416,18 @@ async function loadPickers(force: boolean): Promise<void> {
     checkMessage.value = '请先确认 EASY 已登录。'
     return
   }
+  const generation = ++pickerGeneration
+  const userId = props.userId
+  const current = () => generation === pickerGeneration && userId === props.userId
   checking.value = true
+  pickerFailed.value = false
   if (force || !pickersReady.value) checkMessage.value = '正在向原网站读取期限下拉…'
   const caseType = valueOf('case_type')
   const country = valueOf('country').split(',').map(item => item.trim()).filter(item => /^[A-Za-z0-9_-]{1,40}$/.test(item)).join(',')
   const procType = valueOf('proc_type')
   try {
     const columnResponse = await props.bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'fieldColumn', force } })
+    if (!current()) return
     if (columnResponse.type === MessageType.DictionaryResult && columnResponse.payload.ok && columnResponse.payload.data.kind === 'fieldColumn') {
       columnLabels.value = limitColumnLabels(columnResponse.payload.data.columns)
     }
@@ -437,7 +441,9 @@ async function loadPickers(force: boolean): Promise<void> {
         ...(isQueryGuid(procType) ? { procType } : {})
       }
     })
+    if (!current()) return
     if (response.type !== MessageType.DictionaryResult || !response.payload.ok || response.payload.data.kind !== 'picker') {
+      pickerFailed.value = true
       checkMessage.value = response.type === MessageType.Error
         ? response.payload.message
         : response.type === MessageType.DictionaryResult && !response.payload.ok
@@ -451,15 +457,17 @@ async function loadPickers(force: boolean): Promise<void> {
       const fields = { ...LIMIT_PICKER_FIELDS }
       delete fields.case_status_id
       rememberDictionaries(props.userId, fields, response.payload.data.dictionaries)
-      rememberChoices(props.userId, 'case_status_id', choices('case_status_id'))
+      rememberDictionaries(props.userId, { case_status_id: 'limitCaseStatus' }, response.payload.data.dictionaries)
     }
     checkMessage.value = describePickerReceipt(response.payload.data.dictionaries, response.payload.data.warnings)
     const renamed = Object.values(columnLabels.value)
     if (renamed.length) checkMessage.value += `。自定义栏位标题已按 GetFieldColumn 对齐：${renamed.join('、')}`
   } catch {
+    if (!current()) return
+    pickerFailed.value = true
     checkMessage.value = '读取期限下拉失败。'
   } finally {
-    checking.value = false
+    if (current()) checking.value = false
   }
 }
 
@@ -488,10 +496,13 @@ watch(() => props.seedToken, () => {
   applySeed()
 }, { immediate: true })
 watch(() => props.userId, () => {
+  pickerGeneration += 1
+  checking.value = false
   templates.value = []
   selectedId.value = ''
   pickers.value = {}
   pickersReady.value = false
+  pickerFailed.value = false
   checkMessage.value = ''
   applySeed()
   if (props.userId) {
@@ -503,9 +514,6 @@ watch(() => props.userId, () => {
 }, { immediate: true })
 watch(() => [valueOf('case_type'), valueOf('proc_type'), valueOf('country')].join('|'), (next, previous) => {
   if (applyingTemplate || !pickersReady.value || next === previous) return
-  if (valueOf('ctrl_proc')) setValue('ctrl_proc', '')
-  const status = valueOf('case_status_id')
-  if (status && !choices('case_status_id').some(item => item.value === status)) setValue('case_status_id', '')
   window.clearTimeout(filterTimer)
   filterTimer = window.setTimeout(() => { void loadPickers(true) }, 400)
 })
@@ -556,19 +564,19 @@ watch(() => [valueOf('case_type'), valueOf('proc_type'), valueOf('country')].joi
             </label>
             <label v-else-if="cell.kind === 'named' && cell.key === 'ctrl_proc'" class="query-cell">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true)" @update:model-value="setValue(cell.key, String($event))" />
               <ThemeSelect v-else-if="choices(cell.key).length" :model-value="valueOf(cell.key)" :value-label="namedLabel(cell.key)" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
               <span v-else class="hint">先校对字段，再选择处理事项</span>
               <span v-if="splitCtrlProcIds(valueOf(cell.key)).length > 1" class="hint proc-note">选中的事项会一起放进同一次查询。一行只会命中其中一项。</span>
             </label>
             <label v-else-if="cell.kind === 'named'" class="query-cell">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true)" @update:model-value="setValue(cell.key, String($event))" />
               <ThemeSelect v-else :model-value="valueOf(cell.key)" :value-label="fieldLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
             </label>
             <label v-else-if="cell.kind === 'select'" class="query-cell">
               <span>{{ cell.label }}</span>
-              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
+              <TreeOptionSelect v-if="showPicker(cell.key)" :model-value="valueOf(cell.key)" :multiple="isMultiPickerKey(cell.key)" :options="pickerOptions(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true)" @update:model-value="setValue(cell.key, String($event))" />
               <ThemeSelect v-else :model-value="valueOf(cell.key)" :value-label="fieldLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @update:model-value="setValue(cell.key, String($event))" />
             </label>
             <div v-else class="query-cell">

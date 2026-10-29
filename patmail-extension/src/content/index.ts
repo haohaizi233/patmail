@@ -3,7 +3,7 @@ import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
 import { sendToBackground } from '../utils/runtime'
 import { watchBrowserDownload } from '../utils/download-outcome'
-import { nativeStreamArchive } from '../utils/stream-download'
+import { nativeStreamArchive, pauseNativeDownload } from '../utils/stream-download'
 import { templateArchiveName } from '../api/file-download'
 import { injectPanel } from './injector'
 import { startArchiveDownload } from './save-file'
@@ -297,11 +297,16 @@ const bridge: MessageBridge = {
         if (message.payload.stream) {
           const fileName = message.payload.archiveName ?? templateArchiveName()
           try {
-            const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork) => easyRuntime.streamFiles(
-              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork
-            ), report)
+            const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork, context) => easyRuntime.streamFiles(
+              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, context
+            ), report, { taskId: message.payload.taskId,
+              ...(message.payload.browserTarget ? { backend: 'browser' as const, targetId: message.payload.browserTarget } : {}),
+              ...(message.payload.saveAsNew ? { newCopy: true as const } : {}), manifest: {
+              items: message.payload.items, selection: message.payload.selection,
+              stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName
+            } })
             return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: {
-              fileName, fileCount: message.payload.items.length, notice: `浏览器下载完成（${formatBytes(bytes)}）。`
+              fileName, fileCount: message.payload.items.length, notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。`
             } } }
           } catch (error) {
             return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',
@@ -368,6 +373,11 @@ const bridge: MessageBridge = {
           }
         }
       }
+      case MessageType.DiscardDownload:
+        return await sendToBackground(message) as ContentResponse ?? { type: MessageType.Error, payload: { message: '本机下载任务没有响应。' } }
+      case MessageType.PauseDownload:
+        pauseNativeDownload(message.payload.taskId)
+        return { type: MessageType.PauseDownloadResult, payload: { ok: true } }
       case MessageType.ExportCaseContacts:
         return { type: MessageType.ExportCaseContactsResult,
           payload: await easyRuntime.exportCaseContacts(message.payload.volumes) }

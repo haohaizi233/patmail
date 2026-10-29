@@ -11,13 +11,16 @@ import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress } fro
 import { runPagedFetch, type PageFetchResult } from '../page-pool'
 import QueryTemplateSection from '../../floating/QueryTemplateSection.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
-import { MessageType, type MessageBridge } from '../../shared/message'
+import { downloadFilesRequestIssue, MessageType, type MessageBridge } from '../../shared/message'
 import { DownloadNameValidationError, type FileDownloadSelection } from '../../mail/download-name'
 import { downloadNameText } from '../../mail/download-name'
 import { DOWNLOAD_PROGRESS_CHANNEL, isDownloadProgress } from '../../shared/download-progress'
 import { newUuid } from '../../utils/uuid'
 import { templateArchiveName } from '../../api/file-download'
 import { isRecord } from '../../shared/guards'
+import { recallRecovery, rememberRecovery } from '../../recovery/wal-ledger'
+import { fileQueryOwner, fileQueryScope, restoredFileQuery, type FileQuerySnapshot, type FileQueryTask } from '../../recovery/file-query'
+import { chooseBrowserDownloadTarget, releaseBrowserDownloadTarget } from '../../browser-download/target'
 
 const props = withDefaults(defineProps<{
   userId: string
@@ -27,7 +30,8 @@ const props = withDefaults(defineProps<{
   seedToken?: number
   selectable?: boolean
   epoch?: number
-}>(), { seed: null, seedToken: 0, selectable: false, epoch: 0 })
+  recoverySurface?: string
+}>(), { seed: null, seedToken: 0, selectable: false, epoch: 0, recoverySurface: 'file-query' })
 
 const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { default: () => ({}) })
 
@@ -43,6 +47,8 @@ const queryForm = ref<InstanceType<typeof QueryTemplateSection> | null>(null)
 const downloadSelection = ref<FileDownloadSelection | null>(null)
 const stripAppNoDot = ref(true)
 const downloading = ref(false)
+const choosingTarget = ref(false)
+let downloadAttempt = 0
 let disposed = false
 let releaseDownloadProgress: (() => void) | null = null
 let downloadWait: AbortController | null = null
@@ -86,6 +92,73 @@ const resultsSection = ref<HTMLElement | null>(null)
 const lastQuery = ref<FileSearchQuery | null>(null)
 const resultTemplateName = ref('')
 let generation = 0
+let searchGeneration = 0
+
+const recoveryNotice = ref('')
+const needsRevalidation = ref(false)
+const activeTask = ref<FileQueryTask | null>(null)
+const readPages = ref<number[]>([])
+let recoveryReady = false
+let recoveryGeneration = 0
+let recoveryTimer: ReturnType<typeof setTimeout> | undefined
+let snapshotScope = ''
+let snapshotOwner: [string, string, string] | null = null
+const snapshotIdentity = computed(() => props.userId && props.origin ? fileQueryScope(props.origin, props.userId, props.recoverySurface) : '')
+function surfaceSnapshot(): FileQuerySnapshot | null {
+  if (!snapshotOwner) return null
+  return JSON.parse(JSON.stringify({
+    version: 1, owner: snapshotOwner, query: lastQuery.value, result: result.value, selected: selected.value,
+    form: queryForm.value?.recoveryState?.() ?? null, downloadSelection: downloadSelection.value,
+    stripAppNoDot: stripAppNoDot.value, pageSize: pageSize.value, templateName: resultTemplateName.value,
+    readPages: readPages.value, activeTask: activeTask.value
+  }))
+}
+async function protectSurface(): Promise<void> {
+  if (!recoveryReady || !snapshotScope) throw new Error('恢复账本尚未就绪，当前工作尚未保护。')
+  const snapshot = surfaceSnapshot()
+  if (!snapshot) throw new Error('尚未确认工作面所属账号。')
+  try {
+    await rememberRecovery('file-query', snapshotScope, snapshot)
+    recoveryNotice.value = ''
+  } catch (error) {
+    recoveryNotice.value = error instanceof Error ? error.message : '工作面未保护，请保留本页并重试。'
+    throw error
+  }
+}
+function scheduleSurface(): void {
+  if (!recoveryReady) return
+  if (recoveryTimer) clearTimeout(recoveryTimer)
+  recoveryTimer = setTimeout(() => { void protectSurface().catch(() => {}) }, 150)
+}
+watch(selected, () => { if (recoveryReady) void protectSurface().catch(() => {}) }, { deep: true })
+watch([stripAppNoDot, downloadSelection], scheduleSurface, { deep: true })
+function pauseActiveDownload(): void {
+  const task = activeTask.value
+  if (!task || task.status !== 'running') return
+  task.status = 'paused'
+  void protectSurface().catch(() => {})
+  if (bridge) void bridge.request({ type: MessageType.PauseDownload, payload: { taskId: task.id, ...(task.backend ? { backend: task.backend } : {}) } }).catch(() => {})
+}
+function pauseDownload(): void {
+  pauseActiveDownload()
+  downloadAttempt++
+  downloadWait?.abort()
+  releaseDownloadProgress?.(); releaseDownloadProgress = null
+  downloading.value = false
+  toolbarNotice.value = '下载已暂停，浏览器缓存已保留。继续时请重新确认保存位置。'
+}
+watch(() => props.canSearch, allowed => {
+  if (allowed) return
+  stopBulk()
+  generation += 1
+  pauseActiveDownload()
+  downloadWait?.abort()
+  if (activeTask.value?.status === 'running') activeTask.value.status = 'paused'
+  needsRevalidation.value = Boolean(result.value)
+  if (taskCheckProgress.label === '生成下载名称' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
+  scheduleSurface()
+})
+defineExpose({ protectSurface })
 
 function messageForError(code: string, message: string): string {
   if (code === 'SESSION_EXPIRED') return 'EASY 登录已失效，请在原网站重新登录后检测。'
@@ -135,7 +208,10 @@ async function showResults(): Promise<void> {
 async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs, templateName?: string): Promise<void> {
   if (timeoutMs !== undefined) searchTimeoutMs.value = fileSearchTimeoutMs(timeoutMs)
   if (!bridge || !props.canSearch) return
+  searchGeneration += 1
   stopBulk()
+  const preserveRecoveredSelection = needsRevalidation.value && run === 'continue'
+  if (needsRevalidation.value) { querySessionId.value = ''; run = 'start' }
   const { fields, oversized } = fieldsFor(query)
   if (oversized.length) {
     searchState.value = 'error'
@@ -186,7 +262,11 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     sourceNotice.value = response.payload.data.sourceMessage ?? ''
     if (response.payload.data.sourceCode === 'QUERY_SESSION_INVALID' || response.payload.data.sourceCode === 'QUERY_LAYOUT_CHANGED') querySessionId.value = ''
     else if (response.payload.data.querySessionId) querySessionId.value = response.payload.data.querySessionId
-    if (run === 'start') selected.value = {}
+    if (run === 'start' && !preserveRecoveredSelection) selected.value = {}
+    needsRevalidation.value = false
+    readPages.value = [...new Set([...readPages.value, result.value.pageIndex])]
+    await rememberRecovery('file-query', `${snapshotScope}:page:${querySessionId.value}:${result.value.pageIndex}`, result.value).catch(error => { recoveryNotice.value = String(error) })
+    await protectSurface().catch(() => {})
     searchState.value = result.value.total === 0 ? 'empty' : 'success'
     void showResults()
   } catch {
@@ -206,6 +286,7 @@ function cellText(file: PatentFile, key: typeof resultColumns[number]['key']): s
   return file[key]?.trim() ?? ''
 }
 function togglePage(event: Event): void {
+  if (needsRevalidation.value || !props.canSearch) return
   stopBulk()
   const items = result.value?.items ?? []
   const on = (event.target as HTMLInputElement).checked
@@ -244,20 +325,42 @@ function onDownloadName(selection: FileDownloadSelection | null, problem = ''): 
 }
 
 /** 勾选的文件按下载名称打包下载；包里文件名的申请号校验点已去掉。 */
-async function downloadSelected(): Promise<void> {
-  const files = Object.values(selected.value)
-  if (!bridge || !files.length || downloading.value || selectingAll.value) return
+async function downloadSelected(resume = false, saveAsNew = false): Promise<void> {
+  const frozen = resume ? activeTask.value : null
+  const files = frozen ? frozen.items : Object.values(selected.value)
+  if (!bridge || !props.canSearch || needsRevalidation.value || !files.length || downloading.value || choosingTarget.value || selectingAll.value) return
+  if (frozen && frozen.backend !== 'browser') { toolbarNotice.value = '这是旧版下载任务，不能在新模式直接继续。请保留旧版完成，或丢弃后重新下载；旧缓存不会自动迁入浏览器。'; return }
+  if (!resume && activeTask.value && activeTask.value.status !== 'done') { toolbarNotice.value = '还有暂停的下载，请先继续或丢弃该任务。'; return }
   if (files.some(file => !file.fileNo?.trim())) {
     toolbarNotice.value = '有文件缺文件编号，没有打包下载。换个查询条件重新查一次再选。'
     return
   }
   let selection: FileDownloadSelection | null
   try {
-    selection = queryForm.value ? queryForm.value.currentDownloadSelection() : downloadSelection.value
+    selection = frozen ? frozen.selection : queryForm.value ? queryForm.value.currentDownloadSelection() : downloadSelection.value
   } catch (error) {
     toolbarNotice.value = error instanceof DownloadNameValidationError ? error.message : '没有读到下载名称，请重新选择。'
     return
   }
+  const task: FileQueryTask = frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' }
+  const startingScope = snapshotScope
+  const issue = downloadFilesRequestIssue({ items: task.items, selection, stripAppNoDot: task.stripAppNoDot })
+  if (issue) { toolbarNotice.value = issue; return }
+  const startingGeneration = generation
+  let browserTarget: string
+  choosingTarget.value = true
+  try { browserTarget = await chooseBrowserDownloadTarget(task.id, JSON.stringify([new URL(props.origin).origin, props.userId]), task.archiveName) }
+  catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) toolbarNotice.value = error instanceof Error ? error.message : '浏览器下载尚未启动。'
+    return
+  } finally { choosingTarget.value = false }
+  if (disposed || !props.canSearch || snapshotScope !== startingScope || generation !== startingGeneration) { void releaseBrowserDownloadTarget(task.id).catch(() => {}); return }
+  activeTask.value = task
+  try { await protectSurface() } catch { void releaseBrowserDownloadTarget(task.id).catch(() => {}); toolbarNotice.value = '下载尚未启动：工作面没有持久保存。'; return }
+  if (disposed || !props.canSearch || needsRevalidation.value || snapshotScope !== startingScope ||
+    generation !== startingGeneration || activeTask.value?.id !== task.id) { void releaseBrowserDownloadTarget(task.id).catch(() => {}); return }
+  task.status = 'running'
+  const attempt = ++downloadAttempt
   downloading.value = true
   const wait = downloadWait = new AbortController()
   toolbarNotice.value = '正在生成下载名称并打包…'
@@ -266,6 +369,7 @@ async function downloadSelected(): Promise<void> {
   resetTaskCheckProgress()
   if (selection) paintTaskCheckProgress(0, files.length, startedAt, 'run', '生成下载名称')
   const runtime = globalThis.chrome?.runtime
+  const removeProgress = () => { try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 页面已关闭 */ } }
   let namedFiles = selection ? 0 : files.length
   let packedFiles = 0
   let nativeBytes = 0
@@ -284,21 +388,23 @@ async function downloadSelected(): Promise<void> {
   }
   try {
     runtime?.onMessage?.addListener(onProgress)
-    releaseDownloadProgress = () => {
-      try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 扩展已重载 */ }
-    }
+    releaseDownloadProgress = removeProgress
     // 下载名称不进查询：点下载的一刻再取一次表单当前值，查询之后改模板或固定字符都按新的来。
     const response = await bridge.request({
       type: MessageType.DownloadFiles,
       payload: {
-        items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })),
+        items: task.items,
+        taskId: task.id,
+        browserTarget,
+        ...(saveAsNew ? { saveAsNew: true as const } : {}),
         selection,
-        stripAppNoDot: stripAppNoDot.value,
-        archiveName: templateArchiveName(resultTemplateName.value),
+        stripAppNoDot: task.stripAppNoDot,
+        archiveName: task.archiveName,
         stream: true,
         progressId
       }
     }, wait.signal)
+    if (disposed || wait.signal.aborted || downloadAttempt !== attempt || activeTask.value?.id !== task.id) return
     if (response.type !== MessageType.DownloadFilesResult) {
       toolbarNotice.value = response.type === MessageType.Error ? response.payload.message : '下载返回了意外结果。'
       return
@@ -307,33 +413,66 @@ async function downloadSelected(): Promise<void> {
       toolbarNotice.value = messageForError(response.payload.error.code, response.payload.error.message)
       return
     }
+    task.status = 'done'
+    if (selection) paintTaskCheckProgress(files.length, files.length, startedAt, 'done', '生成下载名称')
     const data = response.payload.data
     toolbarNotice.value = `${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
   } catch {
+    if (disposed || downloadAttempt !== attempt || activeTask.value?.id !== task.id) return
     toolbarNotice.value = '下载通信失败，请重试。'
   } finally {
+    removeProgress()
+    if (releaseDownloadProgress === removeProgress) releaseDownloadProgress = null
+    if (downloadAttempt !== attempt) return
+    if (activeTask.value?.id !== task.id) return
     releaseDownloadProgress?.()
     releaseDownloadProgress = null
     if (downloadWait === wait) downloadWait = null
     downloading.value = false
-    if (!disposed && selection && namedFiles < files.length) {
+    if (task.status !== 'done') task.status = 'paused'
+    task.notice = toolbarNotice.value
+    void protectSurface().catch(() => {})
+    if (!disposed && selection && namedFiles < files.length && task.status !== 'done') {
       paintTaskCheckProgress(namedFiles, files.length, startedAt, 'fail', '生成下载名称')
     }
   }
 }
 
+async function discardDownloadTask(): Promise<void> {
+  const task = activeTask.value
+  if (!bridge || !task || downloading.value || !props.canSearch) return
+  try {
+    const response = task.backend === 'browser'
+      ? await bridge.request({ type: MessageType.DiscardDownload, payload: { taskId: task.id, backend: task.backend } })
+      : { type: MessageType.DiscardDownloadResult, payload: { ok: true as const } }
+    if (response.type !== MessageType.DiscardDownloadResult || !response.payload.ok) {
+      toolbarNotice.value = response.type === MessageType.Error ? response.payload.message : '下载任务没有丢弃，请重试。'
+      return
+    }
+    activeTask.value = null
+    await releaseBrowserDownloadTarget(task.id).catch(() => {})
+    await protectSurface()
+    toolbarNotice.value = '下载任务已丢弃。'
+  } catch (error) {
+    toolbarNotice.value = error instanceof Error ? error.message : '下载任务没有丢弃，请重试。'
+  }
+}
+
 /** 全选本页 / 取消全选本页：只动当前页的行，其他页已选的不受影响。 */
 function selectCurrentPage(on: boolean): void {
+  if (needsRevalidation.value || !props.canSearch) return
   stopBulk()
   const items = result.value?.items ?? []
   if (!items.length) return
   selected.value = selectPage(selected.value, items.map(file => toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
 }
 function clearSelection(): void {
+  if (needsRevalidation.value || !props.canSearch) return
   stopBulk()
   selected.value = {}
 }
 function toggleFile(file: PatentFile): void {
+  if (needsRevalidation.value || !props.canSearch) return
   stopBulk()
   selected.value = toggleSelected(selected.value, toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value))
 }
@@ -439,6 +578,8 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
       bulk.selection = selectPage({ ...bulk.selection, ...selected.value }, rows, true)
       selected.value = bulk.selection
       bulk.completed.add(page)
+      readPages.value = [...new Set([...readPages.value, page])]
+      scheduleSurface()
       tickPage()
     }
   })
@@ -449,6 +590,7 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
 const selectingAll = ref(false)
 const failedPages = ref<number[]>([])
 async function selectAllPages(): Promise<void> {
+  if (needsRevalidation.value || !props.canSearch) return
   const summary = result.value
   if (!bridge || !lastQuery.value || !summary || selectingAll.value || downloading.value) return
   const bulk: BulkRead = {
@@ -517,6 +659,7 @@ async function selectAllPages(): Promise<void> {
 
 /** 容灾补齐：只重拉没读到的页，已勾上的不动。 */
 async function retryFailedPages(): Promise<void> {
+  if (needsRevalidation.value || !props.canSearch) return
   const bulk = retryBulk
   const pages = failedPages.value
   if (!bridge || !bulk || !bulkCurrent(bulk) || selectingAll.value || downloading.value || !pages.length) return
@@ -548,7 +691,52 @@ async function retryFailedPages(): Promise<void> {
   }
 }
 
-watch(() => props.epoch, () => { clearView() })
+watch(snapshotIdentity, async scope => {
+  const current = ++recoveryGeneration
+  releaseDownloadProgress?.()
+  releaseDownloadProgress = null
+  pauseActiveDownload()
+  downloadWait?.abort()
+  downloading.value = false
+  if (taskCheckProgress.label === '生成下载名称') resetTaskCheckProgress()
+  if (recoveryReady && snapshotScope) void protectSurface().catch(() => {})
+  recoveryReady = false
+  snapshotScope = scope
+  snapshotOwner = scope ? fileQueryOwner(props.origin, props.userId, props.recoverySurface) : null
+  if (!scope) return
+  clearView()
+  activeTask.value = null
+  readPages.value = []
+  try {
+    const initialGeneration = searchGeneration
+    const saved = await recallRecovery('file-query', scope)
+    if (current !== recoveryGeneration || disposed) return
+    const restored = restoredFileQuery(saved, props.origin, props.userId, props.recoverySurface)
+    if (restored && searchGeneration === initialGeneration) {
+      lastQuery.value = restored.query
+      result.value = restored.result
+      selected.value = restored.selected
+      pageSize.value = restored.pageSize ?? 100
+      resultTemplateName.value = restored.templateName ?? ''
+      stripAppNoDot.value = restored.stripAppNoDot ?? true
+      downloadSelection.value = restored.downloadSelection
+      activeTask.value = restored.activeTask
+      readPages.value = restored.readPages ?? []
+      querySessionId.value = ''
+      searchState.value = restored.result ? (restored.result.total ? 'success' : 'empty') : 'idle'
+      needsRevalidation.value = true
+      await nextTick()
+      queryForm.value?.restoreRecoveryState?.(restored.form)
+      if (restored.query) emit('searched', restored.query)
+      emit('download-name', restored.downloadSelection, '')
+    }
+    recoveryReady = true
+  } catch (error) {
+    if (current === recoveryGeneration) recoveryNotice.value = error instanceof Error ? error.message : '恢复账本不可用。'
+  }
+}, { immediate: true })
+
+watch(() => props.epoch, () => { stopBulk(); generation += 1 })
 watch(() => props.seedToken, () => {
   if (!props.seedToken || !props.seed) return
   const fields: Record<string, string> = {}
@@ -565,6 +753,11 @@ watch(() => props.seedToken, () => {
 })
 
 onBeforeUnmount(() => {
+  if (recoveryTimer) clearTimeout(recoveryTimer)
+  pauseActiveDownload()
+  if (activeTask.value) void releaseBrowserDownloadTarget(activeTask.value.id).catch(() => {})
+  void protectSurface().catch(() => {})
+  if (taskCheckProgress.label === '生成下载名称' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
   disposed = true
   downloadWait?.abort()
   downloadWait = null
@@ -578,6 +771,15 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="file-search-query">
+    <p v-if="recoveryNotice" class="hint" role="alert">工作面未保护：{{ recoveryNotice }}</p>
+    <p v-if="needsRevalidation" class="hint" role="status">已恢复本地查询与选择，当前为只读工作面。请确认同一账号后点击刷新重新验证查询；不会自动查询或发文。</p>
+    <p v-if="activeTask && activeTask.status !== 'done'" class="hint" role="status">
+      {{ activeTask.status === 'running' ? '下载进行中' : '下载已暂停' }}，任务包含 {{ activeTask.items.length }} 个文件。{{ activeTask.notice }}
+      <button v-if="activeTask.status === 'running'" type="button" @click="pauseDownload">暂停下载</button>
+      <button type="button" :disabled="!canSearch || needsRevalidation || downloading || choosingTarget" @click="downloadSelected(true)">继续下载</button>
+      <button v-if="/不支持原记录续传|原下载记录已被清除|无法读取浏览器下载记录/.test(activeTask.notice)" type="button" :disabled="!canSearch || needsRevalidation || downloading" @click="downloadSelected(true, true)">从缓存另存为新文件</button>
+      <button type="button" :disabled="!canSearch || downloading" @click="discardDownloadTask">丢弃下载任务</button>
+    </p>
     <p class="hint">结案默认包含在结果里。更多案件条件里的「是否包含结案」选「否」，结案文件才不会出现。不要把那种空结果当成库里没有。</p>
     <QueryTemplateSection
       ref="queryForm"
@@ -592,6 +794,7 @@ onBeforeUnmount(() => {
       :seed-token="seedToken"
       @search="(query, timeoutMs) => executeSearch(query, 'start', timeoutMs)"
       @download-name="onDownloadName"
+      @recovery-change="scheduleSurface"
     />
     <slot />
     <section ref="resultsSection" class="card file-results" aria-label="查询结果">
@@ -613,14 +816,14 @@ onBeforeUnmount(() => {
       <template v-else-if="result">
         <p v-if="sourceNotice" class="hint" role="status">{{ sourceNotice }}</p>
         <div v-if="selectable" class="result-toolbar">
-          <button type="button" class="ghost" :disabled="!result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
-          <button type="button" class="ghost" :disabled="!result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
-          <button type="button" class="ghost" :disabled="!result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
           <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
-          <button v-if="failedPages.length" type="button" class="ghost" :disabled="selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
+          <button v-if="failedPages.length" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
           <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" />申请号去点</label>
-          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || downloading || selectingAll" :title="downloadTitle" @click="downloadSelected">{{ downloading ? '正在打包下载…' : '下载已选' }}</button>
+          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '正在打包下载…' : '下载已选' }}</button>
         </div>
         <p v-if="toolbarNotice" class="hint" role="status">{{ toolbarNotice }}</p>
         <div class="table-scroll">
@@ -633,7 +836,7 @@ onBeforeUnmount(() => {
             <thead>
               <tr>
                 <th v-if="selectable" class="check">
-                  <input type="checkbox" aria-label="当前页全选" :checked="pageAllSelected" @change="togglePage" />
+                  <input type="checkbox" aria-label="当前页全选" :disabled="needsRevalidation || !canSearch" :checked="pageAllSelected" @change="togglePage" />
                 </th>
                 <th class="seq">序号</th>
                 <th v-for="column in resultColumns" :key="column.key">{{ column.label }}</th>
@@ -642,7 +845,7 @@ onBeforeUnmount(() => {
             <tbody>
               <tr v-for="(file, index) in result.items" :key="file.fileId" :class="{ 'is-selected': Boolean(selected[file.fileId]) }">
                 <td v-if="selectable" class="check">
-                  <input type="checkbox" :aria-label="file.fileName" :checked="Boolean(selected[file.fileId])" @change="toggleFile(file)" />
+                  <input type="checkbox" :aria-label="file.fileName" :disabled="needsRevalidation || !canSearch" :checked="Boolean(selected[file.fileId])" @change="toggleFile(file)" />
                 </td>
                 <td class="seq">{{ rowNo(index) }}</td>
                 <td v-for="column in resultColumns" :key="column.key">

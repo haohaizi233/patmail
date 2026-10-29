@@ -30,7 +30,8 @@ const sessionName = ref('')
 const sessionUserId = ref('')
 const sessionMessage = ref('')
 const sessionLoading = ref(false)
-const queryUserId = computed(() => props.showSession ? sessionUserId.value : workspace.connection.value.operatorId)
+const lastVerifiedUserId = ref('')
+const queryUserId = computed(() => props.showSession ? (sessionUserId.value || lastVerifiedUserId.value) : workspace.connection.value.operatorId)
 const epoch = ref(0)
 const selected = ref<Record<string, SelectedPatentFile>>({})
 const showSelected = ref(false)
@@ -72,7 +73,6 @@ async function checkSession(): Promise<void> {
   sessionUserId.value = ''
   sessionLoading.value = true
   sessionMessage.value = ''
-  selected.value = {}
   showMail.value = false
   try {
     const response = await bridge.request({ type: MessageType.CheckSession })
@@ -90,6 +90,7 @@ async function checkSession(): Promise<void> {
     sessionStatus.value = response.payload.data.status
     sessionName.value = response.payload.data.displayName ?? ''
     sessionUserId.value = response.payload.data.userId ?? ''
+    if (sessionStatus.value === 'authenticated') lastVerifiedUserId.value = sessionUserId.value
     if (sessionStatus.value !== 'authenticated') sessionMessage.value = '请先在 EASY 原网站登录。'
   } catch {
     if (current !== sessionGeneration) return
@@ -157,6 +158,7 @@ onBeforeUnmount(() => {
     <FileSearchQuery
       v-model:selected="selected"
       selectable
+      :recovery-surface="showSession ? 'floating-files' : 'workspace-files'"
       :user-id="queryUserId"
       :origin="accountOrigin"
       :can-search="canSearch"

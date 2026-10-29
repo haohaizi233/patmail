@@ -1,13 +1,19 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { projectRoot } from './paths.mjs'
+import { mkdtemp } from 'node:fs/promises'
+import { projectRoot, testResultsDir } from './paths.mjs'
+
+export const streamBridgePort = Number(process.env.PATMAIL_TEST_BRIDGE_PORT || 42843)
+export const streamBridgeBase = `http://127.0.0.1:${streamBridgePort}`
 
 export async function ensureStreamBridge() {
   const ready = async () => {
-    try { return (await fetch('http://127.0.0.1:42843/health', { signal: AbortSignal.timeout(1000) }).then(response => response.json())).protocol === 'patmail-stream-v1' } catch { return false }
+    try { const info = await fetch(streamBridgeBase + '/health', { signal: AbortSignal.timeout(1000) }).then(response => response.json()); return info.protocol === 'patmail-stream-v1' && info.version === 2 } catch { return false }
   }
   if (await ready()) return () => {}
-  const child = spawn('python', [join(projectRoot, 'scripts', 'stream-download-bridge.py')], { windowsHide: true, stdio: 'ignore' })
+  const args = [join(projectRoot, 'scripts', 'stream-download-bridge.py'), '--port', String(streamBridgePort)]
+  if (process.env.PATMAIL_TEST_BRIDGE_PORT) args.push('--cache-dir', await mkdtemp(join(testResultsDir, 'bridge-cache-')))
+  const child = spawn('python', args, { windowsHide: true, stdio: 'ignore' })
   let failed = false
   child.on('error', () => { failed = true })
   for (let index = 0; index < 25 && !failed; index++) {

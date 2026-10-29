@@ -50,7 +50,7 @@ describe('下拉校对目录', () => {
     expect(built.dictionaries.limitProcType.options).toEqual([expect.objectContaining({ value: OFFICIAL, label: '官方事项' })])
     expect(built.dictionaries.limitCaseStatus.options.map(item => item.value)).toEqual(['open', 'early', 'tm-open', 'other'])
     expect(built.dictionaries.limitCtrlProc.options.find(item => item.value === 'proc-2')?.parentValue).toBe('proc-1')
-    expect(built.warnings.some(item => item.startsWith('agent'))).toBe(false)
+    expect(built.warnings.some(item => item.startsWith('agent'))).toBe(true)
 
     const applyTypes = choicesFromDictionary(built.dictionaries.limitApplyType, PATENT, '')
     expect(applyTypes.map(item => item.value)).toEqual(['inv'])

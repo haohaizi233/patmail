@@ -71,7 +71,7 @@ const menu = computed(() => props.items || nav)
           <slot />
         </div>
         <footer class="site-foot">
-          <span>© 2026 PatMail　专利发文自动化系统 v1.4.8　|　让知识产权服务更简单、更温暖、更高效 ♡</span>
+          <span>© 2026 PatMail　专利发文自动化系统 v1.6.1　|　让知识产权服务更简单、更温暖、更高效 ♡</span>
           <span>Innovation for a Brighter Tomorrow. ♡</span>
         </footer>
       </div>

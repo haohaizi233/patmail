@@ -20,7 +20,7 @@ export class DictionaryCache {
     this.entries.delete(key)
   }
 
-  async load<T>(key: string, force: boolean, fetcher: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
+  async load<T>(key: string, force: boolean, fetcher: () => Promise<ApiResult<T>>, cacheable: (data: T) => boolean = () => true): Promise<ApiResult<T>> {
     let started = this.epoch(key)
     const pending = this.inflight.get(key)
     if (pending && pending.epoch === started) return pending.promise as Promise<ApiResult<T>>
@@ -32,7 +32,7 @@ export class DictionaryCache {
       started = this.epoch(key)
     }
     const promise = fetcher().then(result => {
-      if (result.ok && this.epoch(key) === started) {
+      if (result.ok && cacheable(result.data) && this.epoch(key) === started) {
         this.entries.set(key, { epoch: started, expires: this.now() + this.ttlMs, data: result.data })
       }
       return result

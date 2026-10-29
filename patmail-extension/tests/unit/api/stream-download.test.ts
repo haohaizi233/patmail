@@ -33,8 +33,12 @@ function fixture() {
     active++; peak = Math.max(peak, active)
     const index = files.findIndex(file => file.fileId === url)
     events.push(`read:${index}`)
-    active--
-    return new Response(`%PDF sample ${index}`, { headers: { 'Content-Length': String(`%PDF sample ${index}`.length) } })
+    let sent = false
+    return new Response(new ReadableStream({ async pull(controller) {
+      await new Promise(resolve => setTimeout(resolve, 1))
+      if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(`%PDF sample ${index}`)) }
+      else { active--; controller.close() }
+    } }, { highWaterMark: 0 }), { headers: { 'Content-Length': String(`%PDF sample ${index}`.length) } })
   }
   return { transport, fetchFile, events, peak: () => peak }
 }
@@ -46,6 +50,125 @@ function output() {
 }
 
 describe('流水单ZIP下载', () => {
+  it.each([false, true])('慢首文件与后续大正文填满缓冲，取消=%s，保持顺序或清理全部请求', async cancelled => {
+    const setup = fixture(), result = output(), controller = new AbortController()
+    let release!: () => void
+    const firstGate = new Promise<void>(resolve => { release = resolve })
+    const reads = Array(6).fill(0)
+    let active = 0, peak = 0
+    const expected = (index: number) => {
+      const body = new Uint8Array(512 * 1024).fill(index)
+      body.set(new TextEncoder().encode('%PDF large fixture'))
+      return body
+    }
+    const running = streamDownloadFiles(setup.transport, files.slice(0, 6), null, false, {
+      signal: controller.signal, sink: result.sink, fetchFile: async url => {
+        const index = files.findIndex(file => file.fileId === url), bytes = expected(index)
+        active++; peak = Math.max(peak, active)
+        let stopped = false
+        return new Response(new ReadableStream({ async pull(target) {
+          if (index === 0) await firstGate
+          if (stopped) return
+          if (reads[index] < 8) {
+            const offset = reads[index]++ * 65536
+            target.enqueue(bytes.slice(offset, offset + 65536))
+          } else { stopped = true; active--; target.close() }
+        }, cancel() { if (!stopped) { stopped = true; active-- }; release() } }, { highWaterMark: 0 }),
+        { headers: { 'Content-Length': String(bytes.length) } })
+      }
+    })
+    const settled = running.then(() => null, error => error)
+    try {
+      for (let attempt = 0; attempt < 100 && reads.slice(1).some(count => count < 5); attempt++) await new Promise(resolve => setTimeout(resolve, 5))
+      expect(peak).toBe(6)
+      expect(reads).toEqual([0, 5, 5, 5, 5, 5])
+      if (cancelled) controller.abort(new Error('填满缓冲后取消'))
+    } finally { release() }
+    const error = await settled
+    expect(active).toBe(0)
+    if (cancelled) {
+      expect(error?.message).toBe('填满缓冲后取消')
+      expect(result.aborted()).toBe(true)
+      return
+    }
+    expect(error).toBeNull()
+    const reader = new ZipReader(new Uint8ArrayReader(result.bytes()), { useWebWorkers: false })
+    const entries = await reader.getEntries()
+    expect(entries.map(entry => entry.filename)).toEqual(files.slice(0, 6).map(file => file.fileName))
+    for (const [index, entry] of entries.entries()) {
+      if (entry.directory) throw new Error('Expected file')
+      const data = await entry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })
+      expect(Buffer.from(data).equals(Buffer.from(expected(index)))).toBe(true)
+    }
+    await reader.close()
+  }, 15000)
+  it('本机输出被背压阻塞时取消仍应及时返回', async () => {
+    const setup = fixture(), controller = new AbortController()
+    let unblock!: () => void, writing!: () => void
+    const blocked = new Promise<void>(resolve => { unblock = resolve })
+    const entered = new Promise<void>(resolve => { writing = resolve })
+    const running = streamDownloadFiles(setup.transport, files.slice(0, 2), null, false, {
+      signal: controller.signal,
+      sink: new WritableStream({ write() { writing(); return blocked } }), fetchFile: setup.fetchFile
+    })
+    await entered
+    controller.abort(new Error('用户取消'))
+    const outcome = await Promise.race([running.then(() => 'success', () => 'cancelled'), new Promise(resolve => setTimeout(() => resolve('hung'), 500))])
+    unblock()
+    await expect(running).rejects.toThrow('用户取消')
+    expect(outcome).toBe('cancelled')
+  })
+  it('后续预取正文失败时，不能等最前面的慢正文才中断', async () => {
+    const setup = fixture(), result = output(), controller = new AbortController()
+    const running = streamDownloadFiles(setup.transport, files.slice(0, 2), null, false, {
+      signal: controller.signal, sink: result.sink, fetchFile: async (url, init) => {
+        if (url === files[1].fileId) return new Response('<html>error</html>', { headers: { 'Content-Type': 'text/html' } })
+        return new Response(new ReadableStream({ async pull(target) {
+          await new Promise<void>(resolve => {
+            if (init?.signal?.aborted) resolve()
+            else init?.signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+          target.close()
+        } }, { highWaterMark: 0 }))
+      }
+    })
+    const outcome = await Promise.race([running.then(() => 'success', () => 'failed'), new Promise(resolve => setTimeout(() => resolve('hung'), 500))])
+    controller.abort()
+    await expect(running).rejects.toThrow('网页')
+    expect(outcome).toBe('failed')
+  })
+  it.each([false, true])('命名=%s 时正文并行达到六路，读取到EOF才释放，ZIP保持原始顺序', async naming => {
+    const setup = fixture(), result = output()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let active = 0, peak = 0
+    const started = Date.now()
+    const running = streamDownloadFiles(setup.transport, files.slice(0, 12), naming ? selection : null, false, {
+      sink: result.sink,
+      fetchFile: async url => {
+        active++; peak = Math.max(peak, active)
+        let sent = false
+        return new Response(new ReadableStream({ async pull(controller) {
+          await gate
+          if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(`%PDF ${url}`)) }
+          else { active--; controller.close() }
+        } }, { highWaterMark: 0 }))
+      }
+    })
+    try {
+      while (peak < 6 && Date.now() - started < 1000) await new Promise(resolve => setTimeout(resolve, 5))
+      expect(peak).toBe(6)
+    } finally { release(); await running }
+    expect(active).toBe(0)
+    const reader = new ZipReader(new Uint8ArrayReader(result.bytes()), { useWebWorkers: false })
+    const entries = await reader.getEntries()
+    expect(entries.map(entry => entry.filename)).toEqual(files.slice(0, 12).map(file => file.fileName))
+    for (const [index, entry] of entries.entries()) {
+      if (entry.directory) throw new Error('Expected file')
+      expect(new TextDecoder().decode(await entry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false }))).toBe(`%PDF ${files[index].fileId}`)
+    }
+    await reader.close()
+  })
   it('单文件原站提示失败但句柄正文为完整PDF时，沿原站口径按实际正文完成', async () => {
     const setup = fixture(), result = output()
     const transport = { ...setup.transport, post: async () => ({ ok: true, data: { ...info, file_guid: files[0].fileId,
@@ -78,11 +201,11 @@ describe('流水单ZIP下载', () => {
     expect(outcome).toBe('failed')
     expect(result.aborted()).toBe(true)
   })
-  it('命名尚未全部完成就消费文件，原始顺序、ZIP64目录和CRC可解包，业务请求峰值不超过5', async () => {
+  it('命名尚未全部完成就消费文件，原始顺序、ZIP64目录和CRC可解包，共享请求达到六路且不越界', async () => {
     const setup = fixture(), result = output()
     await streamDownloadFiles(setup.transport, files, selection, false, { sink: result.sink, fetchFile: setup.fetchFile })
     expect(setup.events.indexOf('read:0')).toBeLessThan(setup.events.indexOf('named:240'))
-    expect(setup.peak()).toBeLessThanOrEqual(5)
+    expect(setup.peak()).toBe(6)
     expect(result.closed()).toBe(true)
     const reader = new ZipReader(new Uint8ArrayReader(result.bytes()), { useWebWorkers: false })
     const entries = await reader.getEntries()
