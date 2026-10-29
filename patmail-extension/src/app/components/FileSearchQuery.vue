@@ -925,9 +925,9 @@ onBeforeUnmount(() => {
           </table>
         </div>
         <nav class="pagination" aria-label="文件分页">
-          <button type="button" :disabled="result.pageIndex <= 1" @click="page(-1)">上一页</button>
+          <button type="button" :disabled="result.pageIndex <= 1 || searchState === 'loading'" @click="page(-1)">上一页</button>
           <span>第 {{ result.pageIndex }} / {{ result.totalPages }} 页</span>
-          <button type="button" :disabled="result.pageIndex >= result.totalPages" @click="page(1)">下一页</button>
+          <button type="button" :disabled="result.pageIndex >= result.totalPages || searchState === 'loading'" @click="page(1)">下一页</button>
         </nav>
       </template>
     </section>

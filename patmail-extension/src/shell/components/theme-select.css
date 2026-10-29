@@ -34,7 +34,10 @@ label > .theme-select,
 .theme-select-value.is-placeholder { color: var(--sub, #8d97b0); }
 .theme-select-chevron { width: 12px; height: 12px; flex: none; color: #c9a0b4; }
 .theme-select-trigger.is-open .theme-select-chevron { transform: rotate(180deg); }
-#theme-select-portal { pointer-events: none; }
+/* 影子树里的下拉菜单要盖过浮窗本体：.panel 在同一层里 z-index 是 2147483647，
+   菜单自己只有 70，会被面板内容压住导致点不到选项。让 portal 撑满视口并抬到最高层，
+   容器不吃事件（pointer-events: none），只有菜单自己接。应用页走 body teleport，不生效。 */
+#theme-select-portal { position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }
 .theme-select-menu {
   position: fixed; z-index: 70; margin: 0; padding: 6px; overflow-x: hidden; overflow-y: auto; list-style: none;
   border: 1px solid #eadff0; border-radius: 12px; background: #fff; color: var(--text, #243056);
