@@ -65,6 +65,7 @@ const recoveryScope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1
 async function launch() {
   console.log('stage: launch browser')
   context = await chromium.launchPersistentContext(profile, { channel: 'chromium', headless: true,
+    ...(process.env.PATMAIL_TEST_CHROMIUM ? { executablePath: process.env.PATMAIL_TEST_CHROMIUM } : {}),
     proxy: { server: `http://127.0.0.1:${server.address().port}`, bypass: '127.0.0.1' },
     args: [`--disable-extensions-except=${distDir}`, `--load-extension=${distDir}`] })
   console.log('stage: Chromium started')
