@@ -23,9 +23,13 @@ async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 function metadata(value: Partial<CachedFileInfo>): Partial<CachedFileInfo> {
   if (value.totalBytes != null) integer(value.totalBytes)
+  if (value.skipReason !== undefined && (typeof value.skipReason !== 'string' || !value.skipReason.trim() || value.skipReason.length > 1000)) throw new Error('Invalid skip reason')
+  if (value.sourceNotice !== undefined && (typeof value.sourceNotice !== 'string' || value.sourceNotice.length > 1000)) throw new Error('Invalid source notice')
   return { ...(value.totalBytes !== undefined ? { totalBytes: value.totalBytes } : {}),
     ...(value.etag !== undefined ? { etag: value.etag } : {}),
-    ...(value.lastModified !== undefined ? { lastModified: value.lastModified } : {}) }
+    ...(value.lastModified !== undefined ? { lastModified: value.lastModified } : {}),
+    ...(value.skipReason !== undefined ? { skipReason: value.skipReason } : {}),
+    ...(value.sourceNotice !== undefined ? { sourceNotice: value.sourceNotice } : {}) }
 }
 
 /** ACKs resolve only after a strict-durability transaction commits. Crypto is always outside transactions. */
@@ -143,8 +147,10 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
         const next = { ...current, updatedAt: patch.updatedAt ?? Date.now(),
           ...(patch.state !== undefined ? { state: patch.state } : {}),
           ...(patch.completedBytes !== undefined ? { completedBytes: patch.completedBytes } : {}),
+          ...(patch.failedCount !== undefined ? { failedCount: patch.failedCount } : {}),
           ...(targetChanged ? { activeTargetId: targetId } : {}) }
         if (next.completedBytes !== undefined) integer(next.completedBytes)
+        if (next.failedCount !== undefined) integer(next.failedCount)
         await request(tx.objectStore('tasks').put(next))
       })
     },
@@ -251,6 +257,13 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
         await task(tx, taskId)
         const values = await request(tx.objectStore('names').index('taskId').getAll(taskId))
         return Object.fromEntries(values.map(value => [String(value.offset), value.names]))
+      })
+    },
+    async skipped(taskId) {
+      return transaction('readonly', async tx => {
+        await task(tx, taskId)
+        const values = await request<BlobRecord[]>(tx.objectStore('blobs').index('taskId').getAll(taskId))
+        return values.filter(value => value.blob !== 'archive' && value.complete && !!value.skipReason).length
       })
     },
     async complete(taskId, bytes) {

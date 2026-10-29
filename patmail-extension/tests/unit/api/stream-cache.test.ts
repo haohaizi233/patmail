@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cachedFileResponse, type DownloadCache, type CachedFileInfo } from '../../../src/api/stream-cache'
+import { cachedFileResponse, responseNetworkFinished, type DownloadCache, type CachedFileInfo } from '../../../src/api/stream-cache'
 
 function fixture(initial = '', complete = false) {
   let bytes = new TextEncoder().encode(initial)
@@ -14,6 +14,50 @@ function fixture(initial = '', complete = false) {
   return { cache, text: () => new TextDecoder().decode(bytes), info: () => info }
 }
 describe('持久附件缓存', () => {
+  it('慢落盘下原站预读有界，取消立即停止原站而不等待落盘', async () => {
+    const setup = fixture()
+    const controller = new AbortController()
+    let resumeWrite!: () => void
+    const writing = new Promise<void>(resolve => { resumeWrite = resolve })
+    setup.cache.write = async () => { await writing }
+    let sourceBytes = 0, cancelled = false
+    const response = await cachedFileResponse('source', 0, setup.cache, controller.signal, async () => new Response(new ReadableStream({
+      pull(target) { sourceBytes += 65536; target.enqueue(new Uint8Array(65536)) },
+      cancel() { cancelled = true }
+    }, { highWaterMark: 0 })))
+    const consuming = response.arrayBuffer().catch(error => error)
+    try {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      const stalledAt = sourceBytes
+      expect(stalledAt).toBeGreaterThan(262144)
+      expect(stalledAt).toBeLessThanOrEqual(3 * 262144)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(sourceBytes).toBe(stalledAt)
+      controller.abort(new Error('cancelled'))
+      await responseNetworkFinished(response)
+      expect(cancelled).toBe(true)
+    } finally { resumeWrite(); await consuming }
+  })
+  it('缓存块正在落盘时读完短原站正文，网络完成先于持久完成', async () => {
+    const setup = fixture()
+    let resumeWrite!: () => void
+    const writing = new Promise<void>(resolve => { resumeWrite = resolve })
+    setup.cache.write = async () => { await writing }
+    let durableFinished = false, reachedEof = false
+    let sent = false
+    const response = await cachedFileResponse('source', 0, setup.cache, new AbortController().signal, async () => new Response(new ReadableStream({
+      pull(target) {
+        if (sent) { reachedEof = true; target.close(); return }
+        sent = true; target.enqueue(new Uint8Array(512 * 1024))
+      }
+    }, { highWaterMark: 0 })))
+    const consuming = response.arrayBuffer().then(() => { durableFinished = true })
+    try {
+      await responseNetworkFinished(response)
+      expect(reachedEof).toBe(true)
+      expect(durableFinished).toBe(false)
+    } finally { resumeWrite(); await consuming }
+  })
   it('64KiB网络碎片合并为256KiB持久提交，避免每个网络块都走一次落盘RPC', async () => {
     const setup = fixture()
     const bytes = new Uint8Array(512 * 1024).fill(7)

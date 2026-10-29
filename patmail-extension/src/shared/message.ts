@@ -914,7 +914,9 @@ export function isMessage(value: unknown): value is AppMessage {
         (p.offset === undefined || (Number.isSafeInteger(p.offset) && Number(p.offset) >= 0)) &&
         (p.data === undefined || (typeof p.data === 'string' && p.data.length <= 349528 && /^[A-Za-z0-9+/]*={0,2}$/.test(p.data))) &&
         (p.command !== 'write' || (typeof p.data === 'string' && p.offset !== undefined)) &&
-        (metadata === undefined || (isRecord(metadata) && Object.keys(metadata).every(key => ['totalBytes', 'etag', 'lastModified'].includes(key)) &&
+        (metadata === undefined || (isRecord(metadata) && Object.keys(metadata).every(key => ['totalBytes', 'etag', 'lastModified', 'skipReason', 'sourceNotice'].includes(key)) &&
+          (metadata.sourceNotice === undefined || (typeof metadata.sourceNotice === 'string' && metadata.sourceNotice.length <= 1000)) &&
+          (metadata.skipReason === undefined || (typeof metadata.skipReason === 'string' && metadata.skipReason.trim().length > 0 && metadata.skipReason.length <= 1000)) &&
           (metadata.totalBytes == null || (Number.isSafeInteger(metadata.totalBytes) && Number(metadata.totalBytes) >= 0)) &&
           ['etag', 'lastModified'].every(key => metadata[key] === undefined || (typeof metadata[key] === 'string' && String(metadata[key]).length <= 1024))))
       }

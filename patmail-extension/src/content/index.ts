@@ -288,7 +288,9 @@ const bridge: MessageBridge = {
         }
       }
       case MessageType.DownloadFiles: {
+        let failedFiles = 0
         const report = (progress: FileDownloadProgress): void => {
+          failedFiles = Math.max(failedFiles, progress.failed ?? 0)
           if (!message.payload.progressId) return
           try {
             chrome.runtime.sendMessage({ channel: DOWNLOAD_PROGRESS_CHANNEL, id: message.payload.progressId, progress }, () => { void chrome.runtime.lastError })
@@ -306,7 +308,7 @@ const bridge: MessageBridge = {
               stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName
             } })
             return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: {
-              fileName, fileCount: message.payload.items.length, notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。`
+              fileName, fileCount: message.payload.items.length, notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。${failedFiles ? `成功 ${message.payload.items.length - failedFiles} 个，跳过 ${failedFiles} 个不可用附件；详情见ZIP内下载失败清单。` : ''}`
             } } }
           } catch (error) {
             return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',

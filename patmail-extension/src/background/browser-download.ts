@@ -43,6 +43,7 @@ export class BrowserStreamDownloads {
   private readonly closingTargets = new Map<Lease, Promise<void>>()
   private readonly closedTargets = new WeakSet<Lease>()
   private readonly queues = new Map<string, Promise<unknown>>()
+  private readonly cacheWork = new Map<string, Set<Promise<unknown>>>()
   private readonly tabEpochs = new Map<number, number>()
   private currentOwner: string | undefined
   constructor(private readonly store: BrowserDownloadStore, private readonly host: (request: BrowserFileRequest) => Promise<BrowserFileReply>,
@@ -59,6 +60,31 @@ export class BrowserStreamDownloads {
     lease.active = false
     this.leases.delete(lease.token)
     if (this.tasks.get(lease.taskId) === lease) this.tasks.delete(lease.taskId)
+  }
+  private async drainCache(taskId: string): Promise<void> {
+    await Promise.allSettled([...(this.cacheWork.get(taskId) ?? [])])
+  }
+  private cacheCommand(lease: Lease, command: Extract<StreamDownloadCommand, { action: 'cache' }>, tabId: number, owner: string): Promise<Reply> {
+    natural(command.index)
+    const work = this.queue<Reply>(`${lease.taskId}/attachment/${command.index}`, async () => {
+      this.assertLease(lease, tabId, owner)
+      if (lease.task.state === 'done') throw new Error('下载任务已完成且缓存已清理。')
+      const id = lease.taskId, blob = command.index
+      let reply: Reply = { ok: true }
+      if (command.command === 'info') reply = { ok: true, info: { ...await this.store.info(id, blob) } }
+      else if (command.command === 'read') {
+        const offset = command.offset ?? 0; natural(offset)
+        reply = { ok: true, data: encode(await this.store.read(id, blob, offset, BLOCK)) }
+      } else if (command.command === 'write') { natural(command.offset); await this.store.append(id, blob, command.offset, decode(command.data)) }
+      else if (command.command === 'reset') await this.store.reset(id, blob, command.metadata ?? {})
+      else await this.store.finishBlob(id, blob, command.metadata ?? {})
+      this.assertLease(lease, tabId, owner)
+      return reply
+    })
+    const pending = this.cacheWork.get(lease.taskId) ?? new Set<Promise<unknown>>()
+    this.cacheWork.set(lease.taskId, pending); pending.add(work)
+    void work.finally(() => { pending.delete(work); if (!pending.size && this.cacheWork.get(lease.taskId) === pending) this.cacheWork.delete(lease.taskId) }).catch(() => {})
+    return work
   }
   private output(lease: Lease, work: () => Promise<void>): Promise<void> {
     const next = lease.output.then(async () => { this.assertLease(lease); await work() })
@@ -113,6 +139,7 @@ export class BrowserStreamDownloads {
       receivedBytes: task.completedBytes ?? archive.receivedBytes,
       sealed: archive.complete || task.state === 'sealed' || task.state === 'done',
       completed: task.state === 'done', ...(task.completedBytes === undefined ? {} : { completedBytes: task.completedBytes }) }
+    Object.assign(snapshot, { failedCount: task.failedCount ?? 0 })
     if (lease && task.state !== 'done' && this.nativeStatus) {
       const native = await this.nativeStatus(lease.targetId)
       if (native) Object.assign(snapshot, native)
@@ -151,6 +178,7 @@ export class BrowserStreamDownloads {
         assertSource()
         const previousTargets = this.previousTargets(task)
         for (const previous of previousTargets) this.invalidate(previous)
+        await this.drainCache(taskId)
         if (previousTargets.length) {
           await this.store.update(taskId, { state: 'paused', updatedAt: Date.now() })
           // A late close can replace the new target. Never open until the old host ACKs close.
@@ -178,6 +206,7 @@ export class BrowserStreamDownloads {
     const lease = this.leases.get(command.token)
     if (!lease) throw new Error('下载凭据已失效。')
     this.assertLease(lease, tabId, owner)
+    if (command.action === 'cache') return this.cacheCommand(lease, command, tabId, owner)
     // Status is read-only. It must remain observable while a queued write is
     // waiting for the browser sink to pull and acknowledge its bytes.
     if (command.action === 'status') {
@@ -200,6 +229,7 @@ export class BrowserStreamDownloads {
         if (task.state !== 'done') {
           const archive = await this.store.info(task.taskId, 'archive')
           if (!lease.closed || !archive.complete) throw new Error('保存文件尚未确认关闭，缓存没有清理。')
+          await this.drainCache(task.taskId)
           await this.store.complete(task.taskId, archive.receivedBytes)
           task.state = 'done'; task.completedBytes = archive.receivedBytes
         }
@@ -210,17 +240,6 @@ export class BrowserStreamDownloads {
         natural(command.offset)
         if (!Array.isArray(command.names) || !command.names.every(name => typeof name === 'string')) throw new Error('缓存文件名无效。')
         await this.store.saveNames(task.taskId, command.offset, command.names)
-      } else if (command.action === 'cache') {
-        natural(command.index)
-        const blob = command.index
-        if (command.command === 'info') return { ok: true, info: { ...await this.store.info(task.taskId, blob) } }
-        if (command.command === 'read') {
-          const offset = command.offset ?? 0; natural(offset)
-          return { ok: true, data: encode(await this.store.read(task.taskId, blob, offset, BLOCK)) }
-        }
-        if (command.command === 'write') { natural(command.offset); await this.store.append(task.taskId, blob, command.offset, decode(command.data)) }
-        else if (command.command === 'reset') await this.store.reset(task.taskId, blob, command.metadata ?? {})
-        else await this.store.finishBlob(task.taskId, blob, command.metadata ?? {})
       } else if (command.action === 'write') {
         if (lease.closed) throw new Error('保存文件已关闭。')
         natural(command.sequence)
@@ -258,12 +277,15 @@ export class BrowserStreamDownloads {
         void settled.catch(() => { last.failed = true })
       } else if (command.action === 'finish' || command.action === 'resume') {
         if (lease.closed) return { ok: true }
+        await this.drainCache(task.taskId)
         let archive = await this.store.info(task.taskId, 'archive')
         if (!archive.complete) {
           if (command.action === 'resume') throw new Error('压缩包尚未封存。')
           if (lease.offset !== archive.receivedBytes) throw new Error('压缩包重放未达到缓存水位，不能封存。')
           await this.store.finishBlob(task.taskId, 'archive')
-          await this.store.update(task.taskId, { state: 'sealed', updatedAt: Date.now() })
+          const failedCount = await this.store.skipped?.(task.taskId) ?? 0
+          await this.store.update(task.taskId, { state: 'sealed', updatedAt: Date.now(), failedCount })
+          task.failedCount = failedCount
           task.state = 'sealed'
           archive = await this.store.info(task.taskId, 'archive')
         }
@@ -305,6 +327,7 @@ export class BrowserStreamDownloads {
       for (const lease of this.previousTargets(task)) if (!targetsById.has(lease.targetId)) targetsById.set(lease.targetId, lease)
       const targets = [...targetsById.values()]
       for (const lease of targets) this.invalidate(lease)
+      await this.drainCache(taskId)
       if (task.state !== 'done') await this.store.update(taskId, { state: 'paused', updatedAt: Date.now() })
       for (const lease of targets) await (lease === active && preemptedClose ? preemptedClose : this.closeTarget(lease))
       return [...new Set(targets.map(lease => lease.tabId).filter(tabId => tabId >= 0))]
@@ -316,6 +339,7 @@ export class BrowserStreamDownloads {
       if (!task) return
       const targets = this.previousTargets(task)
       for (const lease of targets) this.invalidate(lease)
+      await this.drainCache(taskId)
       if (task.state !== 'done') await this.store.update(taskId, { state: 'paused', updatedAt: Date.now() })
       // Keep the record (and its target identity) until every old writer confirms close.
       for (const lease of targets) await this.closeTarget(lease)
@@ -325,6 +349,7 @@ export class BrowserStreamDownloads {
   private revoke(lease: Lease): void {
     this.invalidate(lease)
     void this.queue(lease.taskId, async () => {
+      await this.drainCache(lease.taskId)
       const task = await this.store.get(lease.taskId)
       if (task && task.state !== 'done') await this.store.update(lease.taskId, { state: 'paused', updatedAt: Date.now() })
       await this.closeTarget(lease).catch(() => {})

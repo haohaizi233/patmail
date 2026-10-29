@@ -1,9 +1,76 @@
 import { describe, expect, it } from 'vitest'
 import { DownloadTokens } from '../../../src/api/download-tokens'
 import { prefetchFile } from '../../../src/api/stream-file'
+import { cachedFileResponse, type DownloadCache } from '../../../src/api/stream-cache'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 5))
 describe('正文预取背压', () => {
+  it('带文件条目的ZIP正文保留原始ZIP格式，有效PDF仍保持原格式，空ZIP不能冒充PDF', async () => {
+    const notice = '文件不存在或权限不足'
+    const zipped = await prefetchFile('source', 'test.pdf', false, notice, null, new AbortController().signal,
+      async () => new Response(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4])), () => {})
+    await expect(zipped.ready).resolves.toBeUndefined()
+    expect(zipped.format).toBe('zip')
+    await zipped.finished
+    expect(new Uint8Array(await new Response(zipped.body).arrayBuffer())).toEqual(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]))
+    const pdf = await prefetchFile('source', 'test.pdf', false, notice, null, new AbortController().signal,
+      async () => new Response('%PDF valid'), () => {})
+    await pdf.ready
+    expect(pdf.format).toBe('original')
+    await pdf.finished
+    const emptyZip = await prefetchFile('source', 'test.pdf', false, notice, null, new AbortController().signal,
+      async () => new Response(new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)])), () => {})
+    await expect(emptyZip.ready).rejects.toMatchObject({ name: 'UnavailableDownloadFileError' })
+    await emptyZip.finished
+  })
+  it('HTTP失败先取消未读原站正文，再释放下载额度', async () => {
+    let cancelled = false
+    await expect(prefetchFile('source', 'test.pdf', false, '', null, new AbortController().signal,
+      async () => new Response(new ReadableStream({ cancel() { cancelled = true } }), { status: 503 }), () => {}
+    )).rejects.toThrow('读取文件失败')
+    expect(cancelled).toBe(true)
+  })
+  it('ZIP创建条目前可等待正文前缀验证，异常PDF拒绝ready但有效PDF忽略旧notice', async () => {
+    const notice = '文件不存在或权限不足，共1个文件，下载失败'
+    const invalid = await prefetchFile('source', 'test.pdf', false, notice, null, new AbortController().signal,
+      async () => new Response(''), () => {})
+    expect(invalid.ready).toBeInstanceOf(Promise)
+    await expect(invalid.ready).rejects.toMatchObject({ name: 'Error' })
+    await invalid.finished
+    const valid = await prefetchFile('source', 'test.pdf', false, notice, null, new AbortController().signal,
+      async () => new Response('%PDF valid'), () => {})
+    await expect(valid.ready).resolves.toBeUndefined()
+    await valid.finished
+  })
+  it('原站EOF后即使缓存最终提交阻塞，也归还真实网络额度', async () => {
+    const controller = new AbortController()
+    const pool = new DownloadTokens(() => 'download')
+    const held = await Promise.all(Array.from({ length: 5 }, () => pool.acquire('download', controller.signal)))
+    let finishCommit!: () => void
+    const commit = new Promise<void>(resolve => { finishCommit = resolve })
+    let upstreamActive = 1, durableFinished = false
+    const cache: DownloadCache = {
+      names: {}, async saveNames() {}, async info() { return { receivedBytes: 0, complete: false } },
+      async reset() {}, async write() {}, async complete() { await commit }, async read() { return new TextEncoder().encode('%PDF data') }
+    }
+    const file = await prefetchFile('source', 'test.pdf', false, '', pool, controller.signal,
+      url => cachedFileResponse(url, 0, cache, controller.signal, async () => new Response(new ReadableStream({
+        start(target) { target.enqueue(new TextEncoder().encode('%PDF data')); target.close(); upstreamActive = 0 }
+      }))), () => {}, offset => cache.read(0, offset))
+    void file.finished.then(() => { durableFinished = true })
+    let acquired = false
+    const next = pool.acquire('download', controller.signal).then(release => { acquired = true; return release })
+    try {
+      for (let i = 0; i < 20 && !acquired; i++) await tick()
+      expect(upstreamActive).toBe(0)
+      expect(durableFinished).toBe(false)
+      expect(acquired).toBe(true)
+      await file.networkFinished
+    } finally {
+      finishCommit(); await file.finished
+      ;(await next)(); held.forEach(release => release())
+    }
+  })
   it('慢消费者将应用队列限制在256KiB，取消后解除生产者等待并归还令牌', async () => {
     const controller = new AbortController()
     const pool = new DownloadTokens(() => 'download')

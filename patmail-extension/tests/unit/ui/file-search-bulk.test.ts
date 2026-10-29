@@ -71,6 +71,19 @@ function mount(request: MessageBridge['request'], allowed = ref(true), epoch = r
 }
 
 describe('文件全选的批量分页', () => {
+  it.each([false, true])('简化导出区后仍显示下载结果中的操作提醒（成功=%s）', async success => {
+    mount(async message => {
+      if (message.type === MessageType.SearchFiles) return reply(message, 1)
+      if (message.type === MessageType.DownloadFiles) return success
+        ? { type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'one.zip', fileCount: 1, notice: '请检查浏览器保存位置。' } } }
+        : { type: MessageType.Error, payload: { message: '下载目标不可写，请重新选择保存位置。' } }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    expect(document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent).toBe(success
+      ? '请检查浏览器保存位置。' : '下载目标不可写，请重新选择保存位置。')
+  })
   it('用户取消保存位置时，不建立下载任务也不请求原站下载', async () => {
     const messages: ContentRequest[] = []
     mount(async message => { messages.push(message); return message.type === MessageType.SearchFiles ? reply(message, 1) : { type: MessageType.Error, payload: { message: 'unused' } } })
@@ -169,6 +182,9 @@ describe('文件全选的批量分页', () => {
     const panel = document.querySelector('[aria-label="文件导出"]')!
     expect(panel.closest('[aria-label="查询结果"]')).not.toBeNull()
     expect(panel.querySelector('[role="progressbar"]')).toBeNull()
+    expect(panel.querySelector('strong')).toBeNull()
+    expect(panel.textContent).not.toContain('模板甲.zip')
+    expect(panel.textContent).not.toContain('本次任务')
     expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('0')
     expect(button('暂停下载').closest('[aria-label="文件导出"]')).toBe(panel)
     const progress = { channel: DOWNLOAD_PROGRESS_CHANNEL, id: download!.message.payload.progressId, progress: { phase: 'naming', done: 40, total: 100 } }
@@ -186,8 +202,13 @@ describe('文件全选的批量分页', () => {
       expect(taskCheckProgress.status).toBe('run')
     }
     await settle()
-    expect(panel.textContent).toContain('已入包 10 / 100')
-    expect(panel.textContent).toContain('已命名 40 / 100')
+    const rainbow = document.querySelector('.check-rainbow')!
+    expect(rainbow.querySelectorAll('p')).toHaveLength(2)
+    expect(rainbow.querySelectorAll('p')[0].textContent).toBe('下载文件 10%（10/100）')
+    expect(rainbow.querySelectorAll('p')[1].textContent).toContain('已命名 40/100')
+    expect(panel.textContent).not.toContain('已入包')
+    expect(panel.textContent).not.toContain('已命名')
+    expect(panel.querySelector('[role="status"]')).toBeNull()
     expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('10')
     for (const fn of listeners) fn({ ...progress, progress: { phase: 'naming', done: 100, total: 100 } }, { id: 'test-extension' })
     expect(taskCheckProgress.label).toBe('下载文件')
@@ -202,8 +223,40 @@ describe('文件全选的批量分页', () => {
     expect(taskCheckProgress.label).toBe('下载文件')
     expect(taskCheckProgress.visible).toBe(true)
     expect(listeners.size).toBe(0)
-    expect(panel.textContent).toContain('导出完成')
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('导出完成')
+    expect(panel.querySelector('[role="status"]')).toBeNull()
     expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('100')
+  })
+  it('跳过文件算已处理进度，保存后显示真实入包数而非全部入包', async () => {
+    type Listener = (message: unknown, sender: chrome.runtime.MessageSender) => void
+    const listeners = new Set<Listener>()
+    vi.stubGlobal('chrome', { runtime: { id: 'test-extension', onMessage: {
+      addListener: (fn: Listener) => listeners.add(fn), removeListener: (fn: Listener) => listeners.delete(fn)
+    } } })
+    let progressId = ''
+    let finish!: (value: ContentResponse) => void
+    mount(async message => {
+      if (message.type === MessageType.SearchFiles) return reply(message, 3)
+      if (message.type === MessageType.DownloadFiles) { progressId = message.payload.progressId!; return new Promise(resolve => { finish = resolve }) }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    for (const listener of listeners) listener({ channel: DOWNLOAD_PROGRESS_CHANNEL, id: progressId,
+      progress: { phase: 'packing', done: 3, total: 3, failed: 1 } }, { id: 'test-extension' })
+    await settle()
+    const rainbow = document.querySelector('.check-rainbow')!
+    expect(rainbow.textContent).toContain('已入包 2/3')
+    expect(rainbow.textContent).toContain('跳过 1')
+    expect(rainbow.getAttribute('aria-valuenow')).toBe('99')
+    expect(rainbow.textContent).toContain('正在保存压缩包')
+    finish({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'result.zip', fileCount: 3, notice: '成功 2 个，跳过 1 个；详情见失败清单。' } } })
+    await settle()
+    expect(rainbow.getAttribute('aria-valuenow')).toBe('100')
+    expect(rainbow.textContent).toContain('已入包 2/3')
+    expect(rainbow.textContent).toContain('跳过 1')
+    expect(rainbow.textContent).not.toContain('已入包 3/3')
+    expect(document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent).toContain('成功 2 个，跳过 1 个')
   })
   it('原名下载也显示入包进度，暂停保留计数且拒绝迟到的进度', async () => {
     type Listener = (message: unknown, sender: chrome.runtime.MessageSender) => void
@@ -226,9 +279,10 @@ describe('文件全选的批量分页', () => {
     const progress = { channel: DOWNLOAD_PROGRESS_CHANNEL, id: payload!.progressId, progress: { phase: 'packing', done: 2, total: 4 } }
     listener(progress, { id: 'test-extension' }); await settle()
     expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('50')
-    expect(panel.textContent).toContain('使用附件原名')
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('附件原名')
+    expect(panel.textContent).not.toContain('附件原名')
     button('暂停下载').click(); await settle()
-    expect(panel.textContent).toContain('下载已暂停')
+    expect(panel.querySelector('[role="status"]')).toBeNull()
     expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('50')
     expect(document.querySelector('.check-rainbow')?.textContent).toContain('下载已暂停')
     listener({ ...progress, progress: { phase: 'packing', done: 4, total: 4 } }, { id: 'test-extension' }); await settle()
@@ -253,6 +307,7 @@ describe('文件全选的批量分页', () => {
     expect(button('继续下载').disabled).toBe(true)
     confirm({ type: MessageType.Error, payload: { message: '扩展后台没有在时限内返回。' } }); await settle()
     expect(button('继续下载').disabled).toBe(true)
+    expect(document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent).toContain('扩展后台没有在时限内返回。')
     button('重新确认暂停').click(); await settle()
     expect(button('继续下载').disabled).toBe(true)
     confirm({ type: MessageType.PauseDownloadResult, payload: { ok: true } }); await settle()

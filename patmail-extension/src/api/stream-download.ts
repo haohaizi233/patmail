@@ -6,6 +6,7 @@ import type { FileDownloadProgress } from '../shared/download-progress'
 import { DownloadTokens } from './download-tokens'
 import { prefetchFile } from './stream-file'
 import { cachedFileResponse, type DownloadCache } from './stream-cache'
+import { sourceUnavailableError, UnavailableDownloadFileError } from './download-failure'
 
 export interface StreamDownloadOptions {
   sink: WritableStream<Uint8Array>
@@ -63,7 +64,7 @@ export async function streamDownloadFiles(
   } } as EasyTransport
   const queue: { offset: number; names: string[] }[] = []
   const accept = async (offset: number, names: string[]) => {
-    while (!signal.aborted && (offset !== nextOffset || queue.length >= 2)) await wait()
+    while (!signal.aborted && (queue.length >= 2 || (!options.cache && offset !== nextOffset))) await wait()
     signal.throwIfAborted()
     queue.push({ offset, names }); nextOffset += names.length; wake()
   }
@@ -85,26 +86,29 @@ export async function streamDownloadFiles(
   })().catch(fail)
 
   const used = new Set<string>()
-  type Prepared = { content: () => Promise<Awaited<ReturnType<typeof prefetchFile>>>; name: string; networkFinished: Promise<void> }
+  type Prepared = { content: () => Promise<Awaited<ReturnType<typeof prefetchFile>>>; name: string; networkFinished: Promise<void>; finished: Promise<void> }
   const jobs = new Map<number, Promise<Prepared | null>>()
   const pumps = new Set<Promise<void>>()
+  const fileFailure = (error: unknown) => { if (!(error instanceof UnavailableDownloadFileError)) fail(error) }
   const open = async (index: number, generated: string): Promise<Prepared> => {
     const item = items[index]
     const name = stripAppNoDot ? stripApplicationNoDot(generated) : generated
     const params = buildDownloadParams([item.fileNo], [name])
     if (!params) throw new Error('文件编号或生成名称无效，没有完成压缩包。')
     const cached = await options.cache?.info(index)
+    if (cached?.skipReason) throw new UnavailableDownloadFileError(cached.skipReason)
     if (cached && !cached.complete && cached.totalBytes != null && cached.receivedBytes === cached.totalBytes) {
       await options.cache!.complete(index, cached)
       cached.complete = true
     }
     if (cached?.complete && options.cache) {
       // 完整磁盘缓存无需占用网络窗口，也无需提前分配正文缓冲。
-      return { name, networkFinished: Promise.resolve(), content: async () => {
+      return { name, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: async () => {
         signal.throwIfAborted()
-        const file = await prefetchFile('local-cache', item.fileName, cached.receivedBytes === 0, '', null, signal,
-          () => cachedFileResponse('local-cache', index, options.cache!, signal, options.fetchFile ?? globalThis.fetch.bind(globalThis)), fail)
+        const file = await prefetchFile('local-cache', item.fileName, cached.receivedBytes === 0, cached.sourceNotice ?? '', null, signal,
+          () => cachedFileResponse('local-cache', index, options.cache!, signal, options.fetchFile ?? globalThis.fetch.bind(globalThis)), fileFailure)
         pumps.add(file.finished); void file.finished.then(() => pumps.delete(file.finished))
+        await file.ready
         return file
       } }
     }
@@ -116,20 +120,22 @@ export async function streamDownloadFiles(
       signal.throwIfAborted()
       prepared = await scoped.post('fileDownload', params, signal)
     }
-    if (!prepared.ok) throw new Error(prepared.error.message)
+    if (!prepared.ok) throw sourceUnavailableError(prepared.error.message) ?? new Error(prepared.error.message)
     const handle = readDownloadHandle(prepared.data)
-    if (!handle.ok) throw new Error(handle.error.message)
+    if (!handle.ok) throw sourceUnavailableError(handle.error.message) ?? new Error(handle.error.message)
     const url = transport.fileDownloadUrl(handle.data.fileGuid, handle.data.fileSize)
     if (!url) throw new Error('取文件句柄无效。')
     const fetcher = options.fetchFile ?? globalThis.fetch.bind(globalThis)
     const file = await prefetchFile(url, item.fileName, handle.data.fileSize === 0, handle.data.notice,
-      budget, signal, options.cache ? target => cachedFileResponse(target, index, options.cache!, signal, fetcher) : fetcher, fail,
+      budget, signal, options.cache ? target => cachedFileResponse(target, index, options.cache!, signal, fetcher, handle.data.notice) : fetcher, fileFailure,
       options.cache ? offset => options.cache!.read(index, offset) : undefined)
     pumps.add(file.finished)
     void file.finished.then(() => pumps.delete(file.finished))
-    return { content: async () => file, name, networkFinished: file.finished }
+    return { content: async () => { try { await file.ready } catch (error) { await file.finished; throw error }; return file }, name, networkFinished: file.networkFinished, finished: file.finished }
   }
-  let preparing = 0
+  let preparing = 0, persisting = 0
+  const failures: Array<{ name: string; reason: string }> = []
+  const converted: Array<{ from: string; to: string }> = []
   // 持久模式仅保留每个附件的小描述符，正文留在磁盘；完成的附件不能
   // 继续占住网络窗口。内存模式仍限制六个256KiB正文缓冲。
   const lookahead = options.cache ? items.length : 6
@@ -140,16 +146,21 @@ export async function streamDownloadFiles(
       const batch = queue.shift()!
       wake()
       for (const [offset, generated] of batch.names.entries()) {
-        while ((scheduled - done >= lookahead || preparing >= 6) && !signal.aborted) await wait()
+        while ((scheduled - done >= lookahead || preparing >= 6 || persisting >= (options.cache ? 12 : 6)) && !signal.aborted) await wait()
         signal.throwIfAborted()
         const index = batch.offset + offset
-        // 名称在派发顺序里分配，避免响应顺序改变重名后缀。
-        const name = safeEntryName(stripAppNoDot ? stripApplicationNoDot(generated) : generated, used)
-        preparing++
+        // 网络可乱序完成；实际条目名在顺序入包时分配，恢复时后缀保持一致。
+        const name = stripAppNoDot ? stripApplicationNoDot(generated) : generated
+        preparing++; persisting++
         jobs.set(index, open(index, generated).then(file => {
           void file.networkFinished.then(() => { preparing--; wake() })
+          void file.finished.then(() => { persisting--; wake() })
           return { ...file, name }
-        }).catch(error => { preparing--; fail(error); return null }))
+        }).catch(error => {
+          preparing--; persisting--; wake()
+          if (error instanceof UnavailableDownloadFileError) return { name, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: async () => { throw error } }
+          fail(error); return null
+        }))
         scheduled++; wake()
       }
     }
@@ -170,15 +181,42 @@ export async function streamDownloadFiles(
       const file = await jobs.get(done)!
       signal.throwIfAborted()
       if (!file) throw failure
-      const content = await file.content()
-      await untilAbort(archive.add(file.name, content.body, { signal }))
+      let content: Awaited<ReturnType<typeof prefetchFile>>
+      try { content = await file.content() }
+      catch (error) {
+        if (!(error instanceof UnavailableDownloadFileError)) throw error
+        const reason = error.message.slice(0, 1000)
+        failures.push({ name: file.name, reason })
+        if (options.cache) {
+          const cached = await options.cache.info(done)
+          if (!cached.skipReason) {
+            await options.cache.reset(done, { totalBytes: 0, skipReason: reason })
+          }
+          if (!cached.skipReason || !cached.complete) await options.cache.complete(done, { totalBytes: 0, skipReason: reason })
+        }
+        jobs.delete(done); done++; wake()
+        options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length })
+        continue
+      }
+      const actualName = content.format === 'zip' && /\.pdf$/i.test(file.name) ? file.name.replace(/\.pdf$/i, '.zip') : file.name
+      const entryName = safeEntryName(actualName, used)
+      if (actualName !== file.name) converted.push({ from: file.name, to: entryName })
+      await untilAbort(archive.add(entryName, content.body, { signal }))
       await content.finished
       jobs.delete(done)
       done++; wake()
-      options.onProgress?.({ phase: 'packing', done, total: items.length })
+      options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length })
     }
     await producer; await dispatch
     signal.throwIfAborted()
+    if (failures.length || converted.length) {
+      const lines = ['PatMail 下载说明', `所选 ${items.length} 个；成功 ${items.length - failures.length} 个；跳过 ${failures.length} 个。`, '']
+      if (failures.length) lines.push('以下附件经正文检查确认不可用：', ...failures.map(item => `${item.name}\t${item.reason}`), '')
+      if (converted.length) lines.push('以下源文件实际为ZIP，已保留完整原包（包括其中的PDF/XML等文件）：', ...converted.map(item => `${item.from}\t保存为 ${item.to}`))
+      const data = new TextEncoder().encode(lines.join('\r\n'))
+      const report = new ReadableStream<Uint8Array>({ start(target) { target.enqueue(data); target.close() } })
+      await untilAbort(archive.add(safeEntryName(failures.length ? '下载失败清单.txt' : '源文件格式说明.txt', used), report, { signal }))
+    }
     await untilAbort(archive.close())
     await untilAbort(output.close())
   } catch (error) {

@@ -27,6 +27,21 @@ function memoryCache() {
 }
 
 describe('持久流水的空转回归', () => {
+  it('前六个正文网络已结束但缓存完成标记仍等待时，下一组六个仍能下载，有界为12个持久任务', async () => {
+    const items = Array.from({ length: 30 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, fileNo: String(index), fileName: `${index}.pdf` }))
+    const f = memoryCache(), complete = f.cache.complete
+    let release!: () => void, fetched = 0
+    const gate = new Promise<void>(resolve => { release = resolve })
+    f.cache.complete = async (...args) => { await gate; await complete(...args) }
+    const transport = { post: async (_op: string, params: URLSearchParams) => ({ ok: true, data: { ClientInfo: { IsLogin: true, Status: true }, file_guid: params.get('file_no') } }), fileDownloadUrl: (id: string) => id } as unknown as EasyTransport
+    const running = streamDownloadFiles(transport, items, null, false, { cache: f.cache,
+      sink: new WritableStream({ write() {} }), fetchFile: async () => { fetched++; return new Response('%PDF small') } })
+    try {
+      for (let i = 0; i < 100 && fetched < 12; i++) await new Promise(resolve => setTimeout(resolve, 5))
+      expect(fetched).toBe(12)
+    } finally { release(); await running }
+    expect(fetched).toBe(30)
+  })
   it('恢复已完整缓存的附件时，ZIP阻塞不应预热后续正文到内存', async () => {
     const items = Array.from({ length: 60 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, fileNo: String(index), fileName: `${index}.pdf` }))
     const setup = memoryCache()

@@ -196,7 +196,8 @@ describe('流水单ZIP下载', () => {
   })
   it('后批已生成但前批失败时立即退出，不能让按序队列与命名工作者互相等待', async () => {
     const setup = fixture(), result = output()
-    const transport = { ...setup.transport, post: async (_operation: string, params: URLSearchParams) => {
+    const transport = { ...setup.transport, post: async (operation: string, params: URLSearchParams) => {
+      if (operation !== 'getFileName') return setup.transport.post(operation as Parameters<EasyTransport['post']>[0], params)
       const first = params.get('file_ids')!.split(';')[0]
       if (first === files[0].fileId) {
         await new Promise(resolve => setTimeout(resolve, 30))

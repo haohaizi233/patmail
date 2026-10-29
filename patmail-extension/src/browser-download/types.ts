@@ -10,12 +10,13 @@ export interface BrowserDownloadTask {
   zipCreatedAt: string
   updatedAt: number
   completedBytes?: number
+  failedCount?: number
   activeTargetId?: string
 }
 export interface BrowserDownloadStore {
   create(task: BrowserDownloadTask): Promise<void>
   get(taskId: string): Promise<BrowserDownloadTask | null>
-  update(taskId: string, patch: Partial<Pick<BrowserDownloadTask, 'state' | 'updatedAt' | 'completedBytes' | 'activeTargetId'>>): Promise<void>
+  update(taskId: string, patch: Partial<Pick<BrowserDownloadTask, 'state' | 'updatedAt' | 'completedBytes' | 'activeTargetId' | 'failedCount'>>): Promise<void>
   info(taskId: string, blob: BrowserBlob): Promise<CachedFileInfo>
   reset(taskId: string, blob: BrowserBlob, metadata: Partial<CachedFileInfo>): Promise<void>
   append(taskId: string, blob: BrowserBlob, offset: number, bytes: Uint8Array): Promise<void>
@@ -23,6 +24,7 @@ export interface BrowserDownloadStore {
   read(taskId: string, blob: BrowserBlob, offset: number, limit?: number): Promise<Uint8Array>
   saveNames(taskId: string, offset: number, names: string[]): Promise<void>
   names(taskId: string): Promise<Record<string, string[]>>
+  skipped?(taskId: string): Promise<number>
   complete(taskId: string, bytes: number): Promise<void>
   discard(taskId: string): Promise<void>
 }

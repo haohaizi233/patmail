@@ -100,31 +100,37 @@ const activeTask = ref<FileQueryTask | null>(null)
 const pauseConfirmation = ref<{ taskId: string; pending: boolean; problem: string } | null>(null)
 const pauseBlocked = computed(() => Boolean(pauseConfirmation.value?.taskId === activeTask.value?.id &&
   (pauseConfirmation.value?.pending || pauseConfirmation.value?.problem)))
-const exportProgress = ref({ named: 0, packed: 0, bytes: 0, startedAt: 0 })
+// 暂停文案仍写入恢复账本，底部只保留需要处理的提示；常规进度统一由顶栏显示。
+const actionNotice = computed(() => {
+  if (downloading.value) return ''
+  const notice = toolbarNotice.value || activeTask.value?.notice || ''
+  return notice === '下载已暂停，浏览器缓存已保留。可以继续下载。' || notice === '正在确认暂停，浏览器缓存会保留。' ? '' : notice
+})
+const exportProgress = ref({ named: 0, packed: 0, failed: 0, bytes: 0, startedAt: 0 })
 const exportPercent = computed(() => {
   const task = activeTask.value
   if (!task) return 0
   if (task.status === 'done') return 100
-  return Math.min(99, Math.round(exportProgress.value.packed / task.items.length * 1000) / 10)
+  return Math.min(99, Math.round((exportProgress.value.packed + exportProgress.value.failed) / task.items.length * 1000) / 10)
 })
 const exportEta = computed(() => {
   const task = activeTask.value
   const progress = exportProgress.value
   return task?.status === 'running' && progress.startedAt
-    ? taskCheckSnapshot(progress.packed, task.items.length, progress.startedAt, Date.now(), 'run').eta : ''
+    ? taskCheckSnapshot(progress.packed + progress.failed, task.items.length, progress.startedAt, Date.now(), 'run').eta : ''
 })
 const exportStatus = computed(() => pauseConfirmation.value?.taskId === activeTask.value?.id && pauseConfirmation.value?.pending ? '正在暂停下载…'
   : activeTask.value?.status === 'done' ? '导出完成'
   : activeTask.value?.status === 'paused' ? '下载已暂停'
-  : exportProgress.value.packed >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…' : '正在打包下载…')
+  : exportProgress.value.packed + exportProgress.value.failed >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…' : '正在打包下载…')
 watch([exportProgress, () => activeTask.value?.status, () => pauseConfirmation.value?.pending], () => {
   const task = activeTask.value
   const progress = exportProgress.value
   if (!task || !progress.startedAt || !props.canSearch || disposed) return
   const total = task.items.length
   const named = task.status === 'done' ? total : progress.named
-  const detail = `${exportStatus.value} · ${task.selection ? `已命名 ${named}/${total}` : '附件原名'} · 已接收 ${(progress.bytes / 1024 / 1024).toFixed(1)} MB${exportEta.value ? ` · 预计 ${exportEta.value} 入包完成` : ''}`
-  paintTaskCheckProgress(task.status === 'done' ? total : progress.packed, total, progress.startedAt,
+  const detail = `${exportStatus.value} · ${task.selection ? `已命名 ${named}/${total}` : '附件原名'} · 已入包 ${progress.packed}/${total}${progress.failed ? ` · 跳过 ${progress.failed}` : ''} · 已接收 ${(progress.bytes / 1024 / 1024).toFixed(1)} MB${exportEta.value ? ` · 预计 ${exportEta.value} 处理完成` : ''}`
+  paintTaskCheckProgress(task.status === 'done' ? total : progress.packed + progress.failed, total, progress.startedAt,
     task.status === 'done' ? 'done' : task.status === 'paused' ? 'hold' : 'run', '下载文件', Date.now(), detail)
   // 入包结束还需等待浏览器确认保存，顶部彩虹条不能提前到100%。
   taskCheckProgress.percent = exportPercent.value
@@ -421,25 +427,28 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   const attempt = ++downloadAttempt
   downloading.value = true
   const wait = downloadWait = new AbortController()
-  toolbarNotice.value = '正在生成下载名称并打包…'
+  toolbarNotice.value = ''
   const startedAt = Date.now()
   resetTaskCheckProgress()
-  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, bytes: 0, startedAt }
+  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, failed: 0, bytes: 0, startedAt }
   const progressId = newUuid()
   const runtime = globalThis.chrome?.runtime
   const removeProgress = () => { try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 页面已关闭 */ } }
   let namedFiles = selection ? 0 : files.length
-  let packedFiles = 0
+  let processedFiles = 0
+  let failedFiles = 0
   let nativeBytes = 0
   const onProgress = (message: unknown, sender: chrome.runtime.MessageSender): void => {
     if (disposed || wait.signal.aborted || downloadAttempt !== attempt || activeTask.value?.id !== task.id || sender.id !== runtime?.id || !isRecord(message) || message.channel !== DOWNLOAD_PROGRESS_CHANNEL ||
       message.id !== progressId || !isDownloadProgress(message.progress)) return
     const progress = message.progress
     if (progress.phase === 'naming') namedFiles = Math.max(namedFiles, progress.done)
-    if (progress.phase === 'packing') packedFiles = Math.max(packedFiles, progress.done)
+    if (progress.phase === 'packing') {
+      processedFiles = Math.max(processedFiles, progress.done)
+      failedFiles = Math.max(failedFiles, progress.failed ?? 0)
+    }
     if (progress.phase === 'downloading') nativeBytes = Math.max(nativeBytes, progress.receivedBytes ?? 0)
-    exportProgress.value = { named: namedFiles, packed: packedFiles, bytes: nativeBytes, startedAt }
-    toolbarNotice.value = `流水下载：已命名 ${namedFiles}/${files.length}，已入包 ${packedFiles}/${files.length}；浏览器已接收 ${(nativeBytes / 1024 / 1024).toFixed(1)} MB。`
+    exportProgress.value = { named: namedFiles, packed: Math.max(0, processedFiles - failedFiles), failed: failedFiles, bytes: nativeBytes, startedAt }
   }
   try {
     runtime?.onMessage?.addListener(onProgress)
@@ -470,7 +479,7 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     }
     task.status = 'done'
     const data = response.payload.data
-    toolbarNotice.value = `${data.fileName}（${data.fileCount} 个文件${stripAppNoDot.value ? '，文件名里申请号已去掉校验点' : ''}）。${data.notice}`
+    toolbarNotice.value = data.notice
   } catch (error) {
     if (disposed || downloadAttempt !== attempt || activeTask.value?.id !== task.id) return
     toolbarNotice.value = error instanceof Error ? `${error.message} 缓存已保留，请继续下载。` : '下载通信中断，缓存已保留，请继续下载。'
@@ -504,7 +513,7 @@ async function discardDownloadTask(): Promise<void> {
     if (taskCheckProgress.label === '下载文件') resetTaskCheckProgress()
     await releaseBrowserDownloadTarget(task.id).catch(() => {})
     await protectSurface()
-    toolbarNotice.value = '下载任务已丢弃。'
+    toolbarNotice.value = ''
   } catch (error) {
     toolbarNotice.value = error instanceof Error ? error.message : '下载任务没有丢弃，请重试。'
   }
@@ -758,7 +767,7 @@ watch(snapshotIdentity, async scope => {
   if (!scope) return
   clearView()
   activeTask.value = null
-  exportProgress.value = { named: 0, packed: 0, bytes: 0, startedAt: 0 }
+  exportProgress.value = { named: 0, packed: 0, failed: 0, bytes: 0, startedAt: 0 }
   readPages.value = []
   try {
     const initialGeneration = searchGeneration
@@ -858,11 +867,6 @@ onBeforeUnmount(() => {
         <span>共 {{ result.total }} 个文件</span>
       </div>
       <section v-if="selectable && (result || activeTask)" class="file-export" aria-label="文件导出">
-        <div class="file-export-heading">
-          <span class="file-export-mascot" aria-hidden="true">୨୧</span>
-          <div class="file-export-title"><strong>文件导出</strong><span>{{ activeTask ? activeTask.archiveName : '把选好的文件，装进一个小包裹' }}</span></div>
-          <span class="file-export-count">{{ activeTask && activeTask.status !== 'done' ? '本次任务 ' + activeTask.items.length + ' 个文件' : '已选 ' + Object.keys(selected).length + ' 个文件' }}</span>
-        </div>
         <div class="file-export-actions">
           <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" :disabled="Boolean(activeTask && activeTask.status !== 'done') || choosingTarget" />申请号去点</label>
           <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '正在打包下载…' : '下载已选' }}</button>
@@ -874,17 +878,7 @@ onBeforeUnmount(() => {
             <button type="button" class="ghost file-export-discard" :disabled="!canSearch || downloading || choosingTarget || pauseBlocked" @click="discardDownloadTask">丢弃下载任务</button>
           </template>
         </div>
-        <div v-if="activeTask" class="file-export-progress">
-          <div class="file-export-summary"><strong>{{ exportStatus }}</strong></div>
-          <div class="file-export-metrics">
-            <span>{{ activeTask.selection ? `已命名 ${activeTask.status === 'done' ? activeTask.items.length : exportProgress.named} / ${activeTask.items.length}` : '使用附件原名' }}</span>
-            <span>已入包 {{ activeTask.status === 'done' ? activeTask.items.length : exportProgress.packed }} / {{ activeTask.items.length }}</span>
-            <span>已接收 {{ (exportProgress.bytes / 1024 / 1024).toFixed(1) }} MB</span>
-            <span v-if="exportEta">预计 {{ exportEta }} 入包完成</span>
-          </div>
-          <p v-if="!exportProgress.startedAt && activeTask.status === 'paused'" class="hint">缓存已保留，继续下载后同步进度。</p>
-        </div>
-        <p v-if="toolbarNotice || activeTask?.notice" class="file-export-notice" role="status">{{ toolbarNotice || activeTask?.notice }}</p>
+        <p v-if="actionNotice" class="file-export-notice" role="status">{{ actionNotice }}</p>
       </section>
       <p v-if="searchState === 'idle'" class="hint">输入条件后查询文件。</p>
       <p v-else-if="searchState === 'loading'" class="hint" role="status">正在查询…</p>
@@ -942,18 +936,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .file-export {
-  --export-tint: color-mix(in srgb, var(--pink, #ff4f93) 7%, var(--card, #fff));
   --export-line: color-mix(in srgb, var(--pink, #ff4f93) 24%, var(--card, #fff));
   --export-radius: 16px;
-  display: grid; gap: 12px; margin: 12px 0; padding: 16px; min-width: 0;
-  border: 1px solid var(--export-line); border-radius: var(--export-radius); background: var(--export-tint);
+  display: grid; gap: 8px; margin: 12px 0; min-width: 0;
 }
-.file-export-heading, .file-export-actions, .file-export-summary, .file-export-metrics { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.file-export-mascot { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; color: var(--pink, #ff4f93); background: var(--card, #fff); font-size: 23px; flex: none; }
-.file-export-title { display: grid; gap: 3px; min-width: 0; flex: 1; }
-.file-export-title strong { color: var(--text, #243056); font-size: 14px; }
-.file-export-title > span { overflow-wrap: anywhere; color: var(--sub, #8d97b0); font-size: 12px; }
-.file-export-count { color: var(--pink, #ff4f93); background: var(--card, #fff); border-radius: var(--export-radius); padding: 5px 10px; font-size: 12px; }
+.file-export-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .file-export-actions .download-opt { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; font-size: 12px; }
 .file-export-actions button { border-radius: var(--export-radius); min-height: 34px; padding: 0 16px; font: inherit; font-size: 12px; font-weight: 700; }
 .file-export-actions .ghost { border: 1px solid var(--export-line); background: var(--card, #fff); color: var(--pink, #ff4f93); }
@@ -961,9 +948,6 @@ onBeforeUnmount(() => {
 .file-export-actions button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 .file-export-actions button:focus-visible { outline: 2px solid var(--focus, #9b3060); outline-offset: 3px; }
 .file-export-actions button:not(:disabled):hover { filter: brightness(.97); }
-.file-export-progress { display: grid; gap: 8px; }
-.file-export-summary { justify-content: space-between; font-size: 12px; color: var(--pink, #ff4f93); }
-.file-export-metrics { column-gap: 18px; row-gap: 4px; font-size: 12px; color: var(--sub, #8d97b0); }
 .file-export-notice { margin: 0; color: var(--text, #243056); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-@media (max-width: 600px) { .file-export { padding: 12px; } .file-export-count { margin-left: 48px; } .file-export-actions .download-opt { width: 100%; } }
+@media (max-width: 600px) { .file-export-actions .download-opt { width: 100%; } }
 </style>

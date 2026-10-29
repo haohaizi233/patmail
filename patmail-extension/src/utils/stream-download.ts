@@ -62,7 +62,13 @@ export async function nativeStreamArchive(
     if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
     throw error
   })
+  const reportRetainedFailures = () => {
+    const total = Array.isArray(options.manifest?.items) ? options.manifest.items.length : 1
+    const failed = Number(created.info?.failedCount ?? 0)
+    if (Number.isSafeInteger(failed) && failed > 0 && failed <= total) report({ phase: 'packing', done: total, total, failed })
+  }
   if (created.info?.completed === true && Number.isSafeInteger(created.info.completedBytes)) {
+    reportRetainedFailures()
     if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
     return Number(created.info.completedBytes)
   }
@@ -76,7 +82,9 @@ export async function nativeStreamArchive(
   const metadata = (info: Partial<CachedFileInfo>): Record<string, unknown> => ({
     ...(info.totalBytes === undefined ? {} : { totalBytes: info.totalBytes }),
     ...(typeof info.etag === 'string' ? { etag: info.etag } : {}),
-    ...(typeof info.lastModified === 'string' ? { lastModified: info.lastModified } : {})
+    ...(typeof info.lastModified === 'string' ? { lastModified: info.lastModified } : {}),
+    ...(typeof info.skipReason === 'string' ? { skipReason: info.skipReason } : {}),
+    ...(typeof info.sourceNotice === 'string' ? { sourceNotice: info.sourceNotice } : {})
   })
   const cache: DownloadCache | undefined = created.taskId ? {
     names,
@@ -164,7 +172,7 @@ export async function nativeStreamArchive(
     if (!productionDone) report({ ...lastWork, elapsedMs: Date.now() - startedAt })
   }, 15000)
   try {
-    if (created.info?.sealed === true) { await command({ action: 'finish', token }); productionDone = true }
+    if (created.info?.sealed === true) { reportRetainedFailures(); await command({ action: 'finish', token }); productionDone = true }
     else await produce(sink, signal, onWork, context)
     const bytes = await track
     if (failure) throw failure
