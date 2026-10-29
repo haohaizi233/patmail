@@ -7,7 +7,8 @@
  *
  * 分组（详见 docs/ci/e2e-matrix.md）：
  *   smoke  = 扩展启动 + Service Worker + EASY 绑定 + 文件查询 + 期限查询（PR 快速门禁）
- *   full   = smoke + 原生下载 / ZIP / 取消 / 续传 / 分页 / 故障注入等完整场景
+ *   full   = smoke + 全页工作台场景（workspace，已知红，见 docs/ci/e2e-matrix.md）
+ *            + 原生下载 / ZIP / 取消 / 续传 / 分页 / 故障注入等完整场景
  *   legacy = 旧 Python 桥接下载协议兼容（127.0.0.1:42843）+ 桥接单元测试
  *
  * 用法：node scripts/run-e2e.mjs [smoke|full|legacy|all|<suite 名>] [--bail]
@@ -24,6 +25,7 @@ const reportDir = join(root, 'test-results', 'ci')
 // needs：python = 需要 python 命令（ZIP 校验 / 桥接）；bridge = 需要 tests/stream-download-bridge.py。
 const SUITES = {
   extension: { file: 'tests/e2e/extension.e2e.mjs', needs: [] },
+  workspace: { file: 'tests/e2e/workspace.e2e.mjs', needs: [] },
   limits: { file: 'tests/e2e/limit-query.e2e.mjs', needs: [] },
   download: { file: 'tests/e2e/download.e2e.mjs', needs: [] },
   'browser-download': { file: 'tests/e2e/native-browser-download.e2e.mjs', needs: [] },
@@ -46,6 +48,7 @@ const GROUPS = {
   full: [
     'extension',
     'limits',
+    'workspace',
     'download',
     'browser-download',
     'file-pages',

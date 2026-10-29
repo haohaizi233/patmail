@@ -18,6 +18,9 @@ Desktop.ini
 dist.pem
 credentials.json
 
+# 测试与 CI 生成物（报告、覆盖率、截图、隔离扩展副本、日志），不入库
+test-results/
+
 # local scratch files captured from the EASY site, keep out of the repo
 /_diff_tmp/
 

@@ -27,6 +27,82 @@ function limitRow(customerName) {
   }
 }
 
+/**
+ * 只读字典与查询模板扇出（extension / limit-query 两个 profile 共用）：
+ * 合法空响应即可让页面进入可查询状态，避免 404 污染 console。
+ */
+async function readOnlyFanout(route, pathName, params) {
+  if (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'SearchQueryHisList') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({ Options: null, QueryXml: null })
+    })
+    return true
+  }
+  if (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'GetApplyTags') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({ ApplyTags: null })
+    })
+    return true
+  }
+  // 文件查询页的两支基础字典：字段全部显式给 null，适配器才会走 'empty' 而不是
+  // 'invalid'（undefined 会打「字典缺失」告警并让字典缓存判无效反复重取）。
+  if (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'IPGetBasicData') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({
+        CaseType: null, Country: null, CaseStatus: null, ApplyType: null, BussType: null,
+        customer_status: null, CtrlProc: null, ProcStatus: null, Case_direction: null, CaseBranchDept: null
+      })
+    })
+    return true
+  }
+  if (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'GetFlowdirection') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({
+        FileStatus: null, CaseBranchDept: null, ProcStatus: null, Case_direction: null, DownLoadFileName: null
+      })
+    })
+    return true
+  }
+  // 期限监控选择器的初始化字典（与 limitQueryRoute 的同名分支同一口径）。
+  if (pathName === '/AjaxServers/Report.ashx' && params.get('Call') === 'LimitMonitorInit') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({
+        CountryInfo: [], CaseType: [], ProcStatus: [], CustomerStatus: [], procType: [],
+        Case_direction: [], apply_type: [], case_status: [], BussType: []
+      })
+    })
+    return true
+  }
+  if (pathName === '/AjaxServers/Report.ashx' && params.get('Call') === 'LimitMonitorGetCtrlproc') {
+    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: json({ CtrlProc: [] }) })
+    return true
+  }
+  // The picker load fans out across these read-only endpoints. Empty valid bodies
+  // are enough for the page to become queryable while keeping the fixture small.
+  if (
+    pathName === '/AjaxServers/BaseInfo.ashx' ||
+    pathName === '/AjaxServers/Common.ashx' ||
+    (pathName === '/AjaxServers/PatentAction.ashx' && params.get('Call') === 'GetFieldColumn') ||
+    (pathName === '/AjaxServers/FilingAction.ashx' && params.get('Call') === 'GetFilingFlowNode') ||
+    (pathName === '/AjaxServers/Customer.ashx' && params.get('Call') === 'InitContractStatus') ||
+    (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'GetCaseBusFlow')
+  ) {
+    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: json({}) })
+    return true
+  }
+  return false
+}
+
 // extension profile：文件查询、邮件、流程与 GetSearchFiles 的空/错/重复/撤销分支。
 async function extensionRoute(route, request, pathName, params, authenticated, apiCalls, state) {
   if (pathName === '/AjaxServers/Login.ashx' && params.get('Call') === 'GetUserModel') {
@@ -90,6 +166,10 @@ async function extensionRoute(route, request, pathName, params, authenticated, a
     await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: JSON.stringify(body) })
     return
   }
+  if (await readOnlyFanout(route, pathName, params)) return
+  // Unmatched routes fall through here. Log them so fixture gaps surface loudly in
+  // the test output instead of silently becoming 404 console errors later.
+  console.warn(`[easy-mock] fixture route not found: ${pathName} Call=${params.get('Call') ?? '(none)'}`)
   await route.fulfill({ status: 404 })
 }
 
@@ -111,24 +191,6 @@ async function limitQueryRoute(route, request, pathName, params, authenticated, 
         UserModel: { user_id: operatorId, user_name: 'tester', Name: '测试员', SessionId: 'fixture-only' },
         ClientInfo: { IsLogin: true, Status: true, Result: false, Message: null }
       })
-    })
-    return
-  }
-
-  if (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'SearchQueryHisList') {
-    await route.fulfill({
-      status: 200,
-      contentType: 'text/plain; charset=utf-8',
-      body: json({ Options: null, QueryXml: null })
-    })
-    return
-  }
-
-  if (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'GetApplyTags') {
-    await route.fulfill({
-      status: 200,
-      contentType: 'text/plain; charset=utf-8',
-      body: json({ ApplyTags: null })
     })
     return
   }
@@ -180,24 +242,10 @@ async function limitQueryRoute(route, request, pathName, params, authenticated, 
     return
   }
 
-  // The picker load fans out across these read-only endpoints. Empty valid bodies
-  // are enough for the page to become queryable while keeping the fixture small.
-  if (pathName === '/AjaxServers/BaseInfo.ashx' || pathName === '/AjaxServers/Common.ashx') {
-    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: json({}) })
-    return
-  }
-
-  // 期限页加载时的其余只读字典扇出（字段列、流程节点、合同状态、案件流程）。
-  // 与上面 BaseInfo/Common 同理：合法空响应即可让页面进入可查询状态，避免 404 污染 console。
-  if (
-    (pathName === '/AjaxServers/PatentAction.ashx' && params.get('Call') === 'GetFieldColumn') ||
-    (pathName === '/AjaxServers/FilingAction.ashx' && params.get('Call') === 'GetFilingFlowNode') ||
-    (pathName === '/AjaxServers/Customer.ashx' && params.get('Call') === 'InitContractStatus') ||
-    (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'GetCaseBusFlow')
-  ) {
-    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: json({}) })
-    return
-  }
+  // 期限页加载时的其余只读字典与查询模板扇出（SearchQueryHisList、GetApplyTags、
+  // BaseInfo/Common、字段列、流程节点、合同状态、案件流程）：合法空响应即可让页面
+  // 进入可查询状态，避免 404 污染 console。
+  if (await readOnlyFanout(route, pathName, params)) return
   // Unmatched routes fall through here. Log them so fixture gaps surface loudly in
   // the test output instead of silently becoming 404 console errors later.
   console.warn(`[easy-mock] fixture route not found: ${pathName} Call=${params.get('Call') ?? '(none)'}`)

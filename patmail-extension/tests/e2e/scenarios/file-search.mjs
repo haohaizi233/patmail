@@ -64,14 +64,25 @@ export async function runFileSearch(ctx) {
     await easyPanel.getByText('没有符合条件的文件。').waitFor()
     await easyPanel.getByLabel('附件名称').fill('')
     const countBeforeBlank = apiCalls.length
-    await easyPanel.getByRole('button', { name: '查询文件' }).click()
-    await easyPanel.getByText('请输入查询条件。').waitFor()
+    // 2026-10-27 起产品有意改为「空条件直接禁用查询按钮并说明缺什么」（QueryTemplateSection
+    // 的 canSubmit/submitHint），不再走提交后报「请输入查询条件。」的旧路径（该文案仍保留在
+    // file-search-params 的 API 层契约与单测里）。这里按现行契约断言：按钮禁用、提示可见、零请求。
+    const submit = easyPanel.getByRole('button', { name: '查询文件' })
+    await submit.waitFor()
+    assert.equal(await submit.isDisabled(), true, '空条件时查询按钮应禁用')
+    await easyPanel.getByText('还缺一项能定位的查询条件', { exact: false }).waitFor()
     assert.equal(apiCalls.length, countBeforeBlank)
     await context.clearCookies()
     await easyPanel.getByLabel('我方文号').fill('A-123')
     await easyPanel.getByRole('button', { name: '查询文件' }).click()
-    await easyPanel.getByText('登录已失效', { exact: true }).waitFor()
+    // 掉登录先在查询结果区报「EASY 登录已失效…」，并且这次请求确实没带登录态。
     await easyPanel.getByText('EASY 登录已失效，请在原网站重新登录后检测。').waitFor()
+    assert.equal(apiCalls.at(-1)?.authenticated, false)
+    // 会话卡片按「最近一次检测」口径更新（SessionService 记住登录过，掉线后检测结论才是
+    // expired 而不是 unauthenticated），产品提示也要求「重新登录后检测」，所以按同一条路径
+    // 点「重新检测」断言状态从「已登录」转到「登录已失效」。
+    await easyPanel.getByRole('button', { name: '重新检测' }).click()
+    await easyPanel.getByText('登录已失效', { exact: true }).waitFor()
     await easyPanel.getByRole('button', { name: '页面扫描' }).click()
     await easyPanel.getByRole('button', { name: '扫描页面' }).click()
     await easyPanel.getByLabel('扫描结果').waitFor()
