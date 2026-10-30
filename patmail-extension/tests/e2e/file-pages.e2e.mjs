@@ -68,7 +68,7 @@ try {
   await app.getByRole('button', { name: '查询文件', exact: true }).click()
   await app.getByText('并发验收-1.pdf', { exact: true }).waitFor()
   await app.getByRole('button', { name: '校对最新字段', exact: true }).click()
-  await app.getByText(/^已打开原网站的文件查询页/).waitFor()
+  await app.locator('p.hint').filter({ hasText: /已经和原网站对过|下拉选项已更新|没有拉到最新下拉|新藏起来的|现在能看到的/ }).first().waitFor()
   for (const label of ['文件描述', '文件来源', '附件名称', '设置下载文件名称']) {
     assert.equal(await app.getByText(label, { exact: true }).first().isVisible(), true, `原站折叠的${label}在查询后仍可用`)
   }

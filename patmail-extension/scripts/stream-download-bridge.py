@@ -332,6 +332,10 @@ class Session:
 class BridgeServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
+    # 每个请求都是独立短连接（JSON POST 还带一次 CORS 预检）；默认 5 的监听队列
+    # 在六个生产者并发时会被瞬时突发打满，未及 accept 的连接会被直接 RST，
+    # 扩展侧表现为 TypeError: Failed to fetch。队列放宽后不再丢连接。
+    request_queue_size = 128
 
     def __init__(self, port, cache_dir=None):
         default = Path(os.environ.get('LOCALAPPDATA', str(Path.home() / '.local' / 'share'))) / 'PatMail' / 'download-cache'
@@ -450,8 +454,24 @@ class Handler(BaseHTTPRequestHandler):
         if not length.isdecimal() or int(length) > limit: raise Problem(413, 'body_limit')
         self.connection.settimeout(30)
         body = self.rfile.read(int(length))
+        self.body_consumed = int(length) if len(body) == int(length) else len(body)
         if len(body) != int(length): raise Problem(400, 'incomplete_body')
         return body
+
+    def drain(self, cap=8 * 1024 * 1024):
+        # 报错前排空请求体：带未读数据直接 close 会触发 RST，Windows 上客户端
+        # 读响应时会偶发 ConnectionAborted（WinError 10053），属跨平台时序毛刺。
+        try:
+            length = self.headers.get('Content-Length', '')
+            if not length.isdecimal(): return
+            remaining = int(length) - self.body_consumed
+            self.connection.settimeout(5)
+            while remaining > 0 and self.body_consumed < cap:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk: break
+                self.body_consumed += len(chunk)
+                remaining -= len(chunk)
+        except (OSError, ValueError): pass
 
     def json_body(self):
         try:
@@ -493,11 +513,14 @@ class Handler(BaseHTTPRequestHandler):
     def guarded(self, method):
         self.current_session = None
         self.session_lease = None
+        self.body_consumed = 0
         try:
             if method != 'GET' and not ORIGIN.fullmatch(self.headers.get('Origin', '')): raise Problem(403, 'origin_required')
             method_handler = getattr(self, 'handle_' + method)
             method_handler()
-        except Problem as e: self.answer(e.status, {'error':e.code})
+        except Problem as e:
+            self.drain()
+            self.answer(e.status, {'error':e.code})
         except (OSError, ConnectionError) as e:
             s = self.current_session
             if s:
@@ -508,6 +531,7 @@ class Handler(BaseHTTPRequestHandler):
                         s.persist()
                     except (OSError, ValueError, Problem): s.corrupt = True
                     s.condition.notify_all()
+            self.drain()
             self.answer(507, {'error':'disk_io', 'paused':True})
         finally:
             if self.session_lease is not None: self.session_lease.condition.release()

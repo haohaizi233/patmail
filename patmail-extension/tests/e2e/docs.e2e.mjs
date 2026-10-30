@@ -33,10 +33,12 @@ try {
   const docs = app.getByRole('dialog', { name: 'PatMail 文档', exact: true })
   await docs.getByRole('button', { name: 'README（工作流索引）', exact: true }).click()
   await docs.getByRole('heading', { name: '工作流索引', exact: true }).waitFor()
-  await app.waitForFunction(() => document.querySelectorAll('.docs-md .mermaid-content > svg').length === 1, null, { timeout: 60000 })
+  const indexSource = await readFile(path.join(sources, 'README.md'), 'utf8')
+  const indexDiagrams = (indexSource.match(/^```mermaid$/gm) ?? []).length
+  await app.waitForFunction(n => document.querySelectorAll('.docs-md .mermaid-content > svg').length === n, indexDiagrams, { timeout: 60000 })
   assert.equal(await docs.locator('.mermaid-content svg g.node').evaluateAll(nodes => nodes.filter(node => !node.textContent.trim()).length), 0)
   const indexCaption = (await docs.locator('.mermaid-figure figcaption').first().innerText()).trim()
-  const counts = [{ file: 'README.md', diagrams: 1 }]
+  const counts = [{ file: 'README.md', diagrams: indexDiagrams }]
   for (const [file, heading] of [['PCT提醒.md', 'PCT提醒工作流'], ['PCT鹏城专案.md', 'PCT鹏城专案工作流'], ['文件管理.md', '文件管理工作流']]) {
     await docs.getByRole('link', { name: file, exact: true }).click()
     await docs.getByRole('heading', { name: heading, exact: true }).waitFor()

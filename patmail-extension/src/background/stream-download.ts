@@ -16,17 +16,26 @@ export class LocalStreamDownloads {
   private readonly jobs = new Map<string, Job>()
   constructor(private readonly downloads: Downloads, private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {}
   private async relay(path: string, init?: RequestInit): Promise<Response> {
-    let response: Response
-    try {
-      response = await this.fetcher(BASE + path, { ...init, signal: AbortSignal.timeout(init?.method === 'PUT' ? 120_000 : 10_000) })
-    } catch (error) {
-      const cause = error instanceof Error && 'cause' in error ? String((error as { cause?: unknown }).cause) : ''
-      throw new Error(`RELAY ${path} ${error instanceof Error ? error.name : ''}:${error instanceof Error ? error.message : String(error)} cause=${cause}`)
+    // TypeError=连接层瞬断（连HTTP应答都没拿到）。桥接协议按重发设计：写入有序号
+    // 收据、缓存段有重叠校验、状态翻转重复执行不改变结果；/sessions 重发最坏多留
+    // 一个空任务，由保留期回收。回退先让被打满的监听队列排空再试。
+    for (let attempt = 0; ; attempt++) {
+      let response: Response
+      try {
+        response = await this.fetcher(BASE + path, { ...init, signal: AbortSignal.timeout(init?.method === 'PUT' ? 120_000 : 10_000) })
+      } catch (error) {
+        const cause = error instanceof Error && 'cause' in error ? String((error as { cause?: unknown }).cause) : ''
+        if (error instanceof TypeError && attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
+          continue
+        }
+        throw new Error(`RELAY ${path} ${error instanceof Error ? error.name : ''}:${error instanceof Error ? error.message : String(error)} cause=${cause}`)
+      }
+      if (!response.ok) throw new Error(response.status === 409
+        ? '缓存或任务版本不一致，没有继续写入。已保留原任务，请检查后重试。'
+        : '本机下载流未就绪或未接收完整（HTTP ' + response.status + '），任务缓存仍保留。')
+      return response
     }
-    if (!response.ok) throw new Error(response.status === 409
-      ? '缓存或任务版本不一致，没有继续写入。已保留原任务，请检查后重试。'
-      : '本机下载流未就绪或未接收完整（HTTP ' + response.status + '），任务缓存仍保留。')
-    return response
   }
   private json(path: string, body: unknown = {}): Promise<Response> {
     return this.relay(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

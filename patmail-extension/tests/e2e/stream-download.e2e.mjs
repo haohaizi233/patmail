@@ -182,6 +182,7 @@ try {
     items, selection: null, stripAppNoDot: false, archiveName: '取消验收.zip', stream: true, progressId: id, detached: true
   } }), { tabId: tab.id, items: files.slice(0, 3), id: cancelId })
   let cancellation
+  let cancelResult
   for (let index = 0; index < 100; index++) {
     const item = await worker.evaluate(firstId => chrome.downloads.search({}).then(items => items.find(item => item.id !== firstId && item.state === 'in_progress' && item.bytesReceived > 0)), downloads[0].id)
     if (item) {
@@ -189,9 +190,11 @@ try {
       cancellation = item.id
       break
     }
+    cancelResult = await app.evaluate(id => window.__results[id], cancelId)
+    if (cancelResult) break
     await new Promise(resolve => setTimeout(resolve, 100))
   }
-  assert.notEqual(cancellation, undefined, '取消用例必须在真正传输中操作')
+  assert.notEqual(cancellation, undefined, '取消用例必须在真正传输中操作' + (cancelResult ? '，任务却提前结束了：' + JSON.stringify(cancelResult) : ''))
   await app.waitForFunction(id => Boolean(window.__results[id]), cancelId, { timeout: 20000 })
   const cancelled = await app.evaluate(id => window.__results[id], cancelId)
   assert.equal(cancelled.payload.ok, false, '用户取消必须失败，不能完成残缺包')
@@ -202,12 +205,15 @@ try {
     items, selection: null, stripAppNoDot: false, archiveName: '导航中断验收.zip', stream: true, progressId: id, detached: true
   } }), { tabId: tab.id, items: files.slice(0, 3), id: navigationId })
   let navigationDownload
+  let navigationResult
   for (let index = 0; index < 100; index++) {
     navigationDownload = await worker.evaluate(ids => chrome.downloads.search({}).then(items => items.find(item => !ids.includes(item.id) && item.state === 'in_progress' && item.bytesReceived > 0)), [downloads[0].id, cancellation])
     if (navigationDownload) break
+    navigationResult = await app.evaluate(id => window.__results[id], navigationId)
+    if (navigationResult) break
     await new Promise(resolve => setTimeout(resolve, 100))
   }
-  assert(navigationDownload, '导航回归必须在实际流水传输中操作')
+  assert(navigationDownload, '导航回归必须在实际流水传输中操作' + (navigationResult ? '，任务却提前结束了：' + JSON.stringify(navigationResult) : ''))
   await easy.goto('http://183.36.43.66:88/fixture?top-navigation=1')
   let navigatedState
   for (let index = 0; index < 50; index++) {
