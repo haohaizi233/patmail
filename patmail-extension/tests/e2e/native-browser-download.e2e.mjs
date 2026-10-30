@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { chromium } from 'playwright'
 import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js'
 import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
-import { extensionWorker, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
+import { extensionWorker, gotoFixturePage, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
 
 assert.equal(existsSync(join(distDir, 'local-download')), false, '交付目录不能依赖Python桥接')
 const files = Array.from({ length: 6 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, fileNo: `B${index}`, fileName: `old-${index}.pdf` }))
@@ -90,7 +90,7 @@ async function launch() {
   console.log('stage: service worker ready', worker.url())
   const easy = await context.newPage()
   console.log('stage: opening fixture')
-  await easy.goto('http://183.36.43.66:88/fixture')
+  await gotoFixturePage(easy, 'http://183.36.43.66:88/fixture')
   console.log('stage: fixture loaded')
   await waitForContentScript(worker, easy)
   console.log('stage: content script ready')

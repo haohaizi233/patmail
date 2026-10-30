@@ -11,9 +11,57 @@ export async function launchExtensionContext(dist, { viewport, acceptDownloads, 
   })
 }
 
-/** 扩展后台 Service Worker（必要时等它启动），扩展 ID 从 worker URL 取。 */
+/** 扩展后台 Service Worker（必要时等它启动），扩展 ID 从 worker URL 取。
+ *
+ * MV3 Service Worker 空闲会被 Chrome 回收，重启后 Playwright 的 Worker 句柄失效并抛
+ * "Service worker restarted"。这里返回可恢复句柄：遇到重启自动换新 Worker 重试一次，
+ * 让长流程不被 Service Worker 生命周期抖动打断（调用方只用 url()/evaluate()）。 */
 export async function extensionWorker(context) {
-  return context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
+  let current = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
+  return {
+    url: () => current.url(),
+    async evaluate(pageFunction, arg) {
+      try {
+        return await current.evaluate(pageFunction, arg)
+      } catch (error) {
+        if (!isServiceWorkerRestart(error)) throw error
+        current = await refreshedServiceWorker(context, current)
+        return current.evaluate(pageFunction, arg)
+      }
+    }
+  }
+}
+
+export function isServiceWorkerRestart(error) {
+  return /service worker restarted/i.test(String(error?.message ?? error))
+}
+
+/** 重启后旧句柄不可复用，只能从 context 轮询出新 Worker。 */
+async function refreshedServiceWorker(context, stale, { timeoutMs = 15000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  do {
+    const fresh = context.serviceWorkers().find((worker) => worker !== stale)
+    if (fresh) return fresh
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  } while (Date.now() < deadline)
+  return context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', { timeout: timeoutMs })
+}
+
+/**
+ * 经本地 HTTP 代理打开 EASY 夹具页（http://183.36.43.66:88/fixture 由测试服务器代答）。
+ * 高负载下 Chromium 偶发 net::ERR_PROXY_CONNECTION_FAILED，属启动期瞬时抖动，重试即可恢复。
+ */
+export async function gotoFixturePage(page, url, { attempts = 3 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await page.goto(url)
+    } catch (error) {
+      const message = String(error?.message ?? error)
+      const transient = /ERR_PROXY_CONNECTION_FAILED|ERR_TIMED_OUT|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET/.test(message)
+      if (attempt >= attempts || !transient) throw error
+      await page.waitForTimeout(500 * attempt)
+    }
+  }
 }
 
 /** Playwright waitForFunction treats an async predicate's Promise as truthy. Await RPCs in Node. */
@@ -30,17 +78,22 @@ export async function waitForPageCondition(page, predicate, arg, { timeout = 300
 export async function waitForContentScript(worker, targetPage, { attempts = 25, intervalMs = 200 } = {}) {
   const targetUrl = targetPage.url()
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const tab = (await worker.evaluate(() => chrome.tabs.query({}))).find((item) => item.url === targetUrl)
-    if (tab?.id) {
-      try {
-        const pong = await worker.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: 0 }), tab.id)
-        if (pong?.type === 'PONG') {
-          await openPanelShadow(worker, tab.id)
-          return tab
+    try {
+      const tab = (await worker.evaluate(() => chrome.tabs.query({}))).find((item) => item.url === targetUrl)
+      if (tab?.id) {
+        try {
+          const pong = await worker.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: 0 }), tab.id)
+          if (pong?.type === 'PONG') {
+            await openPanelShadow(worker, tab.id)
+            return tab
+          }
+        } catch {
+          // 内容脚本仍在启动。
         }
-      } catch {
-        // 内容脚本仍在启动。
       }
+    } catch (error) {
+      // Service Worker 刚重启、新实例还没就绪，下一轮重试；其它错误照旧抛出。
+      if (!isServiceWorkerRestart(error)) throw error
     }
     await targetPage.waitForTimeout(intervalMs)
   }

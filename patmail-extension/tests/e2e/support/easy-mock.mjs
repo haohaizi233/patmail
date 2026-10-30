@@ -48,6 +48,22 @@ async function readOnlyFanout(route, pathName, params) {
     })
     return true
   }
+  if (pathName === '/AjaxServers/Mail.ashx' && params.get('Call') === 'MailinfoInit') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({ mailsettinglist: [] })
+    })
+    return true
+  }
+  if (pathName === '/AjaxServers/Login.ashx' && params.get('Call') === 'GetMailSignatureSettingList') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({ TableRows: [] })
+    })
+    return true
+  }
   // 文件查询页的两支基础字典：字段全部显式给 null，适配器才会走 'empty' 而不是
   // 'invalid'（undefined 会打「字典缺失」告警并让字典缓存判无效反复重取）。
   if (pathName === '/AjaxServers/CaseInfo.ashx' && params.get('Call') === 'IPGetBasicData') {
@@ -121,6 +137,20 @@ async function extensionRoute(route, request, pathName, params, authenticated, a
           : { user_id: operatorId, user_name: 'tester', Name: '测试员', SessionId: 'hidden' },
         ClientInfo: { IsLogin: true, Status: true, Result: false, Message: null }
       }) })
+    return
+  }
+  if (pathName === '/AjaxServers/Customer.ashx' && params.get('Call') === 'GetCustomerlist') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: json({
+        TableRows: authenticated ? [
+          { customer_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', customer_name: '测试客户' },
+          { customer_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', customer_name: '测试客户甲' },
+          { customer_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', customer_name: '测试客户同步' }
+        ] : null
+      })
+    })
     return
   }
   if (pathName === '/AjaxServers/Mail.ashx' && params.get('Call') === 'GetMailInfo') {

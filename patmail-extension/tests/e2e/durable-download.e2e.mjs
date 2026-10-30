@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { chromium } from 'playwright'
 import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
-import { waitForContentScript } from './support/browser.mjs'
+import { waitForContentScript, waitForPageCondition } from './support/browser.mjs'
 import { ensureStreamBridge } from './support/stream-bridge.mjs'
 
 const files = Array.from({ length: 6 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, fileNo: `R${index}`, fileName: `old-${index}.pdf` }))
@@ -62,11 +62,21 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   const taskId = crypto.randomUUID()
+  const waitForConfirmedEasyAccount = async tabId => {
+    await waitForPageCondition(app, async ({ expectedTabId, operatorId }) => {
+      const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+      const connection = loaded?.payload?.connection
+      return connection?.sessionStatus === 'authenticated' &&
+        connection.operatorId === operatorId &&
+        connection.easyTabId === expectedTabId
+    }, { expectedTabId: tabId, operatorId: '11111111-1111-4111-8111-111111111111' }, { timeout: 60000 })
+  }
   const start = async progressId => worker.evaluate(({ tabId, files, taskId, progressId }) => chrome.tabs.sendMessage(tabId, {
     type: 'DOWNLOAD_FILES', payload: { items: files, selection: { newFilename: 'file_name', fileNameType: 'colname' },
       stripAppNoDot: true, archiveName: '续传验收.zip', stream: true, detached: true, taskId, progressId }
   }), { tabId: tab.id, files, taskId, progressId })
   const first = crypto.randomUUID()
+  await waitForConfirmedEasyAccount(tab.id)
   assert.equal((await start(first)).type, 'DOWNLOAD_FILES_ACCEPTED')
   let original
   for (let i = 0; i < 500; i++) {
@@ -82,7 +92,8 @@ try {
   assert.equal(failedResult.payload.ok, false)
   assert(original?.bytesReceived > 0, '首轮必须留下非零浏览器前缀')
   await easy.reload()
-  await waitForContentScript(worker, easy)
+  const reboundTab = await waitForContentScript(worker, easy)
+  await waitForConfirmedEasyAccount(reboundTab.id)
   const second = crypto.randomUUID()
   assert.equal((await start(second)).type, 'DOWNLOAD_FILES_ACCEPTED')
   await app.waitForFunction(id => Boolean(window.__results[id]), second, { timeout: 120000 })

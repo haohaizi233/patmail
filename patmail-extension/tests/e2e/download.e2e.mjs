@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
+import { gotoFixturePage } from './support/browser.mjs'
 
 // Every browser request terminates at this local proxy; never forward to EASY.
 // 222.har 的响应结构，使用虚构身份和 GUID，不依赖本地 HAR 或真实会话。
@@ -79,7 +80,7 @@ try {
   worker.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()) })
   const page = await context.newPage()
   page.on('pageerror', e => errors.push(e.message))
-  await page.goto('http://183.36.43.66:88/fixture')
+  await gotoFixturePage(page, 'http://183.36.43.66:88/fixture')
   assert.deepEqual(await page.evaluate(() => ({ secure: isSecureContext, uuid: typeof crypto.randomUUID })),
     { secure: false, uuid: 'undefined' }, '必须在真实 HTTP 非安全上下文复现，不能用 localhost 或 HTTPS 掩盖缺陷')
   const app = await context.newPage()

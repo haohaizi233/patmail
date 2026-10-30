@@ -28,11 +28,11 @@
 | ZIP 完整性 | download、stream-download | full/legacy | 条目顺序、CRC、字节数一致 |
 | 浏览器取消操作 | browser-download-store、native-stream-lifetime | full | 取消/暂停/恢复、终态判定 |
 | 文件管理分页 | file-pages | full | 全选翻页、下载工具条 |
-| 工作台页面加载 | workspace | full | **已知红**，见 §4 |
+| 工作台页面加载 | workspace | full | 单例导航、客户配置同步、跨页选择、任务来源/过期/冲突/撤销、只读写保护、账号隔离、SW 重启恢复、主世界菜单读取与授权打开、无 CSP 错误 |
 | 下载状态机回归 | download、resume-protocol、browser-download-store、native-stream-lifetime | full | 取消/暂停/502 有限重试/Range 续传/缓存命中/长度未知/终态与缓存清理顺序/SW 生命周期 |
 | 故障注入 | download-editor、resume-protocol、native-pipeline-fault* | full | 502/断流/重启注入，状态机最终状态（非页面文案） |
 
-\* `native-pipeline-fault.e2e.mjs` 由 v1.6.2 引入（`pnpm test:e2e:pipeline-fault` 单跑入口）；当前在「冷重启后继续下载」的收尾阶段报红（浏览器进程退出，见 `acceptance-report.md` §4.2），保留在 `full` 组如实反映，不删断言、不加 skip。
+\* `native-pipeline-fault.e2e.mjs` 由 v1.6.2 引入（`pnpm test:e2e:pipeline-fault` 单跑入口）；2026-10-30 最近一次已完成的 full 运行中该场景通过（57.5s）。本节维护它当前验证的下载故障与恢复契约，不再将其列为已知红。
 
 ## 3. 网络隔离（强制）
 
@@ -42,52 +42,31 @@
 - 夹具补路由口径：只读字典/查询模板扇出给**合法空响应**；字典字段显式 `null`（适配器走 `empty`
   而非 `invalid`，避免缓存判无效反复重取）。共享扇出集中在 `easy-mock.mjs` 的 `readOnlyFanout`。
 
-## 4. workspace 场景：已知红（UI 契约漂移）
+## 4. workspace 场景：当前 UI 契约
 
-**状态**：`tests/e2e/scenarios/workspace.mjs` 当前报红，首步即失败（等待
-`navigation[name=工作台导航] link[客户管理]` 超时）。这是**历史 UI 契约漂移**，不是 CI 建设引入的退化：
+`tests/e2e/scenarios/workspace.mjs` 按当前全页工作台与客户/文件查询流程执行：
 
-- 场景断言的是 2026-09-26/09-28 时代的界面契约（链接式「工作台导航」、客户称呼/我方文号表单、
-  保存这套配置、查看已选/绑定已选文件/生成发文计划、Production Write 等）；
-- 产品界面在 09-28（客户与模板改页面条件排版）、09-29（写开关）、10-27（全选翻页与下载工具条）
-  三次演进后未同步；绑定与生成计划入口已移到 EASY 面板（`FileSearchPanel.vue`、`AutomationPanel.vue`）。
+- 使用侧栏按钮、客户选择器、文件查询控件与结果工具栏操作。
+- 在夹具页面主世界提供 `_UserMenu` 和 `AddBusinessTab`，通过 `READ_QUERY_SURFACES` 读取文件查询入口，并通过 `OPEN_EASY_FORM` 验证菜单授权打开与菜单外路径拒绝。
+- 菜单读取和打开请求经 Service Worker 在发起消息的文档中执行 MAIN-world 代码；场景继续要求浏览器错误为空，覆盖无 CSP 违规的路径。
+- 通过界面明确关闭写开关，并检查没有发送邮件、保存草稿或提交流程的请求。
+- 保留任务来源、证据过期/撤销、重复/冲突、账号隔离和 Service Worker 恢复断言。
+- 所有 EASY 请求均由 `tests/e2e/support/easy-mock.mjs` 拦截；客户和邮件设置读取由夹具响应。
 
-**处理原则**：场景模块保留原样，业务断言（任务来源、幂等保护、账号隔离、SW 重启恢复）继续执行并如实报红；
-不删断言、不加 skip、不放行网络。`full` 组包含它，E2E Full 门禁因此为红——这是如实反映，不是门禁故障。
+本节描述当前场景契约，不再将 workspace 列为已知红。具体 checkout 的执行结果以
+`node scripts/run-e2e.mjs workspace` 或 `pnpm test:e2e:full` 的当次输出为准。
 
-**整改计划**（独立工作项，按现行 UI 契约重写导航与操作路径，保留业务断言语义）：
+## 5. native-pipeline-fault：当前故障注入契约
 
-1. 对照 `src/app` 现行导航结构重写「工作台导航」寻路（侧栏按钮/路由，不再是链接式导航）；
-2. 客户/模板断言改为现行条件排版与写开关契约（参照 `scenarios/file-search.mjs` 2026-10-27 的
-   现行契约改法：按钮禁用 + 提示可见 + 零请求等）；
-3. 绑定/生成计划断言迁移到 EASY 面板入口；
-4. 完成后 workspace 由红转绿，`full` 组恢复全绿。
+`tests/e2e/native-pipeline-fault.e2e.mjs` 属于 `full`，也可用
+`pnpm test:e2e:pipeline-fault` 单跑。夹具覆盖以下故障与恢复行为：
 
-**证据**：`test-results/phase2-ws.log`（本次运行）；根因与整改同步记录于 `acceptance-report.md`。
+- 六路下载并发时，一条响应先返回部分内容后断开；测试确认暂停态、继续按钮和未提前完成状态。
+- 关闭工作台及浏览器后重新启动，验证本地任务恢复，继续下载后最终状态完成。
+- 一次临时 502 后重试，断点续传使用 Range；一个缺失附件进入跳过清单，其他文件内容与 ZIP 条目保持一致。
+- 验证 Chrome 确认文件已保存、归档内容校验通过，且没有调用文件选择器、旧 Python 下载桥或额外回环请求。
 
-## 5. native-pipeline-fault：恢复续传阶段已知红
-
-**状态**：`tests/e2e/native-pipeline-fault.e2e.mjs` 当前报红（2026-10-30 重跑 5 次同一位置失败，
-`test-results/pf-e2e*.log`、`pipeline-fault-*.log`）：
-
-- 已稳定通过的部分：下载启动、512KB 后源中断、`继续下载` 按钮出现、`activeTask.status === 'paused'`、
-  中断不报导出完成、原生下载不调文件选择器、关闭工作台后重启浏览器、恢复横幅与查询状态恢复；
-- 失败点：第二阶段点击 `继续下载` 后，等待 `activeTask.status === 'done'` 的 120s 窗口内
-  测试浏览器被关闭（日志依次出现 `event: app closed / context closed / browser disconnected`），
-  `waitForPageCondition`（`tests/e2e/support/browser.mjs`）报 *Target page, context or browser has been closed*；
-- 5 次重跑均在同一点失败，判定为**确定性红**（恢复续传链路或测试脚手架生命周期管理的真实问题），
-  不是 flaky 重试能消化的类型。
-
-**处理原则**：保留原断言与失败证据，不加 skip、不降低断言强度。列入 full 组已知红，PR Smoke 不受影响。
-
-**整改计划**（独立工作项）：
-
-1. 定位续传期间应用/上下文关闭的触发方（扩展侧主动 `window.close`/导航、fixture 会话过期、
-   脚手架 `downloads[].failure()` 注入与第二阶段浏览器生命周期的交互）；
-2. 复现收敛后按 v1.6.1 下载状态机的 13 项回归清单补齐断言（见 `docs/ci/quality-gates.md`）；
-3. 连续 5 次本地重跑全绿后移出已知红名单。
-
-**证据**：`test-results/pf-e2e-4.log`（本次运行，`NPF_EXIT=1`）。
+最近一次已完成的 full 运行中该场景通过（2026-10-30，57.5s）。保留这些故障注入和恢复断言。
 
 ## 6. 失败证据与脱敏
 

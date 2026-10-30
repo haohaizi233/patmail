@@ -7,7 +7,7 @@
  *
  * 分组（详见 docs/ci/e2e-matrix.md）：
  *   smoke  = 扩展启动 + Service Worker + EASY 绑定 + 文件查询 + 期限查询（PR 快速门禁）
- *   full   = smoke + 全页工作台场景（workspace，已知红，见 docs/ci/e2e-matrix.md）
+ *   full   = smoke + 全页工作台场景（workspace）
  *            + 原生下载 / ZIP / 取消 / 续传 / 分页 / 故障注入等完整场景
  *   legacy = 旧 Python 桥接下载协议兼容（127.0.0.1:42843）+ 桥接单元测试
  *

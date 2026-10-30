@@ -76,7 +76,7 @@ export async function launchHarness({ profile = 'extension' } = {}) {
     const worker = await extensionWorker(context)
     const extensionId = new URL(worker.url()).host
     assert.match(extensionId, /^[a-p]{32}$/)
-    const tabFor = (targetPage) => waitForContentScript(worker, targetPage, { attempts: 25, intervalMs: 200 })
+    const tabFor = (targetPage) => waitForContentScript(worker, targetPage, { attempts: 50, intervalMs: 250 })
     async function showPanel(targetPage) {
       const tab = await tabFor(targetPage)
       const response = await worker.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'SHOW_PANEL' }), tab.id)
