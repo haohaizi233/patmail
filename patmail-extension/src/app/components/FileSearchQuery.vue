@@ -5,7 +5,9 @@ import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-se
 import { assessQueryScope, fileSearchValueLimit, isFileSearchBusinessField } from '../../api/file-search-params'
 import { coerceFileSearchQuery } from '../../api/message-guards'
 import type { FileSearchResult, PatentFile } from '../../api/file-search-types'
-import { selectPage, toSelectedFile, toggleSelected, type SelectedPatentFile } from '../../mail'
+import { selectPage, toSelectedFile, type SelectedPatentFile } from '../../mail'
+import { caseScope, deduplicateNamedFiles, newestFirstSelected } from '../../mail/deduplicate'
+import { createDownloadNamePreview, downloadNameRecipeKey, type DownloadNamePreviewState } from '../services/download-name-preview'
 import { fieldLabel } from '../../query/field-registry'
 import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress, taskCheckSnapshot } from '../check-progress'
 import { runPagedFetch, type PageFetchResult } from '../page-pool'
@@ -45,7 +47,10 @@ const emit = defineEmits<{
 const bridge = inject<MessageBridge>('bridge')
 const queryForm = ref<InstanceType<typeof QueryTemplateSection> | null>(null)
 const downloadSelection = ref<FileDownloadSelection | null>(null)
+const candidateSelection = ref<Record<string, SelectedPatentFile>>({ ...selected.value })
+const namePreview = ref<DownloadNamePreviewState>({ names: {}, done: 0, total: 0, pending: false, error: '' })
 const stripAppNoDot = ref(true)
+const deduplicate = ref(true)
 const downloading = ref(false)
 const choosingTarget = ref(false)
 let downloadAttempt = 0
@@ -86,8 +91,29 @@ const searchMessage = ref('')
 const result = ref<FileSearchResult | null>(null)
 const pageAllSelected = computed(() => {
   const items = result.value?.items ?? []
-  return items.length > 0 && items.every(file => Boolean(selected.value[file.fileId]))
+  const candidates = filterSelection(selectPage(candidateSelection.value, items.map(file => toSelectedFile(file)), true))
+  const eligible = items.filter(file => candidates[file.fileId])
+  return eligible.length > 0 && eligible.every(file => Boolean(selected.value[file.fileId]))
 })
+function filterSelection(files: Record<string, SelectedPatentFile>): Record<string, SelectedPatentFile> {
+  const names = downloadSelection.value ? namePreview.value.names : Object.fromEntries(Object.values(files).map(file => [file.fileId, file.fileName]))
+  return deduplicate.value ? deduplicateNamedFiles(files, names, stripAppNoDot.value) : files
+}
+function updateWinners(): void { selected.value = filterSelection(candidateSelection.value) }
+const preview = bridge ? createDownloadNamePreview(bridge, state => { namePreview.value = state; updateWinners() }) : null
+// Parent actions can update bindings or replace the selected records.
+watch(selected, value => {
+  const winners = filterSelection(candidateSelection.value)
+  if (JSON.stringify(value) === JSON.stringify(winners)) return
+  if (!Object.keys(value).length) { candidateSelection.value = {}; return }
+  const next = { ...candidateSelection.value }
+  for (const id of Object.keys(winners)) if (!value[id]) delete next[id]
+  candidateSelection.value = { ...next, ...value }
+}, { deep: true })
+function changeDeduplicate(): void {
+  updateWinners()
+  scheduleSurface()
+}
 const resultsSection = ref<HTMLElement | null>(null)
 const lastQuery = ref<FileSearchQuery | null>(null)
 const resultTemplateName = ref('')
@@ -96,6 +122,12 @@ let searchGeneration = 0
 
 const recoveryNotice = ref('')
 const needsRevalidation = ref(false)
+function refreshNamePreview(): void {
+  preview?.refresh(Object.keys(candidateSelection.value), downloadSelection.value, deduplicate.value && !downloading.value && !needsRevalidation.value && props.canSearch)
+  updateWinners()
+}
+watch([candidateSelection, downloadSelection, stripAppNoDot, deduplicate, downloading, needsRevalidation, () => props.canSearch], refreshNamePreview, { deep: true, flush: 'sync' })
+watch(querySessionId, () => { preview?.clear(); refreshNamePreview() }, { flush: 'sync' })
 const activeTask = ref<FileQueryTask | null>(null)
 const pauseConfirmation = ref<{ taskId: string; pending: boolean; problem: string } | null>(null)
 const pauseBlocked = computed(() => Boolean(pauseConfirmation.value?.taskId === activeTask.value?.id &&
@@ -106,31 +138,31 @@ const actionNotice = computed(() => {
   const notice = toolbarNotice.value || activeTask.value?.notice || ''
   return notice === '下载已暂停，浏览器缓存已保留。可以继续下载。' || notice === '正在确认暂停，浏览器缓存会保留。' ? '' : notice
 })
-const exportProgress = ref({ named: 0, packed: 0, failed: 0, bytes: 0, startedAt: 0 })
+const exportProgress = ref({ named: 0, packed: 0, failed: 0, deduplicated: 0, bytes: 0, startedAt: 0 })
 const exportPercent = computed(() => {
   const task = activeTask.value
   if (!task) return 0
   if (task.status === 'done') return 100
-  return Math.min(99, Math.round((exportProgress.value.packed + exportProgress.value.failed) / task.items.length * 1000) / 10)
+  return Math.min(99, Math.round((exportProgress.value.packed + exportProgress.value.failed + exportProgress.value.deduplicated) / task.items.length * 1000) / 10)
 })
 const exportEta = computed(() => {
   const task = activeTask.value
   const progress = exportProgress.value
   return task?.status === 'running' && progress.startedAt
-    ? taskCheckSnapshot(progress.packed + progress.failed, task.items.length, progress.startedAt, Date.now(), 'run').eta : ''
+    ? taskCheckSnapshot(progress.packed + progress.failed + progress.deduplicated, task.items.length, progress.startedAt, Date.now(), 'run').eta : ''
 })
 const exportStatus = computed(() => pauseConfirmation.value?.taskId === activeTask.value?.id && pauseConfirmation.value?.pending ? '正在暂停下载…'
   : activeTask.value?.status === 'done' ? '导出完成'
   : activeTask.value?.status === 'paused' ? '下载已暂停'
-  : exportProgress.value.packed + exportProgress.value.failed >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…' : '正在打包下载…')
+  : exportProgress.value.packed + exportProgress.value.failed + exportProgress.value.deduplicated >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…' : '正在打包下载…')
 watch([exportProgress, () => activeTask.value?.status, () => pauseConfirmation.value?.pending], () => {
   const task = activeTask.value
   const progress = exportProgress.value
   if (!task || !progress.startedAt || !props.canSearch || disposed) return
   const total = task.items.length
   const named = task.status === 'done' ? total : progress.named
-  const detail = `${exportStatus.value} · ${task.selection ? `已命名 ${named}/${total}` : '附件原名'} · 已入包 ${progress.packed}/${total}${progress.failed ? ` · 跳过 ${progress.failed}` : ''} · 已接收 ${(progress.bytes / 1024 / 1024).toFixed(1)} MB${exportEta.value ? ` · 预计 ${exportEta.value} 处理完成` : ''}`
-  paintTaskCheckProgress(task.status === 'done' ? total : progress.packed + progress.failed, total, progress.startedAt,
+  const detail = `${exportStatus.value} · ${task.selection ? `已命名 ${named}/${total}` : '附件原名'} · 已入包 ${progress.packed}/${total}${progress.failed ? ` · 跳过 ${progress.failed}` : ''}${progress.deduplicated ? ` · 同名去重 ${progress.deduplicated}` : ''} · 已接收 ${(progress.bytes / 1024 / 1024).toFixed(1)} MB${exportEta.value ? ` · 预计 ${exportEta.value} 处理完成` : ''}`
+  paintTaskCheckProgress(task.status === 'done' ? total : progress.packed + progress.failed + progress.deduplicated, total, progress.startedAt,
     task.status === 'done' ? 'done' : task.status === 'paused' ? 'hold' : 'run', '下载文件', Date.now(), detail)
   // 入包结束还需等待浏览器确认保存，顶部彩虹条不能提前到100%。
   taskCheckProgress.percent = exportPercent.value
@@ -145,9 +177,9 @@ const snapshotIdentity = computed(() => props.userId && props.origin ? fileQuery
 function surfaceSnapshot(): FileQuerySnapshot | null {
   if (!snapshotOwner) return null
   return JSON.parse(JSON.stringify({
-    version: 1, owner: snapshotOwner, query: lastQuery.value, result: result.value, selected: selected.value,
+    version: 1, owner: snapshotOwner, query: lastQuery.value, result: result.value, selected: selected.value, candidateSelection: candidateSelection.value,
     form: queryForm.value?.recoveryState?.() ?? null, downloadSelection: downloadSelection.value,
-    stripAppNoDot: stripAppNoDot.value, pageSize: pageSize.value, templateName: resultTemplateName.value,
+    stripAppNoDot: stripAppNoDot.value, deduplicate: deduplicate.value, pageSize: pageSize.value, templateName: resultTemplateName.value,
     readPages: readPages.value, activeTask: activeTask.value
   }))
 }
@@ -168,7 +200,7 @@ function scheduleSurface(): void {
   if (recoveryTimer) clearTimeout(recoveryTimer)
   recoveryTimer = setTimeout(() => { void protectSurface().catch(() => {}) }, 150)
 }
-watch(selected, () => { if (recoveryReady) void protectSurface().catch(() => {}) }, { deep: true })
+watch([selected, candidateSelection], () => { if (recoveryReady) void protectSurface().catch(() => {}) }, { deep: true })
 watch([stripAppNoDot, downloadSelection], scheduleSurface, { deep: true })
 async function confirmDownloadPause(): Promise<void> {
   const task = activeTask.value
@@ -294,6 +326,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     void showResults()
     return
   }
+  if (run === 'start') preview?.clear()
   const current = ++generation
   const queryTemplateName = templateName ?? (run === 'start' ? queryForm.value?.currentSearchTemplateName?.() ?? '' : resultTemplateName.value)
   const next = coerceFileSearchQuery({ ...query, resolvedFields: fields, pageIndex: query.pageIndex || 1, pageSize: query.pageSize || pageSize.value }) ?? {
@@ -326,7 +359,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     sourceNotice.value = response.payload.data.sourceMessage ?? ''
     if (response.payload.data.sourceCode === 'QUERY_SESSION_INVALID' || response.payload.data.sourceCode === 'QUERY_LAYOUT_CHANGED') querySessionId.value = ''
     else if (response.payload.data.querySessionId) querySessionId.value = response.payload.data.querySessionId
-    if (run === 'start' && !preserveRecoveredSelection) selected.value = {}
+    if (run === 'start' && !preserveRecoveredSelection) candidateSelection.value = {}
     needsRevalidation.value = false
     readPages.value = [...new Set([...readPages.value, result.value.pageIndex])]
     await rememberRecovery('file-query', `${snapshotScope}:page:${querySessionId.value}:${result.value.pageIndex}`, result.value).catch(error => { recoveryNotice.value = String(error) })
@@ -354,7 +387,7 @@ function togglePage(event: Event): void {
   stopBulk()
   const items = result.value?.items ?? []
   const on = (event.target as HTMLInputElement).checked
-  selected.value = selectPage(selected.value, items.map(file => toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
+  candidateSelection.value = selectPage(candidateSelection.value, items.map(file => toSelectedFile(file, candidateSelection.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
 }
 function refresh(): void {
   if (lastQuery.value) void executeSearch({ ...lastQuery.value }, 'continue')
@@ -380,7 +413,8 @@ function clearView(): void {
   toolbarNotice.value = ''
   searchState.value = 'idle'
   searchMessage.value = ''
-  selected.value = {}
+  candidateSelection.value = {}
+  deduplicate.value = true
 }
 
 function onDownloadName(selection: FileDownloadSelection | null, problem = ''): void {
@@ -391,7 +425,7 @@ function onDownloadName(selection: FileDownloadSelection | null, problem = ''): 
 /** 勾选的文件按下载名称打包下载；包里文件名的申请号校验点已去掉。 */
 async function downloadSelected(resume = false, saveAsNew = false): Promise<void> {
   const frozen = resume ? activeTask.value : null
-  const files = frozen ? frozen.items : Object.values(selected.value)
+  const files = frozen ? frozen.items : newestFirstSelected(candidateSelection.value)
   if (!bridge || !props.canSearch || needsRevalidation.value || !files.length || downloading.value || choosingTarget.value || selectingAll.value || pauseBlocked.value) return
   if (frozen && frozen.backend !== 'browser') { toolbarNotice.value = '这是旧版下载任务，不能在新模式直接继续。请保留旧版完成，或丢弃后重新下载；旧缓存不会自动迁入浏览器。'; return }
   if (!resume && activeTask.value && activeTask.value.status !== 'done') { toolbarNotice.value = '还有暂停的下载，请先继续或丢弃该任务。'; return }
@@ -402,11 +436,15 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   let selection: FileDownloadSelection | null
   try {
     selection = frozen ? frozen.selection : queryForm.value ? queryForm.value.currentDownloadSelection() : downloadSelection.value
+    if (!frozen && selection) {
+      selection = { ...selection }
+      if (selection.newFilename && selection.fileNameType) delete selection.templateId
+    }
   } catch (error) {
     toolbarNotice.value = error instanceof DownloadNameValidationError ? error.message : '没有读到下载名称，请重新选择。'
     return
   }
-  const task = reactive<FileQueryTask>(frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' })
+  const task = reactive<FileQueryTask>(frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, deduplicate: deduplicate.value, resolvedNames: downloadNameRecipeKey(selection) === downloadNameRecipeKey(downloadSelection.value?.newFilename && downloadSelection.value.fileNameType ? { ...downloadSelection.value, templateId: undefined } : downloadSelection.value) ? { ...namePreview.value.names } : {}, caseScopes: Object.fromEntries(Object.values(candidateSelection.value).map(file => [file.fileId, caseScope(file)])), stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' })
   const startingScope = snapshotScope
   const issue = downloadFilesRequestIssue({ items: task.items, selection, stripAppNoDot: task.stripAppNoDot })
   if (issue) { toolbarNotice.value = issue; return }
@@ -430,13 +468,14 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   toolbarNotice.value = ''
   const startedAt = Date.now()
   resetTaskCheckProgress()
-  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, failed: 0, bytes: 0, startedAt }
+  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, failed: 0, deduplicated: 0, bytes: 0, startedAt }
   const progressId = newUuid()
   const runtime = globalThis.chrome?.runtime
   const removeProgress = () => { try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 页面已关闭 */ } }
   let namedFiles = selection ? 0 : files.length
   let processedFiles = 0
   let failedFiles = 0
+  let deduplicatedFiles = 0
   let nativeBytes = 0
   const onProgress = (message: unknown, sender: chrome.runtime.MessageSender): void => {
     if (disposed || wait.signal.aborted || downloadAttempt !== attempt || activeTask.value?.id !== task.id || sender.id !== runtime?.id || !isRecord(message) || message.channel !== DOWNLOAD_PROGRESS_CHANNEL ||
@@ -446,9 +485,10 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     if (progress.phase === 'packing') {
       processedFiles = Math.max(processedFiles, progress.done)
       failedFiles = Math.max(failedFiles, progress.failed ?? 0)
+      deduplicatedFiles = Math.max(deduplicatedFiles, progress.deduplicated ?? 0)
     }
     if (progress.phase === 'downloading') nativeBytes = Math.max(nativeBytes, progress.receivedBytes ?? 0)
-    exportProgress.value = { named: namedFiles, packed: Math.max(0, processedFiles - failedFiles), failed: failedFiles, bytes: nativeBytes, startedAt }
+    exportProgress.value = { named: namedFiles, packed: Math.max(0, processedFiles - failedFiles - deduplicatedFiles), failed: failedFiles, deduplicated: deduplicatedFiles, bytes: nativeBytes, startedAt }
   }
   try {
     runtime?.onMessage?.addListener(onProgress)
@@ -458,6 +498,9 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
       type: MessageType.DownloadFiles,
       payload: {
         items: task.items,
+        ...(task.deduplicate ? { deduplicate: true as const } : {}),
+        ...(task.resolvedNames ? { resolvedNames: task.resolvedNames } : {}),
+        ...(task.caseScopes ? { caseScopes: task.caseScopes } : {}),
         taskId: task.id,
         browserTarget,
         ...(saveAsNew ? { saveAsNew: true as const } : {}),
@@ -525,17 +568,17 @@ function selectCurrentPage(on: boolean): void {
   stopBulk()
   const items = result.value?.items ?? []
   if (!items.length) return
-  selected.value = selectPage(selected.value, items.map(file => toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
+  candidateSelection.value = selectPage(candidateSelection.value, items.map(file => toSelectedFile(file, candidateSelection.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
 }
 function clearSelection(): void {
   if (needsRevalidation.value || !props.canSearch) return
   stopBulk()
-  selected.value = {}
+  candidateSelection.value = {}
 }
 function toggleFile(file: PatentFile): void {
   if (needsRevalidation.value || !props.canSearch) return
   stopBulk()
-  selected.value = toggleSelected(selected.value, toSelectedFile(file, selected.value[file.fileId]?.customerProfileId, querySessionId.value))
+  candidateSelection.value = selectPage(candidateSelection.value, [toSelectedFile(file, candidateSelection.value[file.fileId]?.customerProfileId, querySessionId.value)], !selected.value[file.fileId])
 }
 
 /** 全选所有进行中把「预计几点完成」也写在按钮旁，翻页快时彩虹条一闪而过也看得到。 */
@@ -636,8 +679,8 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
     onPage: (page, rows) => {
       if (!bulkCurrent(bulk)) return
       // defineModel 的受控 prop 要等父组件渲染后才回流；同一轮并发响应不能各自基于旧 prop 覆盖。
-      bulk.selection = selectPage({ ...bulk.selection, ...selected.value }, rows, true)
-      selected.value = bulk.selection
+      bulk.selection = selectPage({ ...bulk.selection, ...candidateSelection.value }, rows, true)
+      candidateSelection.value = bulk.selection
       bulk.completed.add(page)
       readPages.value = [...new Set([...readPages.value, page])]
       scheduleSurface()
@@ -658,7 +701,7 @@ async function selectAllPages(): Promise<void> {
     generation, query: { ...lastQuery.value, ...(lastQuery.value.resolvedFields ? { resolvedFields: { ...lastQuery.value.resolvedFields } } : {}), pageSize: BULK_PAGE_SIZE },
     querySessionId: summary.pageSize === BULK_PAGE_SIZE ? querySessionId.value : '',
     totalPages: Math.max(1, Math.ceil(summary.total / BULK_PAGE_SIZE)), timeoutMs: searchTimeoutMs.value,
-    controller: new AbortController(), interrupted: false, reason: '', completed: new Set(), selection: { ...selected.value }
+    controller: new AbortController(), interrupted: false, reason: '', completed: new Set(), selection: { ...candidateSelection.value }
   }
   activeBulk = bulk
   retryBulk = null
@@ -695,7 +738,7 @@ async function selectAllPages(): Promise<void> {
       querySessionId.value = bulk.querySessionId
     }
     bulk.selection = selectPage(bulk.selection, first.items.map(file => toSelectedFile(file, undefined, bulk.querySessionId)), true)
-    selected.value = bulk.selection
+    candidateSelection.value = bulk.selection
     bulk.completed.add(first.pageIndex)
     tickPage()
     const all = Array.from({ length: bulk.totalPages }, (_, index) => index + 1).filter(page => !bulk.completed.has(page))
@@ -753,6 +796,7 @@ async function retryFailedPages(): Promise<void> {
 }
 
 watch(snapshotIdentity, async scope => {
+  preview?.clear()
   const current = ++recoveryGeneration
   releaseDownloadProgress?.()
   releaseDownloadProgress = null
@@ -767,7 +811,7 @@ watch(snapshotIdentity, async scope => {
   if (!scope) return
   clearView()
   activeTask.value = null
-  exportProgress.value = { named: 0, packed: 0, failed: 0, bytes: 0, startedAt: 0 }
+  exportProgress.value = { named: 0, packed: 0, failed: 0, deduplicated: 0, bytes: 0, startedAt: 0 }
   readPages.value = []
   try {
     const initialGeneration = searchGeneration
@@ -777,7 +821,8 @@ watch(snapshotIdentity, async scope => {
     if (restored && searchGeneration === initialGeneration) {
       lastQuery.value = restored.query
       result.value = restored.result
-      selected.value = restored.selected
+      deduplicate.value = restored.deduplicate ?? true
+      candidateSelection.value = restored.candidateSelection ?? restored.selected
       pageSize.value = restored.pageSize ?? 100
       resultTemplateName.value = restored.templateName ?? ''
       stripAppNoDot.value = restored.stripAppNoDot ?? true
@@ -818,6 +863,7 @@ watch(() => props.seedToken, () => {
 })
 
 onBeforeUnmount(() => {
+  preview?.cancel()
   if (recoveryTimer) clearTimeout(recoveryTimer)
   pauseActiveDownload()
   if (activeTask.value) void releaseBrowserDownloadTarget(activeTask.value.id).catch(() => {})
@@ -888,6 +934,7 @@ onBeforeUnmount(() => {
       <template v-else-if="result">
         <p v-if="sourceNotice" class="hint" role="status">{{ sourceNotice }}</p>
         <div v-if="selectable" class="result-toolbar">
+          <label class="deduplicate-opt" title="同一案件内按最终下载名称合并重复版本，doc/docx 视为同类，保留上传时间最新的文件"><input v-model="deduplicate" type="checkbox" :disabled="needsRevalidation || !canSearch || downloading || choosingTarget || selectingAll" @change="changeDeduplicate" />同名文件仅保留最新</label>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
@@ -895,6 +942,8 @@ onBeforeUnmount(() => {
           <button v-if="failedPages.length" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
         </div>
+        <p v-if="selectable && deduplicate" class="hint">全选按上传时间保留最新，跨页全选需读取所有页。仅合并同一案件最终下载名称相同的文件，doc/docx 视为同类，原名中的 (2) 等字符保留。</p>
+        <p v-if="selectable && deduplicate && downloadSelection && (namePreview.pending || namePreview.error)" class="hint" role="status">下载名称预览 {{ namePreview.done }}/{{ namePreview.total }}{{ namePreview.error ? `：${namePreview.error}；未确认名称的文件仍保留，下载时重试。` : '，正在按最终名称更新选择；可直接下载。' }}</p>
         <div class="table-scroll">
           <table class="grid">
             <colgroup>
@@ -935,6 +984,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.deduplicate-opt { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .file-export {
   --export-line: color-mix(in srgb, var(--pink, #ff4f93) 24%, var(--card, #fff));
   --export-radius: 16px;
