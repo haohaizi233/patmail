@@ -63,7 +63,7 @@ export function coerceFileSearchQuery(value: unknown): FileSearchQuery | null {
     resolved[key] = text
   }
   const query: FileSearchQuery = {
-    resolvedFields: resolved,
+    ...(value.resolvedFields === undefined ? {} : { resolvedFields: resolved }),
     pageIndex: pageNumber(value.pageIndex, 1, 1_000_000),
     pageSize: pageNumber(value.pageSize, 20, 100)
   }

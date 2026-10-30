@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFullPageBridge } from '../../../src/app/services/full-page-bridge'
 import { EasyRuntime } from '../../../src/api/client'
+import { prepareForwardedSearch } from '../../../src/api/message-guards'
 import { MemoryEvidenceStore } from '../../../src/automation/evidence-store'
 import { handleWorkspaceMessage, workspaceResult, type WorkspaceHost } from '../../../src/background/workspace'
 import { EasyConnectionController, emptyConnection } from '../../../src/shared/connection'
@@ -44,6 +45,36 @@ function background(reply: (message: BackgroundRequest) => Promise<unknown>): vo
 }
 
 describe('full-page query message chain', () => {
+  it.each([
+    { filters: { caseVolume: 'E2E-PAGE' }, field: 'case_volume', value: 'E2E-PAGE' },
+    { filters: { fileName: 'dup-id' }, field: 'file_name', value: 'dup-id' },
+    { filters: { caseVolume: 'ignored', resolvedFields: { case_volume: 'EXPLICIT' } }, field: 'case_volume', value: 'EXPLICIT' }
+  ])('preserves shorthand $field filters through message coercion to the HTTP request', async ({ filters, field, value }) => {
+    const searches: URLSearchParams[] = []
+    const runtime = new EasyRuntime(origin, { fetcher: async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected a form-encoded request body')
+      const params = new URLSearchParams(init.body)
+      if (params.get('Call') === 'GetUserModel') return new Response(JSON.stringify({
+        UserModel: { user_id: userId, Name: '测试员' }, ClientInfo: { IsLogin: true, Status: true, Result: false }
+      }))
+      searches.push(params)
+      return new Response(JSON.stringify({ ClientInfo: { IsLogin: true, Status: true, Result: true }, TableRows: [], TableRowsCount: '0' }))
+    } })
+    const message = { type: 'WORKSPACE', payload: { action: 'forward', message: {
+      type: MessageType.SearchFiles, payload: { query: { ...filters, pageIndex: 3, pageSize: 20 } }
+    } } }
+    try {
+      await runtime.checkSession()
+      prepareForwardedSearch(message)
+      const response = await runtime.searchFiles(message.payload.message.payload.query)
+      expect(response).toMatchObject({ ok: true })
+      expect(searches).toHaveLength(1)
+      expect(searches[0]!.get(field)).toBe(value)
+      expect(searches[0]!.get('pageIndex')).toBe('3')
+    } finally {
+      runtime.dispose()
+    }
+  })
   it('delivers a customer-only deadline query through the workspace to the HTTP transport and back', async () => {
     const requests: { url: string; method: string; credentials?: RequestCredentials; body: URLSearchParams }[] = []
     const runtime = new EasyRuntime(origin, { fetcher: async (url, init) => {
