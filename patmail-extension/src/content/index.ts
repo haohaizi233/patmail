@@ -15,6 +15,7 @@ import { scanFilingForm, waitFilingFormOptions } from '../query/scan-filing-form
 import { LiveEasyAcceptanceRunner } from '../automation/acceptance-runner'
 import { hydrateCustomerMode, watchCustomerMode } from '../settings/customer-mode'
 import { hydrateWriteSwitch, watchWriteSwitch } from '../settings/write-switch'
+import { openEasyPageTab, readEasyPageMenu } from './easy-page-world'
 
 watchWriteSwitch()
 void hydrateWriteSwitch()
@@ -63,56 +64,7 @@ async function scanDocument(doc: Document): Promise<FileSearchFormField[]> {
 }
 
 function openEasyTab(tabId: string, title: string, path: string): Promise<{ ok: boolean; message: string }> {
-  const marker = `patmail-open-${Date.now()}`
-  return new Promise(resolve => {
-    const timer = window.setTimeout(() => {
-      window.removeEventListener('message', onMessage)
-      resolve({ ok: false, message: '原网站没有接住打开请求。请回到 EASY 首页后再试。' })
-    }, 4000)
-    function onMessage(event: MessageEvent): void {
-      if (event.source !== window || event.origin !== location.origin) return
-      const data = event.data as { marker?: string; ok?: boolean; message?: string } | null
-      if (!data || data.marker !== marker) return
-      window.clearTimeout(timer)
-      window.removeEventListener('message', onMessage)
-      resolve({
-        ok: data.ok === true,
-        message: typeof data.message === 'string' ? data.message.slice(0, 200) : ''
-      })
-    }
-    window.addEventListener('message', onMessage)
-    const script = document.createElement('script')
-    script.textContent = `(() => {
-      const path = ${JSON.stringify(path)};
-      const marker = ${JSON.stringify(marker)};
-      const report = (ok, message) => window.postMessage({ marker, ok, message }, location.origin);
-      const open = window.AddBusinessTab;
-      if (typeof open !== 'function') {
-        report(false, '当前标签不是 EASY 首页，打不开内部页签。请先回到首页。');
-        return;
-      }
-      const bare = path.indexOf('?') > -1 ? path.slice(0, path.indexOf('?')) : path;
-      const menu = window._UserMenu;
-      let allowed = bare.toLowerCase().indexOf('forms/faq') >= 0;
-      if (!allowed && Array.isArray(menu)) {
-        for (let i = 0; i < menu.length; i++) {
-          const node = menu[i] || {};
-          if ((node.is_business || node.is_page) && String(node.menu_url || '').toLowerCase() === bare.toLowerCase()) {
-            allowed = true;
-            break;
-          }
-        }
-      }
-      if (!allowed) {
-        report(false, '原网站菜单里没有这个页面，不能打开。');
-        return;
-      }
-      open(${JSON.stringify(tabId)}, ${JSON.stringify(title)}, path);
-      report(true, '已在 EASY 首页打开。');
-    })()`
-    document.documentElement.appendChild(script)
-    script.remove()
-  })
+  return openEasyPageTab(tabId, title, path)
 }
 
 async function openProcessForm(target: ProcessOpenTarget): Promise<{ ok: boolean; message: string }> {
@@ -121,51 +73,9 @@ async function openProcessForm(target: ProcessOpenTarget): Promise<{ ok: boolean
   return openEasyTab(`f_${target.id}`, target.title, resolved.data)
 }
 
-/** 原网站把用户菜单放在页面变量 `_UserMenu` 里，内容脚本看不见，照打开页签的老办法注一段进页面读。 */
+/** `_UserMenu` 属于 EASY 页面主世界；由后台在发起消息的文档中读取。 */
 function readUserMenu(): Promise<Array<{ name: string; url: string }>> {
-  const marker = `patmail-menu-${Date.now()}`
-  return new Promise(resolve => {
-    const timer = window.setTimeout(() => {
-      window.removeEventListener('message', onMessage)
-      resolve([])
-    }, 4000)
-    function onMessage(event: MessageEvent): void {
-      if (event.source !== window || event.origin !== location.origin) return
-      const data = event.data as { marker?: string; entries?: unknown } | null
-      if (!data || data.marker !== marker) return
-      window.clearTimeout(timer)
-      window.removeEventListener('message', onMessage)
-      const entries = Array.isArray(data.entries) ? data.entries : []
-      resolve(entries.flatMap(item => {
-        if (!item || typeof item !== 'object') return []
-        const row = item as { name?: unknown; url?: unknown }
-        const url = typeof row.url === 'string' ? row.url.trim().slice(0, 200) : ''
-        if (!url) return []
-        const name = typeof row.name === 'string' ? row.name.trim().slice(0, 40) : ''
-        return [{ name, url }]
-      }))
-    }
-    window.addEventListener('message', onMessage)
-    const script = document.createElement('script')
-    script.textContent = `(() => {
-      const marker = ${JSON.stringify(marker)};
-      const entries = [];
-      const menu = window._UserMenu;
-      if (Array.isArray(menu)) {
-        for (let i = 0; i < menu.length; i++) {
-          const node = menu[i] || {};
-          if (!(node.is_business || node.is_page)) continue;
-          const url = String(node.menu_url || '').trim();
-          if (!url) continue;
-          const name = String(node.menu_name || node.name || node.title || node.menu_title || node.text || '').trim();
-          entries.push({ name: name.slice(0, 40), url: url.slice(0, 200) });
-        }
-      }
-      window.postMessage({ marker, entries }, location.origin);
-    })()`
-    document.documentElement.appendChild(script)
-    script.remove()
-  })
+  return readEasyPageMenu()
 }
 
 /** 查询入口跟着原网站菜单走：菜单上有哪几项、叫什么名字，下拉里就出哪几项。 */

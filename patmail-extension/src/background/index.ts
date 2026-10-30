@@ -21,6 +21,8 @@ import { createBrowserDownloadStore } from '../browser-download/store'
 import { BROWSER_FILE_CHANNEL, type BrowserFileReply } from '../browser-download/types'
 import { createNativeDownloadTarget, type NativeFetchEvent } from './native-download-target'
 import { NATIVE_NAVIGATION_CHANNEL } from '../browser-download/native-navigation'
+import { EASY_PAGE_WORLD_CHANNEL } from '../shared/easy-page-world'
+import { handleEasyPageWorld } from './easy-page-world'
 
 const streamDownloads = new LocalStreamDownloads(chrome.downloads)
 let legacyStreamsUsed = false
@@ -411,6 +413,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (isRecord(message) && (message.channel === BROWSER_FILE_CHANNEL || message.channel === NATIVE_NAVIGATION_CHANNEL)) return
   if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
   if (sender.id !== chrome.runtime.id) return
+  if (isRecord(message) && message.channel === EASY_PAGE_WORLD_CHANNEL) {
+    void connectionReady.then(() => handleEasyPageWorld(message, sender, {
+      extensionId: chrome.runtime.id,
+      allowsOrigin: origin => Boolean(trustedOrigin(origin)) && originMatchesMode(origin),
+      executeScript: injection => chrome.scripting.executeScript(injection)
+    })).then(sendResponse, () => sendResponse({ ok: false, message: '原网站页面没有完成操作。' }))
+    return true
+  }
   if (isRecord(message) && message.channel === RESULT_CHANNEL) return
   if (isRecord(message) && message.channel === DOWNLOAD_PROGRESS_CHANNEL) return
   if (isRecord(message) && message.channel === DOWNLOAD_RESULT_CHANNEL) return
