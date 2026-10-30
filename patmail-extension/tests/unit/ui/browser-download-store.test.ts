@@ -19,7 +19,7 @@ const task = (taskId: string, patch: Partial<BrowserDownloadTask> = {}): Browser
   updatedAt: Date.now(),
   ...patch
 })
-const make = () => createBrowserDownloadStore(new FakeIDBFactory() as unknown as IDBFactory)
+const make = () => createBrowserDownloadStore(new FakeIDBFactory())
 const bytes = (...values: number[]) => Uint8Array.from(values)
 
 it('创建后能读回任务与清单，重复或缺身份的创建被拒', async () => {
