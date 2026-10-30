@@ -34,7 +34,7 @@ export function createFullPageBridge(): MessageBridge {
         || message.type === MessageType.LoadDictionary || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm
       const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor || message.type === MessageType.SearchFiling
         ? fileSearchTimeoutMs(message.payload.timeoutMs) + 15_000 : 0
-      const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || downloadWait || searchWait || (slow ? 70_000 : 30_000))
+      const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, message.type === MessageType.ResolveDownloadNames ? 300_000 : lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || downloadWait || searchWait || (slow ? 70_000 : 30_000))
       if (response?.type === MessageType.Error) return response
       const forwarded = response?.type === MessageType.WorkspaceResult ? response.payload.forwarded : null
       if (forwarded && forwarded.type === MessageType.Error) return forwarded

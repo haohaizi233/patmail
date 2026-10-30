@@ -50,6 +50,34 @@ function output() {
 }
 
 describe('流水单ZIP下载', () => {
+  it('最终名去重仍流水：后批命名未返回时首批已开始下载', async () => {
+    const f = fixture(), result = output()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const transport = { ...f.transport, post: async (...args: Parameters<EasyTransport['post']>) => {
+      if (args[0] === 'getFileName' && args[1].get('file_ids') === files[40].fileId) await gate
+      return f.transport.post(...args)
+    } } as EasyTransport
+    const running = streamDownloadFiles(transport, files.slice(0, 41), selection, false, { sink: result.sink, fetchFile: f.fetchFile, deduplicate: true })
+    try {
+      for (let i = 0; i < 100 && !f.events.includes('read:0'); i++) await new Promise(resolve => setTimeout(resolve, 5))
+      expect(f.events).toContain('read:0')
+      expect(f.events).not.toContain('named:40')
+    } finally { release(); await running }
+  })
+  it('同案件按生成名称去重：新文件先派发，同名旧文件不取句柄，跨案件保留', async () => {
+    const f = fixture(), result = output(), requested: string[] = []
+    const transport = { ...f.transport, post: async (...args: Parameters<EasyTransport['post']>) => { if (args[0] === 'fileDownload') requested.push(args[1].get('file_no')!); return f.transport.post(...args) } } as EasyTransport
+    await streamDownloadFiles(transport, files.slice(0, 3), { newFilename: 'file_name', fileNameType: 'colname' }, false, {
+      sink: result.sink, fetchFile: f.fetchFile, deduplicate: true,
+      caseScopes: { [files[0].fileId]: 'case-a', [files[1].fileId]: 'case-a', [files[2].fileId]: 'case-b' },
+      resolvedNames: { [files[0].fileId]: '自定名称.docx', [files[1].fileId]: '自定名称.doc', [files[2].fileId]: '自定名称.docx' }
+    })
+    expect(requested).toEqual([files[0].fileNo, files[2].fileNo])
+    const reader = new ZipReader(new Uint8ArrayReader(result.bytes()), { useWebWorkers: false })
+    expect((await reader.getEntries()).map(entry => entry.filename)).toEqual(['自定名称.docx', '自定名称 (2).docx'])
+    await reader.close()
+  })
   it('单附件准备遇到临时网关502后重新取得句柄，正文只下载一次', async () => {
     const result = output()
     let prepares = 0, bodies = 0

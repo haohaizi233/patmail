@@ -7,8 +7,14 @@ import { DownloadTokens } from './download-tokens'
 import { prefetchFile } from './stream-file'
 import { cachedFileResponse, type DownloadCache } from './stream-cache'
 import { sourceUnavailableError, UnavailableDownloadFileError } from './download-failure'
+import { finalDownloadNameKey } from '../mail/deduplicate'
 
 export interface StreamDownloadOptions {
+  deduplicate?: boolean
+  caseScopes?: Record<string, string>
+  resolvedNames?: Record<string, string>
+  tokens?: DownloadTokens
+  namePost?: EasyTransport['post']
   sink: WritableStream<Uint8Array>
   signal?: AbortSignal
   fetchFile?: (url: string, init?: RequestInit) => Promise<Response>
@@ -57,14 +63,17 @@ export async function streamDownloadFiles(
   options.signal?.addEventListener('abort', cancel, { once: true })
 
   let nextOffset = 0, scheduled = 0, done = 0
-  const budget = new DownloadTokens(() => nextOffset - scheduled < 6 ? 'naming' : 'download')
+  const preferred = () => nextOffset - scheduled < 6 ? 'naming' as const : 'download' as const
+  const budget = options.tokens ?? new DownloadTokens(preferred)
+  const restorePriority = options.tokens?.setPreferred(preferred)
   const scoped = { post: async (...args: Parameters<EasyTransport['post']>) => {
+    if (args[0] === 'getFileName' && options.namePost) return options.namePost(...args)
     const release = await budget.acquire(args[0] === 'getFileName' ? 'naming' : 'download', signal)
     try { return await transport.post(...args) } finally { release() }
   } } as EasyTransport
   const queue: { offset: number; names: string[] }[] = []
   const accept = async (offset: number, names: string[]) => {
-    while (!signal.aborted && (queue.length >= 2 || (!options.cache && offset !== nextOffset))) await wait()
+    while (!signal.aborted && (queue.length >= 2 || ((!options.cache || options.deduplicate) && offset !== nextOffset))) await wait()
     signal.throwIfAborted()
     queue.push({ offset, names }); nextOffset += names.length; wake()
   }
@@ -72,6 +81,7 @@ export async function streamDownloadFiles(
     if (selection) {
       const named = await resolveDownloadFileNames(scoped, items.map(item => item.fileId), selection, {
         signal, concurrency: 6, resolvedBatches: options.cache?.names,
+        resolvedNames: options.resolvedNames,
         onBatch: async (offset, names) => {
           await options.cache?.saveNames(offset, names)
           await accept(offset, names)
@@ -86,7 +96,7 @@ export async function streamDownloadFiles(
   })().catch(fail)
 
   const used = new Set<string>()
-  type Prepared = { content: () => Promise<Awaited<ReturnType<typeof prefetchFile>>>; name: string; networkFinished: Promise<void>; finished: Promise<void> }
+  type Prepared = { content: () => Promise<Awaited<ReturnType<typeof prefetchFile>>>; name: string; networkFinished: Promise<void>; finished: Promise<void>; duplicate?: boolean }
   const jobs = new Map<number, Promise<Prepared | null>>()
   const pumps = new Set<Promise<void>>()
   const fileFailure = (error: unknown) => { if (!(error instanceof UnavailableDownloadFileError)) fail(error) }
@@ -136,6 +146,8 @@ export async function streamDownloadFiles(
   let preparing = 0, persisting = 0
   const failures: Array<{ name: string; reason: string }> = []
   const converted: Array<{ from: string; to: string }> = []
+  const namedKeys = new Set<string>()
+  let deduplicated = 0
   // 持久模式仅保留每个附件的小描述符，正文留在磁盘；完成的附件不能
   // 继续占住网络窗口。内存模式仍限制六个256KiB正文缓冲。
   const lookahead = options.cache ? items.length : 6
@@ -151,6 +163,12 @@ export async function streamDownloadFiles(
         const index = batch.offset + offset
         // 网络可乱序完成；实际条目名在顺序入包时分配，恢复时后缀保持一致。
         const name = stripAppNoDot ? stripApplicationNoDot(generated) : generated
+        const key = JSON.stringify([options.caseScopes?.[items[index].fileId] ?? items[index].fileId, finalDownloadNameKey(name)])
+        if (options.deduplicate && namedKeys.has(key)) {
+          jobs.set(index, Promise.resolve({ name, duplicate: true, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: async () => { throw new Error('重复附件不能下载') } }))
+          scheduled++; wake(); continue
+        }
+        namedKeys.add(key)
         preparing++; persisting++
         jobs.set(index, open(index, generated).then(file => {
           void file.networkFinished.then(() => { preparing--; wake() })
@@ -181,6 +199,11 @@ export async function streamDownloadFiles(
       const file = await jobs.get(done)!
       signal.throwIfAborted()
       if (!file) throw failure
+      if (file.duplicate) {
+        deduplicated++; jobs.delete(done); done++; wake()
+        options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length, deduplicated })
+        continue
+      }
       let content: Awaited<ReturnType<typeof prefetchFile>>
       try { content = await file.content() }
       catch (error) {
@@ -195,7 +218,7 @@ export async function streamDownloadFiles(
           if (!cached.skipReason || !cached.complete) await options.cache.complete(done, { totalBytes: 0, skipReason: reason })
         }
         jobs.delete(done); done++; wake()
-        options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length })
+        options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length, deduplicated })
         continue
       }
       const actualName = content.format === 'zip' && /\.pdf$/i.test(file.name) ? file.name.replace(/\.pdf$/i, '.zip') : file.name
@@ -205,12 +228,12 @@ export async function streamDownloadFiles(
       await content.finished
       jobs.delete(done)
       done++; wake()
-      options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length })
+      options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length, deduplicated })
     }
     await producer; await dispatch
     signal.throwIfAborted()
     if (failures.length || converted.length) {
-      const lines = ['PatMail 下载说明', `所选 ${items.length} 个；成功 ${items.length - failures.length} 个；跳过 ${failures.length} 个。`, '']
+      const lines = ['PatMail 下载说明', `所选 ${items.length} 个；成功 ${items.length - failures.length - deduplicated} 个；跳过 ${failures.length} 个；过滤重名 ${deduplicated} 个。`, '']
       if (failures.length) lines.push('以下附件经正文检查确认不可用：', ...failures.map(item => `${item.name}\t${item.reason}`), '')
       if (converted.length) lines.push('以下源文件实际为ZIP，已保留完整原包（包括其中的PDF/XML等文件）：', ...converted.map(item => `${item.from}\t保存为 ${item.to}`))
       const data = new TextEncoder().encode(lines.join('\r\n'))
@@ -230,5 +253,6 @@ export async function streamDownloadFiles(
     await Promise.all(pumps)
     output.releaseLock()
     options.signal?.removeEventListener('abort', cancel)
+    restorePriority?.()
   }
 }

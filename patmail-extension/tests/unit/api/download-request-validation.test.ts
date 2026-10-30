@@ -6,6 +6,13 @@ const payload = (fileName = item.fileName, selection: unknown = null) => ({ item
 const recipe = { newFilename: 'file_name', fileNameType: 'colname' }
 
 describe('下载请求参数诊断', () => {
+  it('最终名缓存和案件分组必须只引用冻结清单，开启去重须有完整分组', () => {
+    const valid = { ...payload(), deduplicate: true, caseScopes: { [item.fileId]: 'case-a' }, resolvedNames: { [item.fileId]: 'DIY.docx' } }
+    expect(downloadFilesRequestIssue(valid)).toBe('')
+    expect(isMessage({ type: 'BROWSER_STREAM_DOWNLOAD', payload: { action: 'start', fileName: 'test.zip', taskId: item.fileId, targetId: item.fileId, manifest: { items: valid.items, selection: valid.selection, stripAppNoDot: true, deduplicate: true, caseScopes: valid.caseScopes, resolvedNames: valid.resolvedNames } } })).toBe(true)
+    expect(downloadFilesRequestIssue({ ...valid, caseScopes: {} })).toContain('分组')
+    expect(downloadFilesRequestIssue({ ...valid, resolvedNames: { other: 'name.docx' } })).toContain('名称')
+  })
   it('1608个文件仍在允许范围内', () => {
     const request = { ...payload(), items: Array.from({ length: 1608 }, () => ({ ...item })) }
     expect(isMessage({ type: 'DOWNLOAD_FILES', payload: request })).toBe(true)

@@ -11,12 +11,13 @@ export interface BrowserDownloadTask {
   updatedAt: number
   completedBytes?: number
   failedCount?: number
+  deduplicatedCount?: number
   activeTargetId?: string
 }
 export interface BrowserDownloadStore {
   create(task: BrowserDownloadTask): Promise<void>
   get(taskId: string): Promise<BrowserDownloadTask | null>
-  update(taskId: string, patch: Partial<Pick<BrowserDownloadTask, 'state' | 'updatedAt' | 'completedBytes' | 'activeTargetId' | 'failedCount'>>): Promise<void>
+  update(taskId: string, patch: Partial<Pick<BrowserDownloadTask, 'state' | 'updatedAt' | 'completedBytes' | 'activeTargetId' | 'failedCount' | 'deduplicatedCount'>>): Promise<void>
   info(taskId: string, blob: BrowserBlob): Promise<CachedFileInfo>
   reset(taskId: string, blob: BrowserBlob, metadata: Partial<CachedFileInfo>): Promise<void>
   append(taskId: string, blob: BrowserBlob, offset: number, bytes: Uint8Array): Promise<void>

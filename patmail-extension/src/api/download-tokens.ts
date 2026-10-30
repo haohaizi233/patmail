@@ -5,7 +5,13 @@ interface Waiter { kind: Kind; signal: AbortSignal; abort: () => void; resolve: 
 export class DownloadTokens {
   private active = 0
   private waiters: Waiter[] = []
-  constructor(private readonly preferred: () => Kind) {}
+  constructor(private preferred: () => Kind) {}
+  setPreferred(preferred: () => Kind): () => void {
+    const previous = this.preferred
+    this.preferred = preferred
+    this.drain()
+    return () => { if (this.preferred === preferred) this.preferred = previous }
+  }
 
   acquire(kind: Kind, signal: AbortSignal): Promise<() => void> {
     if (signal.aborted) return Promise.reject(signal.reason)

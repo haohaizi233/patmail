@@ -1,4 +1,5 @@
 import type { StreamDownloadCommand } from '../shared/message'
+import { finalDownloadNameKey } from '../mail/deduplicate'
 import { BROWSER_FILE_CHANNEL, type BrowserDownloadStore, type BrowserDownloadTask, type BrowserFileRequest, type BrowserFileReply } from '../browser-download/types'
 
 const BLOCK = 256 * 1024
@@ -108,6 +109,20 @@ export class BrowserStreamDownloads {
     if (task && task.owner !== owner) throw new Error('下载任务不属于当前账号。')
     return task
   }
+  private async duplicateCount(task: BrowserDownloadTask): Promise<number> {
+    if (!task.manifest.deduplicate || !Array.isArray(task.manifest.items)) return 0
+    const names = await this.store.names(task.taskId), byId = task.manifest.resolvedNames as Record<string, string> | undefined
+    const scopes = task.manifest.caseScopes as Record<string, string> | undefined
+    const seen = new Set<string>(); let count = 0
+    for (const [index, item] of task.manifest.items.entries()) {
+      const offset = Math.floor(index / 40) * 40
+      const name = names[String(offset)]?.[index - offset] ?? byId?.[item.fileId] ?? (task.manifest.selection === null ? item.fileName : undefined)
+      if (typeof name !== 'string') throw new Error('去重命名检查点不完整，不能确认完成。')
+      const key = JSON.stringify([scopes?.[item.fileId] ?? item.fileId, finalDownloadNameKey(name, task.manifest.stripAppNoDot === true)])
+      if (seen.has(key)) count++; else seen.add(key)
+    }
+    return count
+  }
   private async closeTarget(lease: Lease): Promise<void> {
     if (this.closedTargets.has(lease)) return
     const existing = this.closingTargets.get(lease)
@@ -140,6 +155,7 @@ export class BrowserStreamDownloads {
       sealed: archive.complete || task.state === 'sealed' || task.state === 'done',
       completed: task.state === 'done', ...(task.completedBytes === undefined ? {} : { completedBytes: task.completedBytes }) }
     Object.assign(snapshot, { failedCount: task.failedCount ?? 0 })
+    Object.assign(snapshot, { deduplicatedCount: task.deduplicatedCount ?? 0 })
     if (lease && task.state !== 'done' && this.nativeStatus) {
       const native = await this.nativeStatus(lease.targetId)
       if (native) Object.assign(snapshot, native)
@@ -192,7 +208,9 @@ export class BrowserStreamDownloads {
           this.assertLease(lease); assertSource()
           await this.target(lease, 'open'); this.assertLease(lease); assertSource()
           const archive = await this.store.info(taskId, 'archive')
-          await this.store.update(taskId, { state: archive.complete ? 'sealed' : 'running', updatedAt: Date.now() })
+          if (archive.complete) task.failedCount = await this.store.skipped?.(taskId) ?? task.failedCount ?? 0
+          if (archive.complete) task.deduplicatedCount = await this.duplicateCount(task)
+          await this.store.update(taskId, { state: archive.complete ? 'sealed' : 'running', updatedAt: Date.now(), ...(archive.complete ? { failedCount: task.failedCount, deduplicatedCount: task.deduplicatedCount } : {}) })
           task.state = archive.complete ? 'sealed' : 'running'
           return { ok: true, token: lease.token, taskId, info: await this.info(task, lease, true) }
         } catch (error) {
@@ -283,12 +301,16 @@ export class BrowserStreamDownloads {
           if (command.action === 'resume') throw new Error('压缩包尚未封存。')
           if (lease.offset !== archive.receivedBytes) throw new Error('压缩包重放未达到缓存水位，不能封存。')
           await this.store.finishBlob(task.taskId, 'archive')
-          const failedCount = await this.store.skipped?.(task.taskId) ?? 0
-          await this.store.update(task.taskId, { state: 'sealed', updatedAt: Date.now(), failedCount })
-          task.failedCount = failedCount
           task.state = 'sealed'
           archive = await this.store.info(task.taskId, 'archive')
         }
+        // Reconcile after an interrupted seal as well: the archive transaction may
+        // have committed before the task's summary receipt was written.
+        const failedCount = await this.store.skipped?.(task.taskId) ?? task.failedCount ?? 0
+        const deduplicatedCount = await this.duplicateCount(task)
+        await this.store.update(task.taskId, { state: 'sealed', updatedAt: Date.now(), failedCount, deduplicatedCount })
+        task.deduplicatedCount = deduplicatedCount
+        task.failedCount = failedCount; task.state = 'sealed'
         const receivedBytes = archive.receivedBytes
         settled = this.output(lease, async () => {
           while (lease.cursor < receivedBytes) {

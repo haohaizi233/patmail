@@ -35,6 +35,23 @@ function fixture(nativeStatus?: (targetId: string) => Promise<{ state: 'inProgre
 }
 
 describe('browser stream broker', () => {
+  it('已封存任务恢复时从冻结名称重建同案件去重数', async () => {
+    const f = fixture(), ids = ['a', 'b', 'c']
+    const manifest = { deduplicate: true, stripAppNoDot: false, selection: {}, items: ids.map(fileId => ({ fileId, fileName: 'old.pdf' })), resolvedNames: { a: 'DIY.doc', b: 'DIY.docx', c: 'DIY.docx' }, caseScopes: { a: 'one', b: 'one', c: 'two' } }
+    const first = await f.start({ manifest })
+    await f.store.finishBlob(first.taskId!, 'archive')
+    const restarted = new BrowserStreamDownloads(f.store, f.host)
+    const restored = await restarted.command({ action: 'start', taskId: first.taskId, fileName: 'test.zip', targetId: 'next' }, 10, 'owner')
+    expect(restored.info).toMatchObject({ sealed: true, deduplicatedCount: 1 })
+  })
+  it('封存已提交但任务失败数未提交时，重启start补齐回执摘要', async () => {
+    const f = fixture(), first = await f.start()
+    await f.store.finishBlob(first.taskId!, 'archive')
+    f.store.skipped = async () => 1
+    const restarted = new BrowserStreamDownloads(f.store, f.host)
+    const restored = await restarted.command({ action: 'start', taskId: first.taskId, fileName: 'test.zip', targetId: 'next', manifest: { ids: [1] } }, 10, 'owner')
+    expect(restored.info).toMatchObject({ sealed: true, failedCount: 1 })
+  })
   it('keeps cache RPCs and pause responsive while the native consumer has not pulled ZIP bytes', async () => {
     const f = fixture(), started = await f.start(), token = started.token!
     let entered!: () => void, rejectWrite!: (error: Error) => void

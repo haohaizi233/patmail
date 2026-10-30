@@ -65,7 +65,8 @@ export async function nativeStreamArchive(
   const reportRetainedFailures = () => {
     const total = Array.isArray(options.manifest?.items) ? options.manifest.items.length : 1
     const failed = Number(created.info?.failedCount ?? 0)
-    if (Number.isSafeInteger(failed) && failed > 0 && failed <= total) report({ phase: 'packing', done: total, total, failed })
+    const deduplicated = Number(created.info?.deduplicatedCount ?? 0)
+    if (Number.isSafeInteger(failed) && Number.isSafeInteger(deduplicated) && failed >= 0 && deduplicated >= 0 && failed + deduplicated > 0 && failed + deduplicated <= total) report({ phase: 'packing', done: total, total, failed, deduplicated })
   }
   if (created.info?.completed === true && Number.isSafeInteger(created.info.completedBytes)) {
     reportRetainedFailures()

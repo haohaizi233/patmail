@@ -148,9 +148,11 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
           ...(patch.state !== undefined ? { state: patch.state } : {}),
           ...(patch.completedBytes !== undefined ? { completedBytes: patch.completedBytes } : {}),
           ...(patch.failedCount !== undefined ? { failedCount: patch.failedCount } : {}),
+          ...(patch.deduplicatedCount !== undefined ? { deduplicatedCount: patch.deduplicatedCount } : {}),
           ...(targetChanged ? { activeTargetId: targetId } : {}) }
         if (next.completedBytes !== undefined) integer(next.completedBytes)
         if (next.failedCount !== undefined) integer(next.failedCount)
+        if (next.deduplicatedCount !== undefined) integer(next.deduplicatedCount)
         await request(tx.objectStore('tasks').put(next))
       })
     },
