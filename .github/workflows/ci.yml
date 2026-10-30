@@ -36,7 +36,7 @@ jobs:
         run: node scripts/ci-check.mjs --steps typecheck,lint,format
       - name: 上传静态检查报告
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-static
           path: |
@@ -53,7 +53,7 @@ jobs:
         run: node scripts/ci-check.mjs --steps unit,integration
       - name: 上传测试报告
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-unit
           path: |
@@ -71,7 +71,7 @@ jobs:
         run: node scripts/ci-check.mjs --steps regression
       - name: 上传测试报告
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-regression
           path: |
@@ -89,7 +89,7 @@ jobs:
         run: node scripts/ci-check.mjs --steps secrets,licenses
       - name: 上传扫描报告
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-security
           path: |
@@ -107,14 +107,14 @@ jobs:
         run: node scripts/ci-check.mjs --steps build,manifest,dist
       - name: 上传构建产物
         if: success()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: extension-dist
           path: patmail-extension/dist
           retention-days: 14
       - name: 上传校验报告
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-build
           path: |
@@ -144,7 +144,7 @@ jobs:
         run: node scripts/run-e2e.mjs smoke
       - name: 上传 E2E 报告与失败证据
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: report-e2e-smoke
           path: |
@@ -182,7 +182,7 @@ jobs:
         run: node scripts/ci-report.mjs --gate
       - name: 上传最终 CI 报告
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-summary
           path: |
