@@ -3,7 +3,7 @@ const BASE = 'http://127.0.0.1:42843'
 type Downloads = Pick<typeof chrome.downloads, 'download' | 'cancel'> & Partial<Pick<typeof chrome.downloads, 'search' | 'resume'>>
 interface Job {
   tabId: number; owner: string; taskId?: string; id?: number; flight: Promise<number | null>
-  failure?: string; cancelled: boolean; touched: number; durable: boolean
+  failure?: string; cancelled: boolean; touched: number; durable: boolean; resumeCancelled: boolean
 }
 const binaryBytes = (data: string) => Uint8Array.from(atob(data), char => char.charCodeAt(0))
 const encodedBytes = (bytes: Uint8Array) => {
@@ -40,13 +40,16 @@ export class LocalStreamDownloads {
   private json(path: string, body: unknown = {}): Promise<Response> {
     return this.relay(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   }
-  private async resume(job: Job): Promise<void> {
+  private async resume(job: Job, explicit = false): Promise<void> {
     if (job.id === undefined || !this.downloads.search) return
     const item = (await this.downloads.search({ id: job.id }))[0]
     if (!item) throw new Error('原下载记录已被清除。本机缓存仍保留，请从缓存另存为新文件。')
     if (item.state === 'interrupted' || item.paused) {
+      // 封存可恢复网络中断，但不能覆盖本轮用户取消；仅新的恢复请求授权续传旧取消记录。
+      if (item.error === 'USER_CANCELED' && !explicit && !job.resumeCancelled) throw new Error('浏览器下载已取消，本机任务已保留，可在工作台继续或丢弃。')
       if (!item.canResume || !this.downloads.resume) throw new Error('浏览器不支持原记录续传，本机缓存仍保留，请从缓存另存为新文件。')
       await this.downloads.resume(job.id)
+      job.resumeCancelled = false
     }
   }
   async command(command: StreamDownloadCommand, tabId: number, owner = 'legacy:' + tabId): Promise<{
@@ -81,7 +84,7 @@ export class LocalStreamDownloads {
       }
       for (const [key, prior] of this.jobs) if (taskId && prior.taskId === taskId) this.jobs.delete(key)
       const job: Job = { tabId, owner, taskId, durable, flight: Promise.resolve(existing?.id ?? null),
-        id: existing?.id, cancelled: false, touched: Date.now() }
+        id: existing?.id, cancelled: false, touched: Date.now(), resumeCancelled: existing?.state === 'interrupted' && existing.error === 'USER_CANCELED' }
       this.jobs.set(token, job)
       if (!existing) {
         job.flight = this.downloads.download({ url, filename: command.fileName, saveAs: false, conflictAction: 'uniquify' })
@@ -143,7 +146,7 @@ export class LocalStreamDownloads {
     } else if (command.action === 'resume') {
       const info = (await (await this.json('/status/' + token)).json()) as Record<string, unknown>
       if (!info.sealed) throw new Error('正在恢复本机压缩包，封存后才能续传到浏览器。')
-      await this.resume(job)
+      await this.resume(job, true)
     } else if (Date.now() - job.touched > 15_000) {
       await this.json('/touch/' + token); job.touched = Date.now()
     }

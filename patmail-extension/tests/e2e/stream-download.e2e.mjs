@@ -20,6 +20,9 @@ let prepares = 0, streams = 0
 let activeRequests = 0, peakRequests = 0, activeBodies = 0, peakBodies = 0
 const requestTrace = []
 let slowTransfer = false
+// 取消/导航用例把第二份正文挂起在首块之后：原生下载永远停在“正在传输”，
+// 用例不必和压缩包完成竞速，慢机器上也能确定性地取消或离开。
+let holdTransfer = false
 let proveSix = false, releaseSix
 const sixBodies = new Promise(resolve => { releaseSix = resolve })
 let releaseLastNames
@@ -71,6 +74,13 @@ const server = http.createServer(async (req, res) => {
     for (let offset = 0; offset < payload.length; offset += 65536) {
       if (res.destroyed) return
       res.write(payload.subarray(offset, offset + 65536))
+      if (holdTransfer && index === 1 && offset === 0) {
+        await new Promise(resolve => {
+          const release = () => { res.off('close', release); resolve() }
+          res.once('close', release)
+        })
+        return
+      }
       // 正文窗口要足够长，才能在真实浏览器/本机IPC负载下观察网络重叠。
       if (offset + 65536 < payload.length) await new Promise(resolve => setTimeout(resolve, slowTransfer ? 700 : 40))
     }
@@ -177,6 +187,7 @@ try {
   assert(sixDownload)
   proveSix = false
   slowTransfer = true
+  holdTransfer = true
   const cancelId = '22222222-2222-4222-8222-222222222222'
   await worker.evaluate(({ tabId, items, id }) => chrome.tabs.sendMessage(tabId, { type: 'DOWNLOAD_FILES', payload: {
     items, selection: null, stripAppNoDot: false, archiveName: '取消验收.zip', stream: true, progressId: id, detached: true
@@ -198,6 +209,7 @@ try {
   await app.waitForFunction(id => Boolean(window.__results[id]), cancelId, { timeout: 20000 })
   const cancelled = await app.evaluate(id => window.__results[id], cancelId)
   assert.equal(cancelled.payload.ok, false, '用户取消必须失败，不能完成残缺包')
+  assert.match(cancelled.payload.error?.message ?? '', /取消/, '必须报告用户取消的原因')
   assert.equal(await worker.evaluate(id => chrome.downloads.search({ id }).then(items => items[0].state), cancellation), 'interrupted')
   report.cancellation = { passed: true, successReported: false, interrupted: true }
   const navigationId = '44444444-4444-4444-8444-444444444444'
