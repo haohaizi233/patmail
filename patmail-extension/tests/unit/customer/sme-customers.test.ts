@@ -1,10 +1,30 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isDictionaryResult } from '../../../src/api/message-guards'
-import { parseSmeCustomerSnapshot } from '../../../src/customer/sme-customers'
+import { loadSmeCustomerSnapshot, parseSmeCustomerSnapshot } from '../../../src/customer/sme-customers'
 
 const guid = '50ba5fd7-030b-4de6-9c3a-f7a39ecefc3c'
 
+afterEach(() => vi.unstubAllGlobals())
+
 describe('中小客户名单快照', () => {
+  it('loads the declared packaged resource using the extension URL in every bundle format', async () => {
+    const getURL = vi.fn((path: string) => `chrome-extension://test-extension/${path}`)
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      takenAt: '2026-10-31T01:19:20+08:00', customers: [[guid, '测试客户']]
+    })))
+    vi.stubGlobal('chrome', { runtime: { getURL } })
+    vi.stubGlobal('fetch', fetcher)
+
+    expect(await loadSmeCustomerSnapshot(true)).toEqual({
+      takenAt: '2026-10-31T01:19:20+08:00', customers: [{ id: guid, name: '测试客户' }]
+    })
+    expect(getURL).toHaveBeenCalledWith('assets/sme-customers.json')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const [resource, options] = fetcher.mock.calls[0]
+    expect(resource).toMatch(/^chrome-extension:\/\/test-extension\/assets\/sme-customers\.json\?t=\d+$/)
+    expect(options?.signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('解析紧凑数组，校验编号并去重', () => {
     const snapshot = parseSmeCustomerSnapshot({
       takenAt: '2026-10-13T14:38:36+08:00',

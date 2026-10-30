@@ -25,9 +25,8 @@ SERVER = "183.36.43.66"
 PORT = "8097"
 DATABASE = "IPEasy-X"
 USER = "sa"
-# 两份都要写：public/assets 是 manifest 里 web_accessible_resources 的那份；
-# src/assets 才是运行时真正读的（customer/sme-customers.ts 用 import.meta.url 打进 chunks），
-# 只写 public 的话重新构建也不会换掉插件里的客户名单。
+# 两份快照保持同步：public/assets 由 Vite 复制到 dist/assets，运行时通过
+# manifest 声明的固定扩展资源地址读取；src/assets 保留同一份源快照。
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "public" / "assets" / "sme-customers.json"
 BUNDLED_OUT = ROOT / "patmail-extension" / "src" / "assets" / "sme-customers.json"

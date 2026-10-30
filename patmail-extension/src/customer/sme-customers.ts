@@ -42,16 +42,17 @@ let cached: SmeCustomerSnapshot | null | undefined
 
 /**
  * 中小客户的客户名单走打包好的数据库快照，不走原站 GetCustomerlist（三万多家，响应要二三十分钟）。
- * 只能在扩展页面或后台里读：内容脚本里 fetch chrome-extension:// 会把未打包扩展锁死，读不回来就一直等到请求超时。
- * 快照作为构建产物放在 chunks 里，用 import.meta.url 定位。文件没打包或解析不了时返回 null，调用方明确报错。
+ * 快照使用 manifest 声明的固定资源路径，页面、后台和 IIFE 内容脚本都按扩展地址定位。
+ * 文件没打包或解析不了时返回 null，调用方明确报错。
  */
 export async function loadSmeCustomerSnapshot(force = false): Promise<SmeCustomerSnapshot | null> {
   if (!force && cached !== undefined) return cached
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), SNAPSHOT_WAIT_MS)
   try {
-    // Vite 把 JSON 当资源打进 chunks/，URL 跟着构建产物走，不被 public 目录的复制锁影响。
-    const url = new URL('../assets/sme-customers.json', import.meta.url).href
+    const url = typeof chrome !== 'undefined' && chrome.runtime?.getURL
+      ? chrome.runtime.getURL('assets/sme-customers.json')
+      : '/assets/sme-customers.json'
     const response = await fetch(force ? `${url}?t=${Date.now()}` : url, { signal: controller.signal })
     if (!response.ok) {
       cached = null
