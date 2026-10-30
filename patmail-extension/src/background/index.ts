@@ -61,8 +61,10 @@ const evidence = globalThis.indexedDB ? new IndexedEvidenceStore(globalThis.inde
 const connection = new EasyConnectionController()
 const CONNECTION_SNAPSHOT = 'patmail.connection.snapshot.v1'
 let persistedSnapshot: ConnectionSnapshot | null = null
+let connectionRestored = false
 
 function persistConnection(): void {
+  if (!connectionRestored) return
   const next = connection.snapshot()
   if (sameConnectionSnapshot(persistedSnapshot, next)) return
   persistedSnapshot = next
@@ -126,6 +128,7 @@ function alignToMode(): void {
 }
 
 function warmEasySession(): Promise<void> {
+  if (!connectionRestored) return connectionReady
   if (warming) return warming
   if (connection.context.sessionStatus === 'authenticated' && Date.now() - warmedAt < 1500) return Promise.resolve()
   warming = resumeEasySession(host).finally(() => {
@@ -144,6 +147,7 @@ const connectionReady = (async () => {
     alignToMode()
     persistedSnapshot = connection.snapshot()
   } catch { /* 没有存过连接 */ }
+  connectionRestored = true
   await warmEasySession()
 })()
 
