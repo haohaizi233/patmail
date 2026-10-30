@@ -458,20 +458,31 @@ class Handler(BaseHTTPRequestHandler):
         if len(body) != int(length): raise Problem(400, 'incomplete_body')
         return body
 
-    def drain(self, cap=8 * 1024 * 1024):
+    def drain(self, cap=8 * 1024 * 1024, budget=0.4):
         # 报错前排空请求体：带未读数据直接 close 会触发 RST，Windows 上客户端
         # 读响应时会偶发 ConnectionAborted（WinError 10053），属跨平台时序毛刺。
+        # 但客户端可能谎报 Content-Length 或超限被拒后根本不再发（如 413 用例），
+        # 所以每次 read 只等 0.1s、总预算 0.4s：快读快弃，绝不能让应答等在数据上。
         try:
             length = self.headers.get('Content-Length', '')
             if not length.isdecimal(): return
             remaining = int(length) - self.body_consumed
-            self.connection.settimeout(5)
-            while remaining > 0 and self.body_consumed < cap:
-                chunk = self.rfile.read(min(remaining, 65536))
+            deadline = time.monotonic() + budget
+            self.connection.settimeout(0.1)
+            while remaining > 0 and self.body_consumed < cap and time.monotonic() < deadline:
+                try:
+                    chunk = self.rfile.read(min(remaining, 65536))
+                except TimeoutError:
+                    continue
+                except OSError:
+                    break
                 if not chunk: break
                 self.body_consumed += len(chunk)
                 remaining -= len(chunk)
         except (OSError, ValueError): pass
+        finally:
+            try: self.connection.settimeout(30)
+            except OSError: pass
 
     def json_body(self):
         try:
