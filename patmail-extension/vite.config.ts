@@ -1,12 +1,14 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { copyManifestPlugin } from './vite.manifest'
+import { copyManifestPlugin } from './vite.manifest.ts'
+
+const root = import.meta.dirname
 
 export default defineConfig({
   base: './',
-  server: { fs: { allow: [resolve(__dirname, '..')] } },
-  publicDir: resolve(__dirname, '../public'),
+  server: { fs: { allow: [resolve(root, '..')] } },
+  publicDir: resolve(root, '../public'),
   plugins: [vue(), copyManifestPlugin()],
   build: {
     outDir: 'dist',
@@ -16,9 +18,9 @@ export default defineConfig({
     chunkSizeWarningLimit: 3072,
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, 'src/popup/index.html'),
-        background: resolve(__dirname, 'src/background/index.ts'),
-        app: resolve(__dirname, 'app.html')
+        popup: resolve(root, 'src/popup/index.html'),
+        background: resolve(root, 'src/background/index.ts'),
+        app: resolve(root, 'app.html')
       },
       output: {
         entryFileNames: '[name].js',

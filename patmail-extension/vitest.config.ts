@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     fs: {
-      allow: [resolve(__dirname, '..')],
+      allow: [resolve(import.meta.dirname, '..')],
     },
   },
   test: {
