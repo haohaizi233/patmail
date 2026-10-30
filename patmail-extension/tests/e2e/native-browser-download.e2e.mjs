@@ -78,9 +78,9 @@ async function launch() {
   context.on('page', page => { page.on('pageerror', error => console.error('fixture page error', String(error))); page.on('download', download => downloads.push(download)) })
   await context.addInitScript(() => {
     window.__pickerCalls = 0; window.__legacyCalls = 0
-    window.showSaveFilePicker = async () => {
+    window.showSaveFilePicker = () => {
       window.__pickerCalls++
-      throw new Error('原生下载不允许调用文件选择器')
+      return Promise.reject(new Error('原生下载不允许调用文件选择器'))
     }
     if (location.protocol === 'chrome-extension:' && globalThis.chrome?.runtime) chrome.runtime.onMessage.addListener(message => {
       if (message?.type === 'STREAM_DOWNLOAD') window.__legacyCalls++

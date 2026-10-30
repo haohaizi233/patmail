@@ -58,7 +58,7 @@ export class LocalStreamDownloads {
         if (command.manifest || command.taskId) await this.json('/authority', { owner })
         const response = await this.json('/sessions', { fileName: command.fileName, owner,
           ...(command.taskId ? { taskId: command.taskId } : {}), ...(command.manifest ? { manifest: command.manifest } : {}) })
-        data = await response.json()
+        data = (await response.json()) as Record<string, unknown>
         if (data.protocol !== 'patmail-stream-v1' || typeof data.token !== 'string' || !/^[0-9a-f]{64}$/.test(data.token)) throw new Error('Invalid bridge')
         if ((command.manifest || command.taskId) && data.version !== 2) throw new Error('需要新版续传桥接，请重启 start.py。')
       } catch (error) {
@@ -66,7 +66,7 @@ export class LocalStreamDownloads {
         throw new Error(detail.includes('版本') || detail.includes('缓存') || detail.includes('新版') ? detail
           : '本机流式下载桥接未就绪。请运行仓库 start.py，或 scripts/start-stream-download.ps1 后重试。')
       }
-      const token = data.token as string
+      const token = data.token
       const durable = data.version === 2 && typeof data.taskId === 'string'
       const taskId = durable ? data.taskId as string : undefined
       if (data.completed === true) {
@@ -113,7 +113,7 @@ export class LocalStreamDownloads {
     }
     if (command.action === 'cache') {
       const path = '/cache/' + token + '/' + command.index
-      if (command.command === 'info') return { ok: true, info: await (await this.json('/cache-info/' + token + '/' + command.index)).json() }
+      if (command.command === 'info') return { ok: true, info: (await (await this.json('/cache-info/' + token + '/' + command.index)).json()) as Record<string, unknown> }
       if (command.command === 'read') {
         const response = await this.json(path, { read: true, offset: command.offset ?? 0, limit: 65536 })
         return { ok: true, data: encodedBytes(new Uint8Array(await response.arrayBuffer())) }
@@ -141,7 +141,7 @@ export class LocalStreamDownloads {
       await this.resume(job)
       return { ok: true, downloadId: id }
     } else if (command.action === 'resume') {
-      const info = await (await this.json('/status/' + token)).json()
+      const info = (await (await this.json('/status/' + token)).json()) as Record<string, unknown>
       if (!info.sealed) throw new Error('正在恢复本机压缩包，封存后才能续传到浏览器。')
       await this.resume(job)
     } else if (Date.now() - job.touched > 15_000) {

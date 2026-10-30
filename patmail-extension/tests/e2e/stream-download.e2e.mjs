@@ -111,7 +111,7 @@ try {
   let tab
   for (let index = 0; index < 40; index++) {
     tab = (await worker.evaluate(() => chrome.tabs.query({}))).find(tab => tab.url?.endsWith('/fixture'))
-    try { if ((await worker.evaluate(id => chrome.tabs.sendMessage(id, { type: 'PING' }), tab.id))?.type === 'PONG') break } catch {}
+    try { if ((await worker.evaluate(id => chrome.tabs.sendMessage(id, { type: 'PING' }), tab.id))?.type === 'PONG') break } catch { /* 未就绪，继续轮询 */ }
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   const id = '11111111-1111-4111-8111-111111111111'

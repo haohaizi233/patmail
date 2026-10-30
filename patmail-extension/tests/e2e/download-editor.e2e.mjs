@@ -23,10 +23,10 @@ try {
   async function installRoutes(context) {
   context.on('page', page => page.on('download', download => downloads.push(download)))
   await context.addInitScript(() => {
-    window.showSaveFilePicker = async () => { throw new Error('原生下载不应调用旧版文件选择器') }
+    window.showSaveFilePicker = () => Promise.reject(new Error('原生下载不应调用旧版文件选择器'))
   })
   await installEasyMock(context, { fixtureHtml: '<!doctype html><title>下载名称回归</title>', profile: 'extension' })
-  await context.route('http://183.36.43.66:88/**', async route => {
+  await context.route('http://183.36.43.66:88/**', route => {
     const params = new URLSearchParams(route.request().postData() ?? '')
     const call = params.get('Call')
     if (call) metadataCalls.push(call)
