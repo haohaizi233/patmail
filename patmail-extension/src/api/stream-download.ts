@@ -6,7 +6,7 @@ import type { FileDownloadProgress } from '../shared/download-progress'
 import { DownloadTokens } from './download-tokens'
 import { prefetchFile } from './stream-file'
 import { cachedFileResponse, type DownloadCache } from './stream-cache'
-import { sourceUnavailableError, UnavailableDownloadFileError } from './download-failure'
+import { asError, sourceUnavailableError, UnavailableDownloadFileError } from './download-failure'
 import { finalDownloadNameKey } from '../mail/deduplicate'
 
 export interface StreamDownloadOptions {
@@ -165,7 +165,7 @@ export async function streamDownloadFiles(
         const name = stripAppNoDot ? stripApplicationNoDot(generated) : generated
         const key = JSON.stringify([options.caseScopes?.[items[index].fileId] ?? items[index].fileId, finalDownloadNameKey(name)])
         if (options.deduplicate && namedKeys.has(key)) {
-          jobs.set(index, Promise.resolve({ name, duplicate: true, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: async () => { throw new Error('重复附件不能下载') } }))
+          jobs.set(index, Promise.resolve({ name, duplicate: true, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: () => Promise.reject(new Error('重复附件不能下载')) }))
           scheduled++; wake(); continue
         }
         namedKeys.add(key)
@@ -176,7 +176,7 @@ export async function streamDownloadFiles(
           return { ...file, name }
         }).catch(error => {
           preparing--; persisting--; wake()
-          if (error instanceof UnavailableDownloadFileError) return { name, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: async () => { throw error } }
+          if (error instanceof UnavailableDownloadFileError) return { name, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: () => Promise.reject(asError(error)) }
           fail(error); return null
         }))
         scheduled++; wake()

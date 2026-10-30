@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDownloadNamePreview, type DownloadNamePreviewState } from '../../../src/app/services/download-name-preview'
-import { MessageType, type ContentResponse, type MessageBridge } from '../../../src/shared/message'
+import { MessageType, type ContentRequest, type ContentResponse, type MessageBridge } from '../../../src/shared/message'
 
 afterEach(() => vi.useRealTimers())
 describe('download name preview scheduling', () => {
@@ -50,7 +50,7 @@ describe('download name preview scheduling', () => {
   it('coalesces pending batches after candidate refresh and retains successful older recipes in cache', async () => {
     vi.useFakeTimers()
     const requests: { ids: string[]; finish: (response: ContentResponse) => void }[] = []
-    const bridge: MessageBridge = { request: vi.fn(message => new Promise<ContentResponse>(resolve => {
+    const bridge: MessageBridge = { request: vi.fn((message: ContentRequest) => new Promise<ContentResponse>(resolve => {
       if (message.type === MessageType.ResolveDownloadNames) requests.push({ ids: message.payload.fileIds, finish: resolve })
     })) }
     let state: DownloadNamePreviewState | undefined
@@ -75,7 +75,7 @@ describe('download name preview scheduling', () => {
   it('batches forty IDs with at most six in flight, and ignores replies from an older recipe', async () => {
     vi.useFakeTimers()
     const requests: { ids: string[]; finish: (response: ContentResponse) => void }[] = []
-    const bridge: MessageBridge = { request: vi.fn(message => new Promise<ContentResponse>(resolve => {
+    const bridge: MessageBridge = { request: vi.fn((message: ContentRequest) => new Promise<ContentResponse>(resolve => {
       if (message.type === MessageType.ResolveDownloadNames) requests.push({ ids: message.payload.fileIds, finish: resolve })
     })) }
     let state: DownloadNamePreviewState | undefined
@@ -107,7 +107,7 @@ describe('download name preview scheduling', () => {
 
   it('does not contact the source without DIY, and exposes errors without removing unknown candidates', async () => {
     vi.useFakeTimers()
-    const request = vi.fn(async () => ({ type: MessageType.Error, payload: { message: 'offline' } }) as ContentResponse)
+    const request = vi.fn(async () => ({ type: MessageType.Error, payload: { message: 'offline' } }))
     let state: DownloadNamePreviewState | undefined
     const preview = createDownloadNamePreview({ request }, value => { state = value })
     preview.refresh(['one'], null)

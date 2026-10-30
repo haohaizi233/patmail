@@ -1,4 +1,3 @@
-/* global chrome, document, location, window */
 import http from 'node:http'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'

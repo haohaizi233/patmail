@@ -3,3 +3,11 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+# 安全审计（pnpm audit --prod --audit-level high）漏洞修复：
+# dompurify >=3.4.17（GHSA-mrv2-3pqr-j5jr 等）、source-map-js >=1.2.2（GHSA-68fv-2mgg-jv7q）、
+# katex >=0.18.2（原型污染绕过 trust 限制）。传递依赖不跟随 semver 范围，这里统一钉住。
+overrides:
+  dompurify: ">=3.4.17"
+  source-map-js: ">=1.2.2"
+  katex: ">=0.18.2"

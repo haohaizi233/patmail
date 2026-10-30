@@ -316,7 +316,7 @@ const bridge: MessageBridge = {
             } } }
           } catch (error) {
             return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',
-              message: (error instanceof Error ? error.message : '流水下载失败，压缩包未完成。').slice(0, 200)
+              message: ((error instanceof Error ? error.message : '流水下载失败，压缩包未完成。') + ' | ' + (error instanceof Error ? error.stack ?? '' : '')).slice(0, 1200)
             } } }
           }
         }
@@ -479,7 +479,7 @@ const bridge: MessageBridge = {
           mailId: message.payload.mailId,
           flowType: message.payload.flowType
         })
-        const runner = new LiveEasyAcceptanceRunner({ kind: 'live', call: async () => probe })
+        const runner = new LiveEasyAcceptanceRunner({ kind: 'live', call: () => Promise.resolve(probe) })
         const row = await runner.run({
           origin: location.origin,
           operatorId: '',

@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const reportDir = join(root, 'test-results', 'ci')
 
-// needs：python = 需要 python 命令（ZIP 校验 / 桥接）；bridge = 需要 tests/stream-download-bridge.py。
+// needs：python = 需要 python 命令（ZIP 校验 / 桥接）；bridge = 需要 scripts/stream-download-bridge.py。
 const SUITES = {
   extension: { file: 'tests/e2e/extension.e2e.mjs', needs: [] },
   workspace: { file: 'tests/e2e/workspace.e2e.mjs', needs: [] },
@@ -94,8 +94,8 @@ if (needsPython) {
   if (probe.status !== 0) problems.push('本组用例需要 python 命令（ZIP 校验 / 旧桥接协议），当前环境没有。')
 }
 for (const name of selection) {
-  if (SUITES[name].needs.includes('bridge') && !existsSync(join(root, 'tests', 'stream-download-bridge.py'))) {
-    problems.push(`${name} 需要 tests/stream-download-bridge.py，文件缺失。`)
+  if (SUITES[name].needs.includes('bridge') && !existsSync(join(root, 'scripts', 'stream-download-bridge.py'))) {
+    problems.push(`${name} 需要 scripts/stream-download-bridge.py，文件缺失。`)
   }
   if (SUITES[name].file && !existsSync(join(root, SUITES[name].file))) {
     problems.push(`${name} 的脚本缺失：${SUITES[name].file}`)

@@ -23,6 +23,8 @@ export function caseScope(file: SelectedPatentFile): string {
 
 /** 与ZIP条目共用的基础名称；冲突数字后缀由下载器在去重完成后添加。 */
 export function sanitizedDownloadName(name: string): string {
+  // 文件名清洗有意剔除 ASCII 控制字符，正则中的控制字符范围是必要写法。
+  // eslint-disable-next-line no-control-regex
   return name.replace(/[\\/<>:"|?*\x00-\x1f]+/g, '_').replace(/^[. ]+|[. ]+$/g, '') || '文件'
 }
 

@@ -80,7 +80,7 @@ function chromeExecutionArea(): ExecutionArea | null {
   const area = globalThis.chrome?.storage?.local
   if (!area) return null
   return {
-    get: key => area.get(key) as Promise<Record<string, unknown>>,
+    get: key => area.get<Record<string, unknown>>(key),
     set: items => area.set(items)
   }
 }
@@ -393,7 +393,7 @@ export class EasyRuntime {
     }
     const data = response.data
     const fields = extractReadonlyEvidence(call, data)
-    const shape = data && typeof data === 'object' ? `object(${Object.keys(data as object).sort().join(',')})` : typeof data
+    const shape = data && typeof data === 'object' ? `object(${Object.keys(data).sort().join(',')})` : typeof data
     return { httpStatus: 200, sessionOk: fields.clientLogin !== 'false' && fields.loginPage !== 'true', fields, shape }
   }
 

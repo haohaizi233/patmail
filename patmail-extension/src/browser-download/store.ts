@@ -262,7 +262,7 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
     async names(taskId) {
       return transaction('readonly', async tx => {
         await task(tx, taskId)
-        const values = await request(tx.objectStore('names').index('taskId').getAll(taskId))
+        const values = await typedRequest<NameRecord[]>(tx.objectStore('names').index('taskId').getAll(taskId))
         return Object.fromEntries(values.map(value => [String(value.offset), value.names]))
       })
     },

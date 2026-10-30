@@ -45,6 +45,14 @@ export default tseslint.config(
     },
   },
 
+  // ---- E2E 脚本内的浏览器上下文代码（page.evaluate 回调运行在页面/扩展环境） ----
+  {
+    files: ['tests/**/*.mjs'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser, chrome: 'readonly' },
+    },
+  },
+
   // ---- TypeScript 浏览器源码（真实类型检查） ----
   {
     files: ['src/**/*.ts'],

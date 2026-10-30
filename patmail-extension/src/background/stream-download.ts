@@ -16,7 +16,13 @@ export class LocalStreamDownloads {
   private readonly jobs = new Map<string, Job>()
   constructor(private readonly downloads: Downloads, private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {}
   private async relay(path: string, init?: RequestInit): Promise<Response> {
-    const response = await this.fetcher(BASE + path, { ...init, signal: AbortSignal.timeout(init?.method === 'PUT' ? 120_000 : 10_000) })
+    let response: Response
+    try {
+      response = await this.fetcher(BASE + path, { ...init, signal: AbortSignal.timeout(init?.method === 'PUT' ? 120_000 : 10_000) })
+    } catch (error) {
+      const cause = error instanceof Error && 'cause' in error ? String((error as { cause?: unknown }).cause) : ''
+      throw new Error(`RELAY ${path} ${error instanceof Error ? error.name : ''}:${error instanceof Error ? error.message : String(error)} cause=${cause}`)
+    }
     if (!response.ok) throw new Error(response.status === 409
       ? '缓存或任务版本不一致，没有继续写入。已保留原任务，请检查后重试。'
       : '本机下载流未就绪或未接收完整（HTTP ' + response.status + '），任务缓存仍保留。')

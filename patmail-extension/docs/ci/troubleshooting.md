@@ -11,7 +11,7 @@
 | `dist/ 不存在，先执行 pnpm build` | e2e 加载的是构建产物 | 先 `pnpm build` |
 | Playwright 启动失败 / 找不到 Chromium | 浏览器未安装或版本与 lockfile 不匹配 | `npx playwright install --with-deps chromium` |
 | workspace 场景报红（导航/绑定/生成计划等断言） | **已知红**：历史 UI 契约漂移（详见 `e2e-matrix.md` 与 `acceptance-report.md`），非环境问题 | 按 `e2e-matrix.md` 的整改计划推进；不要删断言或加 skip |
-| legacy 组 `E2E 前置条件不满足，记为 BLOCKED` | 缺 `python` 命令或 `tests/stream-download-bridge.py` | 安装 Python 3；BLOCKED 不等于通过 |
+| legacy 组 `E2E 前置条件不满足，记为 BLOCKED` | 缺 `python` 命令或 `scripts/stream-download-bridge.py` | 安装 Python 3；BLOCKED 不等于通过 |
 | 端口/目录互扰 | 不应发生：每脚本独立进程 + `mkdtemp` + `listen(0)` | 检查是否有自改脚本共用了固定端口/固定临时目录 |
 
 ## 静态检查

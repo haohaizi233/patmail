@@ -111,10 +111,11 @@ export class BrowserStreamDownloads {
   }
   private async duplicateCount(task: BrowserDownloadTask): Promise<number> {
     if (!task.manifest.deduplicate || !Array.isArray(task.manifest.items)) return 0
+    const items = task.manifest.items as Array<{ fileId: string; fileName: string }>
     const names = await this.store.names(task.taskId), byId = task.manifest.resolvedNames as Record<string, string> | undefined
     const scopes = task.manifest.caseScopes as Record<string, string> | undefined
     const seen = new Set<string>(); let count = 0
-    for (const [index, item] of task.manifest.items.entries()) {
+    for (const [index, item] of items.entries()) {
       const offset = Math.floor(index / 40) * 40
       const name = names[String(offset)]?.[index - offset] ?? byId?.[item.fileId] ?? (task.manifest.selection === null ? item.fileName : undefined)
       if (typeof name !== 'string') throw new Error('去重命名检查点不完整，不能确认完成。')

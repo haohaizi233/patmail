@@ -252,7 +252,7 @@ export async function resolveDownloadFileNames(
   }
   const abort = () => stop(apiError('REQUEST_ABORTED', '请求已取消。'))
   options.signal?.addEventListener('abort', abort, { once: true })
-  const names: string[] = new Array(fileIds.length)
+  const names = new Array<string>(fileIds.length)
   let next = 0
   let completed = 0
   const worker = async () => {

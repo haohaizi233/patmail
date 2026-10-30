@@ -1,4 +1,3 @@
-/* global IDBDatabase, indexedDB, window */
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import ts from 'typescript'

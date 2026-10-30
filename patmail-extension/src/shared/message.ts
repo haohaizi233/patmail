@@ -500,12 +500,13 @@ export function downloadFilesRequestIssue(value: unknown): string {
     if (typeof item.fileName !== 'string' || !item.fileName.trim() || item.fileName.length > 4096) return `${prefix}的原文件名为空或超过4096字。`
     if (value.selection === null && (item.fileName.length > 180 || item.fileName.includes(';'))) return `${prefix}的原文件名超过180字或包含分号，请设置下载名称后再下载。`
   }
-  const ids = new Set(items.map(item => String(item.fileId)))
+  const files = items as Array<Record<string, unknown>>
+  const ids = new Set(files.map(item => String(item.fileId)))
   for (const field of ['resolvedNames', 'caseScopes'] as const) {
     const map = value[field]
     if (map !== undefined && (!isRecord(map) || Object.keys(map).length > items.length || Object.entries(map).some(([id, name]) => !ids.has(id) || typeof name !== 'string' || !name.trim() || name.length > (field === 'resolvedNames' ? 180 : 1024) || (field === 'resolvedNames' && name.includes(';'))))) return field === 'resolvedNames' ? '已生成的下载名称无效。' : '案件分组信息无效。'
   }
-  if (value.deduplicate && (!isRecord(value.caseScopes) || items.some(item => !Object.hasOwn(value.caseScopes as object, String(item.fileId))))) return '去重缺少案件分组信息。'
+  if (value.deduplicate && (!isRecord(value.caseScopes) || files.some(item => !Object.hasOwn(value.caseScopes as object, String(item.fileId))))) return '去重缺少案件分组信息。'
   return ''
 }
 
