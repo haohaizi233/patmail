@@ -1,4 +1,6 @@
 import { documentedCallAllowed, documentedParams, summarizeEasyPayload } from './documented-call'
+import { DownloadTokens } from './download-tokens'
+import { DownloadNameRequests } from './download-name-requests'
 import { isLiveWriteCall } from '../automation/live-readonly-policy'
 import { extractReadonlyEvidence, readonlyContract } from '../automation/readonly-contracts'
 import { CURRENT_ENVIRONMENT, PCL_ORIGIN, trustedOrigin } from './config'
@@ -126,6 +128,13 @@ function refusedMailView(preview: MailDraftPreview, message: string, executionId
 }
 
 export class EasyRuntime {
+  private readonly downloadTokens = new DownloadTokens(() => 'naming')
+  private readonly downloadNameRequests = new DownloadNameRequests()
+  private readonly postDownloadName: EasyTransport['post'] = async (...args) => this.downloadNameRequests.post(args[1], args[2], async params => {
+    const signal = args[2] ?? new AbortController().signal
+    const release = await this.downloadTokens.acquire('naming', signal)
+    try { return await this.transport.post('getFileName', params, args[2], args[3], args[4]) } finally { release() }
+  })
   private readonly transport: EasyTransport
   private readonly session: SessionService
   private sessionController: AbortController | null = null
@@ -183,6 +192,7 @@ export class EasyRuntime {
       }
       const nextKey = result.ok && result.data.status === 'authenticated' ? result.data.userId ?? '' : ''
       if (nextKey !== this.historyUserKey) {
+        this.downloadNameRequests.clear()
         this.history.invalidate()
         this.dictionaries.invalidate(this.historyUserKey)
         this.dictionaries.invalidate(nextKey)
@@ -248,6 +258,7 @@ export class EasyRuntime {
     const controller = new AbortController()
     let requestNumber = 0
     if (!batch) {
+      this.downloadNameRequests.clear()
       this.cancelFileSearch()
       this.searchController = controller
       requestNumber = ++this.searchSequence
@@ -668,7 +679,13 @@ export class EasyRuntime {
       if (!(await this.confirmAccountRead())) {
         return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
       }
-      const result = await resolveDownloadFileNames(this.transport, fileIds, selection)
+      const controller = new AbortController()
+      const transport = { post: async (...args: Parameters<EasyTransport['post']>) => {
+        if (args[0] === 'getFileName') return this.postDownloadName(...args)
+        const release = await this.downloadTokens.acquire('naming', args[2] ?? controller.signal)
+        try { return await this.transport.post(...args) } finally { release() }
+      } } as EasyTransport
+      const result = await resolveDownloadFileNames(transport, fileIds, selection)
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') this.session.expire()
       return result
     })()
@@ -736,10 +753,10 @@ export class EasyRuntime {
 
   async streamFiles(items: DownloadFileItem[], selection: FileDownloadSelection | null, stripAppNoDot: boolean,
     sink: WritableStream<Uint8Array>, signal: AbortSignal, onProgress?: (progress: FileDownloadProgress) => void,
-    recovery?: { cache?: import('./stream-cache').DownloadCache; zipCreatedAt?: string }): Promise<void> {
+    recovery?: { cache?: import('./stream-cache').DownloadCache; zipCreatedAt?: string; deduplicate?: boolean; resolvedNames?: Record<string, string>; caseScopes?: Record<string, string> }): Promise<void> {
     if (!items.length || items.length > DOWNLOAD_MAX_ITEMS || items.some(item => !isQueryGuid(item.fileId) || !item.fileNo.trim() || !item.fileName.trim())) throw new Error('下载文件参数无效。')
     if (!(await this.confirmAccountRead())) throw new Error('请先确认EASY当前登录状态。')
-    await streamDownloadFiles(this.transport, items, selection, stripAppNoDot, { sink, signal, onProgress, ...recovery })
+    await streamDownloadFiles(this.transport, items, selection, stripAppNoDot, { sink, signal, onProgress, ...recovery, tokens: this.downloadTokens, namePost: this.postDownloadName })
   }
 
   cancelLimitMonitor(): void {
