@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import shutil
 import signal
 import socket
@@ -169,12 +170,21 @@ def handle_stop(signum: int, _frame: object) -> None:
     raise SystemExit(0)
 
 
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+VITE_LOCAL_URL_RE = re.compile(r"\bLocal\s*:\s*https?://\S+", re.IGNORECASE)
+
+
+def is_vite_local_url(line: str) -> bool:
+    """识别 Vite Local 地址；先移除色码，避免样式重置码打断标签。"""
+    return bool(VITE_LOCAL_URL_RE.search(ANSI_ESCAPE_RE.sub("", line)))
+
+
 def pipe_output(proc: subprocess.Popen[str], ready: threading.Event) -> None:
     if proc.stdout is None:
         return
     for line in proc.stdout:
         recent_output.append(line)
-        if "Local:" in line:
+        if is_vite_local_url(line):
             ready.set()
         try:
             print(line, end="")
@@ -430,14 +440,30 @@ def start_frontend(runner: str) -> subprocess.Popen[str]:
     )
 
 
+def wait_for_ready_or_exit(
+    proc: subprocess.Popen[str], ready: threading.Event, timeout: float
+) -> bool:
+    """等待地址日志或 Vite 退出，避免已退出的进程空等完整启动时限。"""
+    deadline = time.monotonic() + timeout
+    while not ready.is_set():
+        if proc.poll() is not None:
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        ready.wait(timeout=min(0.1, remaining))
+    return True
+
+
 def start_frontend_with_recovery(runner: str) -> subprocess.Popen[str]:
     """带容灾的启动：端口预检、失败自动修复重试一次、就绪用 HTTP 探活。"""
     for attempt in (1, 2):
         recent_output.clear()
         frontend = start_frontend(runner)
         ready = threading.Event()
-        threading.Thread(target=pipe_output, args=(frontend, ready), daemon=True).start()
-        if ready.wait(timeout=40) and frontend.poll() is None:
+        output_reader = threading.Thread(target=pipe_output, args=(frontend, ready), daemon=True)
+        output_reader.start()
+        if wait_for_ready_or_exit(frontend, ready, timeout=40) and frontend.poll() is None:
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline and not http_ready(FRONTEND_URL):
                 time.sleep(0.5)
@@ -449,6 +475,7 @@ def start_frontend_with_recovery(runner: str) -> subprocess.Popen[str]:
         if frontend.poll() is None:
             print("管理端还没有打印访问地址，请查看上方日志。")
             return frontend
+        output_reader.join(timeout=1)
         if attempt == 1 and recoverable_failure():
             repair_frontend(runner)
             continue
