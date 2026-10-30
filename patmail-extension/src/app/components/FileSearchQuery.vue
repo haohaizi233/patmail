@@ -939,6 +939,8 @@ onBeforeUnmount(() => {
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
           <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('review')">查看已选</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('plan')">生成发文计划</button>
           <button v-if="failedPages.length" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
         </div>

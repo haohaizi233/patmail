@@ -58,11 +58,12 @@ function reply(message: Extract<ContentRequest, { type: 'SEARCH_FILES' }>, total
     }))
   } } }
 }
-function mount(request: MessageBridge['request'], allowed = ref(true), epoch = ref(0)) {
+function mount(request: MessageBridge['request'], allowed = ref(true), epoch = ref(0), actions: { onPlan?: () => void; onReview?: () => void } = {}) {
   const selected = ref<Record<string, SelectedPatentFile>>({})
   app = createApp({ render: () => h('div', [h(CheckRainbow), h(FileSearchQuery, {
     userId: 'test', origin: 'http://183.36.43.66:88', canSearch: allowed.value, selectable: true, epoch: epoch.value,
-    selected: selected.value, 'onUpdate:selected': (value: Record<string, SelectedPatentFile>) => { selected.value = value }
+    selected: selected.value, 'onUpdate:selected': (value: Record<string, SelectedPatentFile>) => { selected.value = value },
+    onPlan: actions.onPlan, onReview: actions.onReview
   })]) })
   app.provide('bridge', { request })
   app.directive('hint', {})
@@ -77,6 +78,33 @@ function duplicateOption(): HTMLInputElement {
 }
 
 describe('DIY名称实时去重', () => {
+  it('keeps selected-file review and planning actions available through the parent events', async () => {
+    const onPlan = vi.fn()
+    const onReview = vi.fn()
+    const allowed = ref(true)
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 2) : { type: MessageType.Error, payload: { message: 'unused' } }, allowed, ref(0), { onPlan, onReview })
+    button('测试查询').click(); await settle()
+    expect(button('查看已选').disabled).toBe(true)
+    expect(button('生成发文计划').disabled).toBe(true)
+    button('全选本页').click(); await settle()
+    expect(button('查看已选').disabled).toBe(false)
+    expect(button('生成发文计划').disabled).toBe(false)
+    allowed.value = false; await settle()
+    expect(button('查看已选').disabled).toBe(true)
+    expect(button('生成发文计划').disabled).toBe(true)
+    allowed.value = true; await settle()
+    expect(button('查看已选').disabled).toBe(true)
+    expect(button('生成发文计划').disabled).toBe(true)
+    button('刷新').click(); await settle()
+    button('全选本页').click(); await settle()
+    expect(button('查看已选').disabled).toBe(false)
+    expect(button('生成发文计划').disabled).toBe(false)
+    button('查看已选').click()
+    button('生成发文计划').click()
+    expect(onReview).toHaveBeenCalledTimes(1)
+    expect(onPlan).toHaveBeenCalledTimes(1)
+  })
+
   it('父面板给获选文件绑定客户后仍保留隐藏候选', async () => {
     const selected = mount(async message => {
       if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
