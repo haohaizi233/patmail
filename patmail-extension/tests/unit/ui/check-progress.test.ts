@@ -51,13 +51,17 @@ describe('发文核对进度', () => {
   })
 
   it('进度条的动词跟着任务走：核对、翻页、取数', () => {
+    paintTaskCheckProgress(2, 8, 1_000, 'run', '下载文件', 2_000, '取名 8/8 · 已入包 2/8', '正在入包…')
+    expect(taskCheckProgress.summary).toBe('正在入包…')
     paintTaskCheckProgress(3, 10, 1_000, 'run', '翻页')
     expect(taskCheckProgress.label).toBe('翻页')
     expect(taskCheckProgress.done).toBe(3)
+    expect(taskCheckProgress.summary).toBe('')
     paintTaskCheckProgress(10, 10, 1_000, 'done', '取数')
     expect(taskCheckProgress.label).toBe('取数')
     expect(taskCheckProgress.status).toBe('done')
     resetTaskCheckProgress()
     expect(taskCheckProgress.label).toBe('核对')
+    expect(taskCheckProgress.summary).toBe('')
   })
 })

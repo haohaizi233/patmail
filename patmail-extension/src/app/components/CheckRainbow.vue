@@ -5,6 +5,7 @@ import { taskCheckProgress } from '../check-progress'
 /** 进度条的动词跟着任务走：核对、翻页、取数，写在 taskCheckProgress.label 里。 */
 const summary = computed(() => {
   const progress = taskCheckProgress
+  if (progress.summary) return progress.summary
   const percent = Number.isInteger(progress.percent) ? String(progress.percent) : progress.percent.toFixed(1)
   return `${progress.detail ? '' : '已'}${progress.label} ${percent}%（${progress.done}/${progress.total}）`
 })

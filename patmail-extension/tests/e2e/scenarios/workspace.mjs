@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { waitForPageCondition } from '../support/browser.mjs'
 import { distDir as dist } from '../support/paths.mjs'
 
 async function choose(page, label, value) {
@@ -114,7 +115,7 @@ export async function runWorkspaceFlow(ctx) {
     await easyPage.close()
     workspace = app
   })
-  await check('FullPageBusinessFlow saves a task from the full page and restores it', async () => {
+  await check('FullPageBusinessFlow hides legacy actions and saves a query-backed task from the workspace service', async () => {
     const app = workspace
     await context.addCookies([{ name: 'pm_fixture_session', value: 'active', url: easyUrl, httpOnly: true, sameSite: 'Lax' }])
     const easyPage = await context.newPage()
@@ -161,12 +162,8 @@ export async function runWorkspaceFlow(ctx) {
     await app.getByRole('checkbox', { name: '通知书-1.pdf' }).check()
     await app.getByRole('button', { name: '下一页' }).click()
     await app.getByRole('checkbox', { name: '通知书-2.pdf' }).check()
-    await app.getByRole('button', { name: '查看已选' }).click()
-    await app.getByRole('combobox', { name: '绑定到已有客户配置' }).click()
-    await app.getByRole('option', { name: '测试客户', exact: true }).waitFor()
-    await app.getByRole('option', { name: '测试客户', exact: true }).click()
-    await app.getByRole('button', { name: '绑定已选文件' }).click()
-    await app.getByRole('button', { name: '生成发文计划' }).click()
+    assert.equal(await app.getByRole('button', { name: '查看已选' }).count(), 0)
+    assert.equal(await app.getByRole('button', { name: '生成发文计划' }).count(), 0)
     const templateReady = await app.evaluate(async () => {
       const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
       const connection = loaded.payload.connection
@@ -190,9 +187,65 @@ export async function runWorkspaceFlow(ctx) {
       })
     })
     assert.equal(templateReady.payload.ok, true)
-    await app.getByRole('button', { name: '生成计划' }).click()
-    await app.getByText(/已保存 · 任务 /).first().waitFor()
-    const taskId = (await app.getByText(/已保存 · 任务 /).first().innerText()).split('任务').pop().trim()
+    const recoveryScope = await app.evaluate(async () => {
+      const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+      const connection = loaded.payload.connection
+      return JSON.stringify([connection.easyOrigin, connection.operatorId, 'workspace-files'])
+    })
+    await waitForPageCondition(app, async (scope) => {
+      const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
+      const selected = reply?.value?.payload?.selected ?? {}
+      const files = Object.values(selected)
+      return reply?.ok === true && files.length === 2 &&
+        files.some(file => file.fileName === '通知书-1.pdf' && Boolean(file.querySessionId)) &&
+        files.some(file => file.fileName === '通知书-2.pdf' && Boolean(file.querySessionId)) &&
+        new Set(files.map(file => file.querySessionId)).size === 1
+    }, recoveryScope)
+    const selection = await app.evaluate(async (scope) => {
+      const recovered = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
+      const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+      const selected = Object.values(recovered.value.payload.selected ?? {})
+      const profile = loaded.payload.customers.find(item => item.name === '测试客户' && item.enabled)
+      return { selected, profile: profile ? { id: profile.id, name: profile.name } : null }
+    }, recoveryScope)
+    assert.deepEqual(selection.selected.map(file => file.fileName).sort(), ['通知书-1.pdf', '通知书-2.pdf'])
+    assert.equal(new Set(selection.selected.map(file => file.querySessionId)).size, 1)
+    assert.ok(selection.selected[0].querySessionId)
+    assert.ok(selection.profile, '测试客户应来自本次真实保存的客户配置')
+    assert.ok(selection.selected.every(file => file.customerName === selection.profile.name), '已选文件的原客户名须与客户配置匹配')
+    const taskPlan = await app.evaluate(async ({ selected, profile }) => {
+      const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+      const connection = loaded.payload.connection
+      const files = selected.map(file => ({
+        ...file,
+        customerProfileId: profile.id,
+        customerBinding: {
+          profileId: profile.id,
+          profileName: profile.name,
+          sourceCustomerName: file.customerName.trim(),
+          confirmed: true,
+          source: 'explicit'
+        }
+      }))
+      const response = await chrome.runtime.sendMessage({
+        type: 'WORKSPACE',
+        payload: {
+          action: 'createTaskPlan',
+          files,
+          queryTemplateVersion: 0,
+          expectedScope: {
+            easyOrigin: connection.easyOrigin,
+            operatorId: connection.operatorId,
+            easyTabId: connection.easyTabId,
+            connectionVersion: connection.connectionVersion
+          }
+        }
+      })
+      return response.payload
+    }, selection)
+    assert.equal(taskPlan.ok, true, taskPlan.message)
+    assert.equal(taskPlan.createdTask.fileSource, 'SEARCH_RESPONSE_OBSERVED')
+    const taskId = taskPlan.createdTask.taskId
     assert.match(taskId, /^[0-9a-f-]{36}$/i)
     const provenance = await app.evaluate(async (id) => {
       const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
@@ -220,7 +273,7 @@ export async function runWorkspaceFlow(ctx) {
     assert.deepEqual(provenance.descriptionIds, ['', ''])
     assert.deepEqual(provenance.customerIds, ['', ''])
     assert.deepEqual(provenance.caseIds, ['', ''])
-    console.log('[workspace] full-page selection and persisted task provenance passed')
+    console.log('[workspace] workspace action hiding, durable query selection, and persisted task provenance passed')
     const expired = await app.evaluate(async (id) => {
       const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
       const connection = loaded.payload.connection
@@ -246,7 +299,10 @@ export async function runWorkspaceFlow(ctx) {
         }
       })
     }, taskId)
-    await app.getByRole('button', { name: new RegExp(taskId) }).click()
+    await app.getByRole('button', { name: '发文任务' }).click()
+    await app.waitForURL(/#\/tasks/)
+    const expiredTaskRow = app.getByRole('row').filter({ has: app.getByRole('button', { name: `${taskId} 详情` }) })
+    await expiredTaskRow.getByRole('button', { name: '详情' }).click()
     await app.getByText('查询证据已过期，请重新查询。').waitFor()
     const kept = await app.evaluate(async (id) => {
       const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })

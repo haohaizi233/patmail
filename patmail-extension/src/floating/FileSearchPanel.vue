@@ -158,6 +158,7 @@ onBeforeUnmount(() => {
     <FileSearchQuery
       v-model:selected="selected"
       selectable
+      :show-mail-actions="showSession"
       :recovery-surface="showSession ? 'floating-files' : 'workspace-files'"
       :user-id="queryUserId"
       :origin="accountOrigin"

@@ -58,12 +58,12 @@ function reply(message: Extract<ContentRequest, { type: 'SEARCH_FILES' }>, total
     }))
   } } }
 }
-function mount(request: MessageBridge['request'], allowed = ref(true), epoch = ref(0), actions: { onPlan?: () => void; onReview?: () => void } = {}) {
+function mount(request: MessageBridge['request'], allowed = ref(true), epoch = ref(0), actions: { onPlan?: () => void; onReview?: () => void; showMailActions?: boolean } = {}) {
   const selected = ref<Record<string, SelectedPatentFile>>({})
   app = createApp({ render: () => h('div', [h(CheckRainbow), h(FileSearchQuery, {
     userId: 'test', origin: 'http://183.36.43.66:88', canSearch: allowed.value, selectable: true, epoch: epoch.value,
     selected: selected.value, 'onUpdate:selected': (value: Record<string, SelectedPatentFile>) => { selected.value = value },
-    onPlan: actions.onPlan, onReview: actions.onReview
+    onPlan: actions.onPlan, onReview: actions.onReview, showMailActions: actions.showMailActions
   })]) })
   app.provide('bridge', { request })
   app.directive('hint', {})
@@ -78,6 +78,72 @@ function duplicateOption(): HTMLInputElement {
 }
 
 describe('DIY名称实时去重', () => {
+  it('文件管理仅显示查询与下载操作，不显示旧版已选和发文入口', async () => {
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 2) : { type: MessageType.Error, payload: { message: 'unused' } }, ref(true), ref(0), { showMailActions: false })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    expect(document.body.textContent).not.toContain('查看已选')
+    expect(document.body.textContent).not.toContain('生成发文计划')
+    expect(button('下载已选').disabled).toBe(false)
+  })
+
+  it('连接恢复后提示恢复下载，不再把历史登录错误当成当前状态', async () => {
+    const allowed = ref(true)
+    const previous = '找到 EASY 页面，但还读不到登录状态。请刷新该页面后再检测。'
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 1) : { type: MessageType.Error, payload: { message: previous } }, allowed)
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    allowed.value = false; await settle(); allowed.value = true; await settle()
+    const notice = document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent
+    expect(notice).toContain('EASY 已连接')
+    expect(notice).toContain('刷新')
+    expect(notice).not.toContain('还读不到登录状态')
+    expect(button('继续下载').disabled).toBe(true)
+    button('刷新').click(); await settle()
+    expect(button('继续下载').disabled).toBe(false)
+  })
+
+  it('后台回执超时只标记结果待确认，不把仍可恢复的下载描述成失败', async () => {
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 1) : { type: MessageType.Error, payload: { message: '扩展后台没有在时限内返回。' } })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    const notice = document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent
+    expect(notice).toContain('回执尚未确认')
+    expect(notice).toContain('继续下载')
+    expect(notice).not.toContain('没有在时限内返回')
+  })
+
+  it('连接正常也保留真实的文件权限错误', async () => {
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 1) : { type: MessageType.Error, payload: { message: '目标文件权限已撤销，请重新授权。 | Error: 目标文件权限已撤销，请重新授权。 at chrome-extension://fixture/content.js:1:20' } })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    expect(document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent).toContain('权限已撤销')
+    expect(document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent).not.toContain('chrome-extension://')
+  })
+
+  it('新的登录失败不能仅凭旧的已连接状态被当作已恢复', async () => {
+    const failure = 'EASY 登录已失效，请在原网站重新登录后检测。'
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 1) : { type: MessageType.Error, payload: { message: failure } })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    expect(document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent).toContain(failure)
+  })
+
+  it('重新打开已连接工作面时恢复任务与选择，同时把旧登录错误改为恢复引导', async () => {
+    const request: MessageBridge['request'] = async message => message.type === MessageType.SearchFiles ? reply(message, 1)
+      : { type: MessageType.Error, payload: { message: '找到 EASY 页面，但还读不到登录状态。请刷新该页面后再检测。' } }
+    mount(request)
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    app?.unmount(); await settle(); document.body.innerHTML = ''
+    const selected = mount(request); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(1)
+    const notice = document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent
+    expect(notice).toContain('EASY 已连接')
+    expect(notice).toContain('刷新')
+    expect(notice).not.toContain('还读不到登录状态')
+    expect(button('继续下载').disabled).toBe(true)
+  })
+
   it('keeps selected-file review and planning actions available through the parent events', async () => {
     const onPlan = vi.fn()
     const onReview = vi.fn()
@@ -298,6 +364,7 @@ describe('按同案同名文件的上传时间选择', () => {
     expect(duplicateOption().disabled).toBe(false)
     duplicateOption().click(); await settle()
     expect(Object.keys(selected.value)).toEqual(['00000000-0000-4000-8000-000000000003'])
+    expect(document.querySelector('[aria-label="文件导出"]')?.textContent).toContain('下载任务沿用启动时的 3 个附件；当前查询已选 1 个文件。')
     button('继续下载').click(); await settle()
     expect(downloaded).toEqual([
       ['00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000001'],
@@ -440,8 +507,12 @@ describe('文件全选的批量分页', () => {
     await settle()
     const rainbow = document.querySelector('.check-rainbow')!
     expect(rainbow.querySelectorAll('p')).toHaveLength(2)
-    expect(rainbow.querySelectorAll('p')[0].textContent).toBe('下载文件 10%（10/100）')
-    expect(rainbow.querySelectorAll('p')[1].textContent).toContain('已命名 40/100')
+    expect(rainbow.querySelectorAll('p')[0].textContent).toBe('正在取名、入包…')
+    expect(rainbow.querySelectorAll('p')[1].textContent).toContain('取名 40/100')
+    expect(rainbow.querySelectorAll('p')[1].textContent).toContain('已入包 10/100')
+    expect(rainbow.querySelectorAll('p')[1].textContent).toContain('下载 1.0 KB / 8.0 KB（12.5%）')
+    expect(rainbow.textContent).not.toContain('下载文件 10%')
+    expect(rainbow.textContent?.match(/10\/100/g)).toHaveLength(1)
     expect(panel.textContent).not.toContain('已入包')
     expect(panel.textContent).not.toContain('已命名')
     expect(panel.querySelector('[role="status"]')).toBeNull()
@@ -453,6 +524,7 @@ describe('文件全选的批量分页', () => {
     await settle()
     expect(taskCheckProgress.percent).toBe(99)
     expect(document.querySelector('.check-rainbow')?.textContent).toContain('正在保存压缩包')
+    expect(document.querySelector('.check-rainbow')?.textContent).not.toContain('预计')
     download!.resolve({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'download.zip', fileCount: 100, notice: '' } } })
     await settle()
     expect(taskCheckProgress.status).toBe('done')
@@ -460,6 +532,7 @@ describe('文件全选的批量分页', () => {
     expect(taskCheckProgress.visible).toBe(true)
     expect(listeners.size).toBe(0)
     expect(document.querySelector('.check-rainbow')?.textContent).toContain('导出完成')
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('下载 已保存')
     expect(panel.querySelector('[role="status"]')).toBeNull()
     expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('100')
   })
@@ -516,6 +589,11 @@ describe('文件全选的批量分页', () => {
     listener(progress, { id: 'test-extension' }); await settle()
     expect(document.querySelector('.check-rainbow')?.getAttribute('aria-valuenow')).toBe('50')
     expect(document.querySelector('.check-rainbow')?.textContent).toContain('附件原名')
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('取名 使用附件原名')
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('下载 等待接收')
+    listener({ ...progress, progress: { phase: 'downloading', done: 0, total: 1, receivedBytes: 76_021_760 } }, { id: 'test-extension' }); await settle()
+    expect(document.querySelector('.check-rainbow')?.textContent).toContain('下载 已接收 72.5 MB（总大小待确认）')
+    expect(document.querySelector('.check-rainbow')?.textContent).not.toContain('下载 50%')
     expect(panel.textContent).not.toContain('附件原名')
     button('暂停下载').click(); await settle()
     expect(panel.querySelector('[role="status"]')).toBeNull()

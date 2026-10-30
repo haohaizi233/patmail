@@ -10,7 +10,7 @@ import { caseScope, deduplicateNamedFiles, newestFirstSelected } from '../../mai
 import { createDownloadNamePreview, downloadNameRecipeKey, type DownloadNamePreviewState } from '../services/download-name-preview'
 import { fieldLabel } from '../../query/field-registry'
 import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress, taskCheckSnapshot } from '../check-progress'
-import { runPagedFetch, type PageFetchResult } from '../page-pool'
+import { runPagedFetch } from '../page-pool'
 import QueryTemplateSection from '../../floating/QueryTemplateSection.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { downloadFilesRequestIssue, MessageType, type MessageBridge } from '../../shared/message'
@@ -31,9 +31,10 @@ const props = withDefaults(defineProps<{
   seed?: Record<string, string> | null
   seedToken?: number
   selectable?: boolean
+  showMailActions?: boolean
   epoch?: number
   recoverySurface?: string
-}>(), { seed: null, seedToken: 0, selectable: false, epoch: 0, recoverySurface: 'file-query' })
+}>(), { seed: null, seedToken: 0, selectable: false, showMailActions: true, epoch: 0, recoverySurface: 'file-query' })
 
 const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { default: () => ({}) })
 
@@ -58,6 +59,7 @@ let disposed = false
 let releaseDownloadProgress: (() => void) | null = null
 let downloadWait: AbortController | null = null
 const toolbarNotice = ref('')
+const downloadConnectionRecovered = ref(false)
 /** 按钮悬浮提示：下载用的名称是点的一刻读表单当前值，查询之后改也不用重新查。 */
 const downloadTitle = computed(() => {
   const name = downloadNameText(downloadSelection.value)
@@ -135,10 +137,21 @@ const pauseBlocked = computed(() => Boolean(pauseConfirmation.value?.taskId === 
 // 暂停文案仍写入恢复账本，底部只保留需要处理的提示；常规进度统一由顶栏显示。
 const actionNotice = computed(() => {
   if (downloading.value) return ''
-  const notice = toolbarNotice.value || activeTask.value?.notice || ''
+  const notice = (toolbarNotice.value || activeTask.value?.notice || '').split(/\s+\|\s+(?:Error|DOMException):/)[0] ?? ''
+  if (activeTask.value?.status === 'paused' && !pauseBlocked.value) {
+    const recovery = !props.canSearch ? '请先恢复 EASY 连接。'
+      : needsRevalidation.value ? '请先点击结果区的“刷新”验证查询，再继续下载。'
+        : '请点击“继续下载”确认并恢复任务。'
+    if (/后台没有在时限内返回/.test(notice)) {
+      return `上次下载的后台回执尚未确认，任务已保留。${recovery}`
+    }
+    if (props.canSearch && downloadConnectionRecovered.value && /登录|会话|尚未连接|尚未确认.*(?:账号|身份|用户)|无法确认.*身份/.test(notice)) {
+      return `EASY 已连接，上次下载尚未完成，任务已保留。${recovery}`
+    }
+  }
   return notice === '下载已暂停，浏览器缓存已保留。可以继续下载。' || notice === '正在确认暂停，浏览器缓存会保留。' ? '' : notice
 })
-const exportProgress = ref({ named: 0, packed: 0, failed: 0, deduplicated: 0, bytes: 0, startedAt: 0 })
+const exportProgress = ref({ named: 0, packed: 0, failed: 0, deduplicated: 0, bytes: 0, totalBytes: 0, startedAt: 0 })
 const exportPercent = computed(() => {
   const task = activeTask.value
   if (!task) return 0
@@ -154,16 +167,26 @@ const exportEta = computed(() => {
 const exportStatus = computed(() => pauseConfirmation.value?.taskId === activeTask.value?.id && pauseConfirmation.value?.pending ? '正在暂停下载…'
   : activeTask.value?.status === 'done' ? '导出完成'
   : activeTask.value?.status === 'paused' ? '下载已暂停'
-  : exportProgress.value.packed + exportProgress.value.failed + exportProgress.value.deduplicated >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…' : '正在打包下载…')
+  : exportProgress.value.packed + exportProgress.value.failed + exportProgress.value.deduplicated >= (activeTask.value?.items.length ?? Infinity) ? '正在保存压缩包…'
+    : exportProgress.value.named < (activeTask.value?.items.length ?? Infinity) ? '正在取名、入包…' : '正在入包…')
+function downloadBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+}
 watch([exportProgress, () => activeTask.value?.status, () => pauseConfirmation.value?.pending], () => {
   const task = activeTask.value
   const progress = exportProgress.value
   if (!task || !progress.startedAt || !props.canSearch || disposed) return
   const total = task.items.length
   const named = task.status === 'done' ? total : progress.named
-  const detail = `${exportStatus.value} · ${task.selection ? `已命名 ${named}/${total}` : '附件原名'} · 已入包 ${progress.packed}/${total}${progress.failed ? ` · 跳过 ${progress.failed}` : ''}${progress.deduplicated ? ` · 同名去重 ${progress.deduplicated}` : ''} · 已接收 ${(progress.bytes / 1024 / 1024).toFixed(1)} MB${exportEta.value ? ` · 预计 ${exportEta.value} 处理完成` : ''}`
+  const download = task.status === 'done' ? `已保存${progress.bytes ? `（${downloadBytes(progress.bytes)}）` : ''}`
+    : progress.totalBytes ? `${downloadBytes(progress.bytes)} / ${downloadBytes(progress.totalBytes)}（${Math.min(100, Math.round(progress.bytes / progress.totalBytes * 1000) / 10)}%）`
+      : progress.bytes ? `已接收 ${downloadBytes(progress.bytes)}（总大小待确认）` : '等待接收'
+  const detail = `${task.selection ? `取名 ${named}/${total}` : '取名 使用附件原名'} · 已入包 ${progress.packed}/${total}${progress.failed ? ` · 跳过 ${progress.failed}` : ''}${progress.deduplicated ? ` · 同名去重 ${progress.deduplicated}` : ''} · 浏览器下载 ${download}${exportEta.value ? ` · 预计 ${exportEta.value} 完成入包处理` : ''}`
   paintTaskCheckProgress(task.status === 'done' ? total : progress.packed + progress.failed + progress.deduplicated, total, progress.startedAt,
-    task.status === 'done' ? 'done' : task.status === 'paused' ? 'hold' : 'run', '下载文件', Date.now(), detail)
+    task.status === 'done' ? 'done' : task.status === 'paused' ? 'hold' : 'run', '下载文件', Date.now(), detail, exportStatus.value)
   // 入包结束还需等待浏览器确认保存，顶部彩虹条不能提前到100%。
   taskCheckProgress.percent = exportPercent.value
 }, { flush: 'sync' })
@@ -244,7 +267,11 @@ function pauseDownload(): void {
   void protectSurface().catch(() => {})
 }
 watch(() => props.canSearch, allowed => {
-  if (allowed) return
+  if (allowed) {
+    downloadConnectionRecovered.value = activeTask.value?.status === 'paused'
+    return
+  }
+  downloadConnectionRecovered.value = false
   stopBulk()
   generation += 1
   pauseActiveDownload()
@@ -462,13 +489,14 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   if (disposed || !props.canSearch || needsRevalidation.value || snapshotScope !== startingScope ||
     generation !== startingGeneration || activeTask.value?.id !== task.id) { void releaseBrowserDownloadTarget(task.id).catch(() => {}); return }
   task.status = 'running'
+  downloadConnectionRecovered.value = false
   const attempt = ++downloadAttempt
   downloading.value = true
   const wait = downloadWait = new AbortController()
   toolbarNotice.value = ''
   const startedAt = Date.now()
   resetTaskCheckProgress()
-  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, failed: 0, deduplicated: 0, bytes: 0, startedAt }
+  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, failed: 0, deduplicated: 0, bytes: 0, totalBytes: 0, startedAt }
   const progressId = newUuid()
   const runtime = globalThis.chrome?.runtime
   const removeProgress = () => { try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 页面已关闭 */ } }
@@ -477,6 +505,7 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   let failedFiles = 0
   let deduplicatedFiles = 0
   let nativeBytes = 0
+  let nativeTotalBytes = 0
   const onProgress = (message: unknown, sender: chrome.runtime.MessageSender): void => {
     if (disposed || wait.signal.aborted || downloadAttempt !== attempt || activeTask.value?.id !== task.id || sender.id !== runtime?.id || !isRecord(message) || message.channel !== DOWNLOAD_PROGRESS_CHANNEL ||
       message.id !== progressId || !isDownloadProgress(message.progress)) return
@@ -487,8 +516,11 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
       failedFiles = Math.max(failedFiles, progress.failed ?? 0)
       deduplicatedFiles = Math.max(deduplicatedFiles, progress.deduplicated ?? 0)
     }
-    if (progress.phase === 'downloading') nativeBytes = Math.max(nativeBytes, progress.receivedBytes ?? 0)
-    exportProgress.value = { named: namedFiles, packed: Math.max(0, processedFiles - failedFiles - deduplicatedFiles), failed: failedFiles, deduplicated: deduplicatedFiles, bytes: nativeBytes, startedAt }
+    if (progress.phase === 'downloading') {
+      nativeBytes = Math.max(nativeBytes, progress.receivedBytes ?? 0)
+      nativeTotalBytes = Math.max(nativeTotalBytes, progress.totalBytes ?? 0)
+    }
+    exportProgress.value = { named: namedFiles, packed: Math.max(0, processedFiles - failedFiles - deduplicatedFiles), failed: failedFiles, deduplicated: deduplicatedFiles, bytes: nativeBytes, totalBytes: nativeTotalBytes, startedAt }
   }
   try {
     runtime?.onMessage?.addListener(onProgress)
@@ -811,7 +843,7 @@ watch(snapshotIdentity, async scope => {
   if (!scope) return
   clearView()
   activeTask.value = null
-  exportProgress.value = { named: 0, packed: 0, failed: 0, deduplicated: 0, bytes: 0, startedAt: 0 }
+  exportProgress.value = { named: 0, packed: 0, failed: 0, deduplicated: 0, bytes: 0, totalBytes: 0, startedAt: 0 }
   readPages.value = []
   try {
     const initialGeneration = searchGeneration
@@ -828,6 +860,7 @@ watch(snapshotIdentity, async scope => {
       stripAppNoDot.value = restored.stripAppNoDot ?? true
       downloadSelection.value = restored.downloadSelection
       activeTask.value = restored.activeTask
+      downloadConnectionRecovered.value = props.canSearch && restored.activeTask?.status === 'paused'
       if (restored.activeTask?.status === 'paused' && /正在确认暂停|重新确认暂停/.test(restored.activeTask.notice)) {
         pauseConfirmation.value = { taskId: restored.activeTask.id, pending: false, problem: '上次暂停尚未确认。' }
       }
@@ -915,7 +948,7 @@ onBeforeUnmount(() => {
       <section v-if="selectable && (result || activeTask)" class="file-export" aria-label="文件导出">
         <div class="file-export-actions">
           <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" :disabled="Boolean(activeTask && activeTask.status !== 'done') || choosingTarget" />申请号去点</label>
-          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '正在打包下载…' : '下载已选' }}</button>
+          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '导出中…' : '下载已选' }}</button>
           <template v-if="activeTask && activeTask.status !== 'done'">
             <button v-if="activeTask.status === 'running'" type="button" class="ghost" @click="pauseDownload">暂停下载</button>
             <button v-else type="button" class="ghost" :disabled="!canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || pauseBlocked" @click="downloadSelected(true)">继续下载</button>
@@ -924,6 +957,7 @@ onBeforeUnmount(() => {
             <button type="button" class="ghost file-export-discard" :disabled="!canSearch || downloading || choosingTarget || pauseBlocked" @click="discardDownloadTask">丢弃下载任务</button>
           </template>
         </div>
+        <p v-if="activeTask && activeTask.status !== 'done' && activeTask.items.length !== Object.keys(selected).length" class="hint">下载任务沿用启动时的 {{ activeTask.items.length }} 个附件；当前查询已选 {{ Object.keys(selected).length }} 个文件。</p>
         <p v-if="actionNotice" class="file-export-notice" role="status">{{ actionNotice }}</p>
       </section>
       <p v-if="searchState === 'idle'" class="hint">输入条件后查询文件。</p>
@@ -939,8 +973,8 @@ onBeforeUnmount(() => {
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
           <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
-          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('review')">查看已选</button>
-          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('plan')">生成发文计划</button>
+          <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('review')">查看已选</button>
+          <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('plan')">生成发文计划</button>
           <button v-if="failedPages.length" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
         </div>
