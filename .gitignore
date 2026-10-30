@@ -26,3 +26,8 @@ test-results/
 
 # 会话 Cookie 是登录凭据，只留本机，不入仓
 cookies.txt
+
+# 一次性调试脚本与命令输出日志（*.out / .tmp-* / __covsum 等），只留本机排查，不入仓
+*.out
+.tmp-*
+__*.mjs
