@@ -157,6 +157,30 @@ const artifacts = files.map(file => {
     sha256: createHash('sha256').update(data).digest('hex'),
   }
 })
+
+// ---- 留档比对（--against <artifact-manifest.json>）：先于自产清单执行 ----
+// 自产清单只保证本次构建内部一致，「篡改任一字节」要靠与上一次留档清单比对发现。
+const againstIndex = process.argv.indexOf('--against')
+if (againstIndex !== -1) {
+  const againstPath = process.argv[againstIndex + 1]
+  if (!againstPath || !existsSync(againstPath)) {
+    console.error('用法：node scripts/verify-dist.mjs --against <已留档的 artifact-manifest.json>')
+    process.exit(1)
+  }
+  const recorded = JSON.parse(readFileSync(againstPath, 'utf8'))
+  const current = new Map(artifacts.map(item => [item.path, item.sha256]))
+  for (const item of recorded.files ?? []) {
+    const now = current.get(item.path)
+    if (!now) fail(`留档清单中的文件缺失：${item.path}`)
+    else if (now !== item.sha256) fail(`文件内容与留档 SHA-256 清单不一致：${item.path}`)
+  }
+  const recordedPaths = new Set((recorded.files ?? []).map(item => item.path))
+  for (const item of artifacts) {
+    if (!recordedPaths.has(item.path)) fail(`出现留档清单之外的新文件：${item.path}`)
+  }
+  note(`留档 SHA-256 清单比对 ${recordedPaths.size} 个文件，逐一比对哈希`)
+}
+
 const combined = createHash('sha256')
 for (const item of artifacts) combined.update(`${item.path}\n${item.sha256}\n`)
 const artifactManifest = {

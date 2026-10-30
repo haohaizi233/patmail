@@ -27,7 +27,7 @@
 | 症状 | 原因 | 处理 |
 |---|---|---|
 | `vitest` 偶发超时 | 机器负载（e2e 与 vitest 并行时） | 分开跑；CI 里本来就是独立 Job |
-| `test:coverage --coverage-gate` 不过 | 覆盖率低于 `test-results/ci/coverage-baseline.json` 登记的基线 | 补测试；禁止删排除业务模块来抬数字 |
+| `test:coverage --coverage-gate` 不过 | 覆盖率低于 `ci/coverage-baseline.json` 登记的基线 | 补测试；禁止删排除业务模块来抬数字 |
 | JUnit 报告缺失 | 用 `pnpm test:unit` 等 ci-check 步骤入口（带 `--reporter=junit`） | 直接裸跑 `vitest` 不产 JUnit |
 
 ## 安全扫描

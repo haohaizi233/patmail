@@ -8,6 +8,7 @@ const TTL = 7 * 86400000
 type TaskRecord = Omit<BrowserDownloadTask, 'manifest'> & { generation: string }
 interface BlobRecord extends CachedFileInfo { taskId: string; blob: string; revision: string; epoch: string }
 interface ChunkRecord { taskId: string; blob: string; offset: number; bytes: Uint8Array<ArrayBuffer>; digest: string }
+interface NameRecord { taskId: string; offset: number; names: string[] }
 const emptyInfo = (): CachedFileInfo => ({ receivedBytes: 0, complete: false })
 const integer = (value: number) => { if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid cache offset or size') }
 function blobKey(blob: BrowserBlob): string {
@@ -17,6 +18,10 @@ function blobKey(blob: BrowserBlob): string {
 }
 function request<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error) })
+}
+/** IDB 的 get/getAll 等签名返回 any；统一在边界收窄成明确记录类型，避免 any 流进业务逻辑。 */
+function typedRequest<T>(req: IDBRequest): Promise<T> {
+  return request(req as IDBRequest<T>)
 }
 async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('')
@@ -68,7 +73,7 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
     catch (error) { failure = error; try { tx.abort() } catch { /* already aborted */ } await done.catch(() => {}); throw error }
   }
   async function task(tx: IDBTransaction, taskId: string): Promise<TaskRecord> {
-    const value = await request<TaskRecord | undefined>(tx.objectStore('tasks').get(taskId))
+    const value = await typedRequest<TaskRecord | undefined>(tx.objectStore('tasks').get(taskId))
     if (!value) throw new Error('Download task does not exist')
     return value
   }
@@ -90,18 +95,18 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
     }
   }
   async function collect(tx: IDBTransaction): Promise<void> {
-    const all = await request<TaskRecord[]>(tx.objectStore('tasks').getAll())
+    const all = await typedRequest<TaskRecord[]>(tx.objectStore('tasks').getAll())
     for (const value of all) if ((value.state === 'paused' || value.state === 'done') && value.updatedAt < Date.now() - TTL) await erase(tx, value.taskId)
   }
   async function blobInfo(tx: IDBTransaction, taskId: string, blob: string): Promise<BlobRecord | undefined> {
-    return request(tx.objectStore('blobs').get([taskId, blob]))
+    return typedRequest<BlobRecord | undefined>(tx.objectStore('blobs').get([taskId, blob]))
   }
   async function rows(tx: IDBTransaction, taskId: string, blob: string, offset: number, end: number): Promise<ChunkRecord[]> {
     // Include the block containing offset; chunks can have arbitrary start offsets.
     const store = tx.objectStore('chunks')
     const before = await request(store.openCursor(IDBKeyRange.bound([taskId, blob, 0], [taskId, blob, offset]), 'prev'))
     const start = before ? (before.value as ChunkRecord).offset : offset
-    return request(store.getAll(IDBKeyRange.bound([taskId, blob, start], [taskId, blob, end], false, true)))
+    return typedRequest<ChunkRecord[]>(store.getAll(IDBKeyRange.bound([taskId, blob, start], [taskId, blob, end], false, true)))
   }
   async function verified(rows: ChunkRecord[], offset: number, length: number): Promise<Uint8Array<ArrayBuffer>> {
     const result = new Uint8Array(length)
@@ -130,10 +135,10 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
     async get(taskId) {
       return transaction('readwrite', async tx => {
         await collect(tx)
-        const value = await request<TaskRecord | undefined>(tx.objectStore('tasks').get(taskId))
+        const value = await typedRequest<TaskRecord | undefined>(tx.objectStore('tasks').get(taskId))
         if (!value) return null
         const { generation: _generation, ...record } = value
-        return { ...record, manifest: await request(tx.objectStore('manifests').get(taskId)) }
+        return { ...record, manifest: await typedRequest<BrowserDownloadTask['manifest']>(tx.objectStore('manifests').get(taskId)) }
       })
     },
     async update(taskId, patch) {
@@ -241,9 +246,9 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
       await transaction('readwrite', async tx => {
         const current = await task(tx, taskId); writable(current)
         const records = tx.objectStore('names')
-        const existing = await request(records.get([taskId, offset]))
+        const existing = await typedRequest<NameRecord | undefined>(records.get([taskId, offset]))
         if (existing && JSON.stringify(existing.names) !== JSON.stringify(values)) throw new Error('Download names batch conflict')
-        const batches = await request(records.index('taskId').getAll(taskId))
+        const batches = await typedRequest<NameRecord[]>(records.index('taskId').getAll(taskId))
         for (const batch of batches) {
           const start = Math.max(offset, batch.offset), end = Math.min(offset + values.length, batch.offset + batch.names.length)
           for (let index = start; index < end; index++) if (values[index - offset] !== batch.names[index - batch.offset]) throw new Error('Download names overlap conflict')
@@ -262,7 +267,7 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
     async skipped(taskId) {
       return transaction('readonly', async tx => {
         await task(tx, taskId)
-        const values = await request<BlobRecord[]>(tx.objectStore('blobs').index('taskId').getAll(taskId))
+        const values = await typedRequest<BlobRecord[]>(tx.objectStore('blobs').index('taskId').getAll(taskId))
         return values.filter(value => value.blob !== 'archive' && value.complete && !!value.skipReason).length
       })
     },

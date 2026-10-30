@@ -88,7 +88,7 @@ describe('流水单ZIP下载', () => {
         { headers: { 'Content-Length': String(bytes.length) } })
       }
     })
-    const settled = running.then(() => null, error => error)
+    const settled = running.then(() => null, (error: unknown) => (error instanceof Error ? error : new Error('非 Error 失败原因。')))
     try {
       for (let attempt = 0; attempt < 100 && reads.slice(1).some(count => count < 5); attempt++) await new Promise(resolve => setTimeout(resolve, 5))
       expect(peak).toBe(6)
@@ -108,7 +108,7 @@ describe('流水单ZIP下载', () => {
     expect(entries.map(entry => entry.filename)).toEqual(files.slice(0, 6).map(file => file.fileName))
     for (const [index, entry] of entries.entries()) {
       if (entry.directory) throw new Error('Expected file')
-      const data = await entry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })
+      const data = await entry.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })
       expect(Buffer.from(data).equals(Buffer.from(expected(index)))).toBe(true)
     }
     await reader.close()
@@ -176,7 +176,7 @@ describe('流水单ZIP下载', () => {
     expect(entries.map(entry => entry.filename)).toEqual(files.slice(0, 12).map(file => file.fileName))
     for (const [index, entry] of entries.entries()) {
       if (entry.directory) throw new Error('Expected file')
-      expect(new TextDecoder().decode(await entry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false }))).toBe(`%PDF ${files[index].fileId}`)
+      expect(new TextDecoder().decode(await entry.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false }))).toBe(`%PDF ${files[index].fileId}`)
     }
     await reader.close()
   })
@@ -190,7 +190,7 @@ describe('流水单ZIP下载', () => {
   it('有效句柄返回空ZIP伪装成PDF时，必须中断而不能生成一个坏PDF条目', async () => {
     const setup = fixture(), result = output()
     await expect(streamDownloadFiles(setup.transport, files.slice(0, 1), null, false, { sink: result.sink,
-      fetchFile: async () => new Response(Uint8Array.from([80, 75, 5, 6, ...Array(18).fill(0)]), { headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': '22' } })
+      fetchFile: async () => new Response(Uint8Array.from([80, 75, 5, 6, ...Array.from({ length: 18 }, () => 0)]), { headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': '22' } })
     })).rejects.toThrow()
     expect(result.aborted()).toBe(true)
   })
@@ -224,7 +224,7 @@ describe('流水单ZIP下载', () => {
     expect(entries.map(entry => entry.filename)).toEqual(files.map(file => file.fileName))
     const last = entries[240]
     if (last.directory) throw new Error('Expected file entry')
-    expect(new TextDecoder().decode(await last.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false }))).toBe('%PDF sample 240')
+    expect(new TextDecoder().decode(await last.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false }))).toBe('%PDF sample 240')
     await reader.close()
   })
 

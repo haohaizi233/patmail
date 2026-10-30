@@ -1,3 +1,5 @@
+import { asError } from './download-failure'
+
 export interface CachedFileInfo {
   receivedBytes: number
   complete: boolean
@@ -61,7 +63,7 @@ export async function cachedFileResponse(
       info = { receivedBytes: 0, complete: false, ...(sourceNotice ? { sourceNotice: sourceNotice.slice(0, 1000) } : {}), etag: source.headers.get('content-encoding') ? '' : source.headers.get('etag') ?? '', lastModified: source.headers.get('content-encoding') ? '' : source.headers.get('last-modified') ?? '',
         totalBytes: !source.headers.get('content-encoding') && size !== null ? Number(size) : null }
       await cache.reset(index, info)
-    } else info = { ...info, totalBytes: Number(range![3]) }
+    } else info = { ...info, totalBytes: Number(range[3]) }
   }
   const reader = source?.body?.getReader()
   let replayed = 0, received = prefix
@@ -124,7 +126,7 @@ export async function cachedFileResponse(
         }
         if (!reader) { signal.removeEventListener('abort', abort); target.close(); return }
         while (!queue.length && !sourceEnded && !failure) await wait()
-        if (failure) throw failure
+        if (failure) throw asError(failure)
         const part = queue.shift()
         if (!part) {
           if (info.totalBytes != null && received !== info.totalBytes) throw new Error('文件传输不完整，没有完成压缩包。')

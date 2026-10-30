@@ -32,13 +32,13 @@ async function run(cache: DownloadCache, transport: EasyTransport, fetchFile: (u
 it('不可用附件单独留失败清单，正常附件完成；恢复时冻结失败决定并生成完全相同ZIP', async () => {
   const f = setup()
   const first = await run(f.cache, f.transport, async id => new Response(id === '1'
-    ? Uint8Array.from([80, 75, 5, 6, ...Array(18).fill(0)]) : new TextEncoder().encode(`%PDF valid ${id}`)))
+    ? Uint8Array.from([80, 75, 5, 6, ...Array.from({ length: 18 }, () => 0)]) : new TextEncoder().encode(`%PDF valid ${id}`)))
   const reader = new ZipReader(new Uint8ArrayReader(first.bytes), { useWebWorkers: false })
   const entries = await reader.getEntries()
   expect(entries.map(entry => entry.filename)).toEqual(['source-0.pdf', 'source-2.pdf', '下载失败清单.txt'])
   const reportEntry = entries[2]
   if (reportEntry.directory) throw new Error('report must be a file')
-  const report = await reportEntry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })
+  const report = await reportEntry.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })
   expect(new TextDecoder().decode(report)).toContain('source-1.pdf')
   expect(first.progress.at(-1)).toMatchObject({ phase: 'packing', done: 3, failed: 1 })
   expect(await f.cache.info(1)).toMatchObject({ complete: true, receivedBytes: 0, skipReason: notice })
@@ -63,8 +63,8 @@ it('PDF名实际收到完整ZIP时保留PDF和XML原包，用.zip扩展名且不
   expect(entries.map(entry => entry.filename)).toContain('source-1.zip')
   const packageEntry = entries.find(entry => entry.filename === 'source-1.zip')!
   if (packageEntry.directory) throw new Error('source package must be a file')
-  const stored = await packageEntry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })
-  expect(Buffer.from(stored!)).toEqual(Buffer.from(source))
+  const stored = await packageEntry.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })
+  expect(Buffer.from(stored)).toEqual(Buffer.from(source))
   expect(result.progress.at(-1)).toMatchObject({ failed: 0 })
   await reader.close()
 })

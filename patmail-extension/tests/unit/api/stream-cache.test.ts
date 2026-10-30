@@ -25,7 +25,7 @@ describe('持久附件缓存', () => {
       pull(target) { sourceBytes += 65536; target.enqueue(new Uint8Array(65536)) },
       cancel() { cancelled = true }
     }, { highWaterMark: 0 })))
-    const consuming = response.arrayBuffer().catch(error => error)
+    const consuming = response.arrayBuffer().catch((error: unknown) => error)
     try {
       await new Promise(resolve => setTimeout(resolve, 20))
       const stalledAt = sourceBytes
@@ -62,7 +62,7 @@ describe('持久附件缓存', () => {
     const setup = fixture()
     const bytes = new Uint8Array(512 * 1024).fill(7)
     const writes: number[] = []
-    const write = setup.cache.write
+    const write = setup.cache.write.bind(setup.cache)
     setup.cache.write = async (index, offset, part) => { writes.push(part.length); await write(index, offset, part) }
     let offset = 0
     const response = await cachedFileResponse('source', 0, setup.cache, new AbortController().signal, async () => new Response(new ReadableStream({

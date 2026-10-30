@@ -26,7 +26,7 @@ vi.mock('../../../src/floating/QueryTemplateSection.vue', async () => {
   return { default: defineComponent({ props: ['pageSize'], emits: ['search'], setup(props, { emit, expose }) {
     expose({ currentDownloadSelection: () => downloadRecipe.value, currentSearchTemplateName: () => templateLabel.value })
     return () => h('button', { onClick: () => emit('search', {
-      resolvedFields: { case_volume: 'AUDIT' }, pageIndex: 1, pageSize: props.pageSize
+      resolvedFields: { case_volume: 'AUDIT' }, pageIndex: 1, pageSize: Number(props.pageSize)
     }) }, '测试查询')
   } }) }
 })
@@ -35,7 +35,7 @@ vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
   return { default: defineComponent({ props: ['modelValue', 'options'], emits: ['update:modelValue'], setup(props, { emit }) {
     return () => h('select', { 'aria-label': '每页数量', value: props.modelValue,
       onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value)
-    }, props.options.map((option: { value: number; label: string }) => h('option', { value: option.value }, option.label)))
+    }, (props.options as Array<{ value: number; label: string }>).map(option => h('option', { value: option.value }, option.label)))
   } }) }
 })
 
@@ -62,7 +62,7 @@ function mount(request: MessageBridge['request'], allowed = ref(true), epoch = r
   const selected = ref<Record<string, SelectedPatentFile>>({})
   app = createApp({ render: () => h('div', [h(CheckRainbow), h(FileSearchQuery, {
     userId: 'test', origin: 'http://183.36.43.66:88', canSearch: allowed.value, selectable: true, epoch: epoch.value,
-    selected: selected.value, 'onUpdate:selected': value => { selected.value = value }
+    selected: selected.value, 'onUpdate:selected': (value: Record<string, SelectedPatentFile>) => { selected.value = value }
   })]) })
   app.provide('bridge', { request })
   app.directive('hint', {})

@@ -94,4 +94,4 @@ test-results/
 | 改坏一个断言 | `pnpm test:unit` |
 | 删除 `dist` 里 Manifest 引用的入口 | `pnpm verify:manifest` / `pnpm verify:dist` |
 | 在测试夹具放假凭据（如 `AKIA…`、`-----BEGIN RSA PRIVATE KEY-----`） | `pnpm scan:secrets` |
-| 篡改 `dist` 任一字节 | `pnpm verify:dist` 的 SHA-256 清单 |
+| 篡改 `dist` 任一字节 | `node scripts/verify-dist.mjs --against test-results/ci/artifact-manifest.json`（与留档 SHA-256 清单比对，不一致即失败） |

@@ -3,6 +3,7 @@
  * 每个 *.e2e.mjs 各起一份（paths.mjs 用 mkdtemp 隔离 dist 副本，端口走 listen(0) 动态分配），
  * 进程间互不干扰；EASY 全部由测试路由拦截，绝不触达真实服务器。
  */
+/* global chrome, document, innerHeight, innerWidth */
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { distDir, fixturePagePath } from './paths.mjs'

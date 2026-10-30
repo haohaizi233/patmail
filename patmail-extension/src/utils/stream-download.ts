@@ -107,6 +107,8 @@ export async function nativeStreamArchive(
   } : undefined
   const context: NativeDownloadContext = { cache, taskId: created.taskId, zipCreatedAt: typeof manifest.zipCreatedAt === 'string' ? manifest.zipCreatedAt : undefined }
   let failure: Error | null = null, productionDone = false, succeeded = false
+  // failure 由 track/sink 闭包写入、外层读取；TS 流分析看不到闭包写入，读取一律走这个函数保持声明类型。
+  const currentFailure = (): Error | null => failure
   const pageGone = () => controller.abort(new Error('EASY来源页面已离开，下载已暂停并保留缓存。'))
   globalThis.addEventListener?.('pagehide', pageGone, { once: true })
   let sequence = 0, offset = 0, filled = 0
@@ -175,7 +177,8 @@ export async function nativeStreamArchive(
     if (created.info?.sealed === true) { reportRetainedFailures(); await command({ action: 'finish', token }); productionDone = true }
     else await produce(sink, signal, onWork, context)
     const bytes = await track
-    if (failure) throw failure
+    const failed = currentFailure()
+    if (failed) throw failed
     signal.throwIfAborted()
     succeeded = true
     // 下载complete与ZIP封存均已确认，才清理磁盘缓存。

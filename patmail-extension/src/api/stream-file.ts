@@ -1,6 +1,6 @@
 import type { DownloadTokens } from './download-tokens'
 import { responseNetworkFinished } from './stream-cache'
-import { sourceUnavailableError } from './download-failure'
+import { asError, sourceUnavailableError } from './download-failure'
 
 export const FILE_BUFFER_BYTES = 256 * 1024
 const BLOCK_BYTES = 64 * 1024
@@ -60,7 +60,7 @@ export async function prefetchFile(
       if (replay) {
         while (consumed === available && !ended && !failure) await wait()
         signal.throwIfAborted()
-        if (failure) throw failure
+        if (failure) throw asError(failure)
         if (consumed === available) { controller.close(); return }
         const stored = await replay(consumed)
         const chunk = stored.subarray(0, Math.min(stored.length, available - consumed))
@@ -68,7 +68,7 @@ export async function prefetchFile(
         consumed += chunk.length; controller.enqueue(chunk); return
       }
       while (!queue.length && !ended && !failure) await wait()
-      if (failure) throw failure
+      if (failure) throw asError(failure)
       const chunk = queue.shift()
       if (chunk) { bufferedBytes -= chunk.byteLength; controller.enqueue(chunk); wake() }
       else controller.close()

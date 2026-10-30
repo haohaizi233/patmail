@@ -19,7 +19,7 @@ describe('正文预取背压', () => {
     expect(pdf.format).toBe('original')
     await pdf.finished
     const emptyZip = await prefetchFile('source', 'test.pdf', false, notice, null, new AbortController().signal,
-      async () => new Response(new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)])), () => {})
+      async () => new Response(new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...Array.from({ length: 18 }, () => 0)])), () => {})
     await expect(emptyZip.ready).rejects.toMatchObject({ name: 'UnavailableDownloadFileError' })
     await emptyZip.finished
   })

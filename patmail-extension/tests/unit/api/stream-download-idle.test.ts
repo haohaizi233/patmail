@@ -29,7 +29,7 @@ function memoryCache() {
 describe('持久流水的空转回归', () => {
   it('前六个正文网络已结束但缓存完成标记仍等待时，下一组六个仍能下载，有界为12个持久任务', async () => {
     const items = Array.from({ length: 30 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, fileNo: String(index), fileName: `${index}.pdf` }))
-    const f = memoryCache(), complete = f.cache.complete
+    const f = memoryCache(), complete = f.cache.complete.bind(f.cache)
     let release!: () => void, fetched = 0
     const gate = new Promise<void>(resolve => { release = resolve })
     f.cache.complete = async (...args) => { await gate; await complete(...args) }
@@ -50,7 +50,7 @@ describe('持久流水的空转回归', () => {
       await setup.cache.write(index, 0, bytes)
       await setup.cache.complete(index, { totalBytes: bytes.length })
     }
-    const read = setup.cache.read
+    const read = setup.cache.read.bind(setup.cache)
     const readFiles = new Set<number>()
     setup.cache.read = async (index, offset) => { readFiles.add(index); return read(index, offset) }
     let release!: () => void, blocked!: () => void
@@ -100,7 +100,7 @@ describe('持久流水的空转回归', () => {
       expect(entries.map(entry => entry.filename)).toEqual(items.map(item => item.fileName))
       for (const entry of entries) {
         if (entry.directory) throw new Error('Expected file entry')
-        expect(Buffer.from(await entry.getData!(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })).equals(Buffer.from(bytes))).toBe(true)
+        expect(Buffer.from(await entry.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })).equals(Buffer.from(bytes))).toBe(true)
       }
     } finally { await reader.close() }
   }, 15000)

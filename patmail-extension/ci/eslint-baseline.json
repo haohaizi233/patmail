@@ -1,12 +1,12 @@
 {
   "meta": {
-    "generatedAt": "2026-10-29T08:21:21.622Z",
+    "generatedAt": "2026-10-29T14:48:17.018Z",
     "note": "ESLint 基线：每条规则的历史存量。低于基线可收紧，高于基线即失败。"
   },
   "totals": {
-    "errors": 681,
+    "errors": 635,
     "warnings": 25,
-    "filesWithIssues": 163
+    "filesWithIssues": 155
   },
   "rules": {
     "@typescript-eslint/await-thenable": {
@@ -26,19 +26,19 @@
       "warn": 0
     },
     "@typescript-eslint/no-unnecessary-type-assertion": {
-      "error": 107,
+      "error": 102,
       "warn": 0
     },
     "@typescript-eslint/no-unsafe-argument": {
-      "error": 10,
+      "error": 4,
       "warn": 0
     },
     "@typescript-eslint/no-unsafe-assignment": {
-      "error": 43,
+      "error": 37,
       "warn": 0
     },
     "@typescript-eslint/no-unsafe-call": {
-      "error": 7,
+      "error": 6,
       "warn": 0
     },
     "@typescript-eslint/no-unsafe-function-type": {
@@ -46,11 +46,11 @@
       "warn": 0
     },
     "@typescript-eslint/no-unsafe-member-access": {
-      "error": 37,
+      "error": 29,
       "warn": 0
     },
     "@typescript-eslint/no-unsafe-return": {
-      "error": 6,
+      "error": 3,
       "warn": 0
     },
     "@typescript-eslint/no-unused-vars": {
@@ -58,7 +58,7 @@
       "warn": 0
     },
     "@typescript-eslint/only-throw-error": {
-      "error": 4,
+      "error": 1,
       "warn": 0
     },
     "@typescript-eslint/prefer-promise-reject-errors": {
@@ -74,7 +74,7 @@
       "warn": 0
     },
     "@typescript-eslint/unbound-method": {
-      "error": 8,
+      "error": 6,
       "warn": 0
     },
     "no-control-regex": {
@@ -94,7 +94,7 @@
       "warn": 0
     },
     "no-undef": {
-      "error": 216,
+      "error": 204,
       "warn": 0
     },
     "no-unused-vars": {

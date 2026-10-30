@@ -1,0 +1,114 @@
+{
+  "meta": {
+    "note": "覆盖率防退化基线：低于基线即失败；只允许在明确说明后上调。"
+  },
+  "total": {
+    "lines": {
+      "pct": 73.42,
+      "covered": 12806,
+      "total": 17442
+    },
+    "branches": {
+      "pct": 59.63,
+      "covered": 12842,
+      "total": 21535
+    },
+    "functions": {
+      "pct": 70.94,
+      "covered": 3099,
+      "total": 4368
+    },
+    "statements": {
+      "pct": 67.53,
+      "covered": 15326,
+      "total": 22693
+    }
+  },
+  "core": {
+    "mail": {
+      "lines": {
+        "covered": 1564,
+        "total": 1710,
+        "pct": 91.46
+      },
+      "branches": {
+        "covered": 1708,
+        "total": 2413,
+        "pct": 70.78
+      },
+      "functions": {
+        "covered": 348,
+        "total": 382,
+        "pct": 91.1
+      }
+    },
+    "workflow": {
+      "lines": {
+        "covered": 960,
+        "total": 1073,
+        "pct": 89.47
+      },
+      "branches": {
+        "covered": 862,
+        "total": 1336,
+        "pct": 64.52
+      },
+      "functions": {
+        "covered": 232,
+        "total": 268,
+        "pct": 86.57
+      }
+    },
+    "automation": {
+      "lines": {
+        "covered": 1090,
+        "total": 1483,
+        "pct": 73.5
+      },
+      "branches": {
+        "covered": 1355,
+        "total": 1961,
+        "pct": 69.1
+      },
+      "functions": {
+        "covered": 377,
+        "total": 549,
+        "pct": 68.67
+      }
+    },
+    "background": {
+      "lines": {
+        "covered": 904,
+        "total": 1758,
+        "pct": 51.42
+      },
+      "branches": {
+        "covered": 870,
+        "total": 2082,
+        "pct": 41.79
+      },
+      "functions": {
+        "covered": 153,
+        "total": 342,
+        "pct": 44.74
+      }
+    },
+    "browser-download": {
+      "lines": {
+        "covered": 90,
+        "total": 287,
+        "pct": 31.36
+      },
+      "branches": {
+        "covered": 65,
+        "total": 250,
+        "pct": 26
+      },
+      "functions": {
+        "covered": 17,
+        "total": 89,
+        "pct": 19.1
+      }
+    }
+  }
+}

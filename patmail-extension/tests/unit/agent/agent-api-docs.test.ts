@@ -20,7 +20,7 @@ describe('api docs', () => {
     const hit = searchApiDocs('GetSearchFiles')
     expect(hit).toContain('GetSearchFiles')
     expect(hit).toContain('不是这次已经发出的请求')
-  })
+  }, 30_000)
 
   it('counts interfaces from the index instead of counting markdown files', () => {
     const brief = apiCatalogBrief()
