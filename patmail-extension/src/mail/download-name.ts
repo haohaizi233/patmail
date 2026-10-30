@@ -58,6 +58,8 @@ export interface DownloadNameOptions {
   /** 流水下载共享预算时可借用六路；其它调用保持默认五路。 */
   concurrency?: number
   resolvedBatches?: Record<string, string[]>
+  /** 同一份冻结配方下已生成的逐文件名称；调用方负责隔离不同配方的缓存。 */
+  resolvedNames?: Record<string, string>
   /** 已完成的文件数；并发批次完成顺序不影响返回名称的顺序。 */
   onProgress?: (done: number, total: number) => void
   signal?: AbortSignal
@@ -72,6 +74,10 @@ const COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/
 export const NAME_BATCH = 40
 /** 命名最多 5 路：在常见 HTTP/1.1 同源 6 连接限制下，避免仅命名请求就占满连接；其他请求仍共享同源调度。 */
 const NAME_CONCURRENCY = 5
+
+function validCachedName(name: unknown): name is string {
+  return typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';')
+}
 
 function segments(value: string): string[] {
   return value.split(';')
@@ -254,28 +260,47 @@ export async function resolveDownloadFileNames(
       const index = next
       next += NAME_BATCH
       const batch = fileIds.slice(index, index + NAME_BATCH)
-      const params = buildGetFileNameParams(batch, recipe.data)
-      if (!params) {
-        stop(apiError('INVALID_QUERY', '下载名称参数无效，没有发文。'))
-        return
-      }
       const cached = options.resolvedBatches?.[String(index)]
-      const response = cached?.length === batch.length
-        ? { ok: true as const, data: { file_names: cached.join(';') } }
-        : await transport.post('getFileName', params, controller.signal)
-      if (failure) return
-      if (!response.ok) {
-        stop(response)
-        return
+      let generated: string[] | null
+      if (cached?.length === batch.length) {
+        generated = cached.every(validCachedName) ? cached.slice() : null
+      } else {
+        generated = new Array<string>(batch.length)
+        const missing: number[] = []
+        for (const [position, id] of batch.entries()) {
+          if (options.resolvedNames && Object.prototype.hasOwnProperty.call(options.resolvedNames, id)) {
+            const known = options.resolvedNames[id]
+            if (!validCachedName(known)) {
+              generated = null
+              break
+            }
+            generated[position] = known
+          } else {
+            missing.push(position)
+          }
+        }
+        if (generated && missing.length) {
+          const params = buildGetFileNameParams(missing.map(position => batch[position]), recipe.data)
+          if (!params) {
+            stop(apiError('INVALID_QUERY', '下载名称参数无效，没有发文。'))
+            return
+          }
+          const response = await transport.post('getFileName', params, controller.signal)
+          if (failure) return
+          if (!response.ok) {
+            stop(response)
+            return
+          }
+          const info = isRecord(response.data) ? readClientInfo(response.data.ClientInfo) : null
+          if (info?.ok && info.data.IsLogin === false) {
+            stop(apiError('SESSION_EXPIRED', 'EASY 登录状态已失效。'))
+            return
+          }
+          const fetched = readGeneratedFileNames(response.data, missing.length)
+          if (!fetched) generated = null
+          else for (const [fetchedIndex, position] of missing.entries()) generated[position] = fetched[fetchedIndex]
+        }
       }
-      const info = isRecord(response.data) ? readClientInfo(response.data.ClientInfo) : null
-      if (info?.ok && info.data.IsLogin === false) {
-        stop(apiError('SESSION_EXPIRED', 'EASY 登录状态已失效。'))
-        return
-      }
-      const generated = cached?.length === batch.length
-        ? cached.every(name => typeof name === 'string' && name.trim().length > 0 && name.length <= 180 && !name.includes(';')) ? cached.slice() : null
-        : readGeneratedFileNames(response.data, batch.length)
       if (!generated) {
         stop(apiError('INVALID_RESPONSE', '下载名称没有生成完整的文件名，没有按原文件名发文。'))
         return

@@ -7,7 +7,7 @@ import type { SelectedPatentFile } from '../../../src/mail'
 import { resetTaskCheckProgress, taskCheckProgress } from '../../../src/app/check-progress'
 import { DOWNLOAD_PROGRESS_CHANNEL } from '../../../src/shared/download-progress'
 const templateLabel = vi.hoisted(() => ({ value: '模板甲' }))
-const downloadRecipe = vi.hoisted(() => ({ value: null as { newFilename: string; fileNameType: string } | null }))
+const downloadRecipe = vi.hoisted(() => ({ value: null as { templateId?: string; newFilename: string; fileNameType: string } | null }))
 const targetPicker = vi.hoisted(() => ({ cancel: false, calls: 0 }))
 vi.mock('../../../src/browser-download/target', () => ({
   chooseBrowserDownloadTarget: async () => { targetPicker.calls++; if (targetPicker.cancel) throw new DOMException('cancel', 'AbortError'); return '22222222-2222-4222-8222-222222222222' },
@@ -23,11 +23,11 @@ vi.mock('../../../src/recovery/wal-ledger', () => ({
 
 vi.mock('../../../src/floating/QueryTemplateSection.vue', async () => {
   const { defineComponent, h } = await import('vue')
-  return { default: defineComponent({ props: ['pageSize'], emits: ['search'], setup(props, { emit, expose }) {
+  return { default: defineComponent({ props: ['pageSize'], emits: ['search', 'download-name'], setup(props, { emit, expose }) {
     expose({ currentDownloadSelection: () => downloadRecipe.value, currentSearchTemplateName: () => templateLabel.value })
-    return () => h('button', { onClick: () => emit('search', {
+    return () => h('div', [h('button', { onClick: () => emit('download-name', downloadRecipe.value) }, '测试下载名称'), h('button', { onClick: () => emit('search', {
       resolvedFields: { case_volume: 'AUDIT' }, pageIndex: 1, pageSize: Number(props.pageSize)
-    }) }, '测试查询')
+    }) }, '测试查询')])
   } }) }
 })
 vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
@@ -69,6 +69,214 @@ function mount(request: MessageBridge['request'], allowed = ref(true), epoch = r
   app.mount(document.body.appendChild(document.createElement('div')))
   return selected
 }
+
+function duplicateOption(): HTMLInputElement {
+  const input = Array.from(document.querySelectorAll('label')).find(node => node.textContent?.includes('同名文件仅保留最新'))?.querySelector('input')
+  expect(input).toBeDefined()
+  return input as HTMLInputElement
+}
+
+describe('DIY名称实时去重', () => {
+  it('父面板给获选文件绑定客户后仍保留隐藏候选', async () => {
+    const selected = mount(async message => {
+      if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
+      const response = reply(message, 2)
+      if (response.type === MessageType.SearchFilesResult && response.payload.ok) response.payload.data.items.forEach((file, index) => {
+        file.fileName = 'same.pdf'; file.caseId = 'same'; file.uploadTime = `2026-10-${20 + index}`
+      })
+      return response
+    })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(1)
+    selected.value = Object.fromEntries(Object.entries(selected.value).map(([id, file]) => [id, { ...file, customerProfileId: 'bound-customer' }]))
+    await settle(); duplicateOption().click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(2)
+    expect(Object.values(selected.value).find(file => file.customerProfileId === 'bound-customer')).toBeDefined()
+    selected.value = {}; await settle(); duplicateOption().click(); await settle()
+    expect(selected.value).toEqual({})
+  })
+  it('预览未返回时直接下载，冻结完整候选与当前配方供下载器判断', async () => {
+    vi.useFakeTimers()
+    let payload: Extract<ContentRequest, { type: 'DOWNLOAD_FILES' }>['payload'] | undefined
+    let previewRecipe: unknown
+    mount(async message => {
+      if (message.type === MessageType.SearchFiles) return reply(message, 2)
+      if (message.type === MessageType.ResolveDownloadNames) { previewRecipe = message.payload.selection; return new Promise(() => {}) }
+      if (message.type === MessageType.DownloadFiles) {
+        payload = message.payload
+        return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'test.zip', fileCount: 2, notice: '' } } }
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    downloadRecipe.value = { templateId: '11111111-1111-4111-8111-111111111111', newFilename: 'one', fileNameType: 'txt' }
+    button('测试下载名称').click(); await settle(); await vi.advanceTimersByTimeAsync(250)
+    button('下载已选').click(); await settle()
+    expect(payload?.items).toHaveLength(2)
+    expect(payload?.deduplicate).toBe(true)
+    expect(payload?.resolvedNames).toEqual({})
+    expect(Object.keys(payload?.caseScopes ?? {})).toHaveLength(2)
+    expect(payload?.selection).toEqual({ newFilename: 'one', fileNameType: 'txt' })
+    expect(payload?.selection).toEqual(previewRecipe)
+  })
+  it('名称修改恢复隐藏候选且不重新查询，原名中的 (2) 保留、不同案件不合并', async () => {
+    vi.useFakeTimers()
+    let searches = 0
+    const selected = mount(async message => {
+      if (message.type === MessageType.SearchFiles) {
+        searches++
+        const response = reply(message, 4)
+        if (response.type === MessageType.SearchFilesResult && response.payload.ok) response.payload.data.items.forEach((file, index) => {
+          file.fileName = index === 1 ? '说明书 (2).docx' : '说明书.docx'
+          file.caseId = index === 3 ? 'other' : 'same'
+          file.uploadTime = `2026-10-${20 + index} 12:00:00`
+        })
+        return response
+      }
+      if (message.type === MessageType.ResolveDownloadNames) return { type: MessageType.ResolveDownloadNamesResult, payload: { ok: true, data: {
+        names: message.payload.fileIds.map(id => message.payload.selection.newFilename === 'one' ? '合并.docx' : `${id}.docx`)
+      } } }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(3)
+    downloadRecipe.value = { newFilename: 'one', fileNameType: 'txt' }
+    button('测试下载名称').click(); await settle(); await vi.advanceTimersByTimeAsync(250); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(2)
+    downloadRecipe.value = { newFilename: 'different', fileNameType: 'txt' }
+    button('测试下载名称').click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(4)
+    await vi.advanceTimersByTimeAsync(250); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(4)
+    expect(searches).toBe(1)
+    duplicateOption().click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(4)
+  })
+})
+
+describe('按同案同名文件的上传时间选择', () => {
+  function duplicateReply(message: Extract<ContentRequest, { type: 'SEARCH_FILES' }>, page = message.payload.query.pageIndex): ContentResponse {
+    return { type: MessageType.SearchFilesResult, payload: { ok: true, data: {
+      pageIndex: page, pageSize: 100, total: 201, totalPages: 3, querySessionId: '11111111-1111-4111-8111-111111111111',
+      items: [{ fileId: `duplicate-${page}`, fileNo: `A${page}`, caseId: 'same-case',
+        fileName: page === 1 ? '说明书.doc' : '说明书.docx', uploadTime: `2026-10-${20 + page} 12:00:00` }]
+    } } }
+  }
+  it('默认开启，本页全选只勾较新版本，保留全部结果及正确的页全选状态', async () => {
+    const selected = mount(async message => {
+      if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
+      const response = duplicateReply(message)
+      if (response.type === MessageType.SearchFilesResult && response.payload.ok) {
+        response.payload.data.items.push({ fileId: 'new', fileNo: 'A-new', caseId: 'same-case', fileName: '说明书.docx', uploadTime: '2026-10-29 12:00:00' })
+      }
+      return response
+    })
+    button('测试查询').click(); await settle()
+    expect(duplicateOption().checked).toBe(true)
+    button('全选本页').click(); await settle()
+    expect(Object.keys(selected.value)).toEqual(['new'])
+    expect(document.querySelectorAll('tbody tr')).toHaveLength(2)
+    expect(document.querySelector<HTMLInputElement>('[aria-label="当前页全选"]')?.checked).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('[aria-label="说明书.doc"]')?.checked).toBe(false)
+    document.querySelector<HTMLInputElement>('[aria-label="说明书.doc"]')!.click(); await settle()
+    expect(Object.keys(selected.value)).toEqual(['new'])
+  })
+  it('并发跨页先返回最新再返回旧版本也只保留最新，批量期间锁定选项', async () => {
+    const pending = new Map<number, () => void>()
+    const selected = mount(async message => {
+      if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
+      if (!message.payload.batch) return duplicateReply(message)
+      return new Promise(resolve => pending.set(message.payload.query.pageIndex, () => resolve(duplicateReply(message))))
+    })
+    button('测试查询').click(); await settle(); button('全选所有').click(); await settle()
+    expect(duplicateOption().disabled).toBe(true)
+    pending.get(3)!(); await settle(); pending.get(2)!(); await settle()
+    expect(Object.keys(selected.value)).toEqual(['duplicate-3'])
+    expect(duplicateOption().disabled).toBe(false)
+    expect(document.body.textContent).toContain('共 201 个文件')
+  })
+  it('关闭后全选保留全部，重新开启仅整理已选，不补勾未选文件', async () => {
+    const selected = mount(async message => message.type === MessageType.SearchFiles ? duplicateReply(message)
+      : { type: MessageType.Error, payload: { message: 'unused' } })
+    button('测试查询').click(); await settle(); duplicateOption().click(); await settle()
+    button('全选所有').click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(3)
+    duplicateOption().click(); await settle()
+    expect(Object.keys(selected.value)).toEqual(['duplicate-3'])
+    button('取消全选所有').click(); await settle(); duplicateOption().click(); await settle(); duplicateOption().click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(0)
+  })
+  it('恢复关闭选项及全部选择，旧账本未带选项时默认开启', async () => {
+    const request: MessageBridge['request'] = async message => message.type === MessageType.SearchFiles ? duplicateReply(message)
+      : { type: MessageType.Error, payload: { message: 'unused' } }
+    mount(request); button('测试查询').click(); await settle(); duplicateOption().click(); await settle()
+    button('全选所有').click(); await settle()
+    app!.unmount(); app = undefined; await settle(); document.body.innerHTML = ''
+    const selected = mount(request); await settle()
+    expect(duplicateOption().checked).toBe(false)
+    expect(Object.keys(selected.value)).toHaveLength(3)
+    app!.unmount(); app = undefined; await settle(); document.body.innerHTML = ''
+    for (const value of recoveryRows.values()) delete (value as { deduplicate?: boolean }).deduplicate
+    const legacy = mount(request); await settle()
+    expect(duplicateOption().checked).toBe(true)
+    expect(Object.keys(legacy.value)).toEqual(['duplicate-3'])
+  })
+  it('新下载冻结全部候选，按上传时间排序交给下载器去重', async () => {
+    const downloaded: string[][] = []
+    const selected = mount(async message => {
+      if (message.type === MessageType.SearchFiles) return reply(message, 2)
+      if (message.type === MessageType.DownloadFiles) {
+        downloaded.push(message.payload.items.map(item => item.fileId))
+        return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'one.zip', fileCount: 1, notice: '' } } }
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    const ids = Object.keys(selected.value)
+    selected.value = Object.fromEntries(Object.values(selected.value).map((file, index) => [file.fileId, {
+      ...file, caseId: 'same-case', fileName: index ? '说明书.docx' : '说明书.doc', uploadTime: `2026-10-${21 + index} 12:00:00`
+    }]))
+    await settle(); button('下载已选').click(); await settle()
+    expect(downloaded).toEqual([[ids[1], ids[0]]])
+  })
+  it('补读失败页时以更新版本替换已选旧版本', async () => {
+    let attempts = 0
+    const selected = mount(async message => {
+      if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
+      if (message.payload.query.pageIndex === 3 && ++attempts === 1) return { type: MessageType.Error, payload: { message: '登录已失效。' } }
+      return duplicateReply(message)
+    })
+    button('测试查询').click(); await settle(); button('全选所有').click(); await settle()
+    expect(Object.keys(selected.value)).toEqual(['duplicate-2'])
+    button('重试没读到的 1 页').click(); await settle()
+    expect(Object.keys(selected.value)).toEqual(['duplicate-3'])
+  })
+  it('暂停后调整去重只改变新选择，继续下载沿用冻结清单', async () => {
+    const downloaded: string[][] = []
+    const selected = mount(async message => {
+      if (message.type === MessageType.SearchFiles) {
+        const response = duplicateReply(message)
+        if (response.type === MessageType.SearchFilesResult && response.payload.ok) response.payload.data.items[0].fileId = `00000000-0000-4000-8000-00000000000${message.payload.query.pageIndex}`
+        return response
+      }
+      if (message.type === MessageType.DownloadFiles) {
+        downloaded.push(message.payload.items.map(item => item.fileId))
+        return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'NETWORK_ERROR', message: 'interrupted' } } }
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    button('测试查询').click(); await settle(); duplicateOption().click(); await settle()
+    button('全选所有').click(); await settle(); button('下载已选').click(); await settle()
+    expect(duplicateOption().disabled).toBe(false)
+    duplicateOption().click(); await settle()
+    expect(Object.keys(selected.value)).toEqual(['00000000-0000-4000-8000-000000000003'])
+    button('继续下载').click(); await settle()
+    expect(downloaded).toEqual([
+      ['00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000001'],
+      ['00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000001']
+    ])
+  })
+})
 
 describe('文件全选的批量分页', () => {
   it.each([false, true])('简化导出区后仍显示下载结果中的操作提醒（成功=%s）', async success => {

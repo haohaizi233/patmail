@@ -289,8 +289,10 @@ const bridge: MessageBridge = {
       }
       case MessageType.DownloadFiles: {
         let failedFiles = 0
+        let duplicateFiles = 0
         const report = (progress: FileDownloadProgress): void => {
           failedFiles = Math.max(failedFiles, progress.failed ?? 0)
+          duplicateFiles = Math.max(duplicateFiles, progress.deduplicated ?? 0)
           if (!message.payload.progressId) return
           try {
             chrome.runtime.sendMessage({ channel: DOWNLOAD_PROGRESS_CHANNEL, id: message.payload.progressId, progress }, () => { void chrome.runtime.lastError })
@@ -300,15 +302,17 @@ const bridge: MessageBridge = {
           const fileName = message.payload.archiveName ?? templateArchiveName()
           try {
             const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork, context) => easyRuntime.streamFiles(
-              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, context
+              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, { ...context, deduplicate: message.payload.deduplicate, resolvedNames: message.payload.resolvedNames, caseScopes: message.payload.caseScopes }
             ), report, { taskId: message.payload.taskId,
               ...(message.payload.browserTarget ? { backend: 'browser' as const, targetId: message.payload.browserTarget } : {}),
               ...(message.payload.saveAsNew ? { newCopy: true as const } : {}), manifest: {
               items: message.payload.items, selection: message.payload.selection,
-              stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName
+              stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName,
+              ...(message.payload.deduplicate ? { deduplicate: true, caseScopes: message.payload.caseScopes } : {}),
+              ...(message.payload.resolvedNames ? { resolvedNames: message.payload.resolvedNames } : {})
             } })
             return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: {
-              fileName, fileCount: message.payload.items.length, notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。${failedFiles ? `成功 ${message.payload.items.length - failedFiles} 个，跳过 ${failedFiles} 个不可用附件；详情见ZIP内下载失败清单。` : ''}`
+              fileName, fileCount: Math.max(1, message.payload.items.length - duplicateFiles), notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。${duplicateFiles ? `过滤 ${duplicateFiles} 个同案件同名旧文件。` : ''}${failedFiles ? `成功 ${message.payload.items.length - failedFiles - duplicateFiles} 个，跳过 ${failedFiles} 个不可用附件；详情见ZIP内下载失败清单。` : ''}`
             } } }
           } catch (error) {
             return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',

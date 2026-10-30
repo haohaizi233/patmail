@@ -28,6 +28,8 @@ export interface SelectedPatentFile {
   customerVolume?: string
   applicationNo?: string
   officialPostDate?: string
+  /** 去重保留最新附件使用原站上传时间，不以官方发文日替代。 */
+  uploadTime?: string
   /** 由 Background 签发。页面自行编造的值不会被当成可信查询运行。 */
   querySessionId?: string
 }

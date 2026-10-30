@@ -12,6 +12,7 @@ export interface FileDownloadProgress {
   receivedBytes?: number
   /** packing.done包含已跳过的不可用附件；实际入包数为done-failed。 */
   failed?: number
+  deduplicated?: number
   /** 只有浏览器下载阶段有：响应头声明的总字节，拿不到就留空。 */
   totalBytes?: number
   /** 只有浏览器下载阶段有：inProgress 是流式进度，complete/interrupted 是终态，最终结果据此定成败。 */
@@ -23,6 +24,7 @@ export function isDownloadProgress(value: unknown): value is FileDownloadProgres
     typeof value.total === 'number' && Number.isSafeInteger(value.total) && value.total > 0 &&
     value.total <= DOWNLOAD_MAX_ITEMS && value.done <= value.total &&
     (value.failed === undefined || (Number.isSafeInteger(value.failed) && Number(value.failed) >= 0 && Number(value.failed) <= value.total)) &&
+    (value.deduplicated === undefined || (Number.isSafeInteger(value.deduplicated) && Number(value.deduplicated) >= 0 && Number(value.deduplicated) <= value.total - Number(value.failed ?? 0))) &&
     [value.elapsedMs, value.receivedBytes, value.totalBytes].every(item => item === undefined || (typeof item === 'number' && Number.isSafeInteger(item) && item >= 0)) &&
     (value.state === undefined || value.state === 'inProgress' || value.state === 'complete' || value.state === 'interrupted')
 }

@@ -72,10 +72,11 @@ const profile = await mkdtemp(join(testResultsDir, 'browser-download-profile-'))
 let context, app
 let downloads = []
 const violations = []
+const warmResume = process.env.PATMAIL_PIPELINE_WARM === '1'
 const recoveryScope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1111-1111-111111111111', 'workspace-files'])
 async function launch() {
   console.log('stage: launch browser')
-  context = await chromium.launchPersistentContext(profile, { channel: 'chromium', headless: true,
+  context = await chromium.launchPersistentContext(profile, { channel: 'chromium', headless: true, acceptDownloads: true, downloadsPath: join(profile, 'downloads'),
     ...(process.env.PATMAIL_TEST_CHROMIUM ? { executablePath: process.env.PATMAIL_TEST_CHROMIUM } : {}),
     proxy: { server: `http://127.0.0.1:${server.address().port}`, bypass: '127.0.0.1' },
     args: [`--disable-extensions-except=${distDir}`, `--load-extension=${distDir}`] })
@@ -103,13 +104,15 @@ async function launch() {
   await waitForContentScript(worker, easy)
   console.log('stage: content script ready')
   app = await context.newPage(); await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
+  const cdp = await context.newCDPSession(app)
+  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: join(profile, 'native-files'), eventsEnabled: true })
   app.on('close', () => console.log('event: app closed'))
   app.on('crash', () => console.log('event: app crashed'))
   console.log('stage: workbench ready')
   return worker
 }
 try {
-  await launch()
+  let worker = await launch()
   await app.getByText('当前账号未配置专利标签', { exact: true }).waitFor()
   await app.locator('.download-template-select [role="combobox"]').click()
   await app.getByRole('option', { name: '纯TS验收', exact: true }).click()
@@ -137,13 +140,15 @@ try {
   assert.equal(await app.evaluate(() => window.__pickerCalls), 0, '原生下载不调用文件选择器')
   assert.equal(peakBodies, 6)
   for (const download of downloads) await download.failure()
-  await context.close(); context = null
-  downloads = []
-  console.log('stage: browser closed for recovery')
-  const worker = await launch()
-  await app.getByText('已恢复本地查询与选择', { exact: false }).waitFor()
-  await app.getByRole('button', { name: '刷新', exact: true }).click()
-  await app.waitForFunction(() => !document.body.textContent.includes('已恢复本地查询与选择'))
+  if (!warmResume) {
+    await context.close(); context = null
+    downloads = []
+    console.log('stage: browser closed for recovery')
+    worker = await launch()
+    await app.getByText('已恢复本地查询与选择', { exact: false }).waitFor()
+    await app.getByRole('button', { name: '刷新', exact: true }).click()
+    await app.waitForFunction(() => !document.body.textContent.includes('已恢复本地查询与选择'))
+  }
   await app.getByRole('button', { name: '继续下载', exact: true }).click()
   console.log('stage: resume clicked')
   await waitForPageCondition(app, async scope => {
@@ -153,14 +158,15 @@ try {
   console.log('stage: final file and ledger committed')
   const completePanel = app.getByRole('region', { name: '文件导出', exact: true })
   assert.equal(await app.locator('.check-rainbow').getAttribute('aria-valuenow'), '100')
-  assert.equal(await completePanel.getByText('导出完成', { exact: true }).count(), 1)
+  assert.equal(await completePanel.getByText('导出完成', { exact: true }).count(), 0, '完成状态只在顶栏显示，底部不重复')
   await app.getByRole('region', { name: '查询结果', exact: true }).screenshot({ path: resultPath('file-export-six-complete.png') })
-  assert.equal(downloads.length, 1)
-  assert.equal(await downloads[0].failure(), null)
+  const completedItems = await worker.evaluate(() => chrome.downloads.search({ state: 'complete' }))
+  const completedItem = completedItems.find(item => item.bytesReceived > 3 * 1024 * 1024)
+  assert(completedItem?.exists, 'Chrome must confirm a real saved file')
   const output = resultPath('native-pipeline-fault-recovered.zip')
-  await downloads[0].saveAs(output)
   const saved = await app.evaluate(() => ({ legacyCalls: window.__legacyCalls }))
-  const archive = await readFile(output)
+  const archive = await readFile(completedItem.filename)
+  await writeFile(output, archive)
   const reader = new ZipReader(new Uint8ArrayReader(archive), { useWebWorkers: false })
   try {
     const entries = await reader.getEntries()
@@ -177,10 +183,11 @@ try {
   assert(ranges.some(item => item.index === 1 && item.offset === 262144))
   assert.equal(saved.legacyCalls, 0)
   await app.getByText('成功 7 个，跳过 1 个不可用附件', { exact: false }).waitFor()
+  await app.screenshot({ path: resultPath('native-pipeline-compact-ui.png') })
   assert.equal(violations.length, 0)
   const nativeDownloads = await worker.evaluate(() => chrome.downloads.search({}))
   assert(nativeDownloads.some(item => item.state === 'complete' && item.bytesReceived === archive.length), '原生下载必须确认完整字节')
-  const report = { passed: true, pureBrowser: true, coldRestarted: true, gatewayRetried, peakBodies, sourceFetches: fetches, ranges, names, bytes: archive.length, crc: true, nativeDownloads: nativeDownloads.map(item => ({ state: item.state, receivedBytes: item.bytesReceived })), loopbackRequests: 0 }
+  const report = { passed: true, pureBrowser: true, coldRestarted: !warmResume, gatewayRetried, peakBodies, sourceFetches: fetches, ranges, names, bytes: archive.length, crc: true, nativeDownloads: nativeDownloads.map(item => ({ state: item.state, receivedBytes: item.bytesReceived })), loopbackRequests: 0 }
   Object.assign(report, { preservedOriginalZip: true, skippedUnavailable: 1, goodSourceFiles: 7 })
   await writeFile(resultPath('native-pipeline-fault.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))

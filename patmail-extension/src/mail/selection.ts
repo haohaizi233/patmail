@@ -18,10 +18,12 @@ export function toSelectedFile(file: PatentFile, customerProfileId?: string, que
     ...(file.fileNo ? { fileNo: file.fileNo } : {}),
     ...(customerProfileId ? { customerProfileId } : {}),
     ...(file.caseName ? { caseName: file.caseName } : {}),
+    ...(file.caseId ? { caseId: file.caseId } : {}),
     ...(file.caseVolume ? { caseVolume: file.caseVolume } : {}),
     ...(file.customerVolume ? { customerVolume: file.customerVolume } : {}),
     ...(file.applicationNo ? { applicationNo: file.applicationNo } : {}),
     ...(file.officialPostDate ? { officialPostDate: file.officialPostDate } : {}),
+    ...(file.uploadTime ? { uploadTime: file.uploadTime } : {}),
     ...(querySessionId ? { querySessionId } : {})
   }
 }

@@ -190,7 +190,7 @@ export type ContentRequest =
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
-  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true; taskId?: string; saveAsNew?: true; browserTarget?: string }>
+  | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true; taskId?: string; saveAsNew?: true; browserTarget?: string; deduplicate?: true; resolvedNames?: Record<string, string>; caseScopes?: Record<string, string> }>
   | Response<'EXPORT_CASE_CONTACTS', { volumes: string[] }>
   | Response<'LIST_MAIL_PROCESSES', { query: ProcessListQuery }>
   | Response<'OPEN_EASY_FORM', { target: ProcessOpenTarget }>
@@ -479,7 +479,8 @@ function isDownloadNameResult(value: unknown): value is ApiResult<{ names: strin
 /** 原名是类型识别元数据；有命名配方时，真正提交的名称另由生成名称护栏校验。 */
 export function downloadFilesRequestIssue(value: unknown): string {
   if (!isRecord(value)) return '下载参数不是有效对象。'
-  if (Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream', 'taskId', 'saveAsNew', 'browserTarget'].includes(key))) return '下载参数包含不支持的字段。'
+  if (Object.keys(value).some(key => !['items', 'selection', 'stripAppNoDot', 'progressId', 'detached', 'archiveName', 'stream', 'taskId', 'saveAsNew', 'browserTarget', 'deduplicate', 'resolvedNames', 'caseScopes'].includes(key))) return '下载参数包含不支持的字段。'
+  if (value.deduplicate !== undefined && value.deduplicate !== true) return '去重设置无效。'
   if (typeof value.stripAppNoDot !== 'boolean') return '下载名称中的申请号小数点设置无效。'
   if (value.taskId !== undefined && (typeof value.taskId !== 'string' || !isQueryGuid(value.taskId))) return '下载任务编号无效。'
   if (value.browserTarget !== undefined && (typeof value.browserTarget !== 'string' || !isQueryGuid(value.browserTarget) || !value.taskId || value.stream !== true)) return '浏览器下载目标无效或缺少流式任务编号。'
@@ -499,6 +500,12 @@ export function downloadFilesRequestIssue(value: unknown): string {
     if (typeof item.fileName !== 'string' || !item.fileName.trim() || item.fileName.length > 4096) return `${prefix}的原文件名为空或超过4096字。`
     if (value.selection === null && (item.fileName.length > 180 || item.fileName.includes(';'))) return `${prefix}的原文件名超过180字或包含分号，请设置下载名称后再下载。`
   }
+  const ids = new Set(items.map(item => String(item.fileId)))
+  for (const field of ['resolvedNames', 'caseScopes'] as const) {
+    const map = value[field]
+    if (map !== undefined && (!isRecord(map) || Object.keys(map).length > items.length || Object.entries(map).some(([id, name]) => !ids.has(id) || typeof name !== 'string' || !name.trim() || name.length > (field === 'resolvedNames' ? 180 : 1024) || (field === 'resolvedNames' && name.includes(';'))))) return field === 'resolvedNames' ? '已生成的下载名称无效。' : '案件分组信息无效。'
+  }
+  if (value.deduplicate && (!isRecord(value.caseScopes) || items.some(item => !Object.hasOwn(value.caseScopes as object, String(item.fileId))))) return '去重缺少案件分组信息。'
   return ''
 }
 
@@ -897,8 +904,8 @@ export function isMessage(value: unknown): value is AppMessage {
         (p.newCopy === undefined || (p.newCopy === true && p.taskId !== undefined)) &&
         (p.taskId === undefined || (typeof p.taskId === 'string' && isQueryGuid(p.taskId))) &&
         (p.manifest === undefined || (isRecord(p.manifest) && JSON.stringify(p.manifest).length <= 4_000_000 &&
-          isDownloadFilesRequest({ items: p.manifest.items, selection: p.manifest.selection, stripAppNoDot: p.manifest.stripAppNoDot, archiveName: p.fileName }) &&
-          Object.keys(p.manifest).every(key => ['items', 'selection', 'stripAppNoDot', 'archiveName'].includes(key))))
+          isDownloadFilesRequest({ items: p.manifest.items, selection: p.manifest.selection, stripAppNoDot: p.manifest.stripAppNoDot, archiveName: p.fileName, deduplicate: p.manifest.deduplicate, resolvedNames: p.manifest.resolvedNames, caseScopes: p.manifest.caseScopes }) &&
+          Object.keys(p.manifest).every(key => ['items', 'selection', 'stripAppNoDot', 'archiveName', 'deduplicate', 'resolvedNames', 'caseScopes'].includes(key))))
       if (typeof p.token !== 'string' || !/^[0-9a-f]{64}$/.test(p.token)) return false
       if (p.action === 'write') return Object.keys(p).every(key => ['action', 'token', 'sequence', 'offset', 'data'].includes(key)) && Number.isSafeInteger(p.sequence) && Number(p.sequence) >= 0 &&
         (p.offset === undefined || (Number.isSafeInteger(p.offset) && Number(p.offset) >= 0)) &&

@@ -6,6 +6,9 @@ export interface FileQueryTask {
   backend?: 'browser'
   id: string
   items: Array<{ fileId: string; fileNo: string; fileName: string }>
+  deduplicate?: boolean
+  resolvedNames?: Record<string, string>
+  caseScopes?: Record<string, string>
   selection: FileDownloadSelection | null
   stripAppNoDot: boolean
   archiveName: string
@@ -18,10 +21,12 @@ export interface FileQuerySnapshot {
   query: FileSearchQuery | null
   result: FileSearchResult | null
   selected: Record<string, SelectedPatentFile>
+  candidateSelection?: Record<string, SelectedPatentFile>
   form: unknown
   downloadSelection: FileDownloadSelection | null
   stripAppNoDot: boolean
   pageSize: number
+  deduplicate?: boolean
   templateName: string
   readPages: number[]
   activeTask: FileQueryTask | null
