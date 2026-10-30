@@ -8,6 +8,22 @@ function failure(message: string): BackgroundResponse {
 
 const CALL_CHANNEL = 'patmail-call'
 const RESULT_CHANNEL = 'patmail-result'
+const BACKGROUND_TIMEOUT_MESSAGE = '扩展后台没有在时限内返回。'
+
+function isDetachedDownloadRequest(message: BackgroundRequest): boolean {
+  if (message.type !== MessageType.Workspace || message.payload.action !== 'forward') return false
+  const forwarded = message.payload.message
+  return forwarded.type === MessageType.DownloadFiles && forwarded.payload.detached === true && Boolean(forwarded.payload.progressId)
+}
+
+function isLongStreamRequest(message: BackgroundRequest): boolean {
+  return message.type === MessageType.BrowserStreamDownload || message.type === MessageType.StreamDownload
+}
+
+function isMessagePortClosed(reason: string): boolean {
+  const normalized = reason.toLowerCase()
+  return normalized.includes('message port closed') || normalized.includes('message channel closed')
+}
 
 function acceptedBackground(response: unknown): response is BackgroundResponse {
   return isMessage(response) && (
@@ -38,6 +54,7 @@ function sendThroughMessage(message: BackgroundRequest, timeoutMs: number, hold?
     let settled = false
     // 内容脚本运行在 EASY 的 HTTP 页面，randomUUID 只在安全上下文可用，newUuid 里带兜底。
     const requestId = newUuid()
+    const awaitPushedResult = isDetachedDownloadRequest(message) || isLongStreamRequest(message)
     const started = Date.now()
     let pausedSince = 0
     let pausedMs = 0
@@ -58,7 +75,7 @@ function sendThroughMessage(message: BackgroundRequest, timeoutMs: number, hold?
         pausedMs += now - pausedSince
         pausedSince = 0
       }
-      if (now - started - pausedMs >= timeoutMs) finish(failure('扩展后台没有在时限内返回。'))
+      if (now - started - pausedMs >= timeoutMs) finish(failure(BACKGROUND_TIMEOUT_MESSAGE))
     }, 500)
     const onResult = (pushed: unknown, sender: chrome.runtime.MessageSender) => {
       if (sender.id !== chrome.runtime.id || !isRecord(pushed) || pushed.channel !== RESULT_CHANNEL || pushed.id !== requestId) return
@@ -70,7 +87,7 @@ function sendThroughMessage(message: BackgroundRequest, timeoutMs: number, hold?
       chrome.runtime.sendMessage({ channel: CALL_CHANNEL, id: requestId, message }, (response: unknown) => {
         const reason = chrome.runtime.lastError?.message ?? ''
         if (acceptedBackground(response)) finish(response)
-        else if (reason) finish(describeBackground(response, reason))
+        else if (reason && !(awaitPushedResult && isMessagePortClosed(reason))) finish(describeBackground(response, reason))
       })
     } catch (error) {
       finish(failure(error instanceof Error ? error.message : '扩展后台无法接收消息。'))

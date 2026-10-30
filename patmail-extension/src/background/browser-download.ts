@@ -234,7 +234,7 @@ export class BrowserStreamDownloads {
       return { ok: true, info }
     }
     if (command.action === 'pause' || command.action === 'abort') {
-      await this.pauseTask(lease.taskId, owner)
+      await this.pauseTaskForLease(lease, owner)
       return { ok: true }
     }
     let settled: Promise<void> | undefined
@@ -332,9 +332,18 @@ export class BrowserStreamDownloads {
     return result
   }
   async pauseTask(taskId: string, owner: string): Promise<number[]> {
+    return this.pauseTaskInternal(taskId, owner)
+  }
+  private async pauseTaskForLease(lease: Lease, owner: string): Promise<number[]> {
+    this.assertLease(lease, lease.tabId, owner)
+    if (this.tasks.get(lease.taskId) !== lease) throw new Error('下载凭据已失效或不属于当前账号和来源页面。')
+    return this.pauseTaskInternal(lease.taskId, owner, lease)
+  }
+  private async pauseTaskInternal(taskId: string, owner: string, expectedLease?: Lease): Promise<number[]> {
     // The archive writer can be blocked on a native sink acknowledgement. Ask
     // the target to cancel that pending write before waiting for the task queue.
     const active = this.tasks.get(taskId)
+    if (expectedLease && active !== expectedLease) throw new Error('下载凭据已失效或不属于当前账号和来源页面。')
     const preempted = active ? [active] : []
     let preemptedClose: Promise<void> | undefined
     if (active) {
@@ -346,8 +355,11 @@ export class BrowserStreamDownloads {
     return this.queue(taskId, async () => {
       const task = await this.owned(taskId, owner)
       if (!task) return []
+      // A token-scoped pause may sit behind a replacement start in the task
+      // queue. It owns only the lease that authorized it, never a later lease.
+      if (expectedLease && (this.tasks.has(taskId) || (task.activeTargetId && task.activeTargetId !== expectedLease.targetId))) return []
       const targetsById = new Map(preempted.map(lease => [lease.targetId, lease]))
-      for (const lease of this.previousTargets(task)) if (!targetsById.has(lease.targetId)) targetsById.set(lease.targetId, lease)
+      if (!expectedLease) for (const lease of this.previousTargets(task)) if (!targetsById.has(lease.targetId)) targetsById.set(lease.targetId, lease)
       const targets = [...targetsById.values()]
       for (const lease of targets) this.invalidate(lease)
       await this.drainCache(taskId)

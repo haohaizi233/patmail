@@ -340,6 +340,43 @@ describe('browser stream broker', () => {
     await expect(f.broker.command({ action: 'status', token: c.token! }, 10, 'owner')).rejects.toThrow()
     await f.broker.discardTask(a.taskId!, 'owner'); expect(await f.store.get(a.taskId!)).toBeNull()
   })
+  it('a late pause for the replaced lease cannot revoke a new start queued ahead of it', async () => {
+    const f = fixture(), old = await f.start()
+    const get = f.store.get.bind(f.store)
+    let releaseStartRead!: () => void, releasePauseRead!: () => void, enteredStartRead!: () => void, enteredPauseRead!: () => void
+    const startReadGate = new Promise<void>(resolve => { releaseStartRead = resolve })
+    const pauseReadGate = new Promise<void>(resolve => { releasePauseRead = resolve })
+    const startReadEntered = new Promise<void>(resolve => { enteredStartRead = resolve })
+    const pauseReadEntered = new Promise<void>(resolve => { enteredPauseRead = resolve })
+    let reads = 0
+    f.store.get = async taskId => {
+      reads++
+      if (reads === 1) { enteredStartRead(); await startReadGate }
+      if (reads === 2) { enteredPauseRead(); await pauseReadGate }
+      return get(taskId)
+    }
+
+    const takeover = f.start({ taskId: old.taskId, targetId: 'next' })
+    await startReadEntered
+    const latePause = f.broker.command({ action: 'pause', token: old.token! }, 10, 'owner')
+    releaseStartRead()
+    const current = await takeover
+    await pauseReadEntered
+
+    let releaseReset!: () => void, enteredReset!: () => void
+    const resetGate = new Promise<void>(resolve => { releaseReset = resolve })
+    const resetEntered = new Promise<void>(resolve => { enteredReset = resolve })
+    f.store.reset = async () => { enteredReset(); await resetGate }
+    const reset = f.broker.command({ action: 'cache', command: 'reset', index: 0, token: current.token! }, 10, 'owner')
+    await resetEntered
+    releasePauseRead()
+    releaseReset()
+    await latePause
+
+    await expect(reset).resolves.toMatchObject({ ok: true })
+    await expect(f.broker.command({ action: 'status', token: current.token! }, 10, 'owner')).resolves.toMatchObject({ ok: true })
+    expect(await f.store.get(old.taskId!)).toMatchObject({ state: 'running', activeTargetId: 'next' })
+  })
   it('serializes concurrent takeover: old close precedes new open, stale queued writes fail', async () => {
     const f = fixture(), a = await f.start(); let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })

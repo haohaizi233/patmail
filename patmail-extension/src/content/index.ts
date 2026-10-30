@@ -225,8 +225,9 @@ const bridge: MessageBridge = {
               fileName, fileCount: Math.max(1, message.payload.items.length - duplicateFiles), notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。${duplicateFiles ? `过滤 ${duplicateFiles} 个同案件同名旧文件。` : ''}${failedFiles ? `成功 ${message.payload.items.length - failedFiles - duplicateFiles} 个，跳过 ${failedFiles} 个不可用附件；详情见ZIP内下载失败清单。` : ''}`
             } } }
           } catch (error) {
+            console.warn('[PatMail] 流水下载失败', error)
             return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',
-              message: ((error instanceof Error ? error.message : '流水下载失败，压缩包未完成。') + ' | ' + (error instanceof Error ? error.stack ?? '' : '')).slice(0, 1200)
+              message: (error instanceof Error ? error.message : '流水下载失败，压缩包未完成。').slice(0, 1200)
             } } }
           }
         }
