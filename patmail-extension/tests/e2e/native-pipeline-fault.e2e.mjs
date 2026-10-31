@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { chromium } from 'playwright'
 import { ZipReader, ZipWriter, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js'
 import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
-import { extensionWorker, gotoFixturePage, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
+import { extensionWorker, gotoFixturePage, gotoWithRetry, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
 
 assert.equal(existsSync(join(distDir, 'local-download')), false, '交付目录不能依赖Python桥接')
 const files = Array.from({ length: 8 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, fileNo: `B${index}`, fileName: `old-${index}.pdf` }))
@@ -77,6 +77,7 @@ let context, app
 let downloads = []
 const violations = []
 const warmResume = process.env.PATMAIL_PIPELINE_WARM === '1'
+const slowStart = process.env.PATMAIL_PIPELINE_START_DELAY === '1'
 const recoveryScope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1111-1111-111111111111', 'workspace-files'])
 async function launch() {
   console.log('stage: launch browser')
@@ -107,7 +108,7 @@ async function launch() {
   console.log('stage: fixture loaded')
   await waitForContentScript(worker, easy)
   console.log('stage: content script ready')
-  app = await context.newPage(); await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
+  app = await context.newPage(); await gotoWithRetry(app, `chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
   const cdp = await context.newCDPSession(app)
   await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: join(profile, 'native-files'), eventsEnabled: true })
   app.on('close', () => console.log('event: app closed'))
@@ -115,8 +116,41 @@ async function launch() {
   console.log('stage: workbench ready')
   return worker
 }
+
+/** 启动/恢复阶段容灾：Chromium 冷启动偶发页面加载超时，整体重拉一次即可恢复。 */
+async function launchWithRetry(attempts = 2) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await launch()
+    } catch (error) {
+      await context?.close().catch(() => {})
+      context = null
+      if (attempt >= attempts) throw error
+      console.log('stage: relaunch after transient startup failure', String(error).split('\n')[0])
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+    }
+  }
+}
 try {
-  let worker = await launch()
+  let worker = await launchWithRetry()
+  if (slowStart) await worker.evaluate(() => {
+    const original = chrome.tabs.sendMessage.bind(chrome.tabs)
+    globalThis.__slowStart = { armed: false, delayed: 0, starts: [] }
+    chrome.runtime.onMessage.addListener(envelope => {
+      const message = envelope?.message ?? envelope
+      if (message?.type === 'BROWSER_STREAM_DOWNLOAD' && message.payload?.action === 'start') {
+        globalThis.__slowStart.armed = true
+        globalThis.__slowStart.starts.push(Date.now())
+      }
+    })
+    chrome.tabs.sendMessage = async (...args) => {
+      const delay = args[1]?.type === 'CHECK_SESSION' && globalThis.__slowStart.armed && Date.now() - globalThis.__slowStart.starts[0] < 24_000
+      if (delay) globalThis.__slowStart.delayed++
+      const result = await original(...args)
+      if (delay) await new Promise(resolve => setTimeout(resolve, 13_000))
+      return result
+    }
+  })
   await app.getByText('当前账号未配置专利标签', { exact: true }).waitFor()
   await app.locator('.download-template-select [role="combobox"]').click()
   await app.getByRole('option', { name: '纯TS验收', exact: true }).click()
@@ -127,6 +161,13 @@ try {
   await app.getByRole('button', { name: '下载已选', exact: true }).click()
   console.log('stage: download clicked')
   await waitForPageCondition(app, async () => (await chrome.downloads.search({})).some(item => item.state === 'in_progress' && item.bytesReceived >= 512 * 1024), null, { timeout: 60000 })
+  if (slowStart) {
+    const startup = await worker.evaluate(() => ({ ...globalThis.__slowStart, observedAt: Date.now() }))
+    assert(startup.delayed >= 2)
+    assert.equal(startup.starts.length, 1, 'slow startup must not restart the producer')
+    assert(startup.observedAt - startup.starts[0] > 20_000, 'must exceed the previous start receipt budget')
+    console.log('slow-start passed', JSON.stringify(startup))
+  }
   releaseFailure()
   console.log('stage: source interrupted')
   await app.getByRole('button', { name: '继续下载', exact: true }).waitFor()
@@ -148,7 +189,7 @@ try {
     await context.close(); context = null
     downloads = []
     console.log('stage: browser closed for recovery')
-    worker = await launch()
+    worker = await launchWithRetry()
     await app.getByText('已恢复本地查询与选择', { exact: false }).waitFor()
     await app.getByRole('button', { name: '刷新', exact: true }).click()
     await app.waitForFunction(() => !document.body.textContent.includes('已恢复本地查询与选择'))
@@ -174,15 +215,17 @@ try {
   const reader = new ZipReader(new Uint8ArrayReader(archive), { useWebWorkers: false })
   try {
     const entries = await reader.getEntries()
-    const goodIndexes = sourceFault ? [0, 1, 2, 3, 4, 6] : [0, 1, 2, 3, 4, 5, 6]
-    assert.deepEqual(entries.map(entry => entry.filename), [...goodIndexes.map(index => `2026100263349-${index}.${index === 6 ? 'zip' : 'pdf'}`), '下载失败清单.txt'])
+    const goodIndexes = [0, 1, 2, 3, 4, 5, 6]
+    const entrySuffix = index => index === 6 ? 'zip' : sourceFault && index === 5 ? (emlFault ? 'eml' : 'html') : 'pdf'
+    assert.deepEqual(entries.map(entry => entry.filename), [...goodIndexes.map(index => `2026100263349-${index}.${entrySuffix(index)}`), '下载失败清单.txt'])
     for (const [offset, index] of goodIndexes.entries()) assert.deepEqual(Buffer.from(await entries[offset].getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })), source(index))
     const note = Buffer.from(await entries.at(-1).getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })).toString('utf8')
-    assert(note.includes(sourceFault ? '成功 6 个；跳过 2 个' : '成功 7 个；跳过 1 个'))
+    assert(note.includes('成功 7 个；跳过 1 个'))
     if (sourceFault) {
       assert(note.includes('2026100263349-5.pdf'))
       assert(note.includes(emlFault ? 'EML' : 'Word HTML'))
-      assert(fetches.filter(index => index === 5).length >= 3, '异常正文必须经过重取句柄和正文重试')
+      assert(note.includes(`2026100263349-5.${emlFault ? 'eml' : 'html'}`))
+      assert.equal(fetches.filter(index => index === 5).length, 1, '真实格式正文直接入包，不再重试')
     }
     assert(note.includes('2026100263349-7.pdf'))
     assert(note.includes('2026100263349-6.zip'))
@@ -192,13 +235,13 @@ try {
   assert.equal(fetches.filter(index => index === 0).length, 1)
   assert(ranges.some(item => item.index === 1 && item.offset === 262144))
   assert.equal(saved.legacyCalls, 0)
-  await app.getByText(sourceFault ? '成功 6 个，跳过 2 个不可用附件' : '成功 7 个，跳过 1 个不可用附件', { exact: false }).waitFor()
+  await app.getByText('成功 7 个，跳过 1 个不可用附件', { exact: false }).waitFor()
   await app.screenshot({ path: resultPath('native-pipeline-compact-ui.png') })
   assert.equal(violations.length, 0)
   const nativeDownloads = await worker.evaluate(() => chrome.downloads.search({}))
   assert(nativeDownloads.some(item => item.state === 'complete' && item.bytesReceived === archive.length), '原生下载必须确认完整字节')
   const report = { passed: true, pureBrowser: true, coldRestarted: !warmResume, gatewayRetried, peakBodies, sourceFetches: fetches, ranges, names, bytes: archive.length, crc: true, nativeDownloads: nativeDownloads.map(item => ({ state: item.state, receivedBytes: item.bytesReceived })), loopbackRequests: 0 }
-  Object.assign(report, { preservedOriginalZip: true, htmlFault, emlFault, skippedUnavailable: sourceFault ? 2 : 1, goodSourceFiles: sourceFault ? 6 : 7 })
+  Object.assign(report, { preservedOriginalZip: true, htmlFault, emlFault, preservedSourceFormat: sourceFault ? (emlFault ? 'eml' : 'html') : null, skippedUnavailable: 1, goodSourceFiles: 7 })
   await writeFile(resultPath(emlFault ? 'native-pipeline-eml.json' : htmlFault ? 'native-pipeline-html.json' : 'native-pipeline-fault.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))
 } catch (error) {

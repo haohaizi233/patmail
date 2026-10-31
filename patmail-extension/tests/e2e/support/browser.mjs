@@ -48,20 +48,26 @@ async function refreshedServiceWorker(context, stale, { timeoutMs = 15000 } = {}
 }
 
 /**
- * 经本地 HTTP 代理打开 EASY 夹具页（http://183.36.43.66:88/fixture 由测试服务器代答）。
- * 高负载下 Chromium 偶发 net::ERR_PROXY_CONNECTION_FAILED，属启动期瞬时抖动，重试即可恢复。
+ * 带瞬态故障容灾的页面导航：启动期/恢复期高负载下 Chromium 偶发
+ * net::ERR_PROXY_CONNECTION_FAILED 或 page.goto 加载超时（TimeoutError），
+ * 均属瞬时抖动，重试即可恢复。恢复阶段二次拉起浏览器时同样走这里。
  */
-export async function gotoFixturePage(page, url, { attempts = 3 } = {}) {
+export async function gotoWithRetry(page, url, { attempts = 3, timeout = 30000 } = {}) {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await page.goto(url)
+      return await page.goto(url, { timeout })
     } catch (error) {
       const message = String(error?.message ?? error)
-      const transient = /ERR_PROXY_CONNECTION_FAILED|ERR_TIMED_OUT|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET/.test(message)
+      const transient = /ERR_PROXY_CONNECTION_FAILED|ERR_TIMED_OUT|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|Timeout \d+ms exceeded|TimeoutError/.test(message)
       if (attempt >= attempts || !transient) throw error
       await page.waitForTimeout(500 * attempt)
     }
   }
+}
+
+/** 经本地 HTTP 代理打开 EASY 夹具页（http://183.36.43.66:88/fixture 由测试服务器代答）。 */
+export function gotoFixturePage(page, url, options = {}) {
+  return gotoWithRetry(page, url, options)
 }
 
 /** Playwright waitForFunction treats an async predicate's Promise as truthy. Await RPCs in Node. */
