@@ -10,7 +10,7 @@ pnpm cdp:start
 pnpm cdp:stop
 ```
 
-端口不需要硬编码。服务按顺序解析 CDP 地址：`--endpoint` 参数 → 从浏览器用户数据目录的 `DevToolsActivePort` 读取当前调试端口并探测 `/json/version` 广播的 WebSocket 地址（只接受本机回环地址，非本机广播会被忽略）→ 复用 `log/cdp/config.json` 中上次成功的地址 → 暂无地址。扫描的用户数据目录覆盖 Windows/macOS/Linux 上的 Chrome、Edge、Chromium、Brave 默认位置，也可用环境变量 `PATMAIL_CDP_USER_DATA_DIRS`（多个路径用系统路径分隔符 `;` 或 `:`）指定自定义目录。每轮重连都会重新发现端口，浏览器重启换了端口也能自动接上。
+端口不需要硬编码。服务按顺序解析 CDP 地址：`--endpoint` 参数 → 从浏览器用户数据目录的 `DevToolsActivePort` 读取当前调试端口并探测 `/json/version` 广播的 WebSocket 地址（只接受本机回环地址，非本机广播会被忽略）→ 若 `/json/version` 未广播地址（部分新版 Chrome 会返回 404），则对 `DevToolsActivePort` 记录的 WebSocket 路径与通用路径 `/devtools/browser` 依次做 WebSocket 握手实测，取第一个连通的地址，全部连不通则视为暂无端点 → 复用 `log/cdp/config.json` 中上次成功的地址 → 暂无地址。扫描的用户数据目录覆盖 Windows/macOS/Linux 上的 Chrome、Edge、Chromium、Brave 默认位置，也可用环境变量 `PATMAIL_CDP_USER_DATA_DIRS`（多个路径用系统路径分隔符 `;` 或 `:`）指定自定义目录。每轮重连都会重新发现端口，浏览器重启换了端口也能自动接上。
 
 电脑上没有任何 CDP 端点时，`pnpm cdp:start` 不会报错退出：服务照常启动并保持 `waiting`，每 5 秒重新探测一次，浏览器开启 CDP 后自动连接。`--endpoint` 仅在需要固定地址时使用，例如 `pnpm cdp:start --endpoint ws://127.0.0.1:49323/devtools/browser`，该地址会写入配置并锁定，之后不再自动发现。只允许本机 CDP 地址。服务并不自动开启 Chrome 远程调试，也不会越过 Chrome 的连接授权。`waiting` 表示服务仍在运行，但尚未建立 CDP 会话，此时不能采集浏览器事件；连接成功后状态变为 `connected`。Chrome 如弹出远程调试连接提示，需要用户允许连接。
 

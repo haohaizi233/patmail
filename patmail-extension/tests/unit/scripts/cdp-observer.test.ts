@@ -138,11 +138,101 @@ describe('CDP observer endpoint discovery', () => {
       const offline = async () => {
         throw new Error('offline')
       }
-      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: offline, requireAdvertisedUrl: false }))
+      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: offline, requireAdvertisedUrl: false, wsProbeImpl: async () => true }))
         .resolves.toBe('ws://127.0.0.1:12000/devtools/browser')
     } finally {
       rmSync(browserDir, { recursive: true, force: true })
     }
+  })
+
+  it('falls back to the generic browser path when the recorded path rejects connections', async () => {
+    const discoverDevToolsEndpoint = required<(options: Record<string, unknown>) => Promise<string | null>>('discoverDevToolsEndpoint')
+    const browserDir = mkdtempSync(join(tmpdir(), 'patmail-cdp-browser-'))
+    try {
+      writeFileSync(join(browserDir, 'DevToolsActivePort'), '12000\n/devtools/browser/abc123\n')
+      const offline = async () => {
+        throw new Error('offline')
+      }
+      const probed: string[] = []
+      const wsProbeImpl = async (url: string) => {
+        probed.push(url)
+        return url === 'ws://127.0.0.1:12000/devtools/browser'
+      }
+      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: offline, wsProbeImpl }))
+        .resolves.toBe('ws://127.0.0.1:12000/devtools/browser')
+      expect(probed).toEqual([
+        'ws://127.0.0.1:12000/devtools/browser/abc123',
+        'ws://127.0.0.1:12000/devtools/browser',
+      ])
+    } finally {
+      rmSync(browserDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports no endpoint while every candidate socket is unreachable', async () => {
+    const discoverDevToolsEndpoint = required<(options: Record<string, unknown>) => Promise<string | null>>('discoverDevToolsEndpoint')
+    const browserDir = mkdtempSync(join(tmpdir(), 'patmail-cdp-browser-'))
+    try {
+      writeFileSync(join(browserDir, 'DevToolsActivePort'), '12000\n/devtools/browser/abc123\n')
+      const offline = async () => {
+        throw new Error('offline')
+      }
+      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: offline, wsProbeImpl: async () => false }))
+        .resolves.toBeNull()
+    } finally {
+      rmSync(browserDir, { recursive: true, force: true })
+    }
+  })
+
+  it('trusts the recorded path only when socket probing is unavailable', async () => {
+    const discoverDevToolsEndpoint = required<(options: Record<string, unknown>) => Promise<string | null>>('discoverDevToolsEndpoint')
+    const browserDir = mkdtempSync(join(tmpdir(), 'patmail-cdp-browser-'))
+    try {
+      writeFileSync(join(browserDir, 'DevToolsActivePort'), '12000\n/devtools/browser/abc123\n')
+      const offline = async () => {
+        throw new Error('offline')
+      }
+      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: offline, webSocketImpl: null, requireAdvertisedUrl: false }))
+        .resolves.toBe('ws://127.0.0.1:12000/devtools/browser/abc123')
+      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: offline, webSocketImpl: null }))
+        .resolves.toBeNull()
+    } finally {
+      rmSync(browserDir, { recursive: true, force: true })
+    }
+  })
+
+  it('builds candidate browser WebSocket URLs and probes them with a bounded handshake', async () => {
+    const candidateDevToolsWebSocketUrls = required<(port: number, browserPath: string) => string[]>('candidateDevToolsWebSocketUrls')
+    const probeWebSocketEndpoint = required<(url: string, options?: Record<string, unknown>) => Promise<boolean | null>>('probeWebSocketEndpoint')
+    expect(candidateDevToolsWebSocketUrls(9222, '/devtools/browser/abc123')).toEqual([
+      'ws://127.0.0.1:9222/devtools/browser/abc123',
+      'ws://127.0.0.1:9222/devtools/browser',
+    ])
+    expect(candidateDevToolsWebSocketUrls(9222, 'nonsense')).toEqual(['ws://127.0.0.1:9222/devtools/browser'])
+
+    const makeSocket = (result: 'open' | 'error' | 'hang') =>
+      class {
+        private listeners = new Map<string, Set<() => void>>()
+        constructor() {
+          if (result === 'hang') return
+          queueMicrotask(() => {
+            for (const listener of this.listeners.get(result === 'open' ? 'open' : 'error') ?? []) listener()
+          })
+        }
+        addEventListener(type: string, listener: () => void) {
+          const set = this.listeners.get(type) ?? new Set<() => void>()
+          set.add(listener)
+          this.listeners.set(type, set)
+        }
+        removeEventListener(type: string, listener: () => void) {
+          this.listeners.get(type)?.delete(listener)
+        }
+        close() {}
+      }
+    await expect(probeWebSocketEndpoint('ws://127.0.0.1:9222/devtools/browser', { webSocketImpl: makeSocket('open') })).resolves.toBe(true)
+    await expect(probeWebSocketEndpoint('ws://127.0.0.1:9222/devtools/browser', { webSocketImpl: makeSocket('error') })).resolves.toBe(false)
+    await expect(probeWebSocketEndpoint('ws://127.0.0.1:9222/devtools/browser', { webSocketImpl: makeSocket('hang'), timeoutMs: 5 })).resolves.toBe(false)
+    await expect(probeWebSocketEndpoint('ws://127.0.0.1:9222/devtools/browser', { webSocketImpl: null })).resolves.toBeNull()
   })
 
   it('parses DevToolsActivePort and rejects malformed port files', () => {

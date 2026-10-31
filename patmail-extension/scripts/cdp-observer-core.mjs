@@ -15,6 +15,7 @@ export const SERVICE_CONNECT_TIMEOUT_MS = 120_000
 export const SERVICE_DISCOVERY_TIMEOUT_MS = 20_000
 export const SERVICE_STOP_TIMEOUT_MS = 5_000
 export const DISCOVERY_PROBE_TIMEOUT_MS = 2_000
+export const DISCOVERY_WS_PROBE_TIMEOUT_MS = 5_000
 export const LOG_RETENTION_MS = 24 * 60 * 60 * 1000
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
@@ -161,13 +162,65 @@ export async function discoverDevToolsEndpoint(options = {}) {
         continue
       }
     }
-    if (options.requireAdvertisedUrl === false) {
-      try {
-        return validateEndpointUrl(`ws://127.0.0.1:${active.port}${active.browserPath}`).href
-      } catch {
-        continue
-      }
+    const fallback = await resolveReachableWebSocketEndpoint(
+      candidateDevToolsWebSocketUrls(active.port, active.browserPath),
+      options
+    )
+    if (fallback) return fallback
+  }
+  return null
+}
+
+export function candidateDevToolsWebSocketUrls(port, browserPath) {
+  const candidates = []
+  const push = path => {
+    if (typeof path !== 'string' || !path.startsWith('/')) return
+    let url
+    try {
+      url = validateEndpointUrl(`ws://127.0.0.1:${port}${path}`)
+    } catch {
+      return
     }
+    if (!candidates.includes(url.href)) candidates.push(url.href)
+  }
+  push(browserPath)
+  push('/devtools/browser')
+  return candidates
+}
+
+export async function probeWebSocketEndpoint(wsUrl, options = {}) {
+  const WebSocketImpl = options.webSocketImpl === undefined ? globalThis.WebSocket : options.webSocketImpl
+  if (typeof WebSocketImpl !== 'function') return null
+  let socket
+  try {
+    socket = new WebSocketImpl(wsUrl)
+  } catch {
+    return false
+  }
+  try {
+    await waitForWebSocketOpen(socket, options.timeoutMs ?? DISCOVERY_WS_PROBE_TIMEOUT_MS)
+    return true
+  } catch {
+    return false
+  } finally {
+    try {
+      socket.close()
+    } catch {
+      // The probe socket may already be closed.
+    }
+  }
+}
+
+export async function resolveReachableWebSocketEndpoint(candidates, options = {}) {
+  const probe = options.wsProbeImpl ?? probeWebSocketEndpoint
+  for (const candidate of candidates) {
+    const reachable = await probe(candidate, options)
+    if (reachable === null) {
+      // Without a WebSocket implementation the candidates cannot be probed, so
+      // only the explicitly requested fallback keeps the legacy behaviour.
+      return options.requireAdvertisedUrl === false ? (candidates[0] ?? null) : null
+    }
+    if (reachable) return candidate
   }
   return null
 }
