@@ -33,6 +33,22 @@ export function downloadNameParts(selection: FileDownloadSelection | null): Down
   }))
 }
 
+/** 下载控件随查询模板保存，但不是 GetSearchFiles 的业务筛选字段。 */
+export function isDownloadNameControl(key: string): boolean {
+  return key === 'filetemp' || /^(?:selfilename|txtfilename)(?:[1-9]|[12]\d|3[01])$/.test(key)
+}
+
+export function downloadNameControlFields(selection: FileDownloadSelection | null): Record<string, string> {
+  if (selection?.templateId) return { filetemp: selection.templateId }
+  const fields: Record<string, string> = {}
+  for (const [index, part] of downloadNameParts(selection).entries()) {
+    if (!part.column) continue
+    fields[`selfilename${index + 1}`] = part.column
+    if (part.column === 'fixtxt') fields[`txtfilename${index + 1}`] = part.fixedText
+  }
+  return fields
+}
+
 /** 编辑过的配方不携带模板ID，避免下载时重新加载模板覆盖本次修改。 */
 export function selectionFromNameParts(parts: DownloadNamePart[], label = ''): FileDownloadSelection | null {
   const names: string[] = []

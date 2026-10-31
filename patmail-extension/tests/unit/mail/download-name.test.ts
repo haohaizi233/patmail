@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { EasyTransport } from '../../../src/api/transport'
 import type { ApiResult } from '../../../src/api/types'
 import {
-  buildGetFileNameParams, downloadRecipe, NAME_BATCH, readGeneratedFileNames, resolveDownloadFileNames, selectionFromControls, stripApplicationNoDot
+  buildGetFileNameParams, downloadRecipe, downloadNameControlFields, isDownloadNameControl, NAME_BATCH, readGeneratedFileNames, resolveDownloadFileNames, selectionFromControls, stripApplicationNoDot
 } from '../../../src/mail/download-name'
 
 const TEMPLATE = 'd9896997-1e83-4c7d-9a49-da69ba56e7aa'
@@ -42,6 +42,16 @@ function controlledNames() {
 }
 
 describe('下载名称', () => {
+  it('保存命名模板或完整自定义配方为原站控件字段，空配方清空旧设置', () => {
+    expect(downloadNameControlFields({ templateId: TEMPLATE, ...SELECTION })).toEqual({ filetemp: TEMPLATE })
+    expect(downloadNameControlFields({ newFilename: 'app_no;-;file_desc', fileNameType: 'colname;txt;colname' })).toEqual({
+      selfilename1: 'app_no', selfilename2: 'fixtxt', txtfilename2: '-', selfilename3: 'file_desc'
+    })
+    expect(downloadNameControlFields(null)).toEqual({})
+    expect(['filetemp', 'selfilename1', 'txtfilename31'].every(isDownloadNameControl)).toBe(true)
+    expect(['customer', 'file_name', 'selfilename0', 'selfilename32', '__proto__'].some(isDownloadNameControl)).toBe(false)
+  })
+
   it('选中模板时记下配方，不把空列当成名称', () => {
     expect(selectionFromControls({
       templateId: TEMPLATE,

@@ -27,7 +27,7 @@ import { MessageType, type FileSearchFormField, type MessageBridge } from '../sh
 import { useWorkspace } from '../app/composables/useWorkspace'
 import { hasOptionTree } from '../query/option-tree'
 import { FILE_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
-import { downloadNameParts, selectionFromNameParts, selectionFromControls, type DownloadNamePart, type FileDownloadSelection } from '../mail/download-name'
+import { downloadNameParts, downloadNameControlFields, isDownloadNameControl, selectionFromNameParts, selectionFromControls, type DownloadNamePart, type FileDownloadSelection } from '../mail/download-name'
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import { sameOptionValue } from '../shell/components/theme-select'
 import TreeOptionSelect from '../shell/components/TreeOptionSelect.vue'
@@ -251,6 +251,13 @@ const resolved = computed(() => resolveQueryTemplate(
 
 function formValue(key: string): string {
   if (temporaryActive.value[key]) return temporary.value[key] ?? ''
+  // 这些控件被查询参数解析器隔离到 unknownFields；仍须用于回显和下载，
+  // 不能再从已经过滤它们的 resolved.fields 读取。
+  if (isDownloadNameControl(key)) {
+    const overrides = props.mode === 'customer' ? selectedCustomer.value?.overrides : undefined
+    if (overrides && Object.hasOwn(overrides, key)) return overrides[key] ?? ''
+    return baseMissing.value ? '' : baseFields.value[key] ?? unknownFields.value[key] ?? ''
+  }
   return resolved.value.fields[key] ?? ''
 }
 function downloadChoices(key: string): { value: string; label: string }[] {
@@ -274,24 +281,33 @@ function storedDownloadSelection(): FileDownloadSelection | null {
     template: recipe
   })
 }
+function storedDownloadParts(): DownloadNamePart[] {
+  const selection = storedDownloadSelection()
+  if (selection?.templateId) return downloadNameParts(selection)
+  const parts = Array.from({ length: 31 }, (_, index) => ({
+    column: formValue(`selfilename${index + 1}`).trim(), fixedText: formValue(`txtfilename${index + 1}`)
+  })).filter(part => part.column)
+  return parts.length ? parts : downloadNameParts(selection)
+}
 const nameParts = ref<DownloadNamePart[]>([{ column: '', fixedText: '' }])
 const namePartsEdited = ref(false)
 const downloadSource = computed(() => ({
   templateId: formValue('filetemp'), column: formValue('selfilename1'), fixedText: formValue('txtfilename1'),
-  selection: storedDownloadSelection()
+  parts: storedDownloadParts(), selection: storedDownloadSelection()
 }))
 watch(downloadSource, (next, previous) => {
   const switched = !previous || next.templateId !== previous.templateId || next.column !== previous.column || next.fixedText !== previous.fixedText
   // 元数据异步到达时补齐配方；同一模板的字典刷新不能覆盖用户正在编辑的内容。
   if (switched || !namePartsEdited.value) {
-    nameParts.value = downloadNameParts(next.selection)
+    nameParts.value = next.parts
     namePartsEdited.value = false
   }
 }, { immediate: true })
 function currentDownloadSelection(): FileDownloadSelection | null {
-  return namePartsEdited.value
-    ? selectionFromNameParts(nameParts.value, storedDownloadSelection()?.label)
-    : storedDownloadSelection()
+  const selection = storedDownloadSelection()
+  return namePartsEdited.value || !selection?.templateId
+    ? selectionFromNameParts(nameParts.value, namePartsEdited.value ? selection?.label : '')
+    : selection
 }
 const downloadNameProblem = computed(() => {
   try { currentDownloadSelection(); return '' } catch (error) { return error instanceof Error ? error.message : '下载名称无效。' }
@@ -301,9 +317,16 @@ watch(() => [downloadSource.value, nameParts.value, namePartsEdited.value], () =
 }, { deep: true })
 function chooseDownloadTemplate(templateId: string): void {
   setOverride('filetemp', templateId)
+  if (!templateId) {
+    // 显式清空模板也清空保存模板带来的全部名称段。
+    const cleared = Object.fromEntries(Array.from({ length: 31 }, (_, index) =>
+      [[`selfilename${index + 1}`, ''], [`txtfilename${index + 1}`, '']]).flat())
+    temporaryActive.value = { ...temporaryActive.value, ...Object.fromEntries(Object.keys(cleared).map(key => [key, true])) }
+    temporary.value = { ...temporary.value, ...cleared }
+  }
   // 用户明确重选同一项也要还原；字典后台刷新仍走上面的保留编辑逻辑。
   namePartsEdited.value = false
-  nameParts.value = downloadNameParts(storedDownloadSelection())
+  nameParts.value = storedDownloadParts()
 }
 function editNamePart(index: number, patch: Partial<DownloadNamePart>): void {
   namePartsEdited.value = true
@@ -544,7 +567,7 @@ function restoreTemplate(): void {
   temporary.value = {}
   typedKeys.value = {}
   namePartsEdited.value = false
-  nameParts.value = downloadNameParts(storedDownloadSelection())
+  nameParts.value = storedDownloadParts()
   showFileTree.value = false
 }
 function dictionaryFor(key: string): { name: string; dictionary: NormalizedDictionary } | undefined {
@@ -1140,6 +1163,16 @@ async function saveBoth(): Promise<void> {
   const scope = liveScope()
   if (!scope) return
   const labels = filledDisplay()
+  let downloadFields: Record<string, string>
+  try { downloadFields = downloadNameControlFields(currentDownloadSelection()) }
+  catch (error) {
+    storageMessage.value = error instanceof Error ? error.message : '下载名称无效，没有保存模板。'
+    return
+  }
+  const savedUnknownFields = {
+    ...Object.fromEntries(Object.entries(unknownFields.value).filter(([key]) => !isDownloadNameControl(key))),
+    ...downloadFields
+  }
   const current = selectedLocal.value
   const now = new Date().toISOString()
   const template: QueryTemplate = current ? {
@@ -1147,6 +1180,7 @@ async function saveBoth(): Promise<void> {
     name,
     fields,
     displayValues: labels,
+    unknownFields: savedUnknownFields,
     updatedAt: now
   } : {
     id: `local-${newUuid()}`,
@@ -1155,7 +1189,7 @@ async function saveBoth(): Promise<void> {
     queryType: 'FileSearch',
     fields,
     displayValues: labels,
-    unknownFields: { ...unknownFields.value },
+    unknownFields: savedUnknownFields,
     version: 1,
     createdAt: now,
     updatedAt: now
