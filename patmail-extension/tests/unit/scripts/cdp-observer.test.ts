@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { runInNewContext } from 'node:vm'
 
@@ -42,6 +43,7 @@ describe('CDP observer endpoint policy', () => {
     await expect(waiting).rejects.toMatchObject({ name: 'TimeoutError' })
     expect(connectionFailureReason(Object.assign(new Error('timed out'), { name: 'TimeoutError' }))).toBe('connect_timeout')
     expect(connectionFailureReason(new Error('socket refused'))).toBe('connect_failed')
+    expect(connectionFailureReason(Object.assign(new Error('no endpoint'), { name: 'EndpointUnavailableError' }))).toBe('endpoint_unavailable')
     expect(socket.close).toHaveBeenCalledOnce()
     expect([...listeners.values()].every(set => set.size === 0)).toBe(true)
   })
@@ -85,6 +87,79 @@ describe('CDP observer endpoint policy', () => {
     })
     await expect(resolveWebSocketEndpoint('http://127.0.0.1:9222/json/version', { fetchImpl }))
       .rejects.toThrow(/localhost|loopback/i)
+  })
+})
+
+describe('CDP observer endpoint discovery', () => {
+  it('resolves the endpoint from the argument, discovery, saved config, or nothing', async () => {
+    const resolveEndpoint = required<(options: Record<string, unknown>) => Promise<{ endpoint: string | null; source: string }>>('resolveEndpoint')
+    const root = mkdtempSync(join(tmpdir(), 'patmail-cdp-root-'))
+    const browserDir = mkdtempSync(join(tmpdir(), 'patmail-cdp-browser-'))
+    const emptyDir = mkdtempSync(join(tmpdir(), 'patmail-cdp-empty-'))
+    try {
+      mkdirSync(join(root, 'log', 'cdp'), { recursive: true })
+      writeFileSync(join(root, 'log', 'cdp', 'config.json'), JSON.stringify({ endpoint: 'ws://127.0.0.1:12000/devtools/browser' }))
+      writeFileSync(join(browserDir, 'DevToolsActivePort'), '12000\n/devtools/browser\n')
+
+      const advertised = 'ws://127.0.0.1:12000/devtools/browser/abc123'
+      const fetchOk = async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: advertised }) })
+      const fetchDown = async () => {
+        throw new Error('offline')
+      }
+
+      await expect(resolveEndpoint({ root, endpoint: 'http://127.0.0.1:13000', userDataDirs: [browserDir], fetchImpl: fetchOk }))
+        .resolves.toEqual({ endpoint: 'http://127.0.0.1:13000/', source: 'argument' })
+      await expect(resolveEndpoint({ root, userDataDirs: [browserDir], fetchImpl: fetchOk }))
+        .resolves.toEqual({ endpoint: advertised, source: 'discovery' })
+      await expect(resolveEndpoint({ root, userDataDirs: [emptyDir], fetchImpl: fetchDown }))
+        .resolves.toEqual({ endpoint: 'ws://127.0.0.1:12000/devtools/browser', source: 'saved' })
+
+      const bareRoot = mkdtempSync(join(tmpdir(), 'patmail-cdp-bare-'))
+      try {
+        await expect(resolveEndpoint({ root: bareRoot, userDataDirs: [emptyDir], fetchImpl: fetchDown }))
+          .resolves.toEqual({ endpoint: null, source: 'none' })
+      } finally {
+        rmSync(bareRoot, { recursive: true, force: true })
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(browserDir, { recursive: true, force: true })
+      rmSync(emptyDir, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores non-loopback advertised URLs and can fall back to the active port', async () => {
+    const discoverDevToolsEndpoint = required<(options: Record<string, unknown>) => Promise<string | null>>('discoverDevToolsEndpoint')
+    const browserDir = mkdtempSync(join(tmpdir(), 'patmail-cdp-browser-'))
+    try {
+      writeFileSync(join(browserDir, 'DevToolsActivePort'), '12000\n/devtools/browser\n')
+      const remote = async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://192.168.1.20:9222/devtools/browser/x' }) })
+      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: remote })).resolves.toBeNull()
+      const offline = async () => {
+        throw new Error('offline')
+      }
+      await expect(discoverDevToolsEndpoint({ userDataDirs: [browserDir], fetchImpl: offline, requireAdvertisedUrl: false }))
+        .resolves.toBe('ws://127.0.0.1:12000/devtools/browser')
+    } finally {
+      rmSync(browserDir, { recursive: true, force: true })
+    }
+  })
+
+  it('parses DevToolsActivePort and rejects malformed port files', () => {
+    const parseDevToolsActivePort = required<(content: string) => { port: number; browserPath: string } | null>('parseDevToolsActivePort')
+    expect(parseDevToolsActivePort('12000\n/devtools/browser\n')).toEqual({ port: 12000, browserPath: '/devtools/browser' })
+    expect(parseDevToolsActivePort('9222')).toEqual({ port: 9222, browserPath: '/devtools/browser' })
+    expect(parseDevToolsActivePort('not-a-port\n/devtools/browser')).toBeNull()
+    expect(parseDevToolsActivePort('70000\n/devtools/browser')).toBeNull()
+  })
+
+  it('honours PATMAIL_CDP_USER_DATA_DIRS before the platform defaults', () => {
+    const candidateUserDataDirs = required<(env: object, home: string) => string[]>('candidateUserDataDirs')
+    const custom = [join('D:', 'custom', 'User Data'), join('E:', 'edge', 'User Data')]
+    const dirs = candidateUserDataDirs({ PATMAIL_CDP_USER_DATA_DIRS: custom.join(delimiter) }, join('C:', 'Users', 'test'))
+    expect(dirs.slice(0, 2)).toEqual(custom)
+    expect(new Set(dirs).size).toBe(dirs.length)
+    expect(candidateUserDataDirs({}, join('C:', 'Users', 'test')).length).toBeGreaterThan(1)
   })
 })
 
@@ -345,13 +420,13 @@ describe('CDP observer target and event filtering', () => {
 
 describe('CDP observer log retention', () => {
   it('uses the shared project log path and exposes a token-free status file path', () => {
-    const createObserverPaths = required<(root: string) => { dataDir: string; configPath: string; lockPath: string; statusPath: string }>('createObserverPaths')
+    const createObserverPaths = required<(root: string) => { root: string; dataDir: string; configPath: string; lockPath: string; statusPath: string }>('createObserverPaths')
     expect(createObserverPaths('D:\\workspace')).toEqual({
       root: 'D:\\workspace',
-      dataDir: resolve('D:\\workspace', 'log', 'cdp'),
-      configPath: resolve('D:\\workspace', 'log', 'cdp', 'config.json'),
-      lockPath: resolve('D:\\workspace', 'log', 'cdp', 'service.lock.json'),
-      statusPath: resolve('D:\\workspace', 'log', 'cdp', 'status.json'),
+      dataDir: join('D:\\workspace', 'log', 'cdp'),
+      configPath: join('D:\\workspace', 'log', 'cdp', 'config.json'),
+      lockPath: join('D:\\workspace', 'log', 'cdp', 'service.lock.json'),
+      statusPath: join('D:\\workspace', 'log', 'cdp', 'status.json'),
     })
   })
 

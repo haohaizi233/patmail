@@ -3,10 +3,10 @@ import { createServer } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { isIP } from 'node:net'
-import { dirname, join, resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const DEFAULT_ENDPOINT = 'ws://127.0.0.1:49323/devtools/browser'
 export const DEFAULT_PATMAIL_EXTENSION_ID = 'ieobhddlnmlopeagjkgbjfolpfhncikd'
 export const OBSERVER_BINDING = '__patmailCdpObserver'
 export const SERVICE_HEARTBEAT_MS = 15_000
@@ -14,12 +14,14 @@ export const SERVICE_READY_TIMEOUT_MS = 20_000
 export const SERVICE_CONNECT_TIMEOUT_MS = 120_000
 export const SERVICE_DISCOVERY_TIMEOUT_MS = 20_000
 export const SERVICE_STOP_TIMEOUT_MS = 5_000
+export const DISCOVERY_PROBE_TIMEOUT_MS = 2_000
 export const LOG_RETENTION_MS = 24 * 60 * 60 * 1000
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const WORKSPACE_ROOT = resolve(SCRIPT_DIR, '..', '..')
 const CONNECT_RETRY_MS = 2_000
 const CONNECT_RETRY_MAX_MS = 30_000
+const DISCOVERY_RETRY_MS = 5_000
 const CONTROL_REQUEST_TIMEOUT_MS = 2_000
 const CDP_COMMAND_TIMEOUT_MS = 8_000
 const SNAPSHOT_POLL_MS = 2_000
@@ -86,13 +88,127 @@ export async function resolveWebSocketEndpoint(value, options = {}) {
   return endpoint.href
 }
 
+export function parseDevToolsActivePort(content) {
+  const lines = String(content ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  const port = Number(lines[0])
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return null
+  const browserPath = typeof lines[1] === 'string' && lines[1].startsWith('/') ? lines[1] : '/devtools/browser'
+  return { port, browserPath }
+}
+
+export function candidateUserDataDirs(env = process.env, home = homedir()) {
+  const push = (list, value) => {
+    if (typeof value === 'string' && value.trim()) list.push(value.trim())
+  }
+  const splitPaths = value => String(value ?? '').split(delimiter).map(entry => entry.trim()).filter(Boolean)
+  const candidates = []
+  for (const entry of splitPaths(env.PATMAIL_CDP_USER_DATA_DIRS)) push(candidates, entry)
+  if (process.platform === 'win32') {
+    const localAppData = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+    push(candidates, join(localAppData, 'Google', 'Chrome', 'User Data'))
+    push(candidates, join(localAppData, 'Microsoft', 'Edge', 'User Data'))
+    push(candidates, join(localAppData, 'Chromium', 'User Data'))
+    push(candidates, join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data'))
+  } else if (process.platform === 'darwin') {
+    push(candidates, join(home, 'Library', 'Application Support', 'Google', 'Chrome'))
+    push(candidates, join(home, 'Library', 'Application Support', 'Microsoft Edge'))
+    push(candidates, join(home, 'Library', 'Application Support', 'Chromium'))
+    push(candidates, join(home, 'Library', 'Application Support', 'BraveSoftware', 'Brave-Browser'))
+  } else {
+    const configHome = env.XDG_CONFIG_HOME ?? join(home, '.config')
+    push(candidates, join(configHome, 'google-chrome'))
+    push(candidates, join(configHome, 'microsoft-edge'))
+    push(candidates, join(configHome, 'chromium'))
+    push(candidates, join(configHome, 'BraveSoftware', 'Brave-Browser'))
+  }
+  return [...new Set(candidates)]
+}
+
+async function probeDevToolsEndpoint(httpUrl, options = {}) {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch
+  if (typeof fetchImpl !== 'function') return null
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DISCOVERY_PROBE_TIMEOUT_MS)
+  try {
+    const response = await fetchImpl(httpUrl, { signal: controller.signal })
+    if (!response?.ok) return null
+    const body = await response.json()
+    return typeof body?.webSocketDebuggerUrl === 'string' ? body.webSocketDebuggerUrl : null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export async function discoverDevToolsEndpoint(options = {}) {
+  const dirs = options.userDataDirs ?? candidateUserDataDirs(options.env ?? process.env, options.home ?? homedir())
+  for (const dir of dirs) {
+    let content
+    try {
+      content = await readFile(join(dir, 'DevToolsActivePort'), 'utf8')
+    } catch {
+      continue
+    }
+    const active = parseDevToolsActivePort(content)
+    if (!active) continue
+    const advertised = await probeDevToolsEndpoint(`http://127.0.0.1:${active.port}/json/version`, options)
+    if (advertised) {
+      try {
+        return validateEndpointUrl(advertised).href
+      } catch {
+        // A non-loopback advertisement is ignored and discovery continues.
+        continue
+      }
+    }
+    if (options.requireAdvertisedUrl === false) {
+      try {
+        return validateEndpointUrl(`ws://127.0.0.1:${active.port}${active.browserPath}`).href
+      } catch {
+        continue
+      }
+    }
+  }
+  return null
+}
+
+async function readSavedEndpoint(paths) {
+  const config = await readJson(paths.configPath)
+  if (typeof config?.endpoint !== 'string') return null
+  try {
+    return validateEndpointUrl(config.endpoint).href
+  } catch {
+    return null
+  }
+}
+
+export async function resolveEndpoint(options = {}) {
+  const paths = createObserverPaths(options.root ?? WORKSPACE_ROOT)
+  if (options.endpoint) {
+    return { endpoint: validateEndpointUrl(options.endpoint).href, source: 'argument' }
+  }
+  const discovered = await discoverDevToolsEndpoint(options)
+  if (discovered) return { endpoint: discovered, source: 'discovery' }
+  const saved = await readSavedEndpoint(paths)
+  if (saved) return { endpoint: saved, source: 'saved' }
+  return { endpoint: null, source: 'none' }
+}
+
 export function isAllowedCdpMethod(method) {
   return typeof method === 'string'
     && /^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*$/.test(method)
     && !method.startsWith('Browser.')
 }
 
+export class EndpointUnavailableError extends Error {
+  constructor(message = 'Local CDP endpoint is unavailable') {
+    super(message)
+    this.name = 'EndpointUnavailableError'
+  }
+}
+
 export function connectionFailureReason(error) {
+  if (error?.name === 'EndpointUnavailableError') return 'endpoint_unavailable'
   return error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'connect_timeout' : 'connect_failed'
 }
 
@@ -803,10 +919,10 @@ async function readJson(path) {
   }
 }
 
-async function writeConfig(paths, endpoint) {
+async function writeConfig(paths, endpoint, source = 'argument') {
   await mkdir(paths.dataDir, { recursive: true })
   const tempPath = `${paths.configPath}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
-  await writeFile(tempPath, `${JSON.stringify({ endpoint, updatedAt: nowIso() }, null, 2)}\n`, 'utf8')
+  await writeFile(tempPath, `${JSON.stringify({ endpoint, source, updatedAt: nowIso() }, null, 2)}\n`, 'utf8')
   try {
     await rename(tempPath, paths.configPath)
   } catch {
@@ -833,13 +949,6 @@ async function writeStatusFile(paths, value) {
     await unlink(paths.statusPath).catch(() => undefined)
     await rename(tempPath, paths.statusPath)
   }
-}
-
-async function readEndpoint(paths) {
-  const config = await readJson(paths.configPath)
-  if (typeof config?.endpoint !== 'string') return DEFAULT_ENDPOINT
-  validateEndpointUrl(config.endpoint)
-  return config.endpoint
 }
 
 async function readLock(paths) {
@@ -966,16 +1075,16 @@ export async function startObserver(options = {}) {
     }
   }
 
-  const endpoint = requestedEndpoint ?? await readEndpoint(paths)
-  validateEndpointUrl(endpoint)
-  await writeConfig(paths, endpoint)
+  const resolved = await resolveEndpoint({ root: options.root ?? WORKSPACE_ROOT, endpoint: requestedEndpoint ?? undefined })
+  const endpoint = resolved.endpoint
+  if (endpoint) await writeConfig(paths, endpoint, resolved.source)
   const token = randomBytes(32).toString('hex')
   const reservation = {
     pid: process.pid,
     token,
     status: 'starting',
     controlPort: null,
-    endpointHost: safeHost(endpoint),
+    endpointHost: endpoint ? safeHost(endpoint) : null,
     startedAt: nowIso(),
     heartbeatAt: nowIso(),
   }
@@ -1069,15 +1178,18 @@ export async function stopObserver(options = {}) {
 
 class CdpObserverService {
   constructor(token, options = {}) {
-    this.paths = createObserverPaths(options.root ?? WORKSPACE_ROOT)
+    this.root = options.root ?? WORKSPACE_ROOT
+    this.paths = createObserverPaths(this.root)
     this.token = token
     this.startedAt = Date.now()
-    this.endpoint = options.endpoint ?? DEFAULT_ENDPOINT
+    this.endpoint = options.endpoint ?? null
+    this.endpointLocked = Boolean(options.endpoint)
     this.logger = new JsonlLogger(this.paths.dataDir)
     this.controlServer = null
     this.ws = null
     this.connectingSocket = null
     this.connectionStatus = 'waiting'
+    this.connectionReason = null
     this.stopRequested = false
     this.commandId = 0
     this.pendingCommands = new Map()
@@ -1094,6 +1206,8 @@ class CdpObserverService {
     this.snapshotTimer = null
     this.pruneTimer = null
     this.lastHeartbeatLogAt = 0
+    this.lastConnectErrorReason = null
+    this.lastConnectErrorLogAt = 0
     this.connectDelayMs = CONNECT_RETRY_MS
     this.startedAtIso = new Date(this.startedAt).toISOString()
     this.safeTransport = createCdpSender(command => {
@@ -1104,7 +1218,10 @@ class CdpObserverService {
 
   async start() {
     await mkdir(this.paths.dataDir, { recursive: true })
-    this.endpoint = await readEndpoint(this.paths)
+    if (!this.endpoint) {
+      const resolved = await resolveEndpoint({ root: this.root })
+      this.endpoint = resolved.endpoint
+    }
     this.controlServer = createServer((request, response) => { void this.handleControl(request, response) })
     this.controlServer.on('clientError', (_error, socket) => socket.destroy())
     await new Promise((resolveListen, rejectListen) => {
@@ -1120,7 +1237,7 @@ class CdpObserverService {
       pid: process.pid,
       status: this.connectionStatus,
       controlPort: address.port,
-      endpointHost: safeHost(this.endpoint),
+      endpointHost: this.endpoint ? safeHost(this.endpoint) : null,
       startedAt: this.startedAtIso,
     })
     await writeStatusFile(this.paths, this.statusSnapshot())
@@ -1160,9 +1277,10 @@ class CdpObserverService {
       if (!body) return
       try {
         const endpoint = validateEndpointUrl(body.endpoint).href
-        if (endpoint !== this.endpoint) {
-          await writeConfig(this.paths, endpoint)
+        if (endpoint !== this.endpoint || !this.endpointLocked) {
+          await writeConfig(this.paths, endpoint, 'argument')
           this.endpoint = endpoint
+          this.endpointLocked = true
           await this.logger.log('service.endpoint_changed', { host: safeHost(endpoint) })
           this.ws?.close()
         }
@@ -1203,7 +1321,7 @@ class CdpObserverService {
       pid: process.pid,
       startedAt: this.startedAtIso,
       heartbeatAt: nowIso(),
-      endpointHost: safeHost(this.endpoint),
+      endpointHost: this.endpoint ? safeHost(this.endpoint) : null,
       targets: this.sessions.size,
       logWriteFailures: this.logger.failureCount,
     }
@@ -1215,7 +1333,7 @@ class CdpObserverService {
       await writeLockState(this.paths, this.token, {
         pid: process.pid,
         status: this.connectionStatus,
-        endpointHost: safeHost(this.endpoint),
+        endpointHost: this.endpoint ? safeHost(this.endpoint) : null,
       })
       await writeStatusFile(this.paths, this.statusSnapshot())
       if (Date.now() - this.lastHeartbeatLogAt >= 60_000) {
@@ -1234,7 +1352,7 @@ class CdpObserverService {
     await writeLockState(this.paths, this.token, {
       pid: process.pid,
       status,
-      endpointHost: safeHost(this.endpoint),
+      endpointHost: this.endpoint ? safeHost(this.endpoint) : null,
     }).catch(() => undefined)
     await writeStatusFile(this.paths, this.statusSnapshot()).catch(() => undefined)
   }
@@ -1242,9 +1360,10 @@ class CdpObserverService {
   async connectionLoop() {
     while (!this.stopRequested) {
       let socket
+      let failureReason = null
       try {
         if (typeof WebSocket !== 'function') throw new Error('Node native WebSocket is unavailable')
-        const endpoint = await resolveWebSocketEndpoint(this.endpoint)
+        const endpoint = await resolveWebSocketEndpoint(await this.resolveConnectEndpoint())
         if (this.stopRequested) break
         socket = new WebSocket(endpoint)
         this.connectingSocket = socket
@@ -1267,18 +1386,32 @@ class CdpObserverService {
         }
         if (this.connectingSocket === socket) this.connectingSocket = null
         if (!this.stopRequested) {
-          const reason = connectionFailureReason(error)
-          await this.setConnectionStatus('waiting', reason)
-          await this.logger.log('cdp.connect_error', { reason })
+          failureReason = connectionFailureReason(error)
+          await this.setConnectionStatus('waiting', failureReason)
+          await this.logger.log('cdp.connect_error', { reason: failureReason })
         }
       }
       if (socket && this.ws === socket) this.ws = null
       this.clearCdpState()
       if (this.stopRequested) break
+      if (failureReason === 'endpoint_unavailable') {
+        // No local CDP endpoint exists yet; poll discovery instead of backing off.
+        this.connectDelayMs = CONNECT_RETRY_MS
+        await sleep(DISCOVERY_RETRY_MS)
+        continue
+      }
       await this.setConnectionStatus('waiting', 'disconnected')
       await sleep(this.connectDelayMs)
       this.connectDelayMs = Math.min(this.connectDelayMs * 2, CONNECT_RETRY_MAX_MS)
     }
+  }
+
+  async resolveConnectEndpoint() {
+    if (this.endpointLocked && this.endpoint) return this.endpoint
+    const resolved = await resolveEndpoint({ root: this.root })
+    if (!resolved.endpoint) throw new EndpointUnavailableError()
+    this.endpoint = resolved.endpoint
+    return this.endpoint
   }
 
   waitForSocketOpen(socket) {
