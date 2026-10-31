@@ -1,0 +1,39 @@
+# 本机 CDP 日志服务
+
+服务使用 Node 原生 WebSocket 连接 Chrome CDP，记录 PatMail / EASY 的下载链路。根目录和扩展目录的 `pnpm build` 都先启动或复用服务，再执行编译。重复编译不会重复创建监听进程；Chrome 暂时未开启 CDP 时服务保持等待并重连。
+
+日志目录是项目根的 `log/cdp`，即 `D:\desktop\project\patmail\log\cdp`。按 UTC 小时分 JSONL 文件，每 60 秒清理超过 24 小时的记录，包括处于保留边界的文件；例如文件名中的 `03` 时对应北京时间 `11` 时。配置和当前服务状态保存在同目录的 JSON 文件中，整个 `log` 目录由 Git 忽略。
+
+```powershell
+pnpm cdp:status
+pnpm cdp:start --endpoint ws://127.0.0.1:49323/devtools/browser
+pnpm cdp:stop
+```
+
+Chrome 的调试端口改变后，重新运行带 `--endpoint` 的启动命令即可更新配置。只允许本机 CDP 地址。服务并不自动开启 Chrome 远程调试，也不会越过 Chrome 的连接授权。`waiting` 表示服务仍在运行，但尚未建立 CDP 会话，此时不能采集浏览器事件；连接成功后状态变为 `connected`。Chrome 如弹出远程调试连接提示，需要用户允许连接。
+
+普通业务编译复用正在运行的服务。监听脚本自身更新后，应先执行 `pnpm cdp:stop` 再启动；守护进程会读取新代码。Node 20 使用内置 WebSocket 的实验开关，Node 22/24 使用已提供的全局 WebSocket，不依赖 Playwright。
+
+排查问题先看 `log/cdp/status.json`，确认监听状态和心跳，再按日志时间读取相应 JSONL，关联请求编号、任务编号和进度编号。事件包括网络调用名称/状态/耗时、错误、命名和打包进度、流命令元数据、浏览器下载状态/文件名/字节数。不会保存 Cookie、请求头、密码、完整请求表单、响应正文或下载令牌。
+
+## 下载 UUID 保存名的原因与恢复
+
+2026-10-31 的临时监听器曾使用 Playwright `connectOverCDP()` 连接用户 Chrome。连接时默认接管下载行为，导致文件保存至 `C:\WINDOWS\TEMP\playwright-artifacts-...\<UUID>`，文件没有 `.zip` 后缀，浏览器下载列表和资源管理器因此显示 UUID 名称及不明文件图标。
+
+这轮下载实际已完成：原下载项 #284 的 MIME 是 `application/zip`，文件长度 659404073 字节，正文签名为 ZIP。已将该完整文件复制回 `D:\MemoryLeak\下载\季华递交合并档.zip`，复制前后 SHA-256 相同，494 个 ZIP 条目的 CRC 全部通过。旧下载记录仍可能显示旧 UUID 名称，它不会因另存文件而自动改名。
+
+已通过原生 CDP 恢复 Chrome 默认下载行为。长期监听器完全不使用 Playwright，也不允许发送 `Browser.*` 控制命令；它只通过 CDP 读取状态、接收事件并安装记录消息的监听函数。不要将测试浏览器的自动接收设置应用到用户日常浏览器。
+
+恢复证据保存在本机 `patmail-extension/test-results/cdp-watch/restored-archive.json`、`restored-archive-crc.json`，不提交 Git。
+
+## 本机验证记录（2026-10-31）
+
+- 日志服务定向测试 23/23 通过；两个脚本的 Node 语法检查通过；三个新增代码文件直接 ESLint 为 0 errors / 0 warnings，项目 lint 基线门禁通过。
+- 根项目和扩展项目构建通过，均能启动或复用同一监听进程。
+- 并发启动检查复用同一个 PID，没有创建第二个服务。
+- 实际文件清理验证：删除过期小时文件，删除边界小时中的过期记录，保留边界小时中的新记录。
+- CDP 断线后服务保持运行并重连，恢复后重新发现 3 个相关目标。
+- 独立 TCP 握手回归通过：连接尚未建立时停止服务，会关闭待连接套接字并退出，不留下无锁后台进程。
+- 下载恢复后的小 ZIP 验证：Chrome 使用原始 `.zip` 文件名保存至 `D:\MemoryLeak\下载`，下载状态为 `complete`，文件存在且 ZIP 签名正确。
+
+原来一轮 495 个候选附件的日志显示：取名 495/495、入包 493、跳过 2，浏览器下载完成；这轮没有再次触发“后台回执尚未确认”。恢复后的压缩包包含 493 个附件和 1 份下载失败清单。

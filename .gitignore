@@ -21,6 +21,9 @@ credentials.json
 # 测试与 CI 生成物（报告、覆盖率、截图、隔离扩展副本、日志），不入库
 test-results/
 
+# 本机 CDP 诊断日志与监听服务状态，仅保留本地。
+/log/
+
 # local scratch files captured from the EASY site, keep out of the repo
 /_diff_tmp/
 

@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
+    "build": "node patmail-extension/scripts/cdp-observer.mjs start && vite build",
+    "cdp:start": "node patmail-extension/scripts/cdp-observer.mjs start",
+    "cdp:status": "node patmail-extension/scripts/cdp-observer.mjs status",
+    "cdp:stop": "node patmail-extension/scripts/cdp-observer.mjs stop",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
