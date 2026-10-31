@@ -24,11 +24,11 @@ export async function nativeStreamArchive(
   fileName: string,
   produce: (sink: WritableStream<Uint8Array>, signal: AbortSignal, onWork: (progress: FileDownloadProgress) => void, context: NativeDownloadContext) => Promise<void>,
   report: (progress: FileDownloadProgress) => void,
-  options: { taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; backend?: 'browser'; targetId?: string } = {}
+  options: { taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; backend?: 'browser'; targetId?: string; onTaskId?: (taskId: string) => void } = {}
 ): Promise<number> {
   const controller = new AbortController()
   const signal = controller.signal
-  const { backend, ...startOptions } = options
+  const { backend, onTaskId, ...startOptions } = options
   const browser = backend === 'browser'
   if (options.taskId) {
     activeProducers.get(options.taskId)?.abort(new Error('任务已由新的恢复请求接管。'))
@@ -78,6 +78,8 @@ export async function nativeStreamArchive(
     if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
     throw error
   })
+  // 后台分配的任务号回报给调用方，续跑时凭同一任务号从检查点恢复。
+  if (created.taskId) onTaskId?.(created.taskId)
   const reportRetainedFailures = () => {
     const total = Array.isArray(options.manifest?.items) ? options.manifest.items.length : 1
     const failed = Number(created.info?.failedCount ?? 0)

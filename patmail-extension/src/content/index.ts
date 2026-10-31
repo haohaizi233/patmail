@@ -5,6 +5,7 @@ import { sendToBackground } from '../utils/runtime'
 import { watchBrowserDownload } from '../utils/download-outcome'
 import { nativeStreamArchive, pauseNativeDownload } from '../utils/stream-download'
 import { templateArchiveName } from '../api/file-download'
+import { runWithDownloadRecovery } from '../api/download-failure'
 import { injectPanel } from './injector'
 import { startArchiveDownload } from './save-file'
 import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL, type FileDownloadProgress } from '../shared/download-progress'
@@ -210,24 +211,33 @@ const bridge: MessageBridge = {
         }
         if (message.payload.stream) {
           const fileName = message.payload.archiveName ?? templateArchiveName()
+          let streamTaskId = message.payload.taskId
+          let recoveries = 0
+          const startStream = () => nativeStreamArchive(fileName, (sink, signal, onWork, context) => easyRuntime.streamFiles(
+            message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, { ...context, deduplicate: message.payload.deduplicate, resolvedNames: message.payload.resolvedNames, caseScopes: message.payload.caseScopes }
+          ), report, { ...(streamTaskId ? { taskId: streamTaskId } : {}),
+            ...(message.payload.browserTarget ? { backend: 'browser' as const, targetId: message.payload.browserTarget } : {}),
+            ...(message.payload.saveAsNew ? { newCopy: true as const } : {}),
+            onTaskId: (taskId: string) => { streamTaskId = taskId }, manifest: {
+            items: message.payload.items, selection: message.payload.selection,
+            stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName,
+            ...(message.payload.deduplicate ? { deduplicate: true, caseScopes: message.payload.caseScopes } : {}),
+            ...(message.payload.resolvedNames ? { resolvedNames: message.payload.resolvedNames } : {})
+          } })
           try {
-            const bytes = await nativeStreamArchive(fileName, (sink, signal, onWork, context) => easyRuntime.streamFiles(
-              message.payload.items, message.payload.selection, message.payload.stripAppNoDot, sink, signal, onWork, { ...context, deduplicate: message.payload.deduplicate, resolvedNames: message.payload.resolvedNames, caseScopes: message.payload.caseScopes }
-            ), report, { taskId: message.payload.taskId,
-              ...(message.payload.browserTarget ? { backend: 'browser' as const, targetId: message.payload.browserTarget } : {}),
-              ...(message.payload.saveAsNew ? { newCopy: true as const } : {}), manifest: {
-              items: message.payload.items, selection: message.payload.selection,
-              stripAppNoDot: message.payload.stripAppNoDot, archiveName: fileName,
-              ...(message.payload.deduplicate ? { deduplicate: true, caseScopes: message.payload.caseScopes } : {}),
-              ...(message.payload.resolvedNames ? { resolvedNames: message.payload.resolvedNames } : {})
-            } })
+            // 凭据失效、会话波动、工作台暂离会打断传输，但本机持久缓存完好；
+            // 同一任务自动续跑（等同工作台的「继续下载」），不让整批下载终止。
+            const bytes = await runWithDownloadRecovery(startStream, { attempts: 3,
+              onRetry: (attempt, error) => { recoveries = attempt; console.warn(`[PatMail] 流水下载中断，自动续跑 ${attempt}/3`, error) } })
             return { type: MessageType.DownloadFilesResult, payload: { ok: true, data: {
-              fileName, fileCount: Math.max(1, message.payload.items.length - duplicateFiles), notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。${duplicateFiles ? `过滤 ${duplicateFiles} 个同案件同名旧文件。` : ''}${failedFiles ? `成功 ${message.payload.items.length - failedFiles - duplicateFiles} 个，跳过 ${failedFiles} 个不可用附件；详情见ZIP内下载失败清单。` : ''}`
+              fileName, fileCount: Math.max(1, message.payload.items.length - duplicateFiles), notice: `${message.payload.browserTarget ? '文件已保存' : '浏览器下载完成'}（${formatBytes(bytes)}）。${duplicateFiles ? `过滤 ${duplicateFiles} 个同案件同名旧文件。` : ''}${failedFiles ? `成功 ${message.payload.items.length - failedFiles - duplicateFiles} 个，跳过 ${failedFiles} 个不可用附件；详情见ZIP内下载失败清单。` : ''}${recoveries ? `中途自动续跑 ${recoveries} 次。` : ''}`
             } } }
           } catch (error) {
             console.warn('[PatMail] 流水下载失败', error)
+            const reason = error instanceof Error ? error.message : '流水下载失败，压缩包未完成。'
+            const hint = recoveries ? ` 已自动续跑 ${recoveries} 次仍未恢复；任务缓存已保留，可在工作台点「继续下载」。` : ''
             return { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR',
-              message: (error instanceof Error ? error.message : '流水下载失败，压缩包未完成。').slice(0, 1200)
+              message: (reason + hint).slice(0, 1200)
             } } }
           }
         }
