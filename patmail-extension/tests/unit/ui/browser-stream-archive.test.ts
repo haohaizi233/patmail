@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nativeStreamArchive, pauseNativeDownload } from '../../../src/utils/stream-download'
 import { MessageType } from '../../../src/shared/message'
-const state = vi.hoisted(() => ({ calls: [] as string[], finished: false, failFinish: false, statusFailures: 0, failWrite: false }))
-vi.mock('../../../src/utils/runtime', () => ({ sendToBackground: vi.fn(async message => {
+const state = vi.hoisted(() => ({ calls: [] as string[], finished: false, failFinish: false, statusFailures: 0, failWrite: false, startDelay: 0 }))
+vi.mock('../../../src/utils/runtime', () => ({ sendToBackground: vi.fn(async (message, timeoutMs: number) => {
   if (message.type !== 'BROWSER_STREAM_DOWNLOAD') throw new Error('不能依赖本机桥接或浏览器下载记录')
   const p = message.payload; state.calls.push(p.action)
+  if (p.action === 'start' && state.startDelay) {
+    await new Promise(resolve => setTimeout(resolve, Math.min(state.startDelay, timeoutMs)))
+    if (state.startDelay >= timeoutMs) return { type: 'ERROR', payload: { message: '扩展后台没有在时限内返回。' } }
+  }
   if (p.action === 'status' && state.statusFailures-- > 0) return { type: 'ERROR', payload: { message: '扩展后台没有在时限内返回。' } }
   if (p.action === 'write' && state.failWrite) return { type: 'ERROR', payload: { message: '扩展后台没有在时限内返回。' } }
   if (p.action === 'finish' && state.failFinish) return { type: 'ERROR', payload: { message: '目标文件权限已撤销' } }
@@ -14,10 +18,40 @@ vi.mock('../../../src/utils/runtime', () => ({ sendToBackground: vi.fn(async mes
     ...(p.action === 'status' ? { info: { state: state.finished ? 'complete' : 'inProgress', receivedBytes: 3 } } : {})
   } }
 }) }))
-afterEach(() => { state.calls = []; state.finished = false; state.failFinish = false; state.statusFailures = 0; state.failWrite = false; vi.useRealTimers() })
+afterEach(() => { state.calls = []; state.finished = false; state.failFinish = false; state.statusFailures = 0; state.failWrite = false; state.startDelay = 0; vi.useRealTimers() })
 describe('纯浏览器流任务', () => {
   const options = { taskId: '11111111-1111-4111-8111-111111111111', targetId: '22222222-2222-4222-8222-222222222222', backend: 'browser' as const }
   const produce = async (sink: WritableStream<Uint8Array>) => { const writer = sink.getWriter(); await writer.write(new Uint8Array([1, 2, 3])); await writer.close(); writer.releaseLock() }
+  it('登录复查与目标连接超过20秒时仍等待同一次启动回执，不误暂停或重复启动', async () => {
+    vi.useFakeTimers()
+    state.startDelay = 95_000
+    let productions = 0
+    const pending = nativeStreamArchive('test.zip', async sink => { productions++; await produce(sink) }, () => {}, options)
+    const assertion = expect(pending).resolves.toBe(3)
+    void assertion.catch(() => {})
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(state.calls).toEqual(['start'])
+    expect(productions).toBe(0)
+    await vi.advanceTimersByTimeAsync(71_000)
+    await assertion
+    expect(productions).toBe(1)
+    expect(state.calls.filter(action => action === 'start')).toHaveLength(1)
+    expect(state.calls).not.toContain('pause')
+  })
+  it('启动等待期间暂停后，迟到的启动回执只关闭原令牌，不运行生产者', async () => {
+    vi.useFakeTimers()
+    state.startDelay = 45_000
+    const production = vi.fn(produce)
+    const pending = nativeStreamArchive('test.zip', production, () => {}, options)
+    const assertion = expect(pending).rejects.toThrow('暂停')
+    void assertion.catch(() => {})
+    await vi.advanceTimersByTimeAsync(1_000)
+    pauseNativeDownload(options.taskId)
+    await assertion
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(production).not.toHaveBeenCalled()
+    expect(state.calls).toEqual(['start', 'pause'])
+  })
   it('写入目标close确认后才完成，不查询chrome.downloads', async () => {
     expect(await nativeStreamArchive('test.zip', produce, () => {}, options)).toBe(3)
     expect(state.calls.indexOf('complete')).toBeGreaterThan(state.calls.indexOf('finish'))
@@ -43,7 +77,7 @@ describe('纯浏览器流任务', () => {
   })
   it('写入应答丢失不会盲目重放，暂停并说明缓存恢复入口', async () => {
     state.failWrite = true
-    await expect(nativeStreamArchive('test.zip', produce, () => {}, options)).rejects.toThrow(/缓存.*继续下载/)
+    await expect(nativeStreamArchive('test.zip', produce, () => {}, options)).rejects.toThrow(/浏览器数据写入回执超时.*缓存.*继续下载/)
     expect(state.calls.filter(action => action === 'write')).toHaveLength(1)
     expect(state.calls).toContain('pause')
     expect(state.calls).not.toContain('complete')

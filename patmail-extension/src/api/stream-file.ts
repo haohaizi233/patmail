@@ -2,6 +2,8 @@ import type { DownloadTokens } from './download-tokens'
 import { responseNetworkFinished } from './stream-cache'
 import { asError, sourceUnavailableError, RetryableDownloadFileError } from './download-failure'
 
+export type PrefetchedFormat = 'zip' | 'word-html' | 'eml' | 'original'
+
 export const FILE_BUFFER_BYTES = 256 * 1024
 const BLOCK_BYTES = 64 * 1024
 
@@ -11,7 +13,7 @@ export async function prefetchFile(
   budget: DownloadTokens | null, signal: AbortSignal, fetchFile: (url: string, init?: RequestInit) => Promise<Response>,
   fail: (error: unknown) => void,
   replay?: (offset: number) => Promise<Uint8Array>
-): Promise<{ body: ReadableStream<Uint8Array>; ready: Promise<void>; finished: Promise<void>; networkFinished: Promise<void>; readonly bufferedBytes: number; readonly format: 'zip' | 'original' }> {
+): Promise<{ body: ReadableStream<Uint8Array>; ready: Promise<void>; finished: Promise<void>; networkFinished: Promise<void>; readonly bufferedBytes: number; readonly format: PrefetchedFormat }> {
   const release = budget ? await budget.acquire('download', signal) : () => {}
   let finishNetwork!: () => void
   const networkFinished = new Promise<void>(resolve => { finishNetwork = () => { release(); resolve() } })
@@ -19,7 +21,7 @@ export async function prefetchFile(
   const ready = new Promise<void>((resolve, reject) => { validate = resolve; rejectValidation = reject })
   void ready.catch(() => {})
   let reader: ReadableStreamDefaultReader<Uint8Array>
-  let format: 'zip' | 'original' = 'original'
+  let format: PrefetchedFormat = 'original'
   let length: string | null, encoded: string | null, htmlContentType = false
   try {
     const response = await fetchFile(url, { credentials: 'include', signal })
@@ -107,25 +109,24 @@ export async function prefetchFile(
     const header = new TextDecoder().decode(prefix)
     const html = /^\s*(?:<!doctype\s+html|<html|<script)/i.test(header)
     const wordHtml = html && /urn:schemas-microsoft-com:office:word|name\s*=\s*["']?ProgId["']?\s+content\s*=\s*["']?Word\.Document/i.test(header)
-    if (/\.pdf$/i.test(filename) && wordHtml) {
-      throw new RetryableDownloadFileError('源文件应为PDF，实际返回Word HTML文档，不能作为PDF入包。')
-    }
     // EASY也会把原始邮件正文作为.pdf返回。只匹配正文开头的邮件头，
     // 不能把邮件正文中提到的“%PDF”或普通登录网页当成有效PDF。
     const mailHeaders = header.split(/\r?\n\r?\n/, 1)[0]
     const mail = /^[A-Za-z][A-Za-z0-9-]*:[^\r\n]*\r?\n/.test(mailHeaders) &&
       /^MIME-Version:\s*1\.0\b/im.test(mailHeaders) && /^From:/im.test(mailHeaders) && /^(?:To|Subject|Message-ID):/im.test(mailHeaders)
-    if (/\.pdf$/i.test(filename) && mail) {
-      throw new RetryableDownloadFileError('源文件应为PDF，实际返回EML邮件正文，不能作为PDF入包。')
-    }
-    if (!/\.x?html?$/i.test(filename) && !(wordHtml && /\.doc$/i.test(filename)) && (html || htmlContentType)) {
-      throw new Error('文件响应是网页，没有完成压缩包。')
-    }
-    if (eof && !encoded && length !== null && Number(length) !== firstBytes) throw new Error('文件传输不完整，没有完成压缩包。')
     // EASY may return a ZIP containing the PDF and accompanying XML. Preserve
     // those original bytes and let the caller choose the actual entry suffix.
     if (prefix[0] === 0x50 && prefix[1] === 0x4b && prefix[2] === 0x03 && prefix[3] === 0x04) format = 'zip'
-    if ((!firstBytes && !emptyAllowed) || (/\.pdf$/i.test(filename) && format !== 'zip' && !header.includes('%PDF'))) {
+    // 附件库里PDF名下也可能存着递交时的真实格式（Word HTML、EML正文）。原站
+    // 导出只是把它们一律改名成.pdf；这里按真实格式保留（由调用方换后缀），不再
+    // 当成可重试的异常——重取同一附件只会得到同样的正文。
+    else if (/\.pdf$/i.test(filename) && wordHtml) format = 'word-html'
+    else if (/\.pdf$/i.test(filename) && mail) format = 'eml'
+    if (format === 'original' && !/\.x?html?$/i.test(filename) && !(wordHtml && /\.doc$/i.test(filename)) && (html || htmlContentType)) {
+      throw new Error('文件响应是网页，没有完成压缩包。')
+    }
+    if (eof && !encoded && length !== null && Number(length) !== firstBytes) throw new Error('文件传输不完整，没有完成压缩包。')
+    if ((!firstBytes && !emptyAllowed) || (format === 'original' && /\.pdf$/i.test(filename) && !header.includes('%PDF'))) {
       const emptyArchive = eof && firstBytes === 22 && prefix[0] === 0x50 && prefix[1] === 0x4b && prefix[2] === 0x05 && prefix[3] === 0x06 && prefix.subarray(4).every(value => value === 0)
       // The gateway's notice is stale on many valid responses. Only a complete
       // empty ZIP plus that notice is positive evidence of an unavailable PDF.

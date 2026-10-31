@@ -8,8 +8,9 @@ import { projectRoot } from '../../helpers/project'
 const root = projectRoot
 
 function classify(names: string[]): Array<{ name: string; reason: string | null }> {
-  const script = `import { forbiddenDeliveryName } from './scripts/delivery-guard.mjs'; const names = ${JSON.stringify(names)}; console.log(JSON.stringify(names.map(name => ({ name, reason: forbiddenDeliveryName(name) }))))`
-  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8' })
+  // 名单走stdin；打包后的清单上千条时，命令行长度会超出Windows上限。
+  const script = `import { readFileSync } from 'node:fs'; import { forbiddenDeliveryName } from './scripts/delivery-guard.mjs'; const names = JSON.parse(readFileSync(0, 'utf8')); console.log(JSON.stringify(names.map(name => ({ name, reason: forbiddenDeliveryName(name) }))))`
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', input: JSON.stringify(names) })
   if (result.status !== 0) throw new Error(result.stderr || 'delivery guard failed')
   return JSON.parse(result.stdout) as Array<{ name: string; reason: string | null }>
 }

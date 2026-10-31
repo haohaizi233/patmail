@@ -87,3 +87,23 @@ pnpm typecheck
 - 构建（含类型检查）、产物校验和 ESLint 基线门禁通过。
 
 证据：`test-results/har-095104-audit.json`、`eml-recovery-red.log`、`eml-recovery-green.log`、`eml-recovery-regression.log`、`eml-har-replay.log`、`har-095104-replay/report.json`、`har-095104-replay/replayed.zip`、`eml-recovery-browser.log`、`native-pipeline-eml.json`、`eml-recovery-build.log`、`eml-recovery-dist.log`。真实邮件正文留在忽略目录，不写入仓库。
+
+## 后续：与原站导出包对比后改为保留真实格式
+
+用户随后提供同一批 495 件的原站导出包（服务端 `FileHandler.ashx` 打包，条目一律命名“-递交文件合并档.pdf”）与插件包对比，报“原站下载全是 PDF，插件下载有好多嵌套 ZIP，还有俩没下载出来”。逐字节核对确认两边源字节相同，差异来自原站一律改名为 `.pdf`：
+
+- 481 件真 PDF 两边 SHA256 一致，仅申请号命名不同（原站带小数点，插件按取名配方去掉小数点）。
+- 12 件“嵌套 ZIP”在原站包里同样是 ZIP 字节（如 277,063、1,433 字节的条目两边哈希一致），只是被命名为 `.pdf`；插件此前已按 `.zip` 保留完整原包（`list.xml` + PDF + 签名文件）。
+- 2 件“没下载出来”的在原站包里分别是 23,144 字节的 Word HTML 和 70,257 字节的 EML 邮件正文冒充 `.pdf`，同样打不开；插件此前重试三次后跳过并写入失败清单。
+
+据此把 PDF 名下的 Word HTML、EML 从“可重试异常→跳过”改为按真实格式入包：探测为 Word HTML 时条目后缀改 `.html`，邮件正文改 `.eml`，字节原样保留；`.zip` 改名逻辑不变。这两类正文不再重试（重取同一附件只会得到同样正文，已由原站包同哈希证实），也不再写入跳过缓存。清单按格式分组输出：ZIP 原包、Word HTML、EML 各一节，逐行“原名 → 保存为”。
+
+行为矩阵：
+
+- PDF 名下 ZIP 原包 → `.zip` 保留（不变）。
+- PDF 名下 Word HTML → `.html` 保留（新）。
+- PDF 名下 EML 邮件正文 → `.eml` 保留（新）。
+- 登录页/未知 HTML、HTTP 408/429/5xx、断流、空 ZIP 冒充 PDF、磁盘错误 → 沿用原有暂停/重试/失败清单流程（不变）。
+- 旧缓存中已存的 Word HTML/EML 字节视为真实源文件，继续任务时直接按真实格式入包，不再重取。
+
+回归同步更新：`stream-file`、`stream-download-recovery` 单测改为断言 `.html`/`.eml` 入包、只请求一次、恢复复用缓存且不再重放失败清单；`native-pipeline-fault` 三个变体（默认、`PATMAIL_PIPELINE_HTML=1`、`PATMAIL_PIPELINE_EML=1`）统一断言 7 个源文件入包、跳过 1 个缺失附件、真实格式正文只请求 1 次。另修复一个与本议题无关的既有失败：打包安全测试的 `classify` 把整份文件名单塞进 `node -e` 命令行，933 个名字时超出 Windows 命令行上限（`ENAMETOOLONG`），改为经 stdin 传入名单后通过。

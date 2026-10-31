@@ -4,7 +4,7 @@ import { buildDownloadParams, readDownloadHandle, type DownloadFileItem } from '
 import { resolveDownloadFileNames, stripApplicationNoDot, type FileDownloadSelection } from '../mail/download-name'
 import type { FileDownloadProgress } from '../shared/download-progress'
 import { DownloadTokens } from './download-tokens'
-import { prefetchFile } from './stream-file'
+import { prefetchFile, type PrefetchedFormat } from './stream-file'
 import { cachedFileResponse, type DownloadCache } from './stream-cache'
 import { asError, sourceUnavailableError, UnavailableDownloadFileError, RetryableDownloadFileError } from './download-failure'
 import { finalDownloadNameKey } from '../mail/deduplicate'
@@ -32,6 +32,13 @@ function safeEntryName(value: string, used: Set<string>): string {
   for (let index = 2; used.has(name.toLowerCase()); index++) name = stem + ' (' + index + ')' + extension
   used.add(name.toLowerCase())
   return name
+}
+
+/** 源文件真实格式不是PDF时按真实格式换后缀；只改冒充PDF的附件名。 */
+const convertedSuffix: Partial<Record<PrefetchedFormat, string>> = { zip: '.zip', 'word-html': '.html', eml: '.eml' }
+function convertedEntryName(format: PrefetchedFormat, name: string): string {
+  const suffix = convertedSuffix[format]
+  return suffix && /\.pdf$/i.test(name) ? name.replace(/\.pdf$/i, suffix) : name
 }
 
 /** 六个业务令牌；持久缓存与ZIP消费分别背压，ZIP仍按输入顺序写入。 */
@@ -172,7 +179,7 @@ export async function streamDownloadFiles(
   }
   let preparing = 0, persisting = 0
   const failures: Array<{ name: string; reason: string }> = []
-  const converted: Array<{ from: string; to: string }> = []
+  const converted: Array<{ from: string; to: string; kind: PrefetchedFormat }> = []
   const namedKeys = new Set<string>()
   let deduplicated = 0
   // 持久模式仅保留每个附件的小描述符，正文留在磁盘；完成的附件不能
@@ -248,9 +255,9 @@ export async function streamDownloadFiles(
         options.onProgress?.({ phase: 'packing', done, total: items.length, failed: failures.length, deduplicated })
         continue
       }
-      const actualName = content.format === 'zip' && /\.pdf$/i.test(file.name) ? file.name.replace(/\.pdf$/i, '.zip') : file.name
+      const actualName = convertedEntryName(content.format, file.name)
       const entryName = safeEntryName(actualName, used)
-      if (actualName !== file.name) converted.push({ from: file.name, to: entryName })
+      if (actualName !== file.name) converted.push({ from: file.name, to: entryName, kind: content.format })
       await untilAbort(archive.add(entryName, content.body, { signal }))
       await content.finished
       jobs.delete(done)
@@ -262,7 +269,18 @@ export async function streamDownloadFiles(
     if (failures.length || converted.length) {
       const lines = ['PatMail 下载说明', `所选 ${items.length} 个；成功 ${items.length - failures.length - deduplicated} 个；跳过 ${failures.length} 个；过滤重名 ${deduplicated} 个。`, '']
       if (failures.length) lines.push('以下附件经正文检查确认不可用：', ...failures.map(item => `${item.name}\t${item.reason}`), '')
-      if (converted.length) lines.push('以下源文件实际为ZIP，已保留完整原包（包括其中的PDF/XML等文件）：', ...converted.map(item => `${item.from}\t保存为 ${item.to}`))
+      if (converted.length) {
+        const sections: Array<[PrefetchedFormat, string]> = [
+          ['zip', '以下源文件实际为ZIP，已保留完整原包（包括其中的PDF/XML等文件）：'],
+          ['word-html', '以下源文件实际为Word HTML文档，已按真实格式保存为HTML：'],
+          ['eml', '以下源文件实际为EML邮件正文，已按真实格式保存为EML：']
+        ]
+        for (const [kind, title] of sections) {
+          const rows = converted.filter(item => item.kind === kind)
+          if (rows.length) lines.push(title, ...rows.map(item => `${item.from}\t保存为 ${item.to}`), '')
+        }
+        if (lines.at(-1) === '') lines.pop()
+      }
       const data = new TextEncoder().encode(lines.join('\r\n'))
       const report = new ReadableStream<Uint8Array>({ start(target) { target.enqueue(data); target.close() } })
       await untilAbort(archive.add(safeEntryName(failures.length ? '下载失败清单.txt' : '源文件格式说明.txt', used), report, { signal }))

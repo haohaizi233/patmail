@@ -5,18 +5,19 @@ import { cachedFileResponse, type DownloadCache } from '../../../src/api/stream-
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 5))
 describe('正文预取背压', () => {
-  it('邮件头只影响冒充PDF的EML，合法eml及正文提到邮件头的PDF仍保留', async () => {
+  it('邮件头只标记冒充PDF的EML：按真实格式保留，合法eml及正文提到邮件头的PDF仍保留', async () => {
     const mail = 'Received: from fixture.invalid\r\nFrom: sender@example.invalid\r\nTo: recipient@example.invalid\r\nMIME-Version: 1.0\r\nSubject: fixture %PDF mention\r\n\r\nfixture mail'
     for (const [name, body] of [['source.eml', mail], ['valid.pdf', '%PDF-1.7\n' + mail]]) {
       const file = await prefetchFile('source', name, false, '', null, new AbortController().signal, async () => new Response(body), () => {})
       await file.ready; await file.finished
       expect(await new Response(file.body).text()).toBe(body)
     }
-    const invalid = await prefetchFile('source', 'expected.pdf', false, '', null, new AbortController().signal, async () => new Response(mail), () => {})
-    await expect(invalid.ready).rejects.toMatchObject({ name: 'RetryableDownloadFileError', message: expect.stringContaining('EML') })
-    await invalid.finished
+    const saved = await prefetchFile('source', 'expected.pdf', false, '', null, new AbortController().signal, async () => new Response(mail), () => {})
+    await saved.ready; await saved.finished
+    expect(saved.format).toBe('eml')
+    expect(await new Response(saved.body).text()).toBe(mail)
   })
-  it('Word导出的HTML可作为旧版doc保留，但不能冒充PDF；登录网页仍拒绝', async () => {
+  it('Word导出的HTML可作为旧版doc保留，冒充PDF时按真实格式保留；登录网页仍拒绝', async () => {
     const html = '<html xmlns:w="urn:schemas-microsoft-com:office:word"><body>fixture</body></html>'
     const doc = await prefetchFile('source', 'legacy.doc', false, '', null, new AbortController().signal,
       async () => new Response(html, { headers: { 'Content-Type': 'text/html' } }), () => {})
@@ -24,8 +25,9 @@ describe('正文预取背压', () => {
     expect(await new Response(doc.body).text()).toBe(html)
     const pdf = await prefetchFile('source', 'expected.pdf', false, '', null, new AbortController().signal,
       async () => new Response(html, { headers: { 'Content-Type': 'application/octet-stream' } }), () => {})
-    await expect(pdf.ready).rejects.toMatchObject({ name: 'RetryableDownloadFileError' })
-    await pdf.finished
+    await pdf.ready; await pdf.finished
+    expect(pdf.format).toBe('word-html')
+    expect(await new Response(pdf.body).text()).toBe(html)
     const login = await prefetchFile('source', 'legacy.doc', false, '', null, new AbortController().signal,
       async () => new Response('<html><form action="Login.aspx"></form></html>'), () => {})
     await expect(login.ready).rejects.toThrow('网页')

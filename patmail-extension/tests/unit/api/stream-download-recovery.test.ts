@@ -108,54 +108,63 @@ function cancelledTail(cache: DownloadCache, mode: 'word' | 'pause' | 'resume', 
 }
 
 describe('单文件正文异常容灾', () => {
-  it.each([false, true])('持久缓存=%s：PDF收到EML邮件后只重试该附件，恢复后完整入包', async persistent => {
+  it.each([false, true])('持久缓存=%s：PDF收到EML邮件正文后按真实格式入包，不再重试', async persistent => {
     const f = fixture(async (index, attempt) => new Response(index === 1 && attempt === 1 ? mailSource : `%PDF fixture ${index}`), persistent ? cacheFixture().cache : undefined)
     await f.run()
-    expect(f.prepares.filter(index => index === 1)).toHaveLength(2)
-    expect(await f.entries()).toEqual(items.map((item, index) => ({ name: item.fileName, text: `%PDF fixture ${index}` })))
+    expect(f.prepares.filter(index => index === 1)).toHaveLength(1)
+    const entries = await f.entries()
+    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-1.eml', 'file-2.pdf', '源文件格式说明.txt'])
+    expect(entries[1].text).toBe(mailSource)
+    expect(entries[3].text).toContain('file-1.pdf')
+    expect(entries[3].text).toContain('EML')
   })
 
-  it('EML持续冒充PDF：尝试三次后仅跳过邮件，失败原因可恢复，其余PDF完整保留', async () => {
+  it('EML持续冒充PDF时按真实格式入包，格式说明可恢复且重放不再请求', async () => {
     const { cache } = cacheFixture()
     const f = fixture(async index => new Response(index === 1 ? mailSource : `%PDF fixture ${index}`), cache)
     await f.run()
-    expect(f.prepares.filter(index => index === 1)).toHaveLength(3)
+    expect(f.prepares.filter(index => index === 1)).toHaveLength(1)
     const entries = await f.entries()
-    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-2.pdf', '下载失败清单.txt'])
-    expect(entries[2].text).toContain('EML')
-    expect((await cache.info(1)).skipReason).toContain('EML')
-    const resumed = fixture(async () => { throw Error('完整缓存与失败清单不能重复请求') }, cache)
+    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-1.eml', 'file-2.pdf', '源文件格式说明.txt'])
+    expect(entries[3].text).toContain('EML')
+    expect(await cache.info(1)).toMatchObject({ complete: true })
+    expect((await cache.info(1)).skipReason).toBeUndefined()
+    const resumed = fixture(async () => { throw Error('完整缓存与格式说明不能重复请求') }, cache)
     await resumed.run()
     expect(resumed.prepares).toEqual([])
     expect(await resumed.entries()).toEqual(entries)
   })
 
-  it('旧完整缓存实际是EML时继续任务只清理并重取该附件', async () => {
+  it('旧完整缓存实际是EML时继续任务按真实格式入包，不重取', async () => {
     const { cache } = cacheFixture()
     for (let index = 0; index < 3; index++) {
       const bytes = new TextEncoder().encode(index === 1 ? mailSource : `%PDF fixture ${index}`)
       await cache.write(index, 0, bytes); await cache.complete(index, { totalBytes: bytes.length })
     }
-    const f = fixture(async index => new Response(`%PDF fixture ${index}`), cache)
+    const f = fixture(async () => { throw Error('真实格式缓存不应重取') }, cache)
     await f.run()
-    expect(f.prepares).toEqual([1])
-    expect(await f.entries()).toEqual(items.map((item, index) => ({ name: item.fileName, text: `%PDF fixture ${index}` })))
+    expect(f.prepares).toEqual([])
+    const entries = await f.entries()
+    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-1.eml', 'file-2.pdf', '源文件格式说明.txt'])
+    expect(entries[1].text).toBe(mailSource)
   })
-  it('HAR末三条排队请求：前一个Word HTML附件失败不再连带取消，三条均成功入包', async () => {
+  it('HAR末三条排队请求：Word HTML附件按真实格式入包，不连带取消，四条均完成', async () => {
     const { cache } = cacheFixture()
     const f = cancelledTail(cache, 'word')
     await f.run()
     expect(f.cancelled).toEqual([])
     const entries = await f.entries()
-    expect(entries.map(entry => entry.name)).toEqual(['pending-1.pdf', 'pending-2.pdf', 'pending-3.pdf', '下载失败清单.txt'])
+    expect(entries.map(entry => entry.name)).toEqual(['html-source.html', 'pending-1.pdf', 'pending-2.pdf', 'pending-3.pdf', '源文件格式说明.txt'])
+    expect(entries[0].text).toBe(wordHtml)
     for (let index = 1; index <= 3; index++) {
-      expect(entries[index - 1].text).toBe(`%PDF tail fixture ${index}`)
+      expect(entries[index].text).toBe(`%PDF tail fixture ${index}`)
       expect((await cache.info(index)).complete).toBe(true)
       expect((await cache.info(index)).skipReason).toBeUndefined()
       expect(f.requested.filter(value => value === index)).toHaveLength(1)
-      expect(entries[3].text).not.toContain(`pending-${index}.pdf`)
+      expect(entries[4].text).not.toContain(`pending-${index}.pdf`)
     }
-    expect(entries[3].text).toContain('成功 3 个；跳过 1 个')
+    expect(entries[4].text).toContain('html-source.pdf')
+    expect(entries[4].text).toContain('成功 4 个；跳过 0 个')
   })
 
   it('HAR末三条确实取消后继续：不持久化为缺失，重新准备三条且复用前一份完整缓存', async () => {
@@ -179,41 +188,47 @@ describe('单文件正文异常容灾', () => {
     expect(resumed.requested.sort()).toEqual([1, 2, 3])
     expect(await resumed.entries()).toEqual(tailItems.map((item, index) => ({ name: item.fileName, text: `%PDF tail fixture ${index}` })))
   })
-  it.each([false, true])('持久缓存=%s：PDF收到Word HTML后重新取句柄重试，成功后正常入包', async persistent => {
+  it.each([false, true])('持久缓存=%s：PDF收到Word HTML后按真实格式入包，不再重试', async persistent => {
     const cache = persistent ? cacheFixture().cache : undefined
     const f = fixture(async (index, attempt) => new Response(index === 1 && attempt === 1 ? wordHtml : `%PDF fixture ${index}`,
       { headers: { 'Content-Type': index === 1 && attempt === 1 ? 'text/html' : 'application/octet-stream' } }), cache)
     await f.run()
-    expect(f.prepares.filter(index => index === 1)).toHaveLength(2)
-    expect(await f.entries()).toEqual(items.map((item, index) => ({ name: item.fileName, text: `%PDF fixture ${index}` })))
+    expect(f.prepares.filter(index => index === 1)).toHaveLength(1)
+    const entries = await f.entries()
+    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-1.html', 'file-2.pdf', '源文件格式说明.txt'])
+    expect(entries[1].text).toBe(wordHtml)
+    expect(entries[3].text).toContain('Word HTML')
   })
 
-  it('Word HTML持续返回时仅跳过该附件，其他文件完成，失败原因持久保存且重放不再请求', async () => {
+  it('Word HTML持续返回时按真实格式入包，格式说明持久且重放不再请求', async () => {
     const { cache } = cacheFixture()
     const f = fixture(async index => new Response(index === 1 ? wordHtml : `%PDF fixture ${index}`), cache)
     await f.run()
-    expect(f.prepares.filter(index => index === 1)).toHaveLength(3)
+    expect(f.prepares.filter(index => index === 1)).toHaveLength(1)
     const entries = await f.entries()
-    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-2.pdf', '下载失败清单.txt'])
-    expect(entries[2].text).toContain('file-1.pdf')
-    expect(entries[2].text).toContain('Word')
-    expect(await cache.info(1)).toMatchObject({ complete: true, receivedBytes: 0, skipReason: expect.stringContaining('Word') })
-    const restored = fixture(async () => { throw Error('完整缓存和已确认失败均不得再请求') }, cache)
+    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-1.html', 'file-2.pdf', '源文件格式说明.txt'])
+    expect(entries[3].text).toContain('file-1.pdf')
+    expect(entries[3].text).toContain('Word HTML')
+    expect(await cache.info(1)).toMatchObject({ complete: true })
+    expect((await cache.info(1)).skipReason).toBeUndefined()
+    const restored = fixture(async () => { throw Error('完整缓存不得再请求') }, cache)
     await restored.run()
     expect(restored.prepares).toEqual([])
     expect(await restored.entries()).toEqual(entries)
   })
 
-  it('继续下载时清掉旧版已缓存的异常HTML，只重取该文件并复用其余完整缓存', async () => {
+  it('旧版已缓存的Word HTML继续任务按真实格式入包，复用缓存不再重取', async () => {
     const { cache } = cacheFixture()
     for (let index = 0; index < items.length; index++) {
       const bytes = new TextEncoder().encode(index === 1 ? wordHtml : `%PDF fixture ${index}`)
       await cache.write(index, 0, bytes); await cache.complete(index, { totalBytes: bytes.length })
     }
-    const f = fixture(async index => new Response(`%PDF fixture ${index}`), cache)
+    const f = fixture(async () => { throw Error('真实格式缓存不应重取') }, cache)
     await f.run()
-    expect(f.prepares).toEqual([1])
-    expect(await f.entries()).toEqual(items.map((item, index) => ({ name: item.fileName, text: `%PDF fixture ${index}` })))
+    expect(f.prepares).toEqual([])
+    const entries = await f.entries()
+    expect(entries.map(entry => entry.name)).toEqual(['file-0.pdf', 'file-1.html', 'file-2.pdf', '源文件格式说明.txt'])
+    expect(entries[1].text).toBe(wordHtml)
   })
 
   it('HTTP 503恢复后重新取句柄并继续下载', async () => {
