@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { BrowserStreamDownloads } from '../../../src/background/browser-download'
 import type { BrowserDownloadStore, BrowserDownloadTask, BrowserBlob, BrowserFileRequest, BrowserFileReply } from '../../../src/browser-download/types'
 import type { CachedFileInfo } from '../../../src/api/stream-cache'
@@ -35,6 +35,26 @@ function fixture(nativeStatus?: (targetId: string) => Promise<{ state: 'inProgre
 }
 
 describe('browser stream broker', () => {
+  it('拒绝已超过前台等待期限的启动，不再打开无人接收的下载', async () => {
+    const f = fixture()
+    await expect(f.start({ expiresAt: Date.now() - 1 })).rejects.toThrow('初始化已超时')
+    expect(f.calls).toHaveLength(0)
+  })
+  it('打开目标期间超过启动期限时关闭该目标并保留任务', async () => {
+    const f = fixture(), expiresAt = Date.now() + 60_000
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    f.handler(async request => { if (request.action === 'open') await gate; return { ok: true } })
+    const pending = f.start({ expiresAt })
+    const assertion = expect(pending).rejects.toThrow('初始化已超时')
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1))
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expiresAt + 1)
+    try {
+      release(); await assertion
+      expect(f.calls.map(request => request.action)).toEqual(['open', 'pause'])
+      expect([...f.tasks.values()][0]?.state).toBe('paused')
+    } finally { clock.mockRestore() }
+  })
   it('已封存任务恢复时从冻结名称重建同案件去重数', async () => {
     const f = fixture(), ids = ['a', 'b', 'c']
     const manifest = { deduplicate: true, stripAppNoDot: false, selection: {}, items: ids.map(fileId => ({ fileId, fileName: 'old.pdf' })), resolvedNames: { a: 'DIY.doc', b: 'DIY.docx', c: 'DIY.docx' }, caseScopes: { a: 'one', b: 'one', c: 'two' } }

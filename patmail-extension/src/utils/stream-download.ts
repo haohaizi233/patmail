@@ -6,6 +6,9 @@ import { isRecord } from '../shared/guards'
 
 export interface NativeDownloadContext { cache?: DownloadCache; zipCreatedAt?: string; taskId?: string }
 const activeProducers = new Map<string, AbortController>()
+// 冷后台恢复和启动前复查各可耗时36.5秒，原生目标连接另有15秒。
+// 启动不能沿用普通状态查询的20秒预算，也不能因回执尚在路上就重发start。
+const START_RECEIPT_MS = 130_000
 export function pauseNativeDownload(taskId: string): void {
   activeProducers.get(taskId)?.abort(new Error('下载已暂停，本机缓存和任务已保留。'))
 }
@@ -48,17 +51,30 @@ export async function nativeStreamArchive(
     for (let attempt = 0; ; attempt++) {
       if (!cleanup) signal.throwIfAborted()
       const request = sendToBackground({ type: browser ? MessageType.BrowserStreamDownload : MessageType.StreamDownload, payload },
-        payload.action === 'write' || payload.action === 'cache' || (browser && payload.action === 'finish') ? 130_000 : 20_000)
+        payload.action === 'start' ? START_RECEIPT_MS : payload.action === 'write' || payload.action === 'cache' || (browser && payload.action === 'finish') ? 130_000 : 20_000)
+      if (payload.action === 'start') {
+        // 暂停可能先于启动回执到达。只关闭这次启动的令牌，不能按taskId暂停后来接管的恢复任务。
+        void request.then(response => {
+          if (signal.aborted && response?.type === MessageType.StreamDownloadResult && response.payload.token) {
+            void sendToBackground({ type: browser ? MessageType.BrowserStreamDownload : MessageType.StreamDownload,
+              payload: { action: 'pause', token: response.payload.token } }, 20_000).catch(() => {})
+          }
+        }).catch(() => {})
+      }
       const response = await (cleanup ? request : untilAbort(request))
       if (response?.type === MessageType.StreamDownloadResult) return response.payload
       const reason = response?.type === MessageType.Error ? response.payload.message : '本机下载流没有应答。'
       const transient = !response || /扩展后台没有在时限内返回|扩展后台没有答上|message port closed|receiving end does not exist|service worker/i.test(reason)
       if (!transient) throw new Error(reason)
-      if (!retryable || attempt >= 2) throw new Error(`${reason} 下载已暂停，缓存已保留；请点击「继续下载」恢复。`)
+      const stage = payload.action === 'start' ? '下载初始化' : payload.action === 'checkpoint' ? '名称检查点保存'
+        : payload.action === 'write' ? '浏览器数据写入' : payload.action === 'cache' ? '附件缓存操作'
+          : payload.action === 'finish' ? '压缩包保存确认' : '下载状态查询'
+      if (!retryable || attempt >= 2) throw new Error(`${stage}回执超时：${reason} 下载已暂停，缓存已保留；请点击「继续下载」恢复。`)
       await retryDelay(500 * (attempt + 1))
     }
   }
-  const created = await command({ action: 'start', fileName, ...startOptions }).catch(error => {
+  const created = await command({ action: 'start', fileName, ...startOptions, ...(browser ? { expiresAt: Date.now() + START_RECEIPT_MS } : {}) }).catch(error => {
+    controller.abort(error)
     if (options.taskId && activeProducers.get(options.taskId) === controller) activeProducers.delete(options.taskId)
     throw error
   })

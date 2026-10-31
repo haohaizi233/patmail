@@ -239,7 +239,7 @@ export interface ExecutionLeasePayload {
   lease: { executionId: string; taskFingerprint: string; owner: string; status: string; requestSent: boolean; easyMailId: string } | null
 }
 export type StreamDownloadCommand =
-  | { action: 'start'; fileName: string; taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; targetId?: string }
+  | { action: 'start'; fileName: string; taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; targetId?: string; expiresAt?: number }
   | { action: 'write'; token: string; sequence: number; offset?: number; data: string }
   | { action: 'finish' | 'abort' | 'pause' | 'status' | 'complete' | 'resume'; token: string }
   | { action: 'checkpoint'; token: string; offset: number; names: string[] }
@@ -900,7 +900,8 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.StreamDownload: {
       const p = value.payload
       if (!isRecord(p)) return false
-      if (p.action === 'start') return Object.keys(p).every(key => ['action', 'fileName', 'taskId', 'manifest', 'newCopy', 'targetId'].includes(key)) && isArchiveName(p.fileName) &&
+      if (p.action === 'start') return Object.keys(p).every(key => ['action', 'fileName', 'taskId', 'manifest', 'newCopy', 'targetId', 'expiresAt'].includes(key)) && isArchiveName(p.fileName) &&
+        (p.expiresAt === undefined || (Number.isSafeInteger(p.expiresAt) && Number(p.expiresAt) > 0)) &&
         (p.targetId === undefined || (typeof p.targetId === 'string' && isQueryGuid(p.targetId))) &&
         (p.newCopy === undefined || (p.newCopy === true && p.taskId !== undefined)) &&
         (p.taskId === undefined || (typeof p.taskId === 'string' && isQueryGuid(p.taskId))) &&

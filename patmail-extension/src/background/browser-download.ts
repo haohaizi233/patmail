@@ -175,6 +175,7 @@ export class BrowserStreamDownloads {
       const targetId = command.targetId
       const tabEpoch = this.tabEpochs.get(tabId) ?? 0
       const assertSource = () => {
+        if (command.expiresAt !== undefined && Date.now() >= command.expiresAt) throw new Error('下载初始化已超时，缓存已保留，请继续下载。')
         if ((this.tabEpochs.get(tabId) ?? 0) !== tabEpoch || (this.currentOwner !== undefined && this.currentOwner !== owner)) throw new Error('来源页面或账号已离开，下载已暂停。')
       }
       if (!owner || !targetId || !command.fileName) throw new Error('请先在工作台启动浏览器下载。')
@@ -213,7 +214,9 @@ export class BrowserStreamDownloads {
           if (archive.complete) task.deduplicatedCount = await this.duplicateCount(task)
           await this.store.update(taskId, { state: archive.complete ? 'sealed' : 'running', updatedAt: Date.now(), ...(archive.complete ? { failedCount: task.failedCount, deduplicatedCount: task.deduplicatedCount } : {}) })
           task.state = archive.complete ? 'sealed' : 'running'
-          return { ok: true, token: lease.token, taskId, info: await this.info(task, lease, true) }
+          const info = await this.info(task, lease, true)
+          assertSource()
+          return { ok: true, token: lease.token, taskId, info }
         } catch (error) {
           this.invalidate(lease)
           await this.store.update(taskId, { state: 'paused', updatedAt: Date.now() })

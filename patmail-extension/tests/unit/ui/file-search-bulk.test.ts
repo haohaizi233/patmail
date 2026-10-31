@@ -120,6 +120,18 @@ describe('DIY名称实时去重', () => {
     expect(document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent).not.toContain('chrome-extension://')
   })
 
+  it('流任务已返回具体启动错误时保留阶段，不误称为初始受理回执未确认', async () => {
+    const failure = '下载初始化超时，尚未确认浏览器下载目标。扩展后台没有在时限内返回。缓存已保留，请继续下载。'
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 1)
+      : { type: MessageType.DownloadFilesResult, payload: { ok: false, error: { code: 'BUSINESS_ERROR', message: failure } } })
+    button('测试查询').click(); await settle(); button('全选本页').click(); await settle()
+    button('下载已选').click(); await settle()
+    const notice = document.querySelector('[aria-label="文件导出"] [role="status"]')?.textContent
+    expect(notice).toContain('下载初始化超时')
+    expect(notice).not.toContain('回执尚未确认')
+    expect(button('继续下载').disabled).toBe(false)
+  })
+
   it('新的登录失败不能仅凭旧的已连接状态被当作已恢复', async () => {
     const failure = 'EASY 登录已失效，请在原网站重新登录后检测。'
     mount(async message => message.type === MessageType.SearchFiles ? reply(message, 1) : { type: MessageType.Error, payload: { message: failure } })

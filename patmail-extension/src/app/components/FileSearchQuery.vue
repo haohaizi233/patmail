@@ -142,7 +142,8 @@ const actionNotice = computed(() => {
     const recovery = !props.canSearch ? '请先恢复 EASY 连接。'
       : needsRevalidation.value ? '请先点击结果区的“刷新”验证查询，再继续下载。'
         : '请点击“继续下载”确认并恢复任务。'
-    if (/后台没有在时限内返回/.test(notice)) {
+    // 仅兼容旧的纯受理超时；流任务已返回的初始化/写入/检查点错误必须保留阶段。
+    if (/^扩展后台没有在时限内返回。\s*(?:缓存已保留，请继续下载。)?$/.test(notice)) {
       return `上次下载的后台回执尚未确认，任务已保留。${recovery}`
     }
     if (props.canSearch && downloadConnectionRecovered.value && /登录|会话|尚未连接|尚未确认.*(?:账号|身份|用户)|无法确认.*身份/.test(notice)) {
