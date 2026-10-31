@@ -258,7 +258,7 @@ describe('流水单ZIP下载', () => {
 
   it.each(['html', 'short', 'failure'])('%s 响应时中断输出，不能完成残缺包', async kind => {
     const setup = fixture(), result = output()
-    const fetchFile = async () => kind === 'failure' ? new Response('', { status: 502 })
+    const fetchFile = async () => kind === 'failure' ? new Response('', { status: 401 })
       : new Response(kind === 'html' ? '<html>login</html>' : 'short', { headers: { 'Content-Type': kind === 'html' ? 'text/html' : 'application/pdf', 'Content-Length': '999' } })
     await expect(streamDownloadFiles(setup.transport, files.slice(0, 2), null, false, { sink: result.sink, fetchFile })).rejects.toThrow()
     expect(result.closed()).toBe(false)

@@ -18,7 +18,12 @@ const missingSource = Buffer.from([80, 75, 5, 6, ...Array(18).fill(0)])
 const missingNotice = '文件不存在或权限不足,您共1个文件缺失附件.pdf下载失败'
 const templateId = 'd9896997-1e83-4c7d-9a49-da69ba56e7aa'
 const info = { IsLogin: true, Status: true, Result: true }
-const source = index => { if (index === 6) return wrappedSource; if (index === 7) return missingSource; const bytes = Buffer.alloc(512 * 1024, index); bytes.write('%PDF pure TS fixture'); return bytes }
+const htmlFault = process.env.PATMAIL_PIPELINE_HTML === '1'
+const emlFault = process.env.PATMAIL_PIPELINE_EML === '1'
+const sourceFault = htmlFault || emlFault
+const wordHtml = Buffer.from('<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta name=ProgId content=Word.Document></head><body>fixture document</body></html>')
+const mailSource = Buffer.from('X-QQ-mid: fixture\r\nReceived: from fixture.invalid\r\nFrom: sender@example.invalid\r\nTo: recipient@example.invalid\r\nMIME-Version: 1.0\r\nSubject: fixture\r\nContent-Type: text/plain\r\n\r\nfixture mail')
+const source = index => { if (emlFault && index === 5) return mailSource; if (htmlFault && index === 5) return wordHtml; if (index === 6) return wrappedSource; if (index === 7) return missingSource; const bytes = Buffer.alloc(512 * 1024, index); bytes.write('%PDF pure TS fixture'); return bytes }
 let names = 0, failed = false, gatewayRetried = false, releaseFailure, releaseSix
 let activeBodies = 0, peakBodies = 0
 const failureGate = new Promise(resolve => { releaseFailure = resolve })
@@ -160,19 +165,25 @@ try {
   assert.equal(await completePanel.getByText('导出完成', { exact: true }).count(), 0, '完成状态只在顶栏显示，底部不重复')
   await app.getByRole('region', { name: '查询结果', exact: true }).screenshot({ path: resultPath('file-export-six-complete.png') })
   const completedItems = await worker.evaluate(() => chrome.downloads.search({ state: 'complete' }))
-  const completedItem = completedItems.find(item => item.bytesReceived > 3 * 1024 * 1024)
+  const completedItem = completedItems.find(item => item.bytesReceived > (sourceFault ? 2 : 3) * 1024 * 1024)
   assert(completedItem?.exists, 'Chrome must confirm a real saved file')
-  const output = resultPath('native-pipeline-fault-recovered.zip')
+  const output = resultPath(emlFault ? 'native-pipeline-eml-recovered.zip' : htmlFault ? 'native-pipeline-html-recovered.zip' : 'native-pipeline-fault-recovered.zip')
   const saved = await app.evaluate(() => ({ legacyCalls: window.__legacyCalls }))
   const archive = await readFile(completedItem.filename)
   await writeFile(output, archive)
   const reader = new ZipReader(new Uint8ArrayReader(archive), { useWebWorkers: false })
   try {
     const entries = await reader.getEntries()
-    assert.deepEqual(entries.map(entry => entry.filename), [...files.slice(0, 6).map((_, index) => `2026100263349-${index}.pdf`), '2026100263349-6.zip', '下载失败清单.txt'])
-    for (const [index, entry] of entries.slice(0, 7).entries()) assert.deepEqual(Buffer.from(await entry.getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })), source(index))
-    const note = Buffer.from(await entries[7].getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })).toString('utf8')
-    assert(note.includes('成功 7 个；跳过 1 个'))
+    const goodIndexes = sourceFault ? [0, 1, 2, 3, 4, 6] : [0, 1, 2, 3, 4, 5, 6]
+    assert.deepEqual(entries.map(entry => entry.filename), [...goodIndexes.map(index => `2026100263349-${index}.${index === 6 ? 'zip' : 'pdf'}`), '下载失败清单.txt'])
+    for (const [offset, index] of goodIndexes.entries()) assert.deepEqual(Buffer.from(await entries[offset].getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })), source(index))
+    const note = Buffer.from(await entries.at(-1).getData(new Uint8ArrayWriter(), { checkSignature: true, useWebWorkers: false })).toString('utf8')
+    assert(note.includes(sourceFault ? '成功 6 个；跳过 2 个' : '成功 7 个；跳过 1 个'))
+    if (sourceFault) {
+      assert(note.includes('2026100263349-5.pdf'))
+      assert(note.includes(emlFault ? 'EML' : 'Word HTML'))
+      assert(fetches.filter(index => index === 5).length >= 3, '异常正文必须经过重取句柄和正文重试')
+    }
     assert(note.includes('2026100263349-7.pdf'))
     assert(note.includes('2026100263349-6.zip'))
   } finally { await reader.close() }
@@ -181,14 +192,14 @@ try {
   assert.equal(fetches.filter(index => index === 0).length, 1)
   assert(ranges.some(item => item.index === 1 && item.offset === 262144))
   assert.equal(saved.legacyCalls, 0)
-  await app.getByText('成功 7 个，跳过 1 个不可用附件', { exact: false }).waitFor()
+  await app.getByText(sourceFault ? '成功 6 个，跳过 2 个不可用附件' : '成功 7 个，跳过 1 个不可用附件', { exact: false }).waitFor()
   await app.screenshot({ path: resultPath('native-pipeline-compact-ui.png') })
   assert.equal(violations.length, 0)
   const nativeDownloads = await worker.evaluate(() => chrome.downloads.search({}))
   assert(nativeDownloads.some(item => item.state === 'complete' && item.bytesReceived === archive.length), '原生下载必须确认完整字节')
   const report = { passed: true, pureBrowser: true, coldRestarted: !warmResume, gatewayRetried, peakBodies, sourceFetches: fetches, ranges, names, bytes: archive.length, crc: true, nativeDownloads: nativeDownloads.map(item => ({ state: item.state, receivedBytes: item.bytesReceived })), loopbackRequests: 0 }
-  Object.assign(report, { preservedOriginalZip: true, skippedUnavailable: 1, goodSourceFiles: 7 })
-  await writeFile(resultPath('native-pipeline-fault.json'), JSON.stringify(report, null, 2))
+  Object.assign(report, { preservedOriginalZip: true, htmlFault, emlFault, skippedUnavailable: sourceFault ? 2 : 1, goodSourceFiles: sourceFault ? 6 : 7 })
+  await writeFile(resultPath(emlFault ? 'native-pipeline-eml.json' : htmlFault ? 'native-pipeline-html.json' : 'native-pipeline-fault.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))
 } catch (error) {
   console.error(JSON.stringify({ error: String(error), appClosed: app?.isClosed(), connected: context?.browser()?.isConnected(), pages: context?.pages().map(page => page.url()), fetches, ranges, names, peakBodies, body: await app?.locator('body').innerText().catch(() => '') }))

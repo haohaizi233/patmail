@@ -1,6 +1,6 @@
 import type { DownloadTokens } from './download-tokens'
 import { responseNetworkFinished } from './stream-cache'
-import { asError, sourceUnavailableError } from './download-failure'
+import { asError, sourceUnavailableError, RetryableDownloadFileError } from './download-failure'
 
 export const FILE_BUFFER_BYTES = 256 * 1024
 const BLOCK_BYTES = 64 * 1024
@@ -20,17 +20,17 @@ export async function prefetchFile(
   void ready.catch(() => {})
   let reader: ReadableStreamDefaultReader<Uint8Array>
   let format: 'zip' | 'original' = 'original'
-  let length: string | null, encoded: string | null
+  let length: string | null, encoded: string | null, htmlContentType = false
   try {
     const response = await fetchFile(url, { credentials: 'include', signal })
     if (!response.ok || !response.body) {
       await response.body?.cancel().catch(() => {})
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        throw new RetryableDownloadFileError(`读取文件失败（HTTP ${response.status}），没有完成压缩包。`)
+      }
       throw new Error('读取文件失败，没有完成压缩包。')
     }
-    if (!/\.x?html?$/i.test(filename) && /text\/html/i.test(response.headers.get('content-type') ?? '')) {
-      await response.body.cancel()
-      throw new Error('取文件返回了网页，没有完成压缩包。')
-    }
+    htmlContentType = /text\/html/i.test(response.headers.get('content-type') ?? '')
     length = response.headers.get('content-length')
     encoded = response.headers.get('content-encoding')
     reader = response.body.getReader()
@@ -105,7 +105,20 @@ export async function prefetchFile(
       if (offset === prefix.byteLength) break
     }
     const header = new TextDecoder().decode(prefix)
-    if (!/\.x?html?$/i.test(filename) && /^\s*(?:<!doctype\s+html|<html|<script)/i.test(header)) {
+    const html = /^\s*(?:<!doctype\s+html|<html|<script)/i.test(header)
+    const wordHtml = html && /urn:schemas-microsoft-com:office:word|name\s*=\s*["']?ProgId["']?\s+content\s*=\s*["']?Word\.Document/i.test(header)
+    if (/\.pdf$/i.test(filename) && wordHtml) {
+      throw new RetryableDownloadFileError('源文件应为PDF，实际返回Word HTML文档，不能作为PDF入包。')
+    }
+    // EASY也会把原始邮件正文作为.pdf返回。只匹配正文开头的邮件头，
+    // 不能把邮件正文中提到的“%PDF”或普通登录网页当成有效PDF。
+    const mailHeaders = header.split(/\r?\n\r?\n/, 1)[0]
+    const mail = /^[A-Za-z][A-Za-z0-9-]*:[^\r\n]*\r?\n/.test(mailHeaders) &&
+      /^MIME-Version:\s*1\.0\b/im.test(mailHeaders) && /^From:/im.test(mailHeaders) && /^(?:To|Subject|Message-ID):/im.test(mailHeaders)
+    if (/\.pdf$/i.test(filename) && mail) {
+      throw new RetryableDownloadFileError('源文件应为PDF，实际返回EML邮件正文，不能作为PDF入包。')
+    }
+    if (!/\.x?html?$/i.test(filename) && !(wordHtml && /\.doc$/i.test(filename)) && (html || htmlContentType)) {
       throw new Error('文件响应是网页，没有完成压缩包。')
     }
     if (eof && !encoded && length !== null && Number(length) !== firstBytes) throw new Error('文件传输不完整，没有完成压缩包。')

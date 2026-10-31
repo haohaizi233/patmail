@@ -6,7 +6,7 @@ import type { FileDownloadProgress } from '../shared/download-progress'
 import { DownloadTokens } from './download-tokens'
 import { prefetchFile } from './stream-file'
 import { cachedFileResponse, type DownloadCache } from './stream-cache'
-import { asError, sourceUnavailableError, UnavailableDownloadFileError } from './download-failure'
+import { asError, sourceUnavailableError, UnavailableDownloadFileError, RetryableDownloadFileError } from './download-failure'
 import { finalDownloadNameKey } from '../mail/deduplicate'
 
 export interface StreamDownloadOptions {
@@ -99,7 +99,9 @@ export async function streamDownloadFiles(
   type Prepared = { content: () => Promise<Awaited<ReturnType<typeof prefetchFile>>>; name: string; networkFinished: Promise<void>; finished: Promise<void>; duplicate?: boolean }
   const jobs = new Map<number, Promise<Prepared | null>>()
   const pumps = new Set<Promise<void>>()
-  const fileFailure = (error: unknown) => { if (!(error instanceof UnavailableDownloadFileError)) fail(error) }
+  const fileFailure = (error: unknown) => {
+    if (!(error instanceof UnavailableDownloadFileError) && !(error instanceof RetryableDownloadFileError)) fail(error)
+  }
   const open = async (index: number, generated: string): Promise<Prepared> => {
     const item = items[index]
     const name = stripAppNoDot ? stripApplicationNoDot(generated) : generated
@@ -111,37 +113,62 @@ export async function streamDownloadFiles(
       await options.cache!.complete(index, cached)
       cached.complete = true
     }
-    if (cached?.complete && options.cache) {
-      // 完整磁盘缓存无需占用网络窗口，也无需提前分配正文缓冲。
-      return { name, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: async () => {
-        signal.throwIfAborted()
-        const file = await prefetchFile('local-cache', item.fileName, cached.receivedBytes === 0, cached.sourceNotice ?? '', null, signal,
-          () => cachedFileResponse('local-cache', index, options.cache!, signal, options.fetchFile ?? globalThis.fetch.bind(globalThis)), fileFailure)
-        pumps.add(file.finished); void file.finished.then(() => pumps.delete(file.finished))
-        await file.ready
-        return file
-      } }
-    }
-    let prepared = await scoped.post('fileDownload', params, signal)
-    // This producer prepares one attachment at a time, never a server-side bulk ZIP.
-    // A gateway failure can retry its handle without repeating any mail/write operation.
-    for (let attempt = 1; !prepared.ok && [502, 503, 504].includes(prepared.error.status ?? 0) && attempt < 3; attempt++) {
-      await untilAbort(new Promise<void>(resolve => setTimeout(resolve, attempt * 200)))
-      signal.throwIfAborted()
-      prepared = await scoped.post('fileDownload', params, signal)
-    }
-    if (!prepared.ok) throw sourceUnavailableError(prepared.error.message) ?? new Error(prepared.error.message)
-    const handle = readDownloadHandle(prepared.data)
-    if (!handle.ok) throw sourceUnavailableError(handle.error.message) ?? new Error(handle.error.message)
-    const url = transport.fileDownloadUrl(handle.data.fileGuid, handle.data.fileSize)
-    if (!url) throw new Error('取文件句柄无效。')
     const fetcher = options.fetchFile ?? globalThis.fetch.bind(globalThis)
-    const file = await prefetchFile(url, item.fileName, handle.data.fileSize === 0, handle.data.notice,
-      budget, signal, options.cache ? target => cachedFileResponse(target, index, options.cache!, signal, fetcher, handle.data.notice) : fetcher, fileFailure,
-      options.cache ? offset => options.cache!.read(index, offset) : undefined)
-    pumps.add(file.finished)
-    void file.finished.then(() => pumps.delete(file.finished))
-    return { content: async () => { try { await file.ready } catch (error) { await file.finished; throw error }; return file }, name, networkFinished: file.networkFinished, finished: file.finished }
+    let finishNetwork!: () => void
+    const networkFinished = new Promise<void>(resolve => { finishNetwork = resolve })
+    const validate = async (file: Awaited<ReturnType<typeof prefetchFile>>) => {
+      pumps.add(file.finished)
+      void file.finished.then(() => pumps.delete(file.finished))
+      try { await file.ready } catch (error) { await file.finished; throw error }
+      return file
+    }
+    const fetchFresh = async () => {
+      let prepared = await scoped.post('fileDownload', params, signal)
+      // 仅重新准备当前附件；不重复任何邮件或写入操作。
+      for (let attempt = 1; !prepared.ok && [502, 503, 504].includes(prepared.error.status ?? 0) && attempt < 3; attempt++) {
+        await untilAbort(new Promise<void>(resolve => setTimeout(resolve, attempt * 200)))
+        signal.throwIfAborted()
+        prepared = await scoped.post('fileDownload', params, signal)
+      }
+      if (!prepared.ok) throw sourceUnavailableError(prepared.error.message) ?? new Error(prepared.error.message)
+      const handle = readDownloadHandle(prepared.data)
+      if (!handle.ok) throw sourceUnavailableError(handle.error.message) ?? new Error(handle.error.message)
+      const url = transport.fileDownloadUrl(handle.data.fileGuid, handle.data.fileSize)
+      if (!url) throw new Error('取文件句柄无效。')
+      const file = await prefetchFile(url, item.fileName, handle.data.fileSize === 0, handle.data.notice,
+        budget, signal, options.cache ? target => cachedFileResponse(target, index, options.cache!, signal, fetcher, handle.data.notice) : fetcher, fileFailure,
+        options.cache ? offset => options.cache!.read(index, offset) : undefined)
+      void file.networkFinished.then(finishNetwork)
+      return validate(file)
+    }
+    const recover = async (fromCache: boolean) => {
+      for (let attempt = 1; ; attempt++) {
+        signal.throwIfAborted()
+        try {
+          if (fromCache && attempt === 1) {
+            return await validate(await prefetchFile('local-cache', item.fileName, cached!.receivedBytes === 0, cached!.sourceNotice ?? '', null, signal,
+              () => cachedFileResponse('local-cache', index, options.cache!, signal, fetcher), fileFailure))
+          }
+          return await fetchFresh()
+        } catch (error) {
+          signal.throwIfAborted()
+          if (!(error instanceof RetryableDownloadFileError)) throw error
+          // 校验发生在创建ZIP条目前，且旧正文泵已停止；只丢弃该附件的异常缓存。
+          await options.cache?.reset(index, {})
+          if (attempt >= 3) throw new UnavailableDownloadFileError(`${error.message} 已尝试3次，跳过此附件。`)
+          await untilAbort(new Promise<void>(resolve => setTimeout(resolve, attempt * 200)))
+        }
+      }
+    }
+    if (cached?.complete && options.cache) {
+      // 完整磁盘缓存按序消费时才读取；旧版异常缓存也走相同校验与重取流程。
+      return { name, networkFinished: Promise.resolve(), finished: Promise.resolve(), content: () => recover(true) }
+    }
+    const content = recover(false)
+    // 网络EOF即释放调度窗口；正文校验和重试完成才释放持久任务窗口。
+    // 不能让等待缓存落盘的校验重新扣住六路网络并发。
+    const finished = content.then(file => file.finished, fileFailure).finally(finishNetwork)
+    return { content: () => content, name, networkFinished, finished }
   }
   let preparing = 0, persisting = 0
   const failures: Array<{ name: string; reason: string }> = []

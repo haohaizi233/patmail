@@ -3,6 +3,11 @@ export class UnavailableDownloadFileError extends Error {
   constructor(message: string) { super(message); this.name = 'UnavailableDownloadFileError' }
 }
 
+/** 已确认是单个附件的响应异常；在写入ZIP条目前允许换句柄重试。 */
+export class RetryableDownloadFileError extends Error {
+  constructor(message: string) { super(message); this.name = 'RetryableDownloadFileError' }
+}
+
 export function sourceUnavailableError(notice: string): UnavailableDownloadFileError | undefined {
   return /文件不存在|权限不足/.test(notice) ? new UnavailableDownloadFileError(notice.slice(0, 1000)) : undefined
 }
