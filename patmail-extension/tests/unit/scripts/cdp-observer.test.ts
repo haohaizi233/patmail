@@ -245,11 +245,14 @@ describe('CDP observer endpoint discovery', () => {
 
   it('honours PATMAIL_CDP_USER_DATA_DIRS before the platform defaults', () => {
     const candidateUserDataDirs = required<(env: object, home: string) => string[]>('candidateUserDataDirs')
-    const custom = [join('D:', 'custom', 'User Data'), join('E:', 'edge', 'User Data')]
-    const dirs = candidateUserDataDirs({ PATMAIL_CDP_USER_DATA_DIRS: custom.join(delimiter) }, join('C:', 'Users', 'test'))
+    // 夹具用 resolve 生成平台原生绝对路径：值里不能出现平台路径分隔符（Windows ';' / POSIX ':'），
+    // 否则 'D:' 这类盘符冒号会在 POSIX 上被 split(delimiter) 切开。
+    const custom = [resolve('/custom/User Data'), resolve('/edge/User Data')]
+    const home = resolve('/Users/test')
+    const dirs = candidateUserDataDirs({ PATMAIL_CDP_USER_DATA_DIRS: custom.join(delimiter) }, home)
     expect(dirs.slice(0, 2)).toEqual(custom)
     expect(new Set(dirs).size).toBe(dirs.length)
-    expect(candidateUserDataDirs({}, join('C:', 'Users', 'test')).length).toBeGreaterThan(1)
+    expect(candidateUserDataDirs({}, home).length).toBeGreaterThan(1)
   })
 })
 
