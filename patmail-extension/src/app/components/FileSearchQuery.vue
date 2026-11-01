@@ -185,9 +185,12 @@ watch([exportProgress, () => activeTask.value?.status, () => pauseConfirmation.v
   const download = task.status === 'done' ? `已保存${progress.bytes ? `（${downloadBytes(progress.bytes)}）` : ''}`
     : progress.totalBytes ? `${downloadBytes(progress.bytes)} / ${downloadBytes(progress.totalBytes)}（${Math.min(100, Math.round(progress.bytes / progress.totalBytes * 1000) / 10)}%）`
       : progress.bytes ? `已接收 ${downloadBytes(progress.bytes)}（总大小待确认）` : '等待接收'
-  const detail = `${task.selection ? `取名 ${named}/${total}` : '取名 使用附件原名'} · 已入包 ${progress.packed}/${total}${progress.failed ? ` · 跳过 ${progress.failed}` : ''}${progress.deduplicated ? ` · 同名去重 ${progress.deduplicated}` : ''} · 浏览器下载 ${download}${exportEta.value ? ` · 预计 ${exportEta.value} 完成入包处理` : ''}`
+  // 两行分工跟着流程走：第一行是阶段加「预计几点完成入包」，第二行只排「取名 / 入包 / 浏览器下载」的分步计数，
+  // 每步按发生先后出现一次，不再把预计塞在下载字节后面导致截断。
+  const summary = `${exportStatus.value}${exportEta.value ? ` · 预计 ${exportEta.value} 完成入包处理` : ''}`
+  const detail = `${task.selection ? `取名 ${named}/${total}` : '取名 使用附件原名'} · 入包 ${progress.packed}/${total}${progress.failed ? ` · 跳过 ${progress.failed}` : ''}${progress.deduplicated ? ` · 同名去重 ${progress.deduplicated}` : ''} · 浏览器下载 ${download}`
   paintTaskCheckProgress(task.status === 'done' ? total : progress.packed + progress.failed + progress.deduplicated, total, progress.startedAt,
-    task.status === 'done' ? 'done' : task.status === 'paused' ? 'hold' : 'run', '下载文件', Date.now(), detail, exportStatus.value)
+    task.status === 'done' ? 'done' : task.status === 'paused' ? 'hold' : 'run', '下载文件', Date.now(), detail, summary)
   // 入包结束还需等待浏览器确认保存，顶部彩虹条不能提前到100%。
   taskCheckProgress.percent = exportPercent.value
 }, { flush: 'sync' })

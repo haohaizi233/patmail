@@ -127,7 +127,7 @@ try {
       assert.deepEqual(Buffer.from(await entries[0].getData(new Uint8ArrayWriter(), { checkSignature: true })), pdf)
     } finally { await reader.close() }
     verifiedDownloads.push({ id: downloadIndex, file, entry: `配方${separator}验收.pdf` })
-    assert.match(await app.locator('.check-rainbow').getAttribute('aria-valuetext'), /取名 1\/1.*已入包 1\/1/, '完成进度仍包含取名和入包计数')
+    assert.match(await app.locator('.check-rainbow').getAttribute('aria-valuetext'), /取名 1\/1.*入包 1\/1/, '完成进度仍包含取名和入包计数')
     assert.equal(await app.locator('.check-rainbow').getAttribute('aria-valuenow'), '100')
     assert.equal(await exportPanel.getByRole('progressbar').count(), 0, '下载进度只使用顶部彩虹条')
     assert.equal((await app.locator('.check-rainbow').getAttribute('aria-valuetext') ?? '').includes('导出完成'), true, '完成状态在顶栏显示')

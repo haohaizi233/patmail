@@ -50,8 +50,10 @@ img { max-width: 100%; }
 .search input:focus, .search input:focus-visible { outline: none; border: 0; }
 .search input::placeholder { color: #b7c0d2; }
 .check-rainbow { width: min(460px, 38vw); flex: none; margin-inline: auto; display: grid; gap: 4px; align-content: center; justify-items: center; }
-.check-rainbow-track { width: 100%; height: 14px; border-radius: 99px; background: #fff; border: 1px solid #f6c5d8; overflow: hidden; box-shadow: 0 4px 14px #ffd6e640; }
+.check-rainbow-bar { width: 100%; display: flex; align-items: center; gap: 8px; }
+.check-rainbow-track { flex: 1; min-width: 0; height: 14px; border-radius: 99px; background: #fff; border: 1px solid #f6c5d8; overflow: hidden; box-shadow: 0 4px 14px #ffd6e640; }
 .check-rainbow-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #ff5d73, #ff9f43, #ffe14a, #3ddc97, #4dabff, #8b6cff, #ff5d73); background-size: 200% 100%; animation: check-rainbow 1.6s linear infinite; }
+.check-rainbow-percent { flex: none; min-width: 3.6em; text-align: right; font-size: 12px; line-height: 1.2; font-weight: 800; color: #7a3e86; font-variant-numeric: tabular-nums; }
 .check-rainbow p { margin: 0; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.2; font-weight: 700; color: #7a3e86; text-align: center; }
 @keyframes check-rainbow { from { background-position: 0 0; } to { background-position: 200% 0; } }
 @media (prefers-reduced-motion: reduce) { .check-rainbow-track > span { animation: none; } }
