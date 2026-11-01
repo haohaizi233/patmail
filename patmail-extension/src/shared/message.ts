@@ -10,7 +10,8 @@ import type { MailRuleBundle } from '../mail/types'
 import { isQueryGuid, isQueryTemplate } from '../query/query-validator'
 import type { QueryTemplate } from '../query/query-types'
 import { isEasyConnection, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope } from './connection'
-import { isCaseContactResult, isDictionaryResult, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
+import { isCaseContactResult, isDictionaryResult, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isFileTempNamesResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
+import type { FileTempNameList } from '../api/file-temp-name'
 import type { LimitMonitorQuery } from '../api/limit-monitor-params'
 import type { FilingSearchQuery } from '../api/filing-search-params'
 import { isProcessOpenTarget, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from '../api/mail-process'
@@ -123,6 +124,9 @@ export const MessageType = {
   HistoryQuerySaved: 'HISTORY_QUERY_SAVED',
   DeleteHistoryQuery: 'DELETE_HISTORY_QUERY',
   HistoryQueryDeleted: 'HISTORY_QUERY_DELETED',
+  SaveFileTempName: 'SAVE_FILE_TEMP_NAME',
+  DeleteFileTempName: 'DELETE_FILE_TEMP_NAME',
+  FileTempNamesResult: 'FILE_TEMP_NAMES_RESULT',
   LoadDictionary: 'LOAD_DICTIONARY',
   ScanFileSearchForm: 'SCAN_FILE_SEARCH_FORM',
   FileSearchFormResult: 'FILE_SEARCH_FORM_RESULT',
@@ -209,6 +213,8 @@ export type ContentRequest =
   | Response<'GET_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' }>
   | Response<'SAVE_HISTORY_QUERY', { title: string; queryId: string; queryXml: string; surface?: 'file' | 'limit' }>
   | Response<'DELETE_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' }>
+  | Response<'SAVE_FILE_TEMP_NAME', { tempName: string; newFilename: string; fileNameType: string }>
+  | Response<'DELETE_FILE_TEMP_NAME', { tempId: string }>
   | Response<'LOAD_DICTIONARY', DictionaryLoadRequest>
   | Request<'SCAN_FILE_SEARCH_FORM'>
   | Request<'SCAN_FILING_FORM'>
@@ -424,6 +430,7 @@ export type ContentResponse =
   | Response<'HISTORY_QUERY_RESULT', ApiResult<HistoryQueryDetail>>
   | Response<'HISTORY_QUERY_SAVED', ApiResult<{ saved: true }>>
   | Response<'HISTORY_QUERY_DELETED', ApiResult<{ deleted: true }>>
+  | Response<'FILE_TEMP_NAMES_RESULT', ApiResult<FileTempNameList>>
   | Response<'DICTIONARY_RESULT', ApiResult<DictionarySnapshot>>
   | Response<'FILE_SEARCH_FORM_RESULT', { fields: FileSearchFormField[] }>
   | Response<'FILING_FORM_RESULT', { fields: FileSearchFormField[] }>
@@ -769,6 +776,20 @@ export function isMessage(value: unknown): value is AppMessage {
       return isRecord(value.payload) && typeof value.payload.queryId === 'string' && isQueryGuid(value.payload.queryId) &&
         (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit') &&
         Object.keys(value.payload).every(key => key === 'queryId' || key === 'surface')
+    case MessageType.SaveFileTempName: {
+      if (!isRecord(value.payload) || Object.keys(value.payload).length !== 3) return false
+      const names = typeof value.payload.newFilename === 'string' ? value.payload.newFilename.split(';') : []
+      const types = typeof value.payload.fileNameType === 'string' ? value.payload.fileNameType.split(';') : []
+      return typeof value.payload.tempName === 'string' && value.payload.tempName.trim().length > 0 && value.payload.tempName.length <= 80 &&
+        typeof value.payload.newFilename === 'string' && value.payload.newFilename.length <= 2000 &&
+        typeof value.payload.fileNameType === 'string' && value.payload.fileNameType.length <= 500 &&
+        names.length > 0 && names.length <= 31 && names.length === types.length &&
+        names.every(name => name.length > 0 && name.length <= 80) &&
+        types.every(kind => kind === 'colname' || kind === 'txt')
+    }
+    case MessageType.DeleteFileTempName:
+      return isRecord(value.payload) && typeof value.payload.tempId === 'string' && isQueryGuid(value.payload.tempId) &&
+        Object.keys(value.payload).length === 1
     case MessageType.LoadDictionary:
       return isDictionaryRequest(value.payload)
     case MessageType.ScanFileSearchForm:
@@ -1037,6 +1058,8 @@ export function isMessage(value: unknown): value is AppMessage {
       return isHistorySaveResult(value.payload)
     case MessageType.HistoryQueryDeleted:
       return isHistoryDeleteResult(value.payload)
+    case MessageType.FileTempNamesResult:
+      return isFileTempNamesResult(value.payload)
     case MessageType.DictionaryResult:
       return isDictionaryResult(value.payload)
     case MessageType.FileSearchFormResult:
@@ -1150,6 +1173,8 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.ListHistoryQueries || value.type === MessageType.GetHistoryQuery ||
     value.type === MessageType.SaveHistoryQuery ||
     value.type === MessageType.DeleteHistoryQuery ||
+    value.type === MessageType.SaveFileTempName ||
+    value.type === MessageType.DeleteFileTempName ||
     value.type === MessageType.LoadDictionary || value.type === MessageType.ScanFileSearchForm || value.type === MessageType.ScanFilingForm || value.type === MessageType.CreateEasyMail ||
     value.type === MessageType.ReadQuerySurfaces ||
     value.type === MessageType.SaveEasyMail || value.type === MessageType.FindMailExecution ||
@@ -1165,7 +1190,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
 }
 
 const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES'])
-const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE'])
+const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SAVE_FILE_TEMP_NAME', 'DELETE_FILE_TEMP_NAME', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE'])
 
 /** 不允许转发时给出原因。写开关关掉时，创建、保存和查询模板写回都停在这里。 */
 export function workspaceForwardBlock(value: unknown): string {

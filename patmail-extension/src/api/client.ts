@@ -16,6 +16,7 @@ import type { FilingSearchResult } from './filing-search-types'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
 import { buildMailProcessParams, buildProcessListParams, filingNeedsCpcFlag, normalizeMailProcess, normalizeProcessList, processFormPath, type ProcessKind, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from './mail-process'
 import { isRecord } from './response-guards'
+import { fileTempDeleteParams, fileTempSaveParams, readFileTempNameList, type FileTempNameInput, type FileTempNameList } from './file-temp-name'
 import { normalizeLimitMonitor } from './limit-monitor-normalizer'
 import type { LimitMonitorResult } from './limit-monitor-types'
 import { HistoryQueryService } from './query-history'
@@ -319,6 +320,39 @@ export class EasyRuntime {
     if (!isWriteSwitchOpen()) return apiError('BUSINESS_ERROR', '写开关已关闭。')
     await this.confirmAccountRead()
     return this.history.delete(this.historyUserKey, surface, queryId, signal)
+  }
+
+  /** 保存下载文件名模板。响应带写完之后的整个 TempNameList，用来换掉下拉字典。 */
+  async saveFileTempName(input: FileTempNameInput, signal?: AbortSignal): Promise<ApiResult<FileTempNameList>> {
+    if (!isWriteSwitchOpen()) return apiError('BUSINESS_ERROR', '写开关已关闭。')
+    await this.confirmAccountRead()
+    const params = fileTempSaveParams(input)
+    if (!params.ok) return params
+    return this.writeFileTempName('fileTempSave', params.data, signal)
+  }
+
+  async deleteFileTempName(tempId: string, signal?: AbortSignal): Promise<ApiResult<FileTempNameList>> {
+    if (!isWriteSwitchOpen()) return apiError('BUSINESS_ERROR', '写开关已关闭。')
+    await this.confirmAccountRead()
+    const params = fileTempDeleteParams(tempId)
+    if (!params.ok) return params
+    return this.writeFileTempName('fileTempDelete', params.data, signal)
+  }
+
+  /** 写完作废下拉字典缓存，之后再读 GetFileTempNameList 不会回放旧模板。 */
+  private async writeFileTempName(operation: 'fileTempSave' | 'fileTempDelete', params: URLSearchParams, signal?: AbortSignal): Promise<ApiResult<FileTempNameList>> {
+    const response = await this.transport.post(operation, params, signal)
+    if (!response.ok) {
+      if (response.error.code === 'SESSION_EXPIRED') this.session.expire()
+      return response
+    }
+    const list = readFileTempNameList(response.data)
+    if (!list.ok) {
+      if (list.error.code === 'SESSION_EXPIRED') this.session.expire()
+      return list
+    }
+    this.dictionaries.invalidate(this.historyUserKey)
+    return list
   }
 
   private async mailUser(): Promise<{ ok: true; userId: string } | { ok: false; message: string }> {

@@ -6,7 +6,7 @@ import { apiError, type ApiResult } from './types'
 export type EasyOperation =
   | 'session' | 'fileSearch' | 'historyQuery' | 'historySave' | 'historyDelete'
   | 'basicData' | 'flowDirection' | 'fileTypeTree' | 'fieldColumn' | 'listColumn' | 'mailType'
-  | 'deptTree' | 'treeUser' | 'treeAgent' | 'fileTempList' | 'deptBranch' | 'applyTags' | 'limitInit' | 'limitCtrlProc'
+  | 'deptTree' | 'treeUser' | 'treeAgent' | 'fileTempList' | 'fileTempSave' | 'fileTempDelete' | 'deptBranch' | 'applyTags' | 'limitInit' | 'limitCtrlProc'
   | 'mailCustomer' | 'mailInfoInit' | 'getMailInfo' | 'getMailFile' | 'getMailCase'
   | 'getMailRule' | 'getCustomerContact' | 'getRecentContact' | 'getCaseContact' | 'getSalesContact' | 'getPicsContact' | 'getCaseAgentContact' | 'getSignature' | 'getMailSet' | 'mailSignatureList' | 'signatureSet' | 'caseDemand' | 'customerPageDemand' | 'customerPageContact' | 'saveMailInfo' | 'saveMailRelatedFiles'
   | 'getFlowInfo' | 'getFlowHistory' | 'getUrgencyList' | 'getFlowSubmit' | 'getFlowLastStatus' | 'caseBusFlow' | 'showUserInfo'
@@ -36,6 +36,8 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   treeUser: { path: '/AjaxServers/Common.ashx', call: 'GetTreeUser' },
   treeAgent: { path: '/AjaxServers/Common.ashx', call: 'GetTreeAgent' },
   fileTempList: { path: '/AjaxServers/BaseInfo.ashx', call: 'GetFileTempNameList' },
+  fileTempSave: { path: '/AjaxServers/BaseInfo.ashx', call: 'SaveFileTepmName' },
+  fileTempDelete: { path: '/AjaxServers/BaseInfo.ashx', call: 'DeleteTemp' },
   deptBranch: { path: '/AjaxServers/BaseInfo.ashx', call: 'GetDeptBranch' },
   applyTags: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetApplyTags' },
   limitInit: { path: '/AjaxServers/Report.ashx', call: 'LimitMonitorInit' },
@@ -144,7 +146,7 @@ export class EasyTransport {
 
   /** 只读请求遇到网关 502/503 时再试。写请求不重试，避免一次 502 后面又创建出第二封；打包下载也不重试，免得在原站留两份临时包。 */
   async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void): Promise<ApiResult<unknown>> {
-    const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload'
+    const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'fileTempSave' && operation !== 'fileTempDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload'
     let result = await this.postOnce(operation, params, signal, timeoutMs, onBytes)
     for (let attempt = 1; retryable && !result.ok && (result.error.status === 502 || result.error.status === 503) && attempt < 3; attempt += 1) {
       if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')

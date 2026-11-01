@@ -28,6 +28,8 @@ import { MessageType, type FileSearchFormField, type MessageBridge } from '../sh
 import { useWorkspace } from '../app/composables/useWorkspace'
 import { hasOptionTree } from '../query/option-tree'
 import { FILE_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
+import { adaptFileTemp } from '../api/dictionaries/adapters'
+import type { FileTempNameRow } from '../api/file-temp-name'
 import { downloadNameParts, downloadNameControlFields, isDownloadNameControl, selectionFromNameParts, selectionFromControls, type DownloadNamePart, type FileDownloadSelection } from '../mail/download-name'
 import ThemeSelect from '../shell/components/ThemeSelect.vue'
 import { sameOptionValue } from '../shell/components/theme-select'
@@ -115,6 +117,7 @@ const pageHidden = computed(() => hiddenFormFields(pageFields.value))
 const checkMessage = ref('')
 const dictionaryNote = ref('')
 const downloadHint = ref('')
+const downloadSaving = ref(false)
 const checkingForm = ref(false)
 const showFileTree = ref(false)
 const fileTypeRoots = ref<string[]>([])
@@ -348,6 +351,109 @@ function namePartChoices(column: string): { value: string; label: string }[] {
   if (!options.some(item => item.value === 'fixtxt')) options.push({ value: 'fixtxt', label: '固定字符' })
   if (column && !options.some(item => item.value === column)) options.push({ value: column, label: column })
   return options
+}
+
+/** 保存、删除响应回来的完整 TempNameList 直接换掉下拉，不再单独拉一次字典。 */
+function applyFileTempTemplates(templates: FileTempNameRow[]): void {
+  pickers.value = {
+    ...pickers.value,
+    fileTemp: adaptFileTemp(templates.map(row => ({
+      id: row.id, temp_name: row.tempName, new_filename: row.newFilename, file_name_type: row.fileNameType
+    })))
+  }
+  if (props.userId) rememberDictionaries(props.userId, FILE_PICKER_FIELDS, pickers.value, true)
+}
+
+/** 保存下载名称模板：写到原网站账号上（原站 Call=SaveFileTepmName），同名模板原站允许存多份。 */
+async function saveDownloadName(): Promise<void> {
+  if (downloadSaving.value) return
+  const tempName = formValue('tempName').trim()
+  if (!tempName) {
+    downloadHint.value = '请填写模板名称。'
+    return
+  }
+  if (!props.bridge) {
+    downloadHint.value = '请先连接 EASY 后再保存下载名称模板。'
+    return
+  }
+  let recipe: { newFilename: string; fileNameType: string } | null = null
+  try {
+    const selection = currentDownloadSelection()
+    if (selection?.newFilename && selection.fileNameType) {
+      recipe = { newFilename: selection.newFilename, fileNameType: selection.fileNameType }
+    }
+  } catch (error) {
+    downloadHint.value = error instanceof Error ? error.message : '下载名称无效，没有保存。'
+    return
+  }
+  if (!recipe) {
+    downloadHint.value = '请先配置下载文件名称。'
+    return
+  }
+  downloadSaving.value = true
+  downloadHint.value = '正在保存下载名称模板…'
+  try {
+    const response = await props.bridge.request({
+      type: MessageType.SaveFileTempName,
+      payload: { tempName, ...recipe }
+    })
+    if (response.type !== MessageType.FileTempNamesResult || !response.payload.ok) {
+      downloadHint.value = `原网站没有保存：${response.type === MessageType.FileTempNamesResult && !response.payload.ok
+        ? response.payload.error.message
+        : response.type === MessageType.Error ? response.payload.message : '原网站没有返回保存结果。'}`
+      return
+    }
+    applyFileTempTemplates(response.payload.data.templates)
+    // 同名同配方可能有多份，取列表里最后一份当作刚保存的。
+    let saved: FileTempNameRow | undefined
+    for (const row of response.payload.data.templates) {
+      if (row.tempName === tempName && row.newFilename === recipe.newFilename && row.fileNameType === recipe.fileNameType) saved = row
+    }
+    if (saved) chooseDownloadTemplate(saved.id)
+    downloadHint.value = `已保存下载名称模板「${tempName}」${saved ? '，并在第一个下拉里选中' : ''}。`
+  } finally {
+    downloadSaving.value = false
+  }
+}
+
+/** 删除当前选中的下载名称模板（原站 Call=DeleteTemp，temp_id 是下拉里选中的 id）。 */
+async function deleteDownloadName(): Promise<void> {
+  if (downloadSaving.value) return
+  const templateId = formValue('filetemp').trim()
+  if (!isQueryGuid(templateId)) {
+    downloadHint.value = '先在第一个下拉里选中要删除的下载名称模板。'
+    return
+  }
+  if (!props.bridge) {
+    downloadHint.value = '请先连接 EASY 后再删除下载名称模板。'
+    return
+  }
+  const label = downloadChoices('filetemp').find(item => item.value === templateId)?.label ?? templateId
+  const agreed = await confirmDialog({
+    title: '删除下载名称模板',
+    message: `会从原网站删掉「${label}」。`,
+    confirmLabel: '删除'
+  })
+  if (!agreed) return
+  downloadSaving.value = true
+  downloadHint.value = '正在删除下载名称模板…'
+  try {
+    const response = await props.bridge.request({
+      type: MessageType.DeleteFileTempName,
+      payload: { tempId: templateId }
+    })
+    if (response.type !== MessageType.FileTempNamesResult || !response.payload.ok) {
+      downloadHint.value = `原网站没有删除：${response.type === MessageType.FileTempNamesResult && !response.payload.ok
+        ? response.payload.error.message
+        : response.type === MessageType.Error ? response.payload.message : '原网站没有返回删除结果。'}`
+      return
+    }
+    applyFileTempTemplates(response.payload.data.templates)
+    if (formValue('filetemp').trim() === templateId) chooseDownloadTemplate('')
+    downloadHint.value = `已删除下载名称模板「${label}」。`
+  } finally {
+    downloadSaving.value = false
+  }
 }
 /** 下载是查询之后才点的：点的一刻再取一次当前值，查询后改模板/固定字符都按新的来。 */
 let recoveredForm = false
@@ -1623,10 +1729,11 @@ watch(selectedCustomerId, () => {
                   </span>
                   <button type="button" class="text-button download-part-add" :disabled="nameParts.length >= 31" @click="addNamePart">添加名称段</button>
                 </span>
-                <input :value="formValue('tempName')" type="text" placeholder="模板名称" @input="onText('tempName', $event)" />
-                <button type="button" class="download-save" @click="downloadHint = '下载名称的保存和删除写在原网站账号上，这里先接上选择，不从插件提交。'">保存下载名称</button>
+                <input :value="formValue('tempName')" type="text" placeholder="模板名称" maxlength="80" @input="onText('tempName', $event)" />
+                <button type="button" class="download-save" :disabled="downloadSaving" @click="saveDownloadName">保存下载名称</button>
+                <button type="button" class="download-save download-delete" :disabled="downloadSaving || !isQueryGuid(formValue('filetemp').trim())" @click="deleteDownloadName">删除下载名称</button>
               </span>
-              <p class="download-note">此处可设置文件下载名称模板，填写模板名称保存后，可在第一个下拉中进行选择。模板为执行保存的用户专有，其他用户不共享。选中的名称会带到后面的发文，用来生成文件名，不作为查询条件。</p>
+              <p class="download-note">此处可设置文件下载名称模板，填写模板名称点「保存下载名称」会存到原网站账号上，在第一个下拉中选择；「删除下载名称」删除当前选中的模板。模板为执行保存的用户专有，其他用户不共享。选中的名称会带到后面的发文，用来生成文件名，不作为查询条件。</p>
               <p v-if="downloadHint" class="hint">{{ downloadHint }}</p>
               <p v-if="downloadNameProblem" class="download-name-error" role="alert">{{ downloadNameProblem }}</p>
             </div>

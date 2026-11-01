@@ -2,6 +2,7 @@ import { isQueryGuid } from '../query/query-validator'
 import { isRecord } from '../shared/guards'
 import { fileSearchTimeoutMs, fileSearchValueLimit, isFileSearchBusinessField, type FileSearchQuery } from './file-search-params'
 import type { DictionarySnapshot } from './dictionaries'
+import type { FileTempNameList, FileTempNameRow } from './file-temp-name'
 import type { HistoryQueryDetail, HistoryQueryOption } from './query-history'
 import type { FileSearchResult, PatentFile } from './file-search-types'
 import { isLimitMonitorInputField, isLimitMonitorType, type LimitMonitorQuery } from './limit-monitor-params'
@@ -287,6 +288,20 @@ export function isHistorySaveResult(value: unknown): value is ApiResult<{ saved:
 
 export function isHistoryDeleteResult(value: unknown): value is ApiResult<{ deleted: true }> {
   return isApiResult(value, (data): data is { deleted: true } => isRecord(data) && data.deleted === true && Object.keys(data).length === 1)
+}
+
+function isFileTempNameRow(value: unknown): value is FileTempNameRow {
+  return isRecord(value) && typeof value.id === 'string' && isQueryGuid(value.id) &&
+    typeof value.tempName === 'string' && value.tempName.length > 0 && value.tempName.length <= 80 &&
+    typeof value.newFilename === 'string' && value.newFilename.length > 0 && value.newFilename.length <= 2000 &&
+    typeof value.fileNameType === 'string' && value.fileNameType.length > 0 && value.fileNameType.length <= 500 &&
+    Object.keys(value).length === 4
+}
+
+export function isFileTempNamesResult(value: unknown): value is ApiResult<FileTempNameList> {
+  return isApiResult(value, (data): data is FileTempNameList =>
+    isRecord(data) && Array.isArray(data.templates) && data.templates.length <= 500 &&
+    data.templates.every(isFileTempNameRow) && Object.keys(data).length === 1)
 }
 
 function isCustomerListSnapshot(value: Record<string, unknown>): boolean {

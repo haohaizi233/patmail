@@ -358,6 +358,12 @@ const bridge: MessageBridge = {
       case MessageType.DeleteHistoryQuery:
         return { type: MessageType.HistoryQueryDeleted,
           payload: await easyRuntime.deleteHistoryQuery(message.payload.queryId, signal, message.payload.surface === 'limit' ? 'limit' : 'file') }
+      case MessageType.SaveFileTempName:
+        return { type: MessageType.FileTempNamesResult,
+          payload: await easyRuntime.saveFileTempName(message.payload, signal) }
+      case MessageType.DeleteFileTempName:
+        return { type: MessageType.FileTempNamesResult,
+          payload: await easyRuntime.deleteFileTempName(message.payload.tempId, signal) }
       case MessageType.ScanFileSearchForm:
         return { type: MessageType.FileSearchFormResult, payload: { fields: await readFileSearchForm() } }
       case MessageType.ScanFilingForm:
