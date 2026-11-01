@@ -9,6 +9,7 @@ import type { FilingSearchQuery } from '../../api/filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from '../../api/filing-search-types'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
 import { filingTemplateValues, filingTemplatesOf, applyFilingBuiltin, FILING_BUILTIN_TEMPLATES, FILING_TEMPLATE_TYPE, type FilingBuiltinTemplate } from '../../query/filing-templates'
+import { downloadTemplateJson, readTemplateJson, templateJsonFileName, templateJsonText } from '../../query/template-json'
 import type { QueryTemplate } from '../../query/query-types'
 import { hasOptionTree } from '../../query/option-tree'
 import { activateOptionFallback, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
@@ -51,6 +52,7 @@ const templates = ref<QueryTemplate[]>([])
 const selectedTemplateId = ref('')
 const saveName = ref('')
 const saveNameDirty = ref(false)
+const templateJsonInput = ref<HTMLInputElement | null>(null)
 const templateMessage = ref('')
 const savingTemplate = ref(false)
 const deletingTemplate = ref(false)
@@ -204,6 +206,55 @@ async function deleteTemplate(): Promise<void> {
     deletingTemplate.value = false
   }
 }
+
+/** 导出 JSON：导出表单当前的查询条件，不含模板名。 */
+function exportTemplateJson(): void {
+  const draft = filingDraftFields(values.value)
+  if (!Object.keys(draft.fields).length) {
+    templateMessage.value = '先填写至少一项查询条件，再导出。'
+    return
+  }
+  const from = (selectedTemplate.value?.name || selectedBuiltin.value?.name || saveName.value.trim()).trim()
+  downloadTemplateJson(templateJsonText('FilingSearch', draft), templateJsonFileName('FilingSearch', from))
+  templateMessage.value = `已导出当前条件的 JSON。${from ? `文件名带源模板名「${from}」和时间戳` : '文件名只带查询面和时间戳'}，文件内容不含模板名，导入后自己命名保存。`
+}
+
+/** 导入 JSON：只导入查询字段，模板名不带。填进表单后自己追加、修改、命名，最后自己保存。 */
+async function importTemplateJson(event: Event): Promise<void> {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  let text = ''
+  try {
+    text = await file.text()
+  } catch {
+    templateMessage.value = '这份 JSON 文件没有读开。'
+    return
+  }
+  const read = readTemplateJson(text, 'FilingSearch')
+  if (!read.ok) {
+    templateMessage.value = read.message
+    return
+  }
+  const next: Record<string, string> = {}
+  let count = 0
+  for (const [key, value] of Object.entries(read.conditions.fields)) {
+    if (!value.trim()) continue
+    next[key] = value
+    count += 1
+  }
+  for (const [key, label] of Object.entries(read.conditions.displayValues)) {
+    const text = label.trim()
+    if (text && next[key]) next[`${key}_text`] = label
+  }
+  values.value = next
+  selectedTemplateId.value = ''
+  saveName.value = ''
+  templateMessage.value = `已导入 ${count} 个查询条件。可以继续追加或修改条件，最后自己填模板名称保存。`
+}
+
 const pickers = ref<Record<string, NormalizedDictionary>>({})
 const pickersReady = ref(false)
 const pickerFailed = ref(false)
@@ -842,6 +893,9 @@ onBeforeUnmount(() => {
         <label>模板名称<input v-model="saveName" type="text" maxlength="80" @input="saveNameDirty = true" /></label>
         <button type="button" class="text-button" :disabled="savingTemplate" @click="saveTemplate">{{ savingTemplate ? '正在保存…' : selectedTemplate ? '更新模板' : '保存到本地' }}</button>
         <button type="button" class="text-button" :disabled="!selectedTemplate || deletingTemplate" @click="deleteTemplate">{{ deletingTemplate ? '正在删除…' : '删除模板' }}</button>
+        <button type="button" class="text-button" @click="exportTemplateJson">导出 JSON</button>
+        <button type="button" class="text-button" @click="templateJsonInput?.click()">导入 JSON</button>
+        <input ref="templateJsonInput" type="file" accept=".json,application/json" hidden aria-label="导入查询模板 JSON" @change="importTemplateJson" />
       </div>
       <p v-if="templateMessage" class="hint">{{ templateMessage }}</p>
       <p class="hint">递交查询模板只存在本机：原站没有模板功能，保存和删除都不会写原网站。</p>

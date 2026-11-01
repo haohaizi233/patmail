@@ -22,6 +22,7 @@ import { joinCaseVolumes, splitCaseVolumes } from '../customer/volume-list'
 import { TemplateLoadCoordinator } from '../query/load-coordinator'
 import { historyLabels } from '../query/history-labels'
 import { confirmDialog } from '../app/dialog'
+import { downloadTemplateJson, readTemplateJson, templateJsonFileName, templateJsonText } from '../query/template-json'
 import { MessageType, type MessageBridge } from '../shared/message'
 
 const props = defineProps<{ bridge?: MessageBridge; userId: string; canSearch: boolean; seed?: Record<string, string> | null; seedToken?: number }>()
@@ -61,6 +62,7 @@ const loading = ref(false)
 const message = ref('')
 const saveName = ref('')
 const saveNameDirty = ref(false)
+const templateJsonInput = ref<HTMLInputElement | null>(null)
 const saving = ref(false)
 const deleting = ref(false)
 const checking = ref(false)
@@ -402,6 +404,72 @@ async function deleteTemplate(): Promise<void> {
   }
 }
 
+/** 「更多条件」里藏着的字段键。导入的条件落在这些键上时自动展开，方便接着改。 */
+function hiddenLimitKeys(): Set<string> {
+  return new Set(LIMIT_BLOCKS.filter(block => block.more).flatMap(block => block.cells.flatMap(cell => {
+    if (cell.kind === 'dates') return [cell.start, cell.end, cell.empty].filter((item): item is string => Boolean(item))
+    return [cell.key]
+  })))
+}
+
+/** 导出文件名里的源模板名：先用选中模板的名字，没选模板就用自己填的名字。 */
+function exportSourceName(): string {
+  const selected = templates.value.find(item => item.id === selectedId.value)
+  return (selected ? selected.name : saveName.value).trim()
+}
+
+/** 导出 JSON：导出表单当前的查询条件。文件名带源模板名和时间戳，文件内容不含模板名。 */
+function exportTemplateJson(): void {
+  const fields = draftFields()
+  const extras = Object.entries(unknownFields.value).filter(([, value]) => value.trim()).length
+  if (!Object.keys(fields).length && !extras) {
+    message.value = '先填写至少一项查询条件，再导出。'
+    return
+  }
+  const from = exportSourceName()
+  downloadTemplateJson(
+    templateJsonText('LimitMonitor', { fields, displayValues: filledDisplay(), unknownFields: unknownFields.value }),
+    templateJsonFileName('LimitMonitor', from)
+  )
+  message.value = `已导出当前条件的 JSON。${from ? `文件名带源模板名「${from}」和时间戳` : '文件名只带查询面和时间戳'}，文件内容不含模板名，导入后自己命名保存。`
+}
+
+/** 导入 JSON：只导入查询字段，模板名不带。填进表单后自己追加、修改、命名，最后自己保存。 */
+async function importTemplateJson(event: Event): Promise<void> {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  let text = ''
+  try {
+    text = await file.text()
+  } catch {
+    message.value = '这份 JSON 文件没有读开。'
+    return
+  }
+  const read = readTemplateJson(text, 'LimitMonitor')
+  if (!read.ok) {
+    message.value = read.message
+    return
+  }
+  const fields = read.conditions.fields
+  // 和套用模板一样：条件整套换上，选中的模板和名称都清掉，名称由自己再填。
+  applyingTemplate = true
+  values.value = { ...fields }
+  typedKeys.value = {}
+  displayValues.value = { ...read.conditions.displayValues }
+  unknownFields.value = { ...read.conditions.unknownFields }
+  loadedValues.value = { ...fields }
+  void nextTick(() => { applyingTemplate = false })
+  const hidden = hiddenLimitKeys()
+  if (Object.entries(fields).some(([key, value]) => hidden.has(key) && value.trim())) showMore.value = true
+  selectedId.value = ''
+  saveName.value = ''
+  const count = Object.values(fields).filter(value => value.trim()).length
+  message.value = `已导入 ${count} 个查询条件。可以继续追加或修改条件，最后自己填模板名称保存。`
+}
+
 function search(): void {
   if (!props.canSearch) return
   if (unavailableFields.value.length) { message.value = '原选项当前不可用，请重新读取选项或显式清除后查询。'; return }
@@ -523,10 +591,7 @@ function applySeed(): void {
   values.value = { ...props.seed }
   typedKeys.value = {}
   selectedId.value = ''
-  const hidden = new Set(LIMIT_BLOCKS.filter(block => block.more).flatMap(block => block.cells.flatMap(cell => {
-    if (cell.kind === 'dates') return [cell.start, cell.end, cell.empty].filter((item): item is string => Boolean(item))
-    return [cell.key]
-  })))
+  const hidden = hiddenLimitKeys()
   if (Object.entries(props.seed).some(([key, value]) => hidden.has(key) && value.trim())) showMore.value = true
   message.value = '已载入绑定的查询条件。可以再改，改完重新查询。'
 }
@@ -643,6 +708,9 @@ watch(() => [valueOf('case_type'), valueOf('proc_type'), valueOf('country')].joi
       <label class="limit-save">模板名称<input v-model="saveName" type="text" maxlength="80" @input="saveNameDirty = true" /></label>
       <button class="ghost" type="button" :disabled="!canRead || saving" @click="saveTemplate">{{ saving ? '正在保存…' : '保存到网站' }}</button>
       <button class="ghost" type="button" :disabled="!canRead || deleting || !selectedId" @click="deleteTemplate">{{ deleting ? '正在删除…' : '删除原网站模板' }}</button>
+      <button class="ghost" type="button" @click="exportTemplateJson">导出 JSON</button>
+      <button class="ghost" type="button" @click="templateJsonInput?.click()">导入 JSON</button>
+      <input ref="templateJsonInput" type="file" accept=".json,application/json" hidden aria-label="导入期限模板 JSON" @change="importTemplateJson" />
       <button class="ghost" type="button" @click="reset">重置</button>
       <button v-if="canSearch" class="solid" type="button" @click="search">查询</button>
     </div>

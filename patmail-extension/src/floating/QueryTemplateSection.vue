@@ -22,6 +22,7 @@ import { optionsForCaseType, looksLikeInternalIds, normalizeFileDescriptionValue
 import type { FileTypeNode } from '../api/dictionaries'
 import type { QueryTemplate } from '../query/query-types'
 import { isQueryGuid } from '../query/query-validator'
+import { downloadTemplateJson, readTemplateJson, templateJsonFileName, templateJsonText } from '../query/template-json'
 import { scopeFromConnection, type ExpectedAccountScope } from '../shared/connection'
 import { MessageType, type FileSearchFormField, type MessageBridge } from '../shared/message'
 import { useWorkspace } from '../app/composables/useWorkspace'
@@ -102,6 +103,7 @@ const hotNote = ref('')
 const hotSentinel = ref<HTMLElement | null>(null)
 const saveName = ref('')
 const saveNameDirty = ref(false)
+const templateJsonInput = ref<HTMLInputElement | null>(null)
 const savingTemplate = ref(false)
 const deletingSite = ref(false)
 let hotObserver: IntersectionObserver | null = null
@@ -884,6 +886,67 @@ async function importCurrent(): Promise<void> {
   await reloadLocal()
   storageMessage.value = '已导入为本地模板，刷新原网站模板不会覆盖这份副本。'
 }
+
+/** 导出 JSON：导出表单当前的查询条件，不含模板名。和保存模板同一套字段口径。 */
+function exportTemplateJson(): void {
+  const fields: Record<string, string> = {}
+  for (const [key, value] of Object.entries(resolved.value.fields)) {
+    if (value.trim()) fields[key] = value
+  }
+  if (!Object.keys(fields).length) {
+    storageMessage.value = '先填写至少一项查询条件，再导出。'
+    return
+  }
+  let extras: Record<string, string>
+  try {
+    extras = {
+      ...Object.fromEntries(Object.entries(unknownFields.value).filter(([key]) => !isDownloadNameControl(key))),
+      ...downloadNameControlFields(currentDownloadSelection())
+    }
+  } catch {
+    extras = { ...unknownFields.value }
+  }
+  const from = (baseMissing.value ? '' : baseName.value.trim()) || saveName.value.trim()
+  downloadTemplateJson(
+    templateJsonText('FileSearch', { fields, displayValues: filledDisplay(), unknownFields: extras }),
+    templateJsonFileName('FileSearch', from)
+  )
+  storageMessage.value = `已导出当前条件的 JSON。${from ? `文件名带源模板名「${from}」和时间戳` : '文件名只带查询面和时间戳'}，文件内容不含模板名，导入后自己命名保存。`
+}
+
+/** 导入 JSON：只导入查询字段，模板名不带。填进查询条件后自己追加、修改、命名，最后自己保存。 */
+async function importTemplateJson(event: Event): Promise<void> {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  let text = ''
+  try {
+    text = await file.text()
+  } catch {
+    storageMessage.value = '这份 JSON 文件没有读开。'
+    return
+  }
+  const read = readTemplateJson(text, 'FileSearch')
+  if (!read.ok) {
+    storageMessage.value = read.message
+    return
+  }
+  recoveredForm = false
+  selectedBaseId.value = ''
+  resetBase()
+  displayValues.value = { ...read.conditions.displayValues }
+  unknownFields.value = { ...read.conditions.unknownFields }
+  let count = 0
+  for (const [key, value] of Object.entries(read.conditions.fields)) {
+    if (!value.trim()) continue
+    setOverride(key, value)
+    count += 1
+  }
+  saveName.value = ''
+  storageMessage.value = `已导入 ${count} 个查询条件。可以继续追加或修改条件，最后自己填模板名称保存。`
+}
 async function copySelected(): Promise<void> {
   if (!selectedBaseId.value || baseMissing.value) return
   const scope = liveScope()
@@ -1454,6 +1517,9 @@ watch(selectedCustomerId, () => {
       <button type="button" class="text-button" :disabled="!selectedBaseId || baseMissing" @click="copySelected">复制</button>
       <button type="button" class="text-button" :disabled="!selectedLocal" @click="openTemplateEditor(selectedLocal ?? undefined)">编辑本地模板</button>
       <button type="button" class="text-button" :disabled="!selectedLocal" @click="deleteSelectedLocal">删除本地模板</button>
+      <button type="button" class="text-button" @click="exportTemplateJson">导出 JSON</button>
+      <button type="button" class="text-button" @click="templateJsonInput?.click()">导入 JSON</button>
+      <input ref="templateJsonInput" type="file" accept=".json,application/json" hidden aria-label="导入查询模板 JSON" @change="importTemplateJson" />
     </div>
     <div v-if="manage && mode === 'customer'" class="inline-actions" aria-label="客户操作">
       <button type="button" class="text-button" @click="openCustomerEditor()">新增客户</button>
