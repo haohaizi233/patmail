@@ -214,9 +214,9 @@ function exportTemplateJson(): void {
     templateMessage.value = '先填写至少一项查询条件，再导出。'
     return
   }
-  const from = (selectedTemplate.value?.name || selectedBuiltin.value?.name || saveName.value.trim()).trim()
+  const from = saveName.value.trim() || selectedTemplate.value?.name.trim() || selectedBuiltin.value?.name.trim() || ''
   downloadTemplateJson(templateJsonText('FilingSearch', draft), templateJsonFileName('FilingSearch', from))
-  templateMessage.value = `已导出当前条件的 JSON。${from ? `文件名带源模板名「${from}」和时间戳` : '文件名只带查询面和时间戳'}，文件内容不含模板名，导入后自己命名保存。`
+  templateMessage.value = `已导出当前条件的 JSON。${from ? `文件名带模板名「${from}」和时间戳` : '文件名只带查询面和时间戳；在「模板名称」里填上名字再导出，文件名就会带上'}，文件内容不含模板名，导入后自己命名保存。`
 }
 
 /** 导入 JSON：只导入查询字段，模板名不带。填进表单后自己追加、修改、命名，最后自己保存。 */

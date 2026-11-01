@@ -49,14 +49,14 @@ describe('查询模板 JSON 导出', () => {
     expect(parsed.unknownFields).toBeUndefined()
   })
 
-  it('文件名带查询面、源模板名和时间戳', () => {
+  it('文件名带查询面、模板名和时间戳', () => {
     expect(templateJsonFileName('LimitMonitor', '案卷模板', new Date(2026, 10, 1, 15, 30)))
       .toBe('查询模板-期限监控-案卷模板-20261101-153000.json')
     expect(templateJsonFileName('FilingSearch', '', new Date(2026, 0, 2, 8, 5, 7)))
       .toBe('查询模板-递交管理-20260102-080507.json')
   })
 
-  it('源模板名进文件名前洗掉非法字符并限长', () => {
+  it('模板名进文件名前洗掉非法字符并限长', () => {
     // Windows 不允许 `\/:*?"<>|`，控制字符也要去掉，名字太长要截断，免得下载时被系统改名。
     expect(templateJsonFileName('FileSearch', '客户 A/B:C', new Date(2026, 10, 1, 15, 30)))
       .toBe('查询模板-文件管理-客户 A_B_C-20261101-153000.json')

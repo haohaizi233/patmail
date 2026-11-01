@@ -94,9 +94,9 @@ function fileNameSegment(name: string): string {
     .trim()
 }
 
-/** 导出文件名带查询面、源模板名和时间戳，方便在几份 JSON 之间分辨。时间精确到秒：同一分钟里连点几次导出，
+/** 导出文件名带查询面、模板名和时间戳，方便在几份 JSON 之间分辨。时间精确到秒：同一分钟里连点几次导出，
  *  只到分钟会同名，Chrome 会改名加 (1)(2)，几份内容不同的 JSON 更分不清哪份是哪次的。
- *  源模板名为空（没选模板、纯手填条件）就只写查询面和时间戳。 */
+ *  模板名为空（没选模板也没填名称）就只写查询面和时间戳。 */
 export function templateJsonFileName(surface: TemplateJsonSurface, sourceName = '', now: Date = new Date()): string {
   const pad = (part: number): string => String(part).padStart(2, '0')
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`

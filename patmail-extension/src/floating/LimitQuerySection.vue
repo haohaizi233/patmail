@@ -412,10 +412,10 @@ function hiddenLimitKeys(): Set<string> {
   })))
 }
 
-/** 导出文件名里的源模板名：先用选中模板的名字，没选模板就用自己填的名字。 */
+/** 导出文件名里的模板名：先用「模板名称」框里的名字（选中模板会自动填进来，改过名按新名字走），框空了再退回选中模板的名字。 */
 function exportSourceName(): string {
   const selected = templates.value.find(item => item.id === selectedId.value)
-  return (selected ? selected.name : saveName.value).trim()
+  return saveName.value.trim() || (selected ? selected.name.trim() : '')
 }
 
 /** 导出 JSON：导出表单当前的查询条件。文件名带源模板名和时间戳，文件内容不含模板名。 */
@@ -431,7 +431,7 @@ function exportTemplateJson(): void {
     templateJsonText('LimitMonitor', { fields, displayValues: filledDisplay(), unknownFields: unknownFields.value }),
     templateJsonFileName('LimitMonitor', from)
   )
-  message.value = `已导出当前条件的 JSON。${from ? `文件名带源模板名「${from}」和时间戳` : '文件名只带查询面和时间戳'}，文件内容不含模板名，导入后自己命名保存。`
+  message.value = `已导出当前条件的 JSON。${from ? `文件名带模板名「${from}」和时间戳` : '文件名只带查询面和时间戳；在「模板名称」里填上名字再导出，文件名就会带上'}，文件内容不含模板名，导入后自己命名保存。`
 }
 
 /** 导入 JSON：只导入查询字段，模板名不带。填进表单后自己追加、修改、命名，最后自己保存。 */

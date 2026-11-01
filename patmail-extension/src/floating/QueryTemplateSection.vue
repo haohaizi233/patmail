@@ -906,12 +906,12 @@ function exportTemplateJson(): void {
   } catch {
     extras = { ...unknownFields.value }
   }
-  const from = (baseMissing.value ? '' : baseName.value.trim()) || saveName.value.trim()
+  const from = saveName.value.trim() || (baseMissing.value ? '' : baseName.value.trim())
   downloadTemplateJson(
     templateJsonText('FileSearch', { fields, displayValues: filledDisplay(), unknownFields: extras }),
     templateJsonFileName('FileSearch', from)
   )
-  storageMessage.value = `已导出当前条件的 JSON。${from ? `文件名带源模板名「${from}」和时间戳` : '文件名只带查询面和时间戳'}，文件内容不含模板名，导入后自己命名保存。`
+  storageMessage.value = `已导出当前条件的 JSON。${from ? `文件名带模板名「${from}」和时间戳` : '文件名只带查询面和时间戳；在「模板名称」里填上名字再导出，文件名就会带上'}，文件内容不含模板名，导入后自己命名保存。`
 }
 
 /** 导入 JSON：只导入查询字段，模板名不带。填进查询条件后自己追加、修改、命名，最后自己保存。 */
