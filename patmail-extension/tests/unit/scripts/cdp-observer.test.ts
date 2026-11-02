@@ -281,7 +281,13 @@ describe('CDP observer target and event filtering', () => {
       { targetId: 'foreign-app', type: 'page', title: 'Other', url: 'chrome-extension://foreign/app.html' },
       { targetId: 'worker', type: 'service_worker', title: '', url: 'chrome-extension://abc123/background.js' },
       { targetId: 'easy', type: 'page', title: 'EASY', url: 'http://183.36.43.66:88/Default.aspx' },
+      { targetId: 'jihua', type: 'page', title: '季华 OA', url: 'https://oa.jihualab.net:443/workbench' },
       { targetId: 'lookalike', type: 'page', title: 'Other', url: 'https://183.36.43.660/' },
+      { targetId: 'jihua-http', type: 'page', title: 'Other', url: 'http://oa.jihualab.net/' },
+      { targetId: 'jihua-port', type: 'page', title: 'Other', url: 'https://oa.jihualab.net:8443/' },
+      { targetId: 'jihua-lookalike', type: 'page', title: 'Other', url: 'https://oa.jihualab.net.attacker.example/' },
+      { targetId: 'jihua-credentials', type: 'page', title: 'Other', url: 'https://user@oa.jihualab.net/' },
+      { targetId: 'jihua-worker', type: 'service_worker', title: 'Other', url: 'https://oa.jihualab.net/' },
       { targetId: 'other-extension', type: 'page', title: 'Other', url: 'chrome-extension://different/options.html' },
       { targetId: 'unrelated', type: 'page', title: 'News', url: 'https://example.test/' },
     ]
@@ -290,6 +296,7 @@ describe('CDP observer target and event filtering', () => {
       { targetId: 'app', source: 'app' },
       { targetId: 'worker', source: 'app' },
       { targetId: 'easy', source: 'easy' },
+      { targetId: 'jihua', source: 'jihua' },
     ])
     expect(selectTargets([{ targetId: 'easy', type: 'page', title: 'Other', url: 'https://example.test/' }])).toEqual([])
   })
@@ -306,6 +313,36 @@ describe('CDP observer target and event filtering', () => {
       .toEqual({ origin: 'https://183.36.43.66:88', path: '/Ajax/Report.ashx', call: 'GetRows' })
     expect(safeNetworkUrl('http://183.36.43.66:88/AjaxServers/Report.ashx', 'Call=DownLoad&password=private&token=secret'))
       .toEqual({ origin: 'http://183.36.43.66:88', path: '/AjaxServers/Report.ashx', call: 'DownLoad' })
+  })
+
+  it('keeps Jihua network metadata to the exact OA origin and fixed route categories', () => {
+    const safeNetworkUrl = required<(url: string, postData?: string, source?: string) => Record<string, unknown>>('safeNetworkUrl')
+    const appNumber = 'CN202611020001'
+    const fileName = '申请材料-保密.docx'
+    const detail = safeNetworkUrl(
+      `https://oa.jihualab.net/prod-api/conow/pat/parameter/INVENTION/${appNumber}?PATENT_NUM=${appNumber}&token=private`,
+      `PATENT_NO=${appNumber}&fileName=${encodeURIComponent(fileName)}`,
+      'jihua',
+    )
+    expect(detail).toEqual({ origin: 'https://oa.jihualab.net', path: '/prod-api/conow/pat/parameter/:type/:id' })
+    expect(JSON.stringify(detail)).not.toContain(appNumber)
+    expect(JSON.stringify(detail)).not.toContain(fileName)
+
+    expect(safeNetworkUrl(
+      'https://oa.jihualab.net/prod-api/conow/file/uploadAndOfc?fileName=private.docx',
+      'token=private&base64=private',
+      'jihua',
+    )).toEqual({ origin: 'https://oa.jihualab.net', path: '/prod-api/conow/file/uploadAndOfc' })
+    expect(safeNetworkUrl('https://other.example/private?token=secret', 'fileName=private.docx', 'jihua'))
+      .toEqual({ origin: '', path: '/' })
+    expect(safeNetworkUrl('http://oa.jihualab.net/prod-api/getInfo', '', 'jihua'))
+      .toEqual({ origin: '', path: '/' })
+    expect(safeNetworkUrl('https://oa.jihualab.net:8443/prod-api/getInfo', '', 'jihua'))
+      .toEqual({ origin: '', path: '/' })
+    expect(safeNetworkUrl('https://oa.jihualab.net/prod-api/conow/pat/parameter/UTILITY?PATENT_NUM=private', '', 'jihua'))
+      .toEqual({ origin: 'https://oa.jihualab.net', path: '/prod-api/conow/pat/parameter/:type' })
+    expect(safeNetworkUrl('https://oa.jihualab.net/private/CN202611020001.docx', '', 'jihua'))
+      .toEqual({ origin: 'https://oa.jihualab.net', path: '/other' })
   })
 
   it('records only safe response status, MIME, and timing metadata', () => {
@@ -380,6 +417,111 @@ describe('CDP observer target and event filtering', () => {
     })
   })
 
+  it('does not inspect or forward Jihua transfer messages that can contain business data', () => {
+    const safeRuntimeMetadata = required<(message: unknown) => Record<string, unknown> | null>('safeRuntimeMetadata')
+    expect(safeRuntimeMetadata({
+      channel: 'PATMAIL_JIHUA',
+      action: 'startUpload',
+      payload: { applicationNo: 'CN202611020001', fileName: '申请材料-保密.docx', base64: 'private' },
+      error: '上传失败：申请号 CN202611020001，文件 申请材料-保密.docx',
+    })).toBeNull()
+  })
+
+  it('aggregates Jihua task state into bounded counters and fixed error categories', () => {
+    const summarizeJihuaTask = required<(task: Record<string, unknown>, classifyError: (value: unknown) => string | null) => Record<string, unknown> | null>('summarizeJihuaTask')
+    const classifyJihuaErrorCategory = required<(value: unknown) => string | null>('classifyJihuaErrorCategory')
+    const summary = summarizeJihuaTask({
+      id: 'task-private',
+      status: 'running',
+      rows: [
+        { status: 'success', selected: true, error: '', applicationNo: 'CN202611020001', fileName: '申请材料-保密.docx' },
+        { status: 'uploading', selected: true, error: '', applicationNo: 'CN202611020002', fileName: '另一个材料.docx', intent: { sent: true } },
+        { status: 'failed', selected: false, error: 'OA 上传失败：CN202611020003 的申请材料-内部.docx', applicationNo: 'CN202611020003', intent: { sent: true }, receipt: { attachments: [] } },
+        { status: 'failed', selected: true, error: '季华登录已失效，请重新连接。' },
+        { status: 'not-a-known-state', selected: true, error: 'IndexedDB 持久化失败' },
+        { status: 'unmatched', selected: false, error: '没匹配到材料类型：CN202611020004' },
+      ],
+      errors: ['等待回执超过时限：CN202611020001', '无法连接季华 OA；请检查网络。'],
+      roots: [{ name: 'private-folder-name' }],
+    }, classifyJihuaErrorCategory)
+    expect(summary).toEqual({
+      status: 'running',
+      rowCount: 6,
+      rowsExamined: 6,
+      truncated: false,
+      selectedCount: 4,
+      sentCount: 2,
+      pendingReceiptCount: 1,
+      rowStatusCounts: {
+        pending: 0, checking: 0, uploading: 1, associating: 0, verifying: 0,
+        success: 1, failed: 2, already: 0, unmatched: 1, excluded: 0,
+      },
+      rowErrorCategories: {
+        http_524: 0, http_5xx: 0, file_type: 0, material_unmatched: 1, source_invalid: 0,
+        login: 1, session: 0, timeout: 0, network: 0, receipt: 0, file: 0, storage: 1, validation: 0, remote: 1, other: 0,
+      },
+      taskErrorCategories: {
+        http_524: 0, http_5xx: 0, file_type: 0, material_unmatched: 0, source_invalid: 0,
+        login: 0, session: 0, timeout: 1, network: 1, receipt: 0, file: 0, storage: 0, validation: 0, remote: 0, other: 0,
+      },
+    })
+    expect(JSON.stringify(summary)).not.toContain('CN202611020001')
+    expect(JSON.stringify(summary)).not.toContain('申请材料')
+    expect(JSON.stringify(summary)).not.toContain('private-folder-name')
+    expect(JSON.stringify(summary)).not.toContain('CN202611020004')
+  })
+
+  it('maps common Jihua failures to fixed error-code categories', () => {
+    const classifyJihuaErrorCategory = required<(value: unknown) => string | null>('classifyJihuaErrorCategory')
+    expect(classifyJihuaErrorCategory('OA 上传失败（HTTP 524）：CN202611020001 申请材料.docx')).toBe('http_524')
+    expect(classifyJihuaErrorCategory('文件类型与材料清单不匹配：保密材料.docx')).toBe('file_type')
+    expect(classifyJihuaErrorCategory('文件名应包含申请号、案件名称和材料描述')).toBe('file_type')
+    expect(classifyJihuaErrorCategory('没匹配到材料类型：CN202611020001')).toBe('material_unmatched')
+    expect(classifyJihuaErrorCategory('季华来源文件夹已失效：保密材料')).toBe('source_invalid')
+    expect(classifyJihuaErrorCategory('OA 请求失败（HTTP 503）')).toBe('http_5xx')
+  })
+
+  it('retains cancelled task state in both local and sanitized diagnostic summaries', () => {
+    const summarizeJihuaTask = required<(task: Record<string, unknown>, classifyError: (value: unknown) => string | null) => Record<string, unknown> | null>('summarizeJihuaTask')
+    const safeJihuaTaskSummary = required<(value: Record<string, unknown>) => Record<string, unknown> | null>('safeJihuaTaskSummary')
+    const classifyJihuaErrorCategory = required<(value: unknown) => string | null>('classifyJihuaErrorCategory')
+    const summary = summarizeJihuaTask({ status: 'cancelled', rows: [{ status: 'pending', selected: true, intent: { sent: true } }] }, classifyJihuaErrorCategory)
+    expect(summary).toMatchObject({ status: 'cancelled', pendingReceiptCount: 1 })
+    expect(safeJihuaTaskSummary(summary!)).toMatchObject({ status: 'cancelled', pendingReceiptCount: 1 })
+  })
+
+  it('caps Jihua row traversal and validates summaries to a fixed metadata shape', () => {
+    const summarizeJihuaTask = required<(task: Record<string, unknown>, classifyError: (value: unknown) => string | null) => Record<string, unknown> | null>('summarizeJihuaTask')
+    const classifyJihuaErrorCategory = required<(value: unknown) => string | null>('classifyJihuaErrorCategory')
+    const safeJihuaTaskSummary = required<(value: Record<string, unknown>) => Record<string, unknown> | null>('safeJihuaTaskSummary')
+    const summary = summarizeJihuaTask({
+      status: 'running',
+      rows: Array.from({ length: 50_001 }, () => ({ status: 'pending', selected: true })),
+    }, classifyJihuaErrorCategory)
+    expect(summary).toMatchObject({ rowCount: 50_001, rowsExamined: 50_000, truncated: true, selectedCount: 50_000 })
+
+    const safeSummary = safeJihuaTaskSummary({
+      ...summary,
+      rowStatusCounts: { ...(summary?.rowStatusCounts as Record<string, number>), failed: 4 },
+      rowErrorCategories: { ...(summary?.rowErrorCategories as Record<string, number>), http_524: 3 },
+      taskErrorCategories: { ...(summary?.taskErrorCategories as Record<string, number>), network: 2 },
+      applicationNo: 'CN202611020001',
+      fileName: 'private.docx',
+      rowCount: Number.MAX_SAFE_INTEGER,
+      rowStatusCountsPrivate: { customerName: 'private' },
+    })
+    expect(safeSummary?.rowCount).toBe(2_147_483_647)
+    const rowStatusCounts = safeSummary?.rowStatusCounts as Record<string, unknown> | undefined
+    const rowErrorCategories = safeSummary?.rowErrorCategories as Record<string, unknown> | undefined
+    const taskErrorCategories = safeSummary?.taskErrorCategories as Record<string, unknown> | undefined
+    expect(rowStatusCounts?.failed).toBe(4)
+    expect(rowErrorCategories?.http_524).toBe(3)
+    expect(taskErrorCategories?.network).toBe(2)
+    expect(JSON.stringify(safeSummary)).not.toContain('applicationNo')
+    expect(JSON.stringify(safeSummary)).not.toContain('private.docx')
+    expect(JSON.stringify(safeSummary)).not.toContain('customerName')
+  })
+
   it('keeps console errors useful while removing query tokens and credentials', () => {
     const safeConsoleMessage = required<(args: unknown[]) => string>('safeConsoleMessage')
     expect(safeConsoleMessage([
@@ -430,6 +572,9 @@ describe('CDP observer target and event filtering', () => {
       failed: 0,
       deduplicated: 1,
     }])
+
+    listeners[0]({ channel: 'PATMAIL_JIHUA', action: 'startUpload', payload: { applicationNo: 'CN202611020001', fileName: '申请材料-保密.docx' } }, { id: 'patmail-extension-id' })
+    expect(emitted).toHaveLength(1)
   })
 
   it('polls only the named top progress and export notice without reading full page text', () => {
@@ -440,6 +585,95 @@ describe('CDP observer target and event filtering', () => {
     expect(expression).toContain('item?.byExtensionId === extensionId')
     expect(expression).toContain('blob:${extensionPrefix}')
     expect(expression).not.toContain('document.body.innerText')
+  })
+
+  it('reads the latest Jihua task only through a read-only IndexedDB transaction', async () => {
+    const buildAppSnapshotExpression = required<(startedAt: number, includeJihuaTask?: boolean) => string>('buildAppSnapshotExpression')
+    const expression = buildAppSnapshotExpression(Date.now(), true)
+    expect(expression).toContain("factory.open('patmail-jihua-inventory')")
+    expect(expression).toContain('globalThis.setTimeout(finish, 1_500)')
+    expect(expression).toContain("database.transaction('tasks', 'readonly')")
+    expect(expression).toContain(".get('latest')")
+    expect(expression).not.toContain("transaction('tasks', 'readwrite')")
+
+    const task = {
+      status: 'failed',
+      rows: [{ status: 'failed', selected: true, error: '文件上传失败：CN202611020001 申请材料.docx', applicationNo: 'CN202611020001', fileName: '申请材料.docx' }],
+      errors: [],
+    }
+    const emitted: Array<Record<string, unknown>> = []
+    const transactionModes: string[] = []
+    const taskRequest: { result?: unknown; onsuccess?: () => void } = { result: task }
+    let taskRequestSuccess: (() => void) | undefined
+    Object.defineProperty(taskRequest, 'onsuccess', {
+      get: () => taskRequestSuccess,
+      set: (handler: (() => void) | undefined) => {
+        taskRequestSuccess = handler
+        void Promise.resolve().then(() => taskRequestSuccess?.())
+      },
+    })
+    const transaction = {
+      objectStore: () => ({ get: (key: string) => {
+        expect(key).toBe('latest')
+        return taskRequest
+      } }),
+      oncomplete: undefined as (() => void) | undefined,
+      onerror: undefined as (() => void) | undefined,
+    }
+    Object.defineProperty(transaction, 'oncomplete', {
+      set: (handler: (() => void) | undefined) => { void Promise.resolve().then(() => handler?.()) },
+    })
+    const database = {
+      objectStoreNames: { contains: (name: string) => name === 'tasks' },
+      transaction: (_store: string, mode: string) => {
+        transactionModes.push(mode)
+        return transaction
+      },
+      close: vi.fn(),
+    }
+    const indexedDB = {
+      databases: vi.fn(async () => [{ name: 'patmail-jihua-inventory' }]),
+      open: vi.fn((name: string) => {
+        expect(name).toBe('patmail-jihua-inventory')
+        const request: { result?: typeof database; onsuccess?: () => void; onerror?: () => void; onupgradeneeded?: () => void } = { result: database }
+        let success: (() => void) | undefined
+        Object.defineProperty(request, 'onsuccess', {
+          get: () => success,
+          set: (handler: (() => void) | undefined) => {
+            success = handler
+            void Promise.resolve().then(() => success?.())
+          },
+        })
+        return request
+      }),
+    }
+    const chrome = { runtime: { id: 'patmail-id' }, downloads: { search: () => Promise.resolve([]) } }
+    let resolveTaskSummary!: (value: Record<string, unknown>) => void
+    const taskSummary = new Promise<Record<string, unknown>>(resolve => { resolveTaskSummary = resolve })
+    runInNewContext(expression, {
+      document: { querySelector: () => null, querySelectorAll: () => [] },
+      chrome,
+      indexedDB,
+      setTimeout,
+      clearTimeout,
+      __patmailCdpObserver: (value: string) => {
+        const parsed: unknown = JSON.parse(value) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const record = parsed as Record<string, unknown>
+          emitted.push(record)
+          if (record.kind === 'jihua-task') resolveTaskSummary(record)
+        }
+      },
+    })
+    await taskSummary
+    expect(indexedDB.databases).toHaveBeenCalledOnce()
+    expect(indexedDB.open).toHaveBeenCalledOnce()
+    expect(transactionModes).toEqual(['readonly'])
+    expect(database.close).toHaveBeenCalledOnce()
+    const summary = emitted.find(value => value.kind === 'jihua-task')?.summary
+    expect(summary).toMatchObject({ status: 'failed', rowCount: 1, selectedCount: 1, rowErrorCategories: { file: 1, remote: 0 } })
+    expect(JSON.stringify(emitted)).not.toContain('CN202611020001')
+    expect(JSON.stringify(emitted)).not.toContain('申请材料.docx')
   })
 
   it('passes only PatMail downloads through the real snapshot and Node filtering pipeline', async () => {

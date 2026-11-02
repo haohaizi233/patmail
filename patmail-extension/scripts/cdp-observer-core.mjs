@@ -26,6 +26,7 @@ const DISCOVERY_RETRY_MS = 5_000
 const CONTROL_REQUEST_TIMEOUT_MS = 2_000
 const CDP_COMMAND_TIMEOUT_MS = 8_000
 const SNAPSHOT_POLL_MS = 2_000
+const JIHUA_TASK_SNAPSHOT_MS = 15_000
 const LOG_PRUNE_MS = 60 * 1000
 
 const sleep = ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms))
@@ -405,6 +406,20 @@ function isEasyTarget(target) {
   }
 }
 
+function isJihuaTarget(target) {
+  if (!target || target.type !== 'page' || typeof target.url !== 'string') return false
+  try {
+    const url = new URL(target.url)
+    return url.protocol === 'https:'
+      && url.hostname === 'oa.jihualab.net'
+      && url.port === ''
+      && !url.username
+      && !url.password
+  } catch {
+    return false
+  }
+}
+
 export function selectTargets(targets, knownExtensionIds = new Set()) {
   const extensionIds = new Set([DEFAULT_PATMAIL_EXTENSION_ID, ...knownExtensionIds])
   for (const target of targets ?? []) {
@@ -420,6 +435,10 @@ export function selectTargets(targets, knownExtensionIds = new Set()) {
     }
     if (isEasyTarget(target)) {
       selected.push({ targetId: target.targetId, source: 'easy' })
+      continue
+    }
+    if (isJihuaTarget(target)) {
+      selected.push({ targetId: target.targetId, source: 'jihua' })
       continue
     }
     const extensionId = extensionIdFromUrl(target.url)
@@ -473,12 +492,31 @@ function callFromForm(value) {
   return undefined
 }
 
-export function safeNetworkUrl(value, postData = '') {
+function safeJihuaPath(pathname) {
+  if (pathname === '/prod-api/getInfo') return pathname
+  if (pathname === '/prod-api/conow/pat/parameter/patent/update') return pathname
+  if (/^\/prod-api\/conow\/pat\/parameter\/(?:INVENTION|UTILITY)$/.test(pathname)) {
+    return '/prod-api/conow/pat/parameter/:type'
+  }
+  if (/^\/prod-api\/conow\/pat\/parameter\/(?:INVENTION|UTILITY)\/[A-Za-z0-9_-]{1,128}$/.test(pathname)) {
+    return '/prod-api/conow/pat/parameter/:type/:id'
+  }
+  if (pathname === '/prod-api/conow/file/upload' || pathname === '/prod-api/conow/file/uploadAndOfc') return pathname
+  return '/other'
+}
+
+export function safeNetworkUrl(value, postData = '', source = '') {
   let url
   try {
     url = new URL(String(value))
   } catch {
     return { origin: '', path: '/' }
+  }
+  if (url.hostname === 'oa.jihualab.net' || source === 'jihua') {
+    if (url.protocol !== 'https:' || url.hostname !== 'oa.jihualab.net' || url.port !== '' || url.username || url.password) {
+      return { origin: '', path: '/' }
+    }
+    return { origin: 'https://oa.jihualab.net', path: safeJihuaPath(url.pathname) }
   }
   let call
   for (const [key, value] of url.searchParams) {
@@ -517,9 +555,99 @@ export function safeNetworkResponseEvent(request, params) {
   return event
 }
 
+export function classifyJihuaErrorCategory(value) {
+  if (typeof value !== 'string' || value.length === 0) return null
+  if (/http\s*524|status\s*524|(?:^|\D)524(?:\D|$)/i.test(value)) return 'http_524'
+  if (/http\s*5\d{2}|status\s*5\d{2}/i.test(value)) return 'http_5xx'
+  if (/文件类型|文件格式|文件名应包含|扩展名|mime|file.?type|文件名.{0,10}(?:类型|后缀).{0,10}(?:不符|不匹配|错误)/i.test(value)) return 'file_type'
+  if (/未匹配|没匹配到|无法匹配|材料.{0,12}(?:不存在|未配置|不支持)|(?:not match|unmatched material)/i.test(value)) return 'material_unmatched'
+  if (/来源.{0,16}(?:无效|失效|不合法|不存在)|(?:无效|失效|不合法).{0,16}(?:来源|路径|目录)|未找到(?:任务)?来源|来源文件夹.{0,8}(?:不可用|失效)|source.{0,12}(?:invalid|not found)/i.test(value)) return 'source_invalid'
+  if (/登录|令牌|\bauth(?:orization)?\b|\btoken\b/i.test(value)) return 'login'
+  if (/会话|binding|\bsession\b/i.test(value)) return 'session'
+  if (/超过时限|超时|\btimeout\b/i.test(value)) return 'timeout'
+  if (/无法连接|连接失败|通信失败|网络|\bnetwork\b|\bfetch\b/i.test(value)) return 'network'
+  if (/回执|\breceipt\b|\backnowledg/i.test(value)) return 'receipt'
+  if (/文件|分块|\bfile\b|\bchunk\b/i.test(value)) return 'file'
+  if (/indexeddb|持久化|存储|保存失败|\bstorage\b/i.test(value)) return 'storage'
+  if (/无效|缺少|不在允许范围|格式|\binvalid\b|\bvalidation\b/i.test(value)) return 'validation'
+  if (/\boa\b|上传|请求|服务器|\bhttp\b|\bremote\b/i.test(value)) return 'remote'
+  return 'other'
+}
+
+export function summarizeJihuaTask(taskValue, classifyError) {
+  if (!taskValue || typeof taskValue !== 'object' || Array.isArray(taskValue)) return null
+  const taskStatuses = ['ready', 'running', 'pausing', 'paused', 'completed', 'failed', 'cancelled']
+  const rowStatuses = ['pending', 'checking', 'uploading', 'associating', 'verifying', 'success', 'failed', 'already', 'unmatched', 'excluded']
+  const errorCategories = ['http_524', 'http_5xx', 'file_type', 'material_unmatched', 'source_invalid', 'login', 'session', 'timeout', 'network', 'receipt', 'file', 'storage', 'validation', 'remote', 'other']
+  const rows = Array.isArray(taskValue.rows) ? taskValue.rows : []
+  const maxRows = 50_000
+  const rowsExamined = Math.min(rows.length, maxRows)
+  const rowStatusCounts = Object.fromEntries(rowStatuses.map(status => [status, 0]))
+  const rowErrorCounts = Object.fromEntries(errorCategories.map(category => [category, 0]))
+  const taskErrorCounts = Object.fromEntries(errorCategories.map(category => [category, 0]))
+  let selectedCount = 0
+  let sentCount = 0
+  let pendingReceiptCount = 0
+  const countError = (counts, value) => {
+    if (typeof classifyError !== 'function' || typeof value !== 'string' || !value.trim()) return
+    const category = classifyError(value)
+    if (Object.hasOwn(counts, category)) counts[category] += 1
+  }
+  for (let index = 0; index < rowsExamined; index += 1) {
+    const row = rows[index]
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    if (rowStatuses.includes(row.status)) rowStatusCounts[row.status] += 1
+    if (row.selected === true) selectedCount += 1
+    if (row.intent?.sent === true) sentCount += 1
+    if (row.intent?.sent === true && !row.receipt) pendingReceiptCount += 1
+    if (row.status === 'unmatched') rowErrorCounts.material_unmatched += 1
+    else countError(rowErrorCounts, row.error)
+  }
+  if (Array.isArray(taskValue.errors)) {
+    for (const error of taskValue.errors.slice(0, 500)) countError(taskErrorCounts, error)
+  }
+  return {
+    status: taskStatuses.includes(taskValue.status) ? taskValue.status : 'unknown',
+    rowCount: Math.min(rows.length, 2_147_483_647),
+    rowsExamined,
+    truncated: rows.length > maxRows,
+    selectedCount,
+    sentCount,
+    pendingReceiptCount,
+    rowStatusCounts,
+    rowErrorCategories: rowErrorCounts,
+    taskErrorCategories: taskErrorCounts,
+  }
+}
+
+export function safeJihuaTaskSummary(value) {
+  if (!objectValue(value)) return null
+  const taskStatuses = ['ready', 'running', 'pausing', 'paused', 'completed', 'failed', 'cancelled', 'unknown']
+  const rowStatuses = ['pending', 'checking', 'uploading', 'associating', 'verifying', 'success', 'failed', 'already', 'unmatched', 'excluded']
+  const errorCategories = ['http_524', 'http_5xx', 'file_type', 'material_unmatched', 'source_invalid', 'login', 'session', 'timeout', 'network', 'receipt', 'file', 'storage', 'validation', 'remote', 'other']
+  const count = candidate => Number.isSafeInteger(candidate) && candidate >= 0 ? Math.min(candidate, 2_147_483_647) : 0
+  const safeCounts = (source, keys) => {
+    const counts = objectValue(source) ?? {}
+    return Object.fromEntries(keys.map(key => [key, count(counts[key])]))
+  }
+  return {
+    status: taskStatuses.includes(value.status) ? value.status : 'unknown',
+    rowCount: count(value.rowCount),
+    rowsExamined: count(value.rowsExamined),
+    truncated: value.truncated === true,
+    selectedCount: count(value.selectedCount),
+    sentCount: count(value.sentCount),
+    pendingReceiptCount: count(value.pendingReceiptCount),
+    rowStatusCounts: safeCounts(value.rowStatusCounts, rowStatuses),
+    rowErrorCategories: safeCounts(value.rowErrorCategories, errorCategories),
+    taskErrorCategories: safeCounts(value.taskErrorCategories, errorCategories),
+  }
+}
+
 export function safeRuntimeMetadata(message) {
   const root = objectValue(message)
   if (!root) return null
+  if (root.channel === 'PATMAIL_JIHUA') return null
   const packetMessage = objectValue(root.message)
   const packetBody = objectValue(root.body)
   const rootPayload = objectValue(root.payload)
@@ -732,6 +860,7 @@ export function buildAppObserverInstallExpression() {
 
     onMessage.addListener((packet, sender) => {
       if (!packet || typeof packet !== 'object') return
+      if (packet.channel === 'PATMAIL_JIHUA') return
       const message = packet.message && typeof packet.message === 'object' ? packet.message : null
       const body = packet.body && typeof packet.body === 'object' ? packet.body : null
       const payload = packet.payload && typeof packet.payload === 'object'
@@ -819,10 +948,78 @@ export function buildAppObserverInstallExpression() {
   return `(${install.toString()})()`
 }
 
-export function buildAppSnapshotExpression(startedAt) {
-  const poll = function pollPatMailSnapshot(startTime) {
+export function buildAppSnapshotExpression(startedAt, includeJihuaTask = false) {
+  const poll = function pollPatMailSnapshot(startTime, shouldPollJihuaTask, summarizeTask, classifyError) {
     const report = globalThis.__patmailCdpObserver
     if (typeof report !== 'function') return
+    const pollJihuaTask = () => {
+      if (!shouldPollJihuaTask) return
+      const factory = globalThis.indexedDB
+      if (typeof factory?.databases !== 'function' || typeof globalThis.setTimeout !== 'function' || typeof globalThis.clearTimeout !== 'function') return
+      let active = true
+      let database = null
+      const finish = () => {
+        if (!active) return
+        active = false
+        globalThis.clearTimeout(timeout)
+        database?.close?.()
+      }
+      const timeout = globalThis.setTimeout(finish, 1_500)
+      try {
+        factory.databases().then(databases => {
+          if (!active) return
+          if (!Array.isArray(databases) || !databases.some(databaseInfo => databaseInfo?.name === 'patmail-jihua-inventory')) {
+            finish()
+            return
+          }
+          let request
+          try {
+            request = factory.open('patmail-jihua-inventory')
+          } catch {
+            finish()
+            return
+          }
+          request.onupgradeneeded = () => {
+            try { request.transaction?.abort() } catch { /* Abort a raced database creation rather than initialize it. */ }
+            try { request.result?.close() } catch { /* The raced database may already be closed. */ }
+            finish()
+          }
+          request.onerror = finish
+          request.onblocked = finish
+          request.onsuccess = () => {
+            if (!active) {
+              request.result?.close?.()
+              return
+            }
+            database = request.result
+            if (!database || !database.objectStoreNames?.contains('tasks')) {
+              finish()
+              return
+            }
+            let transaction
+            try {
+              transaction = database.transaction('tasks', 'readonly')
+            } catch {
+              finish()
+              return
+            }
+            const taskRequest = transaction.objectStore('tasks').get('latest')
+            taskRequest.onsuccess = () => {
+              if (!active) return
+              const summary = summarizeTask(taskRequest.result, classifyError)
+              if (summary) report(JSON.stringify({ kind: 'jihua-task', summary }))
+            }
+            transaction.oncomplete = finish
+            transaction.onerror = finish
+            transaction.onabort = finish
+          }
+        }).catch(finish)
+      } catch {
+        // The local task snapshot is optional; a denied or unavailable IndexedDB read is ignored.
+        finish()
+      }
+    }
+    pollJihuaTask()
     const progress = []
     let topProgress = null
     let exportNotice = ''
@@ -896,7 +1093,10 @@ export function buildAppSnapshotExpression(startedAt) {
       sendDownloads([])
     }
   }
-  return `(${poll.toString()})(${JSON.stringify(Number(startedAt))})`
+  const taskHelpers = includeJihuaTask === true
+    ? `,(${summarizeJihuaTask.toString()}),(${classifyJihuaErrorCategory.toString()})`
+    : ',null,null'
+  return `(${poll.toString()})(${JSON.stringify(Number(startedAt))},${includeJihuaTask === true}${taskHelpers})`
 }
 
 function logHourStart(filename) {
@@ -1253,6 +1453,8 @@ class CdpObserverService {
     this.knownExtensionIds = new Set()
     this.networkRequests = new Map()
     this.lastSnapshotByTarget = new Map()
+    this.lastJihuaTaskSnapshotByTarget = new Map()
+    this.lastJihuaTaskSnapshotAt = 0
     this.snapshotBusyTargets = new Set()
     this.reconcileTimer = null
     this.heartbeatTimer = null
@@ -1507,6 +1709,7 @@ class CdpObserverService {
     this.knownExtensionIds.clear()
     this.networkRequests.clear()
     this.lastSnapshotByTarget.clear()
+    this.lastJihuaTaskSnapshotByTarget.clear()
     this.snapshotBusyTargets.clear()
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
     this.reconcileTimer = null
@@ -1577,6 +1780,7 @@ class CdpObserverService {
       if (selected) {
         this.sessions.delete(selected.sessionId)
         this.lastSnapshotByTarget.delete(params.targetId)
+        this.lastJihuaTaskSnapshotByTarget.delete(params.targetId)
         this.logger.log('target.detached', { source: selected.source, reason: 'destroyed' })
       }
       return
@@ -1588,6 +1792,7 @@ class CdpObserverService {
         this.selectedTargets.delete(target.targetId)
         this.configuredSessions.delete(params.sessionId)
         this.lastSnapshotByTarget.delete(target.targetId)
+        this.lastJihuaTaskSnapshotByTarget.delete(target.targetId)
         this.logger.log('target.detached', { source: target.source, reason: 'detached' })
       }
       return
@@ -1656,6 +1861,7 @@ class CdpObserverService {
           this.sessions.delete(current.sessionId)
           this.configuredSessions.delete(current.sessionId)
           this.lastSnapshotByTarget.delete(targetId)
+          this.lastJihuaTaskSnapshotByTarget.delete(targetId)
           this.snapshotBusyTargets.delete(targetId)
           for (const key of this.networkRequests.keys()) {
             if (key.startsWith(`${current.sessionId}:`)) this.networkRequests.delete(key)
@@ -1737,6 +1943,15 @@ class CdpObserverService {
     } catch {
       return
     }
+    if (value?.kind === 'jihua-task') {
+      const summary = safeJihuaTaskSummary(value.summary)
+      if (!summary) return
+      const signature = JSON.stringify(summary)
+      if (this.lastJihuaTaskSnapshotByTarget.get(target.targetId) === signature) return
+      this.lastJihuaTaskSnapshotByTarget.set(target.targetId, signature)
+      void this.logger.log('jihua.task', summary)
+      return
+    }
     if (value?.kind === 'runtime-message') {
       const metadata = safeRuntimeMetadata(value)
       if (metadata) void this.logger.log('runtime.message', metadata)
@@ -1774,6 +1989,13 @@ class CdpObserverService {
 
   handleConsole(target, params) {
     if (!['warning', 'error', 'assert'].includes(params.type)) return
+    if (target.source === 'jihua') {
+      const text = (params.args ?? []).filter(argument => argument?.type === 'string' && typeof argument.value === 'string')
+        .map(argument => argument.value).join(' ').slice(0, 2000)
+      const errorCategory = classifyJihuaErrorCategory(text)
+      void this.logger.log('runtime.console', { source: target.source, level: params.type, ...(errorCategory ? { errorCategory } : {}) })
+      return
+    }
     const message = safeConsoleMessage(params.args)
     void this.logger.log('runtime.console', {
       source: target.source,
@@ -1784,10 +2006,14 @@ class CdpObserverService {
 
   handleException(target, params) {
     const details = params.exceptionDetails ?? {}
-    const exceptionName = safeIdentifier(details.exception?.className, 60)
-    const message = sanitizeDiagnosticText(details.exception?.description?.split(/\r?\n/, 1)[0] ?? details.text, 500)
+    const exceptionName = target.source === 'jihua'
+      ? (['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'DOMException'].includes(details.exception?.className) ? details.exception.className : undefined)
+      : safeIdentifier(details.exception?.className, 60)
+    const rawMessage = details.exception?.description?.split(/\r?\n/, 1)[0] ?? details.text
+    const message = target.source === 'jihua' ? undefined : sanitizeDiagnosticText(rawMessage, 500)
+    const errorCategory = target.source === 'jihua' ? classifyJihuaErrorCategory(rawMessage) : undefined
     const frames = (details.stackTrace?.callFrames ?? []).slice(0, 8).map(frame => {
-      const url = safeNetworkUrl(frame.url)
+      const url = safeNetworkUrl(frame.url, '', target.source)
       const name = safeIdentifier(frame.functionName, 80)
       const line = Number.isInteger(frame.lineNumber) && frame.lineNumber >= 0 ? frame.lineNumber + 1 : null
       const column = Number.isInteger(frame.columnNumber) && frame.columnNumber >= 0 ? frame.columnNumber + 1 : null
@@ -1798,6 +2024,7 @@ class CdpObserverService {
       source: target.source,
       ...(exceptionName ? { name: exceptionName } : {}),
       ...(message ? { message } : {}),
+      ...(errorCategory ? { errorCategory } : {}),
       ...(frames.length ? { stack: frames } : {}),
       ...(Number.isInteger(details.lineNumber) && details.lineNumber >= 0 ? { line: details.lineNumber } : {}),
       ...(Number.isInteger(details.columnNumber) && details.columnNumber >= 0 ? { column: details.columnNumber } : {}),
@@ -1805,7 +2032,8 @@ class CdpObserverService {
   }
 
   handleNetworkRequest(target, sessionId, params) {
-    const url = safeNetworkUrl(params.request?.url, params.request?.postData)
+    const postData = target.source === 'jihua' ? '' : params.request?.postData
+    const url = safeNetworkUrl(params.request?.url, postData, target.source)
     if (!url.origin || url.origin === 'null') return
     const key = `${sessionId}:${params.requestId}`
     const started = finiteNumber(params.timestamp) ? params.timestamp : 0
@@ -1860,10 +2088,19 @@ class CdpObserverService {
     if (this.stopRequested || !this.ws || this.ws.readyState !== WebSocket.OPEN) return
     for (const [sessionId, target] of this.sessions) {
       if (target.source !== 'app' || target.type !== 'page' || this.snapshotBusyTargets.has(target.targetId)) continue
+      let includeJihuaTask = false
+      if (Date.now() - this.lastJihuaTaskSnapshotAt >= JIHUA_TASK_SNAPSHOT_MS) {
+        try {
+          includeJihuaTask = new URL(target.url).pathname.toLowerCase().endsWith('/app.html')
+        } catch {
+          includeJihuaTask = false
+        }
+        if (includeJihuaTask) this.lastJihuaTaskSnapshotAt = Date.now()
+      }
       this.snapshotBusyTargets.add(target.targetId)
       try {
         await this.sendCdp('Runtime.evaluate', {
-          expression: buildAppSnapshotExpression(this.startedAt),
+          expression: buildAppSnapshotExpression(this.startedAt, includeJihuaTask),
           returnByValue: false,
           awaitPromise: false,
         }, sessionId)
