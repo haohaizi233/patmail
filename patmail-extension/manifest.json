@@ -8,7 +8,7 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
-  "host_permissions": ["http://183.36.43.66:88/*", "http://d.hiseeip.com:88/*", "http://183.36.43.44:88/*", "http://z.hiseeip.com:88/*", "https://ip.pcl.ac.cn:81/*", "http://127.0.0.1/*", "http://localhost/*", "http://43.138.138.200:8588/*"],
+  "host_permissions": ["http://183.36.43.66:88/*", "http://d.hiseeip.com:88/*", "http://183.36.43.44:88/*", "http://z.hiseeip.com:88/*", "https://ip.pcl.ac.cn:81/*", "http://127.0.0.1/*", "http://localhost/*", "http://43.138.138.200:8588/*", "https://oa.jihualab.net/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

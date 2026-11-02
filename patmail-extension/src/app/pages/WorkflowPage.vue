@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onActivated, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import Bunny from '../../shell/components/Bunny.vue'
 import MailTypeTreeSelect from '../../shell/components/MailTypeTreeSelect.vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { bg } from '../../shell/assets'
+import JihuaUploadPage from './JihuaUploadPage.vue'
 import {
   cloneCatalog,
   cloneWorkflow,
@@ -42,7 +43,7 @@ import { useWorkflowChoices } from '../composables/useWorkflowChoices'
 import { useQuerySurfaces } from '../composables/useQuerySurfaces'
 import { confirmDialog } from '../dialog'
 
-type Screen = 'sea' | 'ocean' | 'flow'
+type Screen = 'sea' | 'ocean' | 'flow' | 'jihua'
 
 const screen = ref<Screen>('sea')
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
@@ -76,12 +77,6 @@ function replaceDraft(next: WorkflowDefinition | null, markDirty: boolean): void
 
 onMounted(async () => {
   catalog.value = await loadWorkflowCatalog()
-})
-
-onActivated(() => {
-  if (dirty.value || creating.value || saving.value) return
-  replaceDraft(null, false)
-  screen.value = 'sea'
 })
 
 watch(screen, (value) => {
@@ -434,72 +429,78 @@ function chooseProc(param: WorkflowParam, id: string): void {
 </script>
 
 <template>
-  <header v-if="screen === 'flow' && draft" class="page-head flow-head">
-    <Bunny />
-    <div class="flow-head-fields">
-      <button type="button" class="flow-text" @click="backToSea">回到海边</button>
-      <label>名字
-        <input v-model="draft.label" type="text" maxlength="40" :disabled="locked" />
-      </label>
-      <label>这句话怎么介绍
-        <input v-model="draft.summary" type="text" maxlength="400" :disabled="locked" />
-      </label>
-    </div>
-    <img class="page-art" :src="bg('专注每一次发文，让知识更有力量.png')" alt="" />
-  </header>
-  <PageHead
-    v-else
-    title="工作流"
-    :desc="screen === 'ocean' ? '从知识海洋里挑几件会做的事，串成一条你自己的。' : '先挑一条，点开再看每一步。'"
-    :art="bg('专注每一次发文，让知识更有力量.png')"
-  />
-
-  <section v-if="screen === 'sea'" class="sea">
-    <article v-for="flow in catalog.workflows" :key="flow.id" class="sea-card">
-      <button type="button" class="sea-open" @click="openFlow(flow)">
-        <b>{{ flow.label }}</b>
-        <small>{{ flow.summary }}</small>
-        <span v-if="isSystemWorkflow(flow)" class="sea-badge">系统</span>
-        <em>{{ flow.steps.length }} 步</em>
-      </button>
-      <div class="sea-actions">
-        <button type="button" class="sea-remove" @click="copyFlow(flow)">复制副本</button>
-        <button v-if="!isSystemWorkflow(flow)" type="button" class="sea-remove" @click="removeFlow(flow)">拿掉</button>
+  <div v-show="screen !== 'jihua'" class="workflow-main">
+    <header v-if="screen === 'flow' && draft" class="page-head flow-head">
+      <Bunny />
+      <div class="flow-head-fields">
+        <button type="button" class="flow-text" @click="backToSea">回到海边</button>
+        <label>名字
+          <input v-model="draft.label" type="text" maxlength="40" :disabled="locked" />
+        </label>
+        <label>这句话怎么介绍
+          <input v-model="draft.summary" type="text" maxlength="400" :disabled="locked" />
+        </label>
       </div>
-    </article>
-    <button type="button" class="sea-card sea-add" @click="openOcean">
-      <b>从知识海洋加一条</b>
-      <small>把会做的事挑出来，按你点的顺序排好。</small>
-    </button>
-  </section>
+      <img class="page-art" :src="bg('专注每一次发文，让知识更有力量.png')" alt="" />
+    </header>
+    <PageHead
+      v-else
+      title="工作流"
+      :desc="screen === 'ocean' ? '从知识海洋里挑几件会做的事，串成一条你自己的。' : '先挑一条，点开再看每一步。'"
+      :art="bg('专注每一次发文，让知识更有力量.png')"
+    />
 
-  <section v-else-if="screen === 'ocean'" class="card ocean">
-    <button type="button" class="flow-text" @click="screen = 'sea'">回到海边</button>
-    <p class="hint">现在会自己跑起来的，是 PCT提醒、PCT鹏城专案和文件管理。新加的会按你排的步骤保存下来。</p>
-    <div class="skill-sea">
-      <button
-        v-for="skill in SKILLS"
-        :key="skill.id"
-        type="button"
-        class="skill-bubble"
-        :class="[skill.tint, { on: picked.includes(skill.id) }]"
-        @click="toggleSkill(skill.id)"
-      >
-        <i v-if="picked.includes(skill.id)">{{ picked.indexOf(skill.id) + 1 }}</i>
-        <b>{{ skill.title }}</b>
-        <small>{{ skill.blurb }}</small>
+    <section v-if="screen === 'sea'" class="sea">
+      <article v-for="flow in catalog.workflows" :key="flow.id" class="sea-card">
+        <button type="button" class="sea-open" @click="openFlow(flow)">
+          <b>{{ flow.label }}</b>
+          <small>{{ flow.summary }}</small>
+          <span v-if="isSystemWorkflow(flow)" class="sea-badge">系统</span>
+          <em>{{ flow.steps.length }} 步</em>
+        </button>
+        <div class="sea-actions">
+          <button type="button" class="sea-remove" @click="copyFlow(flow)">复制副本</button>
+          <button v-if="!isSystemWorkflow(flow)" type="button" class="sea-remove" @click="removeFlow(flow)">拿掉</button>
+        </div>
+      </article>
+      <button type="button" class="card sea-card jihua-upload-card tone-pink" @click="screen = 'jihua'">
+        <b>计划实验室-文件导入</b>
+        <small>按申请号和文件描述整理文件，核对后使用已登录的季华平台会话上传。</small>
+        <span class="sea-badge">工作流工具</span>
       </button>
-    </div>
-    <label class="ocean-name">给这条起个名字
-      <input v-model="newName" type="text" maxlength="40" placeholder="我的工作流" />
-    </label>
-    <div class="flow-actions">
-      <button type="button" class="solid" :disabled="creating" @click="createFromOcean">{{ creating ? '正在放进去…' : '放进我的工作流' }}</button>
-    </div>
-    <p v-if="oceanNotice" class="hint">{{ oceanNotice }}</p>
-  </section>
+      <button type="button" class="sea-card sea-add" @click="openOcean">
+        <b>从知识海洋加一条</b>
+        <small>把会做的事挑出来，按你点的顺序排好。</small>
+      </button>
+    </section>
 
-  <template v-else-if="draft">
+    <section v-else-if="screen === 'ocean'" class="card ocean">
+      <button type="button" class="flow-text" @click="screen = 'sea'">回到海边</button>
+      <p class="hint">现在会自己跑起来的，是 PCT提醒、PCT鹏城专案和文件管理。新加的会按你排的步骤保存下来。</p>
+      <div class="skill-sea">
+        <button
+          v-for="skill in SKILLS"
+          :key="skill.id"
+          type="button"
+          class="skill-bubble"
+          :class="[skill.tint, { on: picked.includes(skill.id) }]"
+          @click="toggleSkill(skill.id)"
+        >
+          <i v-if="picked.includes(skill.id)">{{ picked.indexOf(skill.id) + 1 }}</i>
+          <b>{{ skill.title }}</b>
+          <small>{{ skill.blurb }}</small>
+        </button>
+      </div>
+      <label class="ocean-name">给这条起个名字
+        <input v-model="newName" type="text" maxlength="40" placeholder="我的工作流" />
+      </label>
+      <div class="flow-actions">
+        <button type="button" class="solid" :disabled="creating" @click="createFromOcean">{{ creating ? '正在放进去…' : '放进我的工作流' }}</button>
+      </div>
+      <p v-if="oceanNotice" class="hint">{{ oceanNotice }}</p>
+    </section>
+
+    <template v-else-if="screen === 'flow' && draft">
     <section class="card flow-preview">
       <div class="section-heading">
         <strong>全局预览</strong>
@@ -624,5 +625,13 @@ function chooseProc(param: WorkflowParam, id: string): void {
         <p v-if="notice" class="hint">{{ notice }}</p>
       </section>
     </div>
-  </template>
+    </template>
+  </div>
+  <div v-show="screen === 'jihua'" class="workflow-jihua">
+    <JihuaUploadPage @back="screen = 'sea'" />
+  </div>
 </template>
+
+<style scoped>
+.jihua-upload-card { display: grid; gap: 8px; width: 100%; min-height: 96px; text-align: left; font: inherit; color: var(--text); cursor: pointer; }
+</style>

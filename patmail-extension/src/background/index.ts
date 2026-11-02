@@ -23,6 +23,7 @@ import { createNativeDownloadTarget, type NativeFetchEvent } from './native-down
 import { NATIVE_NAVIGATION_CHANNEL } from '../browser-download/native-navigation'
 import { EASY_PAGE_WORLD_CHANNEL } from '../shared/easy-page-world'
 import { handleEasyPageWorld } from './easy-page-world'
+import { handleJihuaMessage, JIHUA_CHANNEL } from './jihua-page-world'
 
 const streamDownloads = new LocalStreamDownloads(chrome.downloads)
 let legacyStreamsUsed = false
@@ -417,6 +418,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (isRecord(message) && (message.channel === BROWSER_FILE_CHANNEL || message.channel === NATIVE_NAVIGATION_CHANNEL)) return
   if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
   if (sender.id !== chrome.runtime.id) return
+  if (isRecord(message) && message.channel === JIHUA_CHANNEL) {
+    void handleJihuaMessage(message, sender).then(sendResponse, (error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message.slice(0, 500) : '季华页面没有完成操作。' }))
+    return true
+  }
   if (isRecord(message) && message.channel === EASY_PAGE_WORLD_CHANNEL) {
     void connectionReady.then(() => handleEasyPageWorld(message, sender, {
       extensionId: chrome.runtime.id,
