@@ -837,8 +837,9 @@ async function refreshTask(): Promise<void> {
     return
   }
   task.value = loaded
-  roots.value = await repository.getRoots()
+  const storedRoots = await repository.getRoots()
   if (generation !== operationGeneration) return
+  roots.value = storedRoots
   otherWorkbenchRunning.value = false
   if (loaded.status === 'running' || loaded.status === 'pausing') {
     try {
@@ -857,6 +858,7 @@ async function refreshTask(): Promise<void> {
         }
         return latest
       })
+      if (generation !== operationGeneration) return
       if (restored) task.value = restored
     } catch (error) {
       if (error instanceof UploadLockBusyError) otherWorkbenchRunning.value = true
@@ -955,7 +957,7 @@ async function startOrResume(): Promise<void> {
       }
       try {
         const latest = await repository.load()
-        if (latest && latest.id === task.value?.id) task.value = latest
+        if (isCurrentAction(operation) && latest && latest.id === task.value?.id) task.value = latest
       } catch {
         // Keep the in-memory runner state visible; the next explicit refresh can retry storage.
       }

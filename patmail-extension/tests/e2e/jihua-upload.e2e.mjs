@@ -269,6 +269,17 @@ try {
     && await app.getByText('已选 0 / 0 行', { exact: true }).count() === 1
   assert.ok(blankTaskAfterLateUpload, 'A late original upload must not populate or replace the current blank task')
 
+  const readsBeforeRescan = await app.evaluate(() => window.__fixtureReads)
+  await app.getByRole('button', { name: '添加文件夹', exact: true }).click()
+  await app.getByText('已选 0 / 1 行', { exact: true }).waitFor()
+  assert.ok((await app.locator('.jh-file-row').innerText()).includes('回执待确认'),
+    'A new task scanning the same directory must inherit the original sent intent')
+  assert.equal(await app.locator('.jh-file-row .theme-select-trigger').isDisabled(), true,
+    'The inherited sent material must remain locked until its receipt is reconciled')
+  assert.equal(await app.evaluate(() => window.__fixtureReads), readsBeforeRescan,
+    'Cross-task upload-state recovery must not read file contents')
+  report.cancellation.sameFolderIntentRetained = true
+
   await app.locator('.jh-history-select .theme-select-trigger').click()
   await app.getByRole('option', { name: /1 个文件.*已取消/ }).click()
   await app.getByRole('button', { name: '恢复任务', exact: true }).click()
