@@ -234,8 +234,7 @@ export function createJihuaRepository(factory?: IDBFactory): JihuaRepository {
                 if (archived.rootId !== requested.rootId
                   || archived.relativePath !== requested.relativePath
                   || archived.fileName !== requested.fileName
-                  || archived.applicationNo !== requested.applicationNo
-                  || archived.materialKey !== requested.materialKey) continue
+                  || archived.applicationNo !== requested.applicationNo) continue
                 const existing = bestByRequestedRow.get(requested)
                 if (!existing || isNewerCandidate(candidate, existing)) bestByRequestedRow.set(requested, candidate)
               }

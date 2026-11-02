@@ -371,7 +371,7 @@ describe('Jihua IndexedDB repository', () => {
     }])
   })
 
-  it('finds archived upload state only when file and business identity fields all match', async () => {
+  it('matches file and application identity even when a fresh scan loses a manual material mapping', async () => {
     const repository = createJihuaRepository(makeFactory())
     const archivedRow = uploadStateRow()
     const currentLatestRow = uploadStateRow({ intent: { ...archivedRow.intent!, requestId: 'current-only' } })
@@ -383,12 +383,12 @@ describe('Jihua IndexedDB repository', () => {
       uploadStateRow({ rootId: 'other-root' }),
       uploadStateRow({ relativePath: 'other/case.pdf' }),
       uploadStateRow({ applicationNo: '2021100850613' }),
-      uploadStateRow({ materialKey: 'APPLY_FILE' }),
+      uploadStateRow({ materialKey: '' }),
     ]
 
     const found = await repository.findArchivedUploads(scannedRows)
 
-    expect(found).toEqual([archivedRow])
+    expect(found).toEqual([archivedRow, archivedRow])
     expect(found[0]?.intent?.requestId).not.toBe('current-only')
   })
 

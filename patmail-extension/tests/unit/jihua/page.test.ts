@@ -162,7 +162,8 @@ describe('Jihua upload workbench', () => {
     rig.createJihuaTask.mockReturnValue(newTask)
     rig.scanDirectory.mockResolvedValue({ rows: [row], files: new Map([[row.id, fileHandle]]), scannedFiles: 1, excludedFiles: 0, errors: [] })
     const archivedIntent = { requestId: 'retained-upload', sessionKey: 'owner', tabId: 1, documentId: 'doc-1', sent: true }
-    rig.repository.findArchivedUploads.mockResolvedValue([{ ...row, selected: true, intent: archivedIntent }])
+    rig.repository.findArchivedUploads.mockResolvedValue([{ ...row, materialKey: 'APPLY_FILE', selected: true, intent: archivedIntent }])
+    row.materialKey = ''
     rig.mergeInventory.mockImplementation((task: JihuaTask, result: { rows: JihuaTask['rows'] }, root: { id: string; name: string }) => ({
       ...task, roots: [{ id: root.id, name: root.name }], rows: result.rows, status: 'ready'
     }))
@@ -179,6 +180,7 @@ describe('Jihua upload workbench', () => {
     expect(rig.task?.rows).toHaveLength(1)
     expect(rig.repository.findArchivedUploads).toHaveBeenCalledOnce()
     expect(rig.task?.rows[0]?.intent).toEqual(archivedIntent)
+    expect(rig.task?.rows[0]?.materialKey).toBe('APPLY_FILE')
     expect(rig.task?.rows[0]?.selected).toBe(false)
   })
 
