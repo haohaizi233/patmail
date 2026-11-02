@@ -503,6 +503,8 @@ async function addFolder(): Promise<void> {
       for (const row of result.rows) {
         const previous = archivedById.get(row.id)
         if (previous) {
+          // A fresh filename parse must not discard a material the user mapped before sending.
+          row.materialKey = previous.intent?.materialKey ?? previous.materialKey
           row.intent = previous.intent
           row.receipt = previous.receipt
           row.record = previous.record
@@ -1091,11 +1093,12 @@ onUnmounted(() => {
           </div>
           <div class="table-scroll jh-table-wrap" role="region" aria-label="文件明细表格" tabindex="0">
             <table class="grid jh-table jh-file-table">
-              <thead><tr><th>选</th><th>申请号</th><th>案件名称</th><th>文件描述</th><th>本地文件</th><th>材料类型</th><th>状态</th><th>进度 / 回执</th></tr></thead>
+              <thead><tr><th>选</th><th>申请号</th><th>状态</th><th>案件名称</th><th>文件描述</th><th>本地文件</th><th>材料类型</th><th>进度 / 回执</th></tr></thead>
               <tbody>
                 <tr v-for="row in visibleRows" :key="row.id" class="jh-file-row">
                   <td><input type="checkbox" :checked="isSelected(row)" :disabled="!canEdit" :aria-label="`选择 ${row.fileName}`" @change="editSelection([row], ($event.target as HTMLInputElement).checked)" /></td>
                   <td class="mono">{{ row.applicationNo || '未识别' }}</td>
+                  <td><span class="jh-badge theme-select-badge" :class="statusClass(row)" :data-status="displayStatus(row)">{{ statusLabel(row) }}</span></td>
                   <td>{{ row.caseName || '—' }}</td>
                   <td>{{ row.description || '—' }}</td>
                   <td class="jh-path" :title="row.relativePath">{{ row.relativePath }}</td>
@@ -1111,7 +1114,6 @@ onUnmounted(() => {
                       />
                     </label>
                   </td>
-                  <td><span class="jh-badge theme-select-badge" :class="statusClass(row)" :data-status="displayStatus(row)">{{ statusLabel(row) }}</span></td>
                   <td class="jh-detail">
                     {{ rowDetail(row) || `尝试 ${row.attempts} 次` }}
                     <button v-if="row.intent?.sent && !row.receipt" type="button" class="ghost jh-row-recovery" :disabled="!canEdit" @click="confirmUnknownUpload(row)">核实后重试</button>
@@ -1275,7 +1277,7 @@ onUnmounted(() => {
 .jh-count { color: var(--sub); font-size: 12px; white-space: nowrap; }
 .jh-filters .jh-count { margin: 0 0 9px auto; }
 .jh-table-wrap, .jh-group-table-wrap { max-width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
-.jh-table-wrap { scrollbar-gutter: stable; }
+.jh-table-wrap { max-height: min(60vh, 640px); scrollbar-gutter: stable; }
 .jh-group-table-wrap { max-height: min(42vh, 380px); }
 .jh-table { width: 100%; font-size: 12px; }
 .jh-table th, .jh-table td { min-width: 72px; height: auto; padding: 8px 10px; vertical-align: top; }
@@ -1286,11 +1288,11 @@ onUnmounted(() => {
 .jh-file-table { min-width: 1180px; }
 .jh-file-table th:first-child, .jh-file-table td:first-child { min-width: 42px; width: 42px; }
 .jh-file-table th:nth-child(2), .jh-file-table td:nth-child(2) { min-width: 120px; }
-.jh-file-table th:nth-child(3), .jh-file-table td:nth-child(3) { min-width: 130px; }
-.jh-file-table th:nth-child(4), .jh-file-table td:nth-child(4) { min-width: 150px; }
-.jh-file-table th:nth-child(5), .jh-file-table td:nth-child(5) { min-width: 250px; max-width: 360px; }
-.jh-file-table th:nth-child(6), .jh-file-table td:nth-child(6) { min-width: 190px; }
-.jh-file-table th:nth-child(7), .jh-file-table td:nth-child(7) { min-width: 105px; }
+.jh-file-table th:nth-child(3), .jh-file-table td:nth-child(3) { min-width: 105px; }
+.jh-file-table th:nth-child(4), .jh-file-table td:nth-child(4) { min-width: 130px; }
+.jh-file-table th:nth-child(5), .jh-file-table td:nth-child(5) { min-width: 150px; }
+.jh-file-table th:nth-child(6), .jh-file-table td:nth-child(6) { min-width: 250px; max-width: 360px; }
+.jh-file-table th:nth-child(7), .jh-file-table td:nth-child(7) { min-width: 190px; }
 .jh-file-table th:nth-child(8), .jh-file-table td:nth-child(8) { min-width: 250px; }
 .jh-row-recovery { display: block; height: 28px; margin-top: 8px; padding: 0 9px; color: var(--pink); font-size: 11px; }
 .jh-path { max-width: 360px; overflow-wrap: anywhere; color: var(--text); }

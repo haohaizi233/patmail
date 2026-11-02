@@ -181,22 +181,36 @@ try {
   const layoutEvidence = {}
   for (const width of [1440, 1100]) {
     await app.setViewportSize({ width, height: 1000 })
+    await app.locator('.workspace').evaluate(node => { node.scrollTop = 0 })
     await app.waitForTimeout(100)
     const dimensions = await app.evaluate(() => {
       const root = document.documentElement
       const body = document.body
       const table = document.querySelector('.jh-table-wrap')
+      const workspace = document.querySelector('.workspace')
+      const state = document.querySelector('.jh-file-row .jh-badge')?.getBoundingClientRect()
+      const tableBounds = table?.getBoundingClientRect()
       return {
         viewportWidth: root.clientWidth,
         pageScrollWidth: Math.max(root.scrollWidth, body.scrollWidth),
         tableClientWidth: table?.clientWidth ?? 0,
-        tableScrollWidth: table?.scrollWidth ?? 0
+        tableScrollWidth: table?.scrollWidth ?? 0,
+        workspaceClientWidth: workspace?.clientWidth ?? 0,
+        workspaceScrollWidth: workspace?.scrollWidth ?? 0,
+        tableClientHeight: table?.clientHeight ?? 0,
+        tableScrollHeight: table?.scrollHeight ?? 0,
+        statusVisibleWithoutHorizontalScroll: Boolean(state && tableBounds && state.left >= tableBounds.left && state.right <= tableBounds.right)
       }
     })
     assert.ok(dimensions.pageScrollWidth <= dimensions.viewportWidth,
       `Page root must not overflow horizontally at ${width}px: ${JSON.stringify(dimensions)}`)
     assert.ok(dimensions.tableScrollWidth > dimensions.tableClientWidth,
       `The wide results table should retain its own local scroll area at ${width}px: ${JSON.stringify(dimensions)}`)
+    assert.ok(dimensions.workspaceScrollWidth <= dimensions.workspaceClientWidth,
+      `Workspace must not overflow horizontally at ${width}px: ${JSON.stringify(dimensions)}`)
+    assert.ok(dimensions.tableClientHeight <= 600 && dimensions.tableScrollHeight > dimensions.tableClientHeight,
+      'Long results should scroll inside the table and keep task controls above it')
+    assert.ok(dimensions.statusVisibleWithoutHorizontalScroll, 'Row status must be visible beside the application number')
     layoutEvidence[width] = dimensions
     await app.screenshot({ path: join(resultDir, `layout-${width}.png`), fullPage: true })
   }
