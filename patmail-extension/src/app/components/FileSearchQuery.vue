@@ -7,7 +7,8 @@ import { coerceFileSearchQuery } from '../../api/message-guards'
 import type { FileSearchResult, PatentFile } from '../../api/file-search-types'
 import { selectPage, toSelectedFile, type SelectedPatentFile } from '../../mail'
 import { caseScope, deduplicateNamedFiles, newestFirstSelected } from '../../mail/deduplicate'
-import { createDownloadNamePreview, downloadNameRecipeKey, type DownloadNamePreviewState } from '../services/download-name-preview'
+import { createDownloadNamePreview, type DownloadNamePreviewState } from '../services/download-name-preview'
+import { createFileSearchPageCache } from '../services/file-search-page-cache'
 import { fieldLabel } from '../../query/field-registry'
 import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress, taskCheckSnapshot } from '../check-progress'
 import { runPagedFetch } from '../page-pool'
@@ -91,6 +92,7 @@ const sourceNotice = ref('')
 const searchState = ref<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle')
 const searchMessage = ref('')
 const result = ref<FileSearchResult | null>(null)
+const pageCache = createFileSearchPageCache()
 const pageAllSelected = computed(() => {
   const items = result.value?.items ?? []
   const candidates = filterSelection(selectPage(candidateSelection.value, items.map(file => toSelectedFile(file)), true))
@@ -129,7 +131,7 @@ function refreshNamePreview(): void {
   updateWinners()
 }
 watch([candidateSelection, downloadSelection, stripAppNoDot, deduplicate, downloading, needsRevalidation, () => props.canSearch], refreshNamePreview, { deep: true, flush: 'sync' })
-watch(querySessionId, () => { preview?.clear(); refreshNamePreview() }, { flush: 'sync' })
+watch(querySessionId, () => { pageCache.clear(); preview?.clear(); refreshNamePreview() }, { flush: 'sync' })
 const activeTask = ref<FileQueryTask | null>(null)
 const pauseConfirmation = ref<{ taskId: string; pending: boolean; problem: string } | null>(null)
 const pauseBlocked = computed(() => Boolean(pauseConfirmation.value?.taskId === activeTask.value?.id &&
@@ -332,6 +334,10 @@ async function showResults(): Promise<void> {
   }
 }
 
+function queryNeedsRevalidation(data: FileSearchResult): boolean {
+  return ['QUERY_SESSION_INVALID', 'QUERY_LAYOUT_CHANGED', 'QUERY_SESSION_REVALIDATION_REQUIRED'].includes(data.sourceCode ?? '')
+}
+
 async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs, templateName?: string): Promise<void> {
   if (timeoutMs !== undefined) searchTimeoutMs.value = fileSearchTimeoutMs(timeoutMs)
   if (!bridge || !props.canSearch) return
@@ -357,7 +363,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     void showResults()
     return
   }
-  if (run === 'start') preview?.clear()
+  if (run === 'start') { pageCache.clear(); preview?.clear() }
   const current = ++generation
   const queryTemplateName = templateName ?? (run === 'start' ? queryForm.value?.currentSearchTemplateName?.() ?? '' : resultTemplateName.value)
   const next = coerceFileSearchQuery({ ...query, resolvedFields: fields, pageIndex: query.pageIndex || 1, pageSize: query.pageSize || pageSize.value }) ?? {
@@ -371,7 +377,11 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
   result.value = null
   try {
     const continuation = run === 'continue' && querySessionId.value ? { querySessionId: querySessionId.value } : undefined
-    const response = await bridge.request({ type: MessageType.SearchFiles, payload: continuation ? { query: next, continuation, timeoutMs: searchTimeoutMs.value } : { query: next, timeoutMs: searchTimeoutMs.value } })
+    // 与全选遍历共用查询来源；同一查询的翻页及刷新保留在途取名请求。
+    const response = await bridge.request({ type: MessageType.SearchFiles, payload: {
+      query: next, timeoutMs: searchTimeoutMs.value,
+      ...(continuation ? { continuation, batch: true } : {})
+    } })
     if (current !== generation) return
     if (response.type !== MessageType.SearchFilesResult) {
       searchState.value = 'error'
@@ -388,10 +398,12 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     result.value = response.payload.data
     resultTemplateName.value = queryTemplateName
     sourceNotice.value = response.payload.data.sourceMessage ?? ''
-    if (response.payload.data.sourceCode === 'QUERY_SESSION_INVALID' || response.payload.data.sourceCode === 'QUERY_LAYOUT_CHANGED') querySessionId.value = ''
+    const revalidate = queryNeedsRevalidation(response.payload.data)
+    if (revalidate) { querySessionId.value = ''; pageCache.clear() }
     else if (response.payload.data.querySessionId) querySessionId.value = response.payload.data.querySessionId
+    if (!revalidate) pageCache.set(response.payload.data)
     if (run === 'start' && !preserveRecoveredSelection) candidateSelection.value = {}
-    needsRevalidation.value = false
+    needsRevalidation.value = revalidate
     readPages.value = [...new Set([...readPages.value, result.value.pageIndex])]
     await rememberRecovery('file-query', `${snapshotScope}:page:${querySessionId.value}:${result.value.pageIndex}`, result.value).catch(error => { recoveryNotice.value = String(error) })
     await protectSurface().catch(() => {})
@@ -421,20 +433,36 @@ function togglePage(event: Event): void {
   candidateSelection.value = selectPage(candidateSelection.value, items.map(file => toSelectedFile(file, candidateSelection.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
 }
 function refresh(): void {
-  if (lastQuery.value) void executeSearch({ ...lastQuery.value }, 'continue')
+  if (!lastQuery.value) return
+  pageCache.clear()
+  void executeSearch({ ...lastQuery.value }, 'continue')
 }
 function changePageSize(): void {
   if (!lastQuery.value || !props.canSearch || ![20, 50, 100].includes(pageSize.value)) return
   void executeSearch({ ...lastQuery.value, pageIndex: 1, pageSize: pageSize.value }, 'start', undefined, resultTemplateName.value)
 }
 function page(delta: number): void {
-  if (!lastQuery.value || !result.value || searchState.value === 'loading') return
+  if (!props.canSearch || !lastQuery.value || !result.value || searchState.value === 'loading') return
   const next = lastQuery.value.pageIndex + delta
   if (next < 1 || next > result.value.totalPages) return
+  const cached = !needsRevalidation.value && pageCache.get(querySessionId.value, lastQuery.value.pageSize, next)
+  if (cached) {
+    // 全选已读到的完整页直接供表格使用，不再占用 EASY 请求或重置下载进度。
+    result.value = cached
+    lastQuery.value = { ...lastQuery.value, pageIndex: next }
+    sourceNotice.value = cached.sourceMessage ?? ''
+    searchState.value = cached.total ? 'success' : 'empty'
+    searchMessage.value = ''
+    emit('searched', lastQuery.value)
+    scheduleSurface()
+    void showResults()
+    return
+  }
   void executeSearch({ ...lastQuery.value, pageIndex: next }, 'continue')
 }
 function clearView(): void {
   stopBulk()
+  pageCache.clear()
   generation += 1
   result.value = null
   lastQuery.value = null
@@ -475,7 +503,10 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     toolbarNotice.value = error instanceof DownloadNameValidationError ? error.message : '没有读到下载名称，请重新选择。'
     return
   }
-  const task = reactive<FileQueryTask>(frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, deduplicate: deduplicate.value, resolvedNames: downloadNameRecipeKey(selection) === downloadNameRecipeKey(downloadSelection.value?.newFilename && downloadSelection.value.fileNameType ? { ...downloadSelection.value, templateId: undefined } : downloadSelection.value) ? { ...namePreview.value.names } : {}, caseScopes: Object.fromEntries(Object.values(candidateSelection.value).map(file => [file.fileId, caseScope(file)])), stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' })
+  const task = reactive<FileQueryTask>(frozen ?? { backend: 'browser', id: newUuid(), items: files.map(file => ({ fileId: file.fileId, fileNo: file.fileNo?.trim() ?? '', fileName: file.fileName })), selection, deduplicate: deduplicate.value, resolvedNames: preview?.snapshot(files.map(file => file.fileId), selection) ?? {}, caseScopes: Object.fromEntries(Object.values(candidateSelection.value).map(file => [file.fileId, caseScope(file)])), stripAppNoDot: stripAppNoDot.value, archiveName: templateArchiveName(resultTemplateName.value), status: 'paused', notice: '' })
+  const adoptPreviewNames = () => {
+    if (!frozen) Object.assign(task.resolvedNames ??= {}, preview?.snapshot(task.items.map(file => file.fileId), selection) ?? {})
+  }
   const startingScope = snapshotScope
   const issue = downloadFilesRequestIssue({ items: task.items, selection, stripAppNoDot: task.stripAppNoDot })
   if (issue) { toolbarNotice.value = issue; return }
@@ -488,10 +519,13 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
     return
   } finally { choosingTarget.value = false }
   if (disposed || !props.canSearch || snapshotScope !== startingScope || generation !== startingGeneration) { void releaseBrowserDownloadTarget(task.id).catch(() => {}); return }
+  adoptPreviewNames()
   activeTask.value = task
   try { await protectSurface() } catch { void releaseBrowserDownloadTarget(task.id).catch(() => {}); toolbarNotice.value = '下载尚未启动：工作面没有持久保存。'; return }
   if (disposed || !props.canSearch || needsRevalidation.value || snapshotScope !== startingScope ||
     generation !== startingGeneration || activeTask.value?.id !== task.id) { void releaseBrowserDownloadTarget(task.id).catch(() => {}); return }
+  // 保存位置选择及恢复账本写入期间，预热仍可能完成；在交给下载器前再次接收成果。
+  adoptPreviewNames()
   task.status = 'running'
   downloadConnectionRecovered.value = false
   const attempt = ++downloadAttempt
@@ -500,11 +534,12 @@ async function downloadSelected(resume = false, saveAsNew = false): Promise<void
   toolbarNotice.value = ''
   const startedAt = Date.now()
   resetTaskCheckProgress()
-  exportProgress.value = { named: selection ? 0 : files.length, packed: 0, failed: 0, deduplicated: 0, bytes: 0, totalBytes: 0, startedAt }
+  const knownNameCount = selection ? task.items.filter(file => Boolean(task.resolvedNames?.[file.fileId])).length : files.length
+  exportProgress.value = { named: knownNameCount, packed: 0, failed: 0, deduplicated: 0, bytes: 0, totalBytes: 0, startedAt }
   const progressId = newUuid()
   const runtime = globalThis.chrome?.runtime
   const removeProgress = () => { try { runtime?.onMessage?.removeListener(onProgress) } catch { /* 页面已关闭 */ } }
-  let namedFiles = selection ? 0 : files.length
+  let namedFiles = knownNameCount
   let processedFiles = 0
   let failedFiles = 0
   let deduplicatedFiles = 0
@@ -680,16 +715,20 @@ async function readBulkPage(bulk: BulkRead, page: number, fresh = false): Promis
         ...(fresh ? {} : { batch: true as const })
       }
     })
-    if (!bulkCurrent(bulk)) return { ok: false, session: true }
+    if (!bulkCurrent(bulk) || bulk.interrupted) return { ok: false, session: true }
     if (response.type === MessageType.SearchFilesResult && response.payload.ok) {
       const data = response.payload.data
-      if (data.sourceCode === 'QUERY_SESSION_INVALID' || data.sourceCode === 'QUERY_LAYOUT_CHANGED'
+      if (queryNeedsRevalidation(data)
         || data.pageSize !== BULK_PAGE_SIZE || data.pageIndex !== page
         || (!fresh && data.querySessionId && data.querySessionId !== bulk.querySessionId)) {
         bulk.interrupted = true
+        needsRevalidation.value = true
+        querySessionId.value = ''
+        pageCache.clear()
         bulk.reason = '查询运行或分页布局已变化，请重新查询后再全选。'
         return { ok: false, session: true }
       }
+      pageCache.set(data)
       return { ok: true, data }
     }
     const message = response.type === MessageType.SearchFilesResult && !response.payload.ok
@@ -773,6 +812,8 @@ async function selectAllPages(): Promise<void> {
       lastQuery.value = { ...bulk.query, pageIndex: 1 }
       querySessionId.value = bulk.querySessionId
     }
+    // 新布局改变查询来源时 watcher 会清缓存，采用来源后再保留它的第一页。
+    pageCache.set(first)
     bulk.selection = selectPage(bulk.selection, first.items.map(file => toSelectedFile(file, undefined, bulk.querySessionId)), true)
     candidateSelection.value = bulk.selection
     bulk.completed.add(first.pageIndex)
@@ -832,6 +873,7 @@ async function retryFailedPages(): Promise<void> {
 }
 
 watch(snapshotIdentity, async scope => {
+  pageCache.clear()
   preview?.clear()
   const current = ++recoveryGeneration
   releaseDownloadProgress?.()

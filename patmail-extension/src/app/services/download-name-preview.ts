@@ -2,7 +2,9 @@ import type { FileDownloadSelection } from '../../mail/download-name'
 import { MessageType, type MessageBridge } from '../../shared/message'
 
 export function downloadNameRecipeKey(selection: FileDownloadSelection | null): string {
-  return JSON.stringify(selection ? [selection.templateId ?? '', selection.newFilename ?? '', selection.fileNameType ?? '', selection.column ?? '', selection.fixedText ?? ''] : null)
+  const explicit = selection ? { ...selection } : null
+  if (explicit?.newFilename && explicit.fileNameType) delete explicit.templateId
+  return JSON.stringify(explicit ? [explicit.templateId ?? '', explicit.newFilename ?? '', explicit.fileNameType ?? '', explicit.column ?? '', explicit.fixedText ?? ''] : null)
 }
 
 export interface DownloadNamePreviewState {
@@ -30,6 +32,14 @@ export function createDownloadNamePreview(bridge: MessageBridge, changed: (state
     cache.clear()
     inFlight.clear()
     changed({ names: {}, done: 0, total: 0, pending: false, error: '' })
+  }
+  function snapshot(ids: string[], selection: FileDownloadSelection | null): Record<string, string> {
+    if (!selection) return {}
+    const names = cache.get(downloadNameRecipeKey(selection))
+    if (!names) return {}
+    return Object.fromEntries([...new Set(ids)]
+      .filter(id => Object.prototype.hasOwnProperty.call(names, id) && typeof names[id] === 'string' && names[id].trim())
+      .map(id => [id, names[id]]))
   }
   function refresh(ids: string[], selection: FileDownloadSelection | null, enabled = true) {
     cancel()
@@ -91,5 +101,5 @@ export function createDownloadNamePreview(bridge: MessageBridge, changed: (state
       void Promise.all(Array.from({ length: Math.min(6, Math.ceil(missing.length / 40)) }, worker)).then(() => publish(false))
     }, 250)
   }
-  return { refresh, cancel, clear }
+  return { refresh, cancel, clear, snapshot }
 }

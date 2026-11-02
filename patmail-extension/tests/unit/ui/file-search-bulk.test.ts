@@ -8,9 +8,9 @@ import { resetTaskCheckProgress, taskCheckProgress } from '../../../src/app/chec
 import { DOWNLOAD_PROGRESS_CHANNEL } from '../../../src/shared/download-progress'
 const templateLabel = vi.hoisted(() => ({ value: '模板甲' }))
 const downloadRecipe = vi.hoisted(() => ({ value: null as { templateId?: string; newFilename: string; fileNameType: string } | null }))
-const targetPicker = vi.hoisted(() => ({ cancel: false, calls: 0 }))
+const targetPicker = vi.hoisted(() => ({ cancel: false, calls: 0, wait: null as Promise<void> | null }))
 vi.mock('../../../src/browser-download/target', () => ({
-  chooseBrowserDownloadTarget: async () => { targetPicker.calls++; if (targetPicker.cancel) throw new DOMException('cancel', 'AbortError'); return '22222222-2222-4222-8222-222222222222' },
+  chooseBrowserDownloadTarget: async () => { targetPicker.calls++; if (targetPicker.wait) await targetPicker.wait; if (targetPicker.cancel) throw new DOMException('cancel', 'AbortError'); return '22222222-2222-4222-8222-222222222222' },
   releaseBrowserDownloadTarget: async () => {}
 }))
 
@@ -40,7 +40,7 @@ vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
 })
 
 let app: App | undefined
-afterEach(() => { targetPicker.cancel = false; targetPicker.calls = 0; recoveryGate.wait = null; recoveryGate.read = null; app?.unmount(); recoveryRows.clear(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => { targetPicker.cancel = false; targetPicker.calls = 0; targetPicker.wait = null; recoveryGate.wait = null; recoveryGate.read = null; app?.unmount(); recoveryRows.clear(); app = undefined; document.body.innerHTML = ''; resetTaskCheckProgress(); downloadRecipe.value = null; templateLabel.value = '模板甲'; vi.useRealTimers(); vi.unstubAllGlobals() })
 async function settle() { for (let i = 0; i < 30; i++) { await Promise.resolve(); await nextTick() } }
 function button(label: string): HTMLButtonElement {
   const found = Array.from(document.querySelectorAll('button')).find(node => node.textContent?.trim() === label)
@@ -201,6 +201,127 @@ describe('DIY名称实时去重', () => {
     selected.value = {}; await settle(); duplicateOption().click(); await settle()
     expect(selected.value).toEqual({})
   })
+  it('全选遍历后的下载中翻页直接显示已读结果，不查询、不清空表格或下载进度', async () => {
+    let finishDownload!: (response: ContentResponse) => void
+    const request = vi.fn<MessageBridge['request']>(async message => {
+      if (message.type === MessageType.SearchFiles) return reply(message, 250)
+      if (message.type === MessageType.DownloadFiles) return new Promise(resolve => { finishDownload = resolve })
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    mount(request)
+    button('测试查询').click(); await settle(); button('全选所有').click(); await settle()
+    const searches = () => request.mock.calls.filter(([message]) => message.type === MessageType.SearchFiles).length
+    expect(searches()).toBe(3)
+    button('下载已选').click(); await settle()
+    const downloadDetail = taskCheckProgress.detail
+    button('下一页').click()
+    expect(document.body.textContent).not.toContain('正在查询')
+    await settle()
+    expect(searches()).toBe(3)
+    expect(document.body.textContent).toContain('file-101.pdf')
+    expect(taskCheckProgress.detail).toBe(downloadDetail)
+    button('下一页').click(); await settle()
+    expect(document.body.textContent).toContain('file-201.pdf')
+    button('上一页').click(); await settle()
+    expect(document.body.textContent).toContain('file-101.pdf')
+    expect(searches()).toBe(3)
+    finishDownload({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'test.zip', fileCount: 250, notice: '' } } })
+    await settle()
+    button('刷新').click(); await settle(); button('下一页').click(); await settle()
+    expect(searches()).toBe(5)
+    expect(request.mock.calls.filter(([message]) => message.type === MessageType.SearchFiles).slice(-2)
+      .every(([message]) => message.type === MessageType.SearchFiles && message.payload.batch)).toBe(true)
+  })
+
+  it('预热中开始下载会接收保存位置选择期间的新成果，并从已完成数量继续显示', async () => {
+    vi.useFakeTimers()
+    type Listener = (message: unknown, sender: chrome.runtime.MessageSender) => void
+    const listeners = new Set<Listener>()
+    vi.stubGlobal('chrome', { runtime: { id: 'test-extension', onMessage: {
+      addListener: (listener: Listener) => listeners.add(listener), removeListener: (listener: Listener) => listeners.delete(listener)
+    } } })
+    const pending: { ids: string[]; finish: (response: ContentResponse) => void }[] = []
+    let payload: Extract<ContentRequest, { type: 'DOWNLOAD_FILES' }>['payload'] | undefined
+    let finishDownload!: (response: ContentResponse) => void
+    mount(async message => {
+      if (message.type === MessageType.SearchFiles) return reply(message, 120)
+      if (message.type === MessageType.ResolveDownloadNames) return new Promise(resolve => { pending.push({ ids: message.payload.fileIds, finish: resolve }) })
+      if (message.type === MessageType.DownloadFiles) { payload = message.payload; return new Promise(resolve => { finishDownload = resolve }) }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    })
+    button('测试查询').click(); await settle(); button('全选所有').click(); await settle()
+    downloadRecipe.value = { templateId: '11111111-1111-4111-8111-111111111111', newFilename: 'app_no', fileNameType: 'colname' }
+    button('测试下载名称').click(); await settle(); await vi.advanceTimersByTimeAsync(250)
+    expect(pending).toHaveLength(3)
+    const complete = (index: number) => pending[index].finish({ type: MessageType.ResolveDownloadNamesResult, payload: { ok: true, data: { names: pending[index].ids.map(id => `${id}.pdf`) } } })
+    complete(0); await settle()
+    let choose!: () => void
+    targetPicker.wait = new Promise(resolve => { choose = resolve })
+    button('下载已选').click(); await settle()
+    expect(payload).toBeUndefined()
+    complete(1); await settle(); choose(); await settle()
+    expect(Object.keys(payload?.resolvedNames ?? {})).toHaveLength(80)
+    expect(taskCheckProgress.detail).toContain('取名 80/120')
+    for (const listener of listeners) listener({ channel: DOWNLOAD_PROGRESS_CHANNEL, id: payload?.progressId, progress: { phase: 'naming', done: 0, total: 120 } }, { id: 'test-extension' })
+    expect(taskCheckProgress.detail).toContain('取名 80/120')
+    expect(pending).toHaveLength(3)
+    complete(2); await settle()
+    finishDownload({ type: MessageType.DownloadFilesResult, payload: { ok: true, data: { fileName: 'test.zip', fileCount: 120, notice: '' } } })
+    await settle()
+  })
+
+  it('首次读取未遍历页沿用查询来源，避免清掉预热中的共享命名请求', async () => {
+    const calls: Extract<ContentRequest, { type: 'SEARCH_FILES' }>[] = []
+    mount(async message => {
+      if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
+      calls.push(message)
+      return reply(message, 250)
+    })
+    button('测试查询').click(); await settle(); button('下一页').click(); await settle()
+    expect(calls).toHaveLength(2)
+    expect(calls[1].payload.continuation?.querySessionId).toBe('11111111-1111-4111-8111-111111111111')
+    expect(calls[1].payload.batch).toBe(true)
+    button('上一页').click(); await settle()
+    expect(calls).toHaveLength(2)
+  })
+
+  it('后台要求重新验证来源后清掉旧页缓存，不能通过翻页绕过只读状态', async () => {
+    const calls: Extract<ContentRequest, { type: 'SEARCH_FILES' }>[] = []
+    mount(async message => {
+      if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
+      calls.push(message)
+      const response = reply(message, 250)
+      if (calls.length === 3 && response.type === MessageType.SearchFilesResult && response.payload.ok) {
+        delete response.payload.data.querySessionId
+        response.payload.data.sourceCode = 'QUERY_SESSION_REVALIDATION_REQUIRED'
+        response.payload.data.sourceMessage = '查询记录已从本地恢复，需要重新查询后才能继续。'
+      }
+      return response
+    })
+    button('测试查询').click(); await settle(); button('下一页').click(); await settle(); button('全选本页').click(); await settle()
+    button('下一页').click(); await settle()
+    expect(button('下载已选').disabled).toBe(true)
+    button('上一页').click(); await settle()
+    expect(calls).toHaveLength(4)
+    expect(calls[3].payload.continuation).toBeUndefined()
+    expect(calls[3].payload.batch).toBeUndefined()
+  })
+
+  it('全选遇到后台恢复校验不能把没有有效来源的页当作遍历成功', async () => {
+    const selected = mount(async message => {
+      if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
+      const response = reply(message, 250)
+      if (message.payload.batch && response.type === MessageType.SearchFilesResult && response.payload.ok) {
+        delete response.payload.data.querySessionId
+        response.payload.data.sourceCode = 'QUERY_SESSION_REVALIDATION_REQUIRED'
+      }
+      return response
+    })
+    button('测试查询').click(); await settle(); button('全选所有').click(); await settle()
+    expect(Object.keys(selected.value)).toHaveLength(100)
+    expect(button('下载已选').disabled).toBe(true)
+  })
+
   it('预览未返回时直接下载，冻结完整候选与当前配方供下载器判断', async () => {
     vi.useFakeTimers()
     let payload: Extract<ContentRequest, { type: 'DOWNLOAD_FILES' }>['payload'] | undefined
@@ -680,7 +801,11 @@ describe('文件全选的批量分页', () => {
     mount(async message => {
       if (message.type !== MessageType.SearchFiles) return { type: MessageType.Error, payload: { message: 'unused' } }
       calls.push(message)
-      return reply(message, 240)
+      const response = reply(message, 240)
+      if (response.type === MessageType.SearchFilesResult && response.payload.ok && message.payload.query.pageSize === 100) {
+        response.payload.data.querySessionId = '22222222-2222-4222-8222-222222222222'
+      }
+      return response
     })
     const pageSize = document.querySelector<HTMLSelectElement>('select[aria-label="每页数量"]') ?? document.querySelector<HTMLSelectElement>('select')
     // 初次查询前选20，保留用户在旧页面得到的布局。
@@ -691,7 +816,11 @@ describe('文件全选的批量分页', () => {
     expect(calls.slice(1).map(call => [call.payload.query.pageIndex, call.payload.query.pageSize])).toEqual([[1, 100], [2, 100], [3, 100]])
     expect(calls[1].payload.continuation).toBeUndefined()
     expect(calls[1].payload.batch).toBeUndefined()
-    expect(calls.slice(2).every(call => call.payload.continuation?.querySessionId === '11111111-1111-4111-8111-111111111111')).toBe(true)
+    expect(calls.slice(2).every(call => call.payload.continuation?.querySessionId === '22222222-2222-4222-8222-222222222222')).toBe(true)
+    const traversedCalls = calls.length
+    button('下一页').click(); await settle(); button('上一页').click(); await settle()
+    expect(calls).toHaveLength(traversedCalls)
+    expect(document.body.textContent).toContain('file-1.pdf')
   })
 
   it('重新查询后忽略旧批次的在途页，不把旧文件重新勾入', async () => {

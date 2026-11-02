@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDownloadNamePreview, type DownloadNamePreviewState } from '../../../src/app/services/download-name-preview'
+import type { FileDownloadSelection } from '../../../src/mail/download-name'
 import { MessageType, type ContentRequest, type ContentResponse, type MessageBridge } from '../../../src/shared/message'
 
 afterEach(() => vi.useRealTimers())
+function readPreviewNames(preview: ReturnType<typeof createDownloadNamePreview>, ids: string[], selection: FileDownloadSelection | null): Record<string, string> {
+  return preview.snapshot(ids, selection)
+}
 describe('download name preview scheduling', () => {
   it('resets names and isolates old requests when account or query context changes', async () => {
     vi.useFakeTimers()
@@ -27,6 +31,53 @@ describe('download name preview scheduling', () => {
     preview.refresh(['one'], recipe)
     expect(state?.names).toEqual({})
     preview.cancel()
+  })
+
+  it('snapshots only cached requested IDs and normalizes an explicit recipe without templateId', async () => {
+    vi.useFakeTimers()
+    const requests: { ids: string[]; finish: (response: ContentResponse) => void }[] = []
+    const request = vi.fn((message: ContentRequest) => new Promise<ContentResponse>(resolve => {
+      if (message.type === MessageType.ResolveDownloadNames) requests.push({ ids: message.payload.fileIds, finish: resolve })
+    }))
+    const bridge: MessageBridge = { request }
+    let state: DownloadNamePreviewState | undefined
+    const preview = createDownloadNamePreview(bridge, value => { state = value })
+    const templateRecipe = { templateId: 'template', newFilename: 'one', fileNameType: 'txt' }
+    const explicitRecipe = { newFilename: 'one', fileNameType: 'txt' }
+
+    expect(readPreviewNames(preview, ['one'], templateRecipe)).toEqual({})
+    expect(request).not.toHaveBeenCalled()
+    preview.refresh(['one', 'two', 'three'], templateRecipe)
+    await vi.advanceTimersByTimeAsync(250)
+    requests[0].finish({ type: MessageType.ResolveDownloadNamesResult, payload: { ok: true, data: { names: ['one.pdf', 'two.pdf', 'three.pdf'] } } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(readPreviewNames(preview, ['two', 'missing', 'one', 'two'], explicitRecipe)).toEqual({ two: 'two.pdf', one: 'one.pdf' })
+    expect(readPreviewNames(preview, ['one', 'two', 'three'], { newFilename: 'different', fileNameType: 'txt' })).toEqual({})
+    preview.refresh(['one', 'two', 'three'], explicitRecipe)
+    expect(state).toMatchObject({ names: { one: 'one.pdf', two: 'two.pdf', three: 'three.pdf' }, done: 3, pending: false })
+    await vi.advanceTimersByTimeAsync(250)
+    expect(requests).toHaveLength(1)
+
+    preview.clear()
+    expect(readPreviewNames(preview, ['one', 'two', 'three'], explicitRecipe)).toEqual({})
+    preview.cancel()
+  })
+
+  it('keeps a late result from a canceled generation snapshotable in the same context', async () => {
+    vi.useFakeTimers()
+    let finish!: (response: ContentResponse) => void
+    const bridge: MessageBridge = { request: vi.fn(() => new Promise<ContentResponse>(resolve => { finish = resolve })) }
+    const preview = createDownloadNamePreview(bridge, () => {})
+    const recipe = { newFilename: 'one', fileNameType: 'txt' }
+    preview.refresh(['late'], recipe)
+    await vi.advanceTimersByTimeAsync(250)
+    preview.cancel()
+    finish({ type: MessageType.ResolveDownloadNamesResult, payload: { ok: true, data: { names: ['late.pdf'] } } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(readPreviewNames(preview, ['late'], recipe)).toEqual({ late: 'late.pdf' })
+    preview.clear()
   })
 
   it('reuses a pending recipe after cache eviction and merges its result into the current cache', async () => {
