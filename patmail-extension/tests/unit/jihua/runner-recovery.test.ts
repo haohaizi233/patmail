@@ -144,6 +144,24 @@ function setup(rows = [makeRow(0)]) {
 }
 
 describe('Jihua runner recovery boundaries', () => {
+  it.each(['pause', 'cancel'] as const)('retains %s requested while an explicit circuit reset is being saved', async action => {
+    const ctx = setup()
+    ctx.task.status = 'paused'
+    ctx.task.writeFailureStreak = { upload: 3, association: 0, circuitOpen: true }
+    const saving = deferred()
+    const release = deferred()
+    vi.spyOn(ctx.repository, 'save').mockImplementationOnce(async () => { saving.resolve(); await release.promise })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport)
+    const running = runner.run({ resetWriteFailureStreak: true })
+    await saving.promise
+    runner[action]()
+    release.resolve()
+    await running
+    expect(ctx.task.status).toBe(action === 'pause' ? 'paused' : 'cancelled')
+    expect(ctx.transport.request).not.toHaveBeenCalled()
+    expect(ctx.transport.upload).not.toHaveBeenCalled()
+  })
+
   it('fences an inherited upload from another account while processing other materials', async () => {
     const inherited = makeRow(0)
     inherited.intent = { requestId: 'foreign', sessionKey: 'other-account', tabId: 8, documentId: 'other-doc', sent: true }
@@ -173,29 +191,627 @@ describe('Jihua runner recovery boundaries', () => {
     expect(ctx.transport.upload).not.toHaveBeenCalled()
   })
 
-  it('pauses the pipeline on an upstream 524 and preserves sent intents without replaying uploads', async () => {
-    const rows = Array.from({ length: 12 }, (_, index) => makeRow(index, `20211008506${String(index).padStart(2, '0')}`))
+  it('uses one healthy read probe to resume queued applications without replaying failed uploads', async () => {
+    const rows = Array.from({ length: 7 }, (_, index) => makeRow(index, `20211008506${String(index).padStart(2, '0')}`))
     const ctx = setup(rows)
+    ctx.transport.upload = vi.fn(async (file: File, _material: Material, _id: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      if (file.name === rows[0]?.fileName) throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
+      return { code: 200, data: [{ ID: `ok-${file.name}` }] }
+    })
+    ctx.transport.receipt = vi.fn(async () => ({ state: 'failed' as const, error: 'OA 上传失败（HTTP 524）；结果未确认。' }))
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
+
+    await runner.run()
+
+    expect(ctx.task.status).toBe('failed')
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(7)
+    expect(rows[0]).toMatchObject({ status: 'failed', intent: { sent: true } })
+    expect(rows[0]?.error).toContain('524')
+    expect(rows.slice(1).every(row => row.status === 'success')).toBe(true)
+    expect(ctx.task.errors.some(error => /正在执行健康检查/.test(error))).toBe(true)
+    expect(ctx.task.pauseReason).toBeUndefined()
+    expect(ctx.task.recovery).toBeUndefined()
+    expect(ctx.transport.checkSession).toHaveBeenCalledTimes(9)
+    expect(vi.mocked(ctx.transport.request).mock.calls.filter(([path]) => typeof path === 'string' && path.includes('?'))).toHaveLength(8)
+    const sentCount = vi.mocked(ctx.transport.upload).mock.calls.length
+    const updateCount = ctx.updateBodies.length
+    // An explicit later resume observes each original receipt without replaying multipart.
+    rows.forEach(row => { row.selected = Boolean(row.intent?.sent) })
+    await runner.run()
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(sentCount)
+    expect(ctx.updateBodies).toHaveLength(updateCount)
+    expect(ctx.task.pauseReason).toBeUndefined()
+  })
+
+  it('pauses after three failed health probes and leaves queued rows pending', async () => {
+    const rows = Array.from({ length: 7 }, (_, index) => makeRow(index, `20211008506${String(index).padStart(2, '0')}`))
+    const ctx = setup(rows)
+    const save = vi.spyOn(ctx.repository, 'save')
+    const request = ctx.transport.request
+    const queries = new Map<string, number>()
+    ctx.transport.request = vi.fn(async (path: string, method: 'GET' | 'POST' = 'GET', body?: unknown) => {
+      if (path.includes('?')) {
+        const applicationNo = new URL(path, 'https://example.test').searchParams.get('PATENT_NUM') ?? ''
+        const count = (queries.get(applicationNo) ?? 0) + 1
+        queries.set(applicationNo, count)
+        if (count > 1) return { code: 524, msg: 'OA 请求失败（HTTP 524）；结果未确认。' }
+      }
+      return request(path, method, body)
+    })
+    ctx.transport.upload = vi.fn(async (file: File, _material: Material, _id: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      if (file.name === rows[0]?.fileName) throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
+      return { code: 200, data: [{ ID: `ok-${file.name}` }] }
+    })
+    ctx.transport.receipt = vi.fn(async () => ({ state: 'failed' as const, error: 'OA 上传失败（HTTP 524）；结果未确认。' }))
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
+
+    await runner.run()
+
+    expect(ctx.task.status).toBe('paused')
+    expect(ctx.task.pauseReason).toContain('3 次')
+    expect(ctx.task.pauseReason).toContain('HTTP 524')
+    expect(ctx.task.recovery).toBeUndefined()
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(6)
+    expect(rows[0]).toMatchObject({ status: 'failed', intent: { sent: true } })
+    expect(rows.slice(1, 6).every(row => row.status === 'success')).toBe(true)
+    expect(rows[6]).toMatchObject({ status: 'pending', selected: true })
+    expect([...queries.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0)).toBe(3)
+    expect(ctx.transport.checkSession).toHaveBeenCalledTimes(10)
+    expect(new Set(save.mock.calls.map(([snapshot]) => snapshot.recovery?.attempt).filter(Boolean))).toEqual(new Set([1, 2, 3]))
+  })
+
+  it('pauses immediately when the health probe reports an expired session', async () => {
+    const rows = [makeRow(0, '2021100850600')]
+    const ctx = setup(rows)
+    const request = ctx.transport.request
+    const queries = new Map<string, number>()
+    ctx.transport.request = vi.fn(async (path: string, method: 'GET' | 'POST' = 'GET', body?: unknown) => {
+      if (path.includes('?')) {
+        const applicationNo = new URL(path, 'https://example.test').searchParams.get('PATENT_NUM') ?? ''
+        const count = (queries.get(applicationNo) ?? 0) + 1
+        queries.set(applicationNo, count)
+        if (count > 1) return { code: 401, msg: '季华登录已失效，请重新连接 OA 页面。' }
+      }
+      return request(path, method, body)
+    })
     ctx.transport.upload = vi.fn(async (_file: File, _material: Material, _id: string, beforeSend: () => Promise<void>) => {
       await beforeSend()
       throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
     })
     ctx.transport.receipt = vi.fn(async () => ({ state: 'failed' as const, error: 'OA 上传失败（HTTP 524）；结果未确认。' }))
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
 
-    await new JihuaRunner(ctx.task, ctx.repository, ctx.transport).run()
+    await runner.run()
 
     expect(ctx.task.status).toBe('paused')
-    expect(ctx.transport.upload).toHaveBeenCalled()
-    expect(vi.mocked(ctx.transport.upload).mock.calls.length).toBeLessThanOrEqual(6)
-    expect(rows.slice(6).every(row => row.status === 'pending' && !row.intent)).toBe(true)
-    expect(rows.filter(row => row.intent?.sent).every(row => row.status === 'failed' && /524/.test(row.error))).toBe(true)
-    expect(ctx.task.errors.some(error => /暂停新上传/.test(error))).toBe(true)
-    const sentCount = vi.mocked(ctx.transport.upload).mock.calls.length
-    // Retry only the uncertain rows: the original receipt is observed, never multipart again.
-    rows.forEach(row => { row.selected = Boolean(row.intent?.sent) })
-    await new JihuaRunner(ctx.task, ctx.repository, ctx.transport).run()
-    expect(ctx.transport.upload).toHaveBeenCalledTimes(sentCount)
+    expect(ctx.task.pauseReason).toContain('登录已失效')
+    expect(ctx.task.recovery).toBeUndefined()
+    expect(ctx.transport.upload).toHaveBeenCalledOnce()
+    expect(ctx.transport.checkSession).toHaveBeenCalledTimes(3)
+  })
+
+  it('treats a transient fetch failure as availability loss, not an expired session', async () => {
+    const row = makeRow(0)
+    const ctx = setup([row])
+    ctx.transport.upload = vi.fn(async (_file: File, _material: Material, _id: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      throw new TypeError('Failed to fetch')
+    })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0] })
+
+    await runner.run()
+
+    expect(row.status).toBe('failed')
+    expect(row.error).toContain('Failed to fetch')
+    expect(ctx.task.pauseReason).toBeUndefined()
+    expect(ctx.task.recovery).toBeUndefined()
+    expect(ctx.transport.checkSession).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(ctx.transport.request).mock.calls.filter(([path]) => typeof path === 'string' && path.includes('?'))).toHaveLength(2)
+  })
+
+  it('routes an unconfirmed association HTTP 524 through recovery and preserves its streak until association succeeds', async () => {
+    const first = makeRow(0, '2021100850612')
+    const second = makeRow(1, '2021100850613')
+    second.selected = false
+    second.status = 'failed'
+    second.error = '手动关联重试。'
+    const ctx = setup([first, second])
+    const save = vi.spyOn(ctx.repository, 'save')
+    const request = ctx.transport.request
+    const probeStarted = deferred()
+    const releaseProbe = deferredValue<unknown>()
+    let firstSearches = 0
+    let firstUpdates = 0
+    ctx.transport.request = vi.fn(async (path: string, method: 'GET' | 'POST' = 'GET', body?: unknown, requestId?: string) => {
+      if (method === 'POST' && (body as { patentParameter?: { ID?: string } })?.patentParameter?.ID === `case-${first.applicationNo}`) {
+        firstUpdates++
+        throw new Error('OA 请求失败（HTTP 524）；结果未确认。')
+      }
+      if (path.includes('?') && new URL(path, 'https://example.test').searchParams.get('PATENT_NUM') === first.applicationNo && ++firstSearches === 2) {
+        probeStarted.resolve()
+        return releaseProbe.promise
+      }
+      return request(path, method, body, requestId)
+    })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
+    const run = runner.run()
+
+    await probeStarted.promise
+    expect(first.status).toBe('failed')
+    expect(first.error).toContain('HTTP 524')
+    expect(ctx.task.writeFailureStreak?.association).toBe(1)
+    expect(save.mock.calls.some(([snapshot]) => snapshot.writeFailureStreak?.association === 1 && snapshot.recovery?.attempt === 1)).toBe(true)
+    expect(firstUpdates).toBe(1)
+    expect(await runner.enqueue([second.id])).toBe(1)
+    releaseProbe.resolve({ code: 200, total: 1, rows: [{ ID: `case-${first.applicationNo}`, PATENT_NO: first.applicationNo }] })
+    await run
+
+    expect(firstUpdates).toBe(1)
+    expect(first.status).toBe('failed')
+    expect(second.status).toBe('success')
+    expect(ctx.task.writeFailureStreak?.association).toBe(0)
+    expect(ctx.task.pauseReason).toBeUndefined()
+  })
+
+  it('counts an association write as successful when readback confirms it after an HTTP 524 callback', async () => {
+    const row = makeRow(0)
+    const ctx = setup([row])
+    ctx.task.writeFailureStreak = { upload: 1, association: 2 }
+    const request = ctx.transport.request
+    ctx.transport.request = vi.fn(async (path: string, method: 'GET' | 'POST' = 'GET', body?: unknown, requestId?: string) => {
+      const result = await request(path, method, body, requestId)
+      if (method === 'POST' && path.includes('/update')) throw new Error('OA 请求失败（HTTP 524）；结果未确认。')
+      return result
+    })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0] })
+
+    await runner.run()
+
+    expect(row.status).toBe('success')
+    expect(ctx.updateBodies).toHaveLength(1)
+    expect(ctx.task.writeFailureStreak).toEqual({ upload: 0, association: 0 })
+    expect(ctx.task.recovery).toBeUndefined()
+    expect(ctx.task.pauseReason).toBeUndefined()
+    expect(vi.mocked(ctx.transport.request).mock.calls.filter(([path]) => typeof path === 'string' && path.includes('?'))).toHaveLength(1)
+  })
+
+  it('persists upload failure streaks across recovery probes and runner reconstruction until the circuit opens', async () => {
+    const first = makeRow(0, '2021100850612')
+    const ctx = setup([first])
+    const save = vi.spyOn(ctx.repository, 'save')
+    let task = ctx.task
+    task.writeFailureStreak = { upload: 0, association: 0 }
+    const failUpload: JihuaTransport['upload'] = vi.fn(async (_file: File, _material: Material, _requestId: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
+    })
+    ctx.transport.upload = failUpload
+    ctx.transport.receipt = vi.fn(async () => ({ state: 'failed' as const, error: 'HTTP 524' }))
+
+    for (const [index, next] of [makeRow(1, '2021100850613'), makeRow(2, '2021100850614')].entries()) {
+      if (index > 0) {
+        const persisted = save.mock.calls.at(-1)?.[0]
+        expect(persisted?.writeFailureStreak?.upload).toBe(index)
+        task = JSON.parse(JSON.stringify(persisted)) as JihuaTask
+        task.rows.forEach(row => { row.selected = false })
+        task.rows.push(next)
+        task.scannedFiles++
+        ctx.files.set(next.id, makeHandle(next.fileName))
+      }
+      next.selected = true
+      next.status = 'pending'
+      const runner = new JihuaRunner(task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
+      await runner.run()
+      expect(task.writeFailureStreak?.upload).toBe(index + 1)
+      expect(task.recovery).toBeUndefined()
+      expect(task.pauseReason).toBeUndefined()
+      expect(task.status).toBe('failed')
+    }
+
+    const persisted = save.mock.calls.at(-1)?.[0]
+    expect(persisted?.writeFailureStreak?.upload).toBe(2)
+    task = JSON.parse(JSON.stringify(persisted)) as JihuaTask
+    task.rows.forEach(row => { row.selected = false })
+    const third = makeRow(3, '2021100850615')
+    const concurrent = Array.from({ length: 5 }, (_, index) => makeRow(index + 4, `20211008506${String(index + 6).padStart(2, '0')}`))
+    const waiting = makeRow(9, '2021100850699')
+    task.rows.push(third, ...concurrent, waiting)
+    task.scannedFiles += 7
+    for (const row of [third, ...concurrent, waiting]) ctx.files.set(row.id, makeHandle(row.fileName))
+    for (const row of [third, ...concurrent, waiting]) { row.selected = true; row.status = 'pending' }
+    const sixSent = deferred()
+    const failThird = deferred()
+    const settleConcurrent = deferred()
+    const circuitSaved = deferred()
+    let started = 0
+    const concurrentNames = new Set(concurrent.map(row => row.fileName))
+    ctx.transport.upload = vi.fn(async (file: File, _material: Material, _requestId: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      if (++started === 6) sixSent.resolve()
+      if (file.name === third.fileName) {
+        await failThird.promise
+        throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
+      }
+      if (concurrentNames.has(file.name)) {
+        await settleConcurrent.promise
+        return { code: 200, data: [{ ID: `settled-${file.name}` }] }
+      }
+      throw new Error(`Unexpected upload for ${file.name}`)
+    })
+    save.mockImplementation(async snapshot => {
+      if (snapshot.pauseReason?.includes('上传写入连续 3 次')) circuitSaved.resolve()
+    })
+    const runner = new JihuaRunner(task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
+    const run = runner.run()
+
+    await sixSent.promise
+    failThird.resolve()
+    await circuitSaved.promise
+    const circuitSnapshot = save.mock.calls.find(([snapshot]) => snapshot.writeFailureStreak?.upload === 3 && snapshot.pauseReason?.includes('上传写入连续 3 次'))?.[0]
+    expect(circuitSnapshot?.recovery).toBeUndefined()
+    expect(task.writeFailureStreak?.upload).toBe(3)
+    settleConcurrent.resolve()
+    await run
+
+    expect(task.status).toBe('paused')
+    expect(task.pauseReason).toContain('上传写入连续 3 次')
+    expect(task.writeFailureStreak?.upload).toBe(0)
+    expect(task.writeFailureStreak?.circuitOpen).toBe(true)
+    expect(third.status).toBe('failed')
+    expect(concurrent.every(row => row.status === 'pending' && row.intent?.sent && row.receipt?.attachments.length)).toBe(true)
+    expect(waiting).toMatchObject({ status: 'pending', selected: true })
+    expect(waiting.intent).toBeUndefined()
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(6)
+
+    await new JihuaRunner(task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0] }).run()
+    expect(task.status).toBe('paused')
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(6)
+  })
+
+  it.each(['pause', 'cancel'] as const)('interrupts a blocked recovery probe promptly on %s', async mode => {
+    const row = makeRow(0)
+    const ctx = setup([row])
+    const request = ctx.transport.request
+    const probeStarted = deferred()
+    const releaseProbe = deferredValue<unknown>()
+    let searches = 0
+    ctx.transport.request = vi.fn(async (path: string, method: 'GET' | 'POST' = 'GET', body?: unknown) => {
+      if (path.includes('?') && ++searches === 2) {
+        probeStarted.resolve()
+        return releaseProbe.promise
+      }
+      return request(path, method, body)
+    })
+    ctx.transport.upload = vi.fn(async (_file: File, _material: Material, _id: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
+    })
+    ctx.transport.receipt = vi.fn(async () => ({ state: 'failed' as const, error: 'HTTP 524' }))
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
+    const run = runner.run()
+
+    await probeStarted.promise
+    expect(ctx.task.recovery?.attempt).toBe(1)
+    if (mode === 'pause') runner.pause()
+    else runner.cancel()
+    await run
+
+    expect(ctx.task.status).toBe(mode === 'pause' ? 'paused' : 'cancelled')
+    expect(ctx.task.recovery).toBeUndefined()
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(1)
     expect(ctx.updateBodies).toHaveLength(0)
+
+    releaseProbe.resolve({ code: 200, total: 1, rows: [{ ID: `case-${row.applicationNo}`, PATENT_NO: row.applicationNo }] })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(1)
+    expect(ctx.updateBodies).toHaveLength(0)
+  })
+
+  it.each(['pause', 'cancel'] as const)('interrupts the recovery backoff promptly on %s', async mode => {
+    const row = makeRow(0)
+    const ctx = setup([row])
+    const recoverySaved = deferred()
+    ctx.repository.save = vi.fn(async (snapshot: JihuaTask) => {
+      if (snapshot.recovery) recoverySaved.resolve()
+    })
+    ctx.transport.upload = vi.fn(async (_file: File, _material: Material, _id: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
+    })
+    ctx.transport.receipt = vi.fn(async () => ({ state: 'failed' as const, error: 'HTTP 524' }))
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [500] })
+    const run = runner.run()
+
+    await recoverySaved.promise
+    if (mode === 'pause') runner.pause()
+    else runner.cancel()
+    const settledQuickly = await Promise.race([
+      run.then(() => true),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 120)),
+    ])
+    if (!settledQuickly) {
+      runner.cancel()
+      await run
+    }
+
+    expect(settledQuickly).toBe(true)
+    expect(ctx.task.status).toBe(mode === 'pause' ? 'paused' : 'cancelled')
+    expect(ctx.task.recovery).toBeUndefined()
+    expect(ctx.transport.checkSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('holds same-application manual retries and other queued work behind recovery', async () => {
+    const active = makeRow(0, '2021100850612')
+    const sameApplicationRetry = makeRow(1, active.applicationNo, 'APPLY_FILE')
+    const otherRetry = makeRow(2, '2021100850613')
+    for (const row of [sameApplicationRetry, otherRetry]) {
+      row.selected = false
+      row.status = 'failed'
+      row.error = '等待人工重试。'
+    }
+    const ctx = setup([active, sameApplicationRetry, otherRetry])
+    const request = ctx.transport.request
+    const probeStarted = deferred()
+    const releaseProbe = deferredValue<unknown>()
+    let activeSearches = 0
+    ctx.transport.request = vi.fn(async (path: string, method: 'GET' | 'POST' = 'GET', body?: unknown) => {
+      if (path.includes('?')) {
+        const applicationNo = new URL(path, 'https://example.test').searchParams.get('PATENT_NUM') ?? ''
+        if (applicationNo === active.applicationNo && ++activeSearches === 2) {
+          probeStarted.resolve()
+          return releaseProbe.promise
+        }
+      }
+      return request(path, method, body)
+    })
+    const sameApplicationStarted = deferred()
+    const otherStarted = deferred()
+    ctx.transport.upload = vi.fn(async (file: File, _material: Material, _id: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      if (file.name === active.fileName) throw new Error('OA 上传失败（HTTP 524）；结果未确认。')
+      if (file.name === sameApplicationRetry.fileName) sameApplicationStarted.resolve()
+      if (file.name === otherRetry.fileName) otherStarted.resolve()
+      return { code: 200, data: [{ ID: `uploaded-${file.name}` }] }
+    })
+    ctx.transport.receipt = vi.fn(async () => ({ state: 'failed' as const, error: 'HTTP 524' }))
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport, { recoveryDelaysMs: [0, 0, 0] })
+    const run = runner.run()
+
+    await probeStarted.promise
+    expect(await runner.enqueue([sameApplicationRetry.id, otherRetry.id])).toBe(2)
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(1)
+    expect(sameApplicationRetry.status).toBe('pending')
+    expect(otherRetry.status).toBe('pending')
+
+    releaseProbe.resolve({ code: 200, total: 1, rows: [{ ID: `case-${active.applicationNo}`, PATENT_NO: active.applicationNo }] })
+    await Promise.all([sameApplicationStarted.promise, otherStarted.promise])
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(3)
+    await run
+    expect(active.status).toBe('failed')
+    expect(sameApplicationRetry.status).toBe('success')
+    expect(otherRetry.status).toBe('success')
+  })
+
+  it('appends a different application while all six upload lanes are occupied', async () => {
+    const rows = Array.from({ length: 7 }, (_, index) => makeRow(index, `20211008506${String(index).padStart(2, '0')}`))
+    const appended = rows[6]
+    appended.selected = false
+    appended.status = 'failed'
+    appended.error = '上次查询失败。'
+    const ctx = setup(rows)
+    const release = new Map(rows.map(row => [row.id, deferred()]))
+    const sixStarted = deferred()
+    const appendedStarted = deferred()
+    const save = vi.spyOn(ctx.repository, 'save')
+    let initialStarted = 0
+    let activeUploads = 0
+    let peakUploads = 0
+    ctx.transport.upload = vi.fn(async (file: File, _material: Material, _requestId: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      activeUploads++
+      peakUploads = Math.max(peakUploads, activeUploads)
+      if (file.name === appended.fileName) appendedStarted.resolve()
+      else if (++initialStarted === 6) sixStarted.resolve()
+      await release.get(rows.find(row => row.fileName === file.name)!.id)!.promise
+      activeUploads--
+      return { code: 200, data: [{ ID: `uploaded-${file.name}` }] }
+    })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport)
+    const run = runner.run()
+
+    await sixStarted.promise
+    expect(await runner.enqueue([appended.id])).toBe(1)
+    expect(appended).toMatchObject({ selected: true, status: 'pending', error: '上次查询失败。' })
+    expect(save.mock.calls.some(([snapshot]) =>
+      snapshot.rows.some(row => row.id === appended.id && row.status === 'pending' && row.selected),
+    )).toBe(true)
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(6)
+
+    release.get(rows[0].id)!.resolve()
+    await appendedStarted.promise
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(7)
+    expect(peakUploads).toBeLessThanOrEqual(6)
+
+    for (const row of rows.slice(1)) release.get(row.id)!.resolve()
+    await run
+    expect(appended.status).toBe('success')
+    expect(peakUploads).toBeLessThanOrEqual(6)
+  })
+
+  it('serializes same-application requeues and ignores a duplicate enqueue click', async () => {
+    const first = makeRow(0)
+    const appended = makeRow(1, first.applicationNo, 'APPLY_FILE')
+    appended.materialKey = ''
+    appended.selected = false
+    appended.status = 'unmatched'
+    appended.error = '请手动选择材料。'
+    const ctx = setup([first, appended])
+    const releaseFirst = deferred()
+    const releaseAppended = deferred()
+    const firstStarted = deferred()
+    const appendedStarted = deferred()
+    ctx.transport.upload = vi.fn(async (file: File, _material: Material, _requestId: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      if (file.name === first.fileName) {
+        firstStarted.resolve()
+        await releaseFirst.promise
+      } else {
+        appendedStarted.resolve()
+        await releaseAppended.promise
+      }
+      return { code: 200, data: [{ ID: `uploaded-${file.name}` }] }
+    })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport)
+    const run = runner.run()
+
+    await firstStarted.promise
+    expect(await runner.enqueue([appended.id], new Map([[appended.id, 'APPLY_FILE']]))).toBe(1)
+    expect(appended.materialKey).toBe('APPLY_FILE')
+    expect(await runner.enqueue([appended.id])).toBe(0)
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(1)
+
+    releaseFirst.resolve()
+    await appendedStarted.promise
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(2)
+    releaseAppended.resolve()
+    await run
+    expect(appended.status).toBe('success')
+  })
+
+  it('honors clearing a material before requeue without uploading under the old mapping', async () => {
+    const row = makeRow(0)
+    row.status = 'failed'
+    const ctx = setup([row])
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport)
+    expect(await runner.enqueue([row.id], new Map([[row.id, '']]))).toBe(1)
+    expect(row.materialKey).toBe('')
+    await runner.run()
+    expect(row.status).toBe('unmatched')
+    expect(ctx.transport.upload).not.toHaveBeenCalled()
+  })
+
+  it('preserves queued intent and receipt and reuses them instead of posting again', async () => {
+    const recovered = makeRow(0, '2021100850612')
+    const retained = makeRow(1, '2021100850613')
+    for (const row of [recovered, retained]) {
+      row.selected = false
+      row.status = 'failed'
+      row.error = '上次上传需要核对。'
+      row.attempts = 3
+      row.record = { id: `case-${row.applicationNo}`, type: 'INVENTION', applicationNo: row.applicationNo }
+    }
+    recovered.intent = {
+      requestId: 'recovered-request', sessionKey: session.key, tabId: session.tabId,
+      documentId: session.documentId, sent: true, materialKey: recovered.materialKey,
+      applicationNo: recovered.applicationNo,
+    }
+    retained.intent = {
+      requestId: 'retained-request', sessionKey: session.key, tabId: session.tabId,
+      documentId: session.documentId, sent: true, materialKey: retained.materialKey,
+      applicationNo: retained.applicationNo,
+    }
+    retained.receipt = { attachments: [{ ID: 'retained-attachment' }] }
+    const recoveredIntent = recovered.intent
+    const retainedIntent = retained.intent
+    const retainedReceipt = retained.receipt
+    const recoveredRecord = recovered.record
+    const retainedRecord = retained.record
+    const ctx = setup([recovered, retained])
+    ctx.transport.receipt = vi.fn(async requestId => requestId === 'recovered-request'
+      ? { state: 'done' as const, value: { code: 200, data: [{ ID: 'recovered-attachment' }] } }
+      : { state: 'missing' as const })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport)
+
+    expect(await runner.enqueue([recovered.id, retained.id], new Map([
+      [recovered.id, 'APPLY_FILE'], [retained.id, 'APPLY_FILE'],
+    ]))).toBe(2)
+    expect(recovered).toMatchObject({ selected: true, status: 'pending', error: '上次上传需要核对。', attempts: 3, materialKey: 'PATENT_REQUEST' })
+    expect(retained).toMatchObject({ selected: true, status: 'pending', error: '上次上传需要核对。', attempts: 3, materialKey: 'PATENT_REQUEST' })
+    expect(recovered.intent).toBe(recoveredIntent)
+    expect(retained.intent).toBe(retainedIntent)
+    expect(retained.receipt).toBe(retainedReceipt)
+    expect(recovered.record).toBe(recoveredRecord)
+    expect(retained.record).toBe(retainedRecord)
+
+    await runner.run()
+
+    expect(ctx.transport.receipt).toHaveBeenCalledTimes(1)
+    expect(ctx.transport.receipt).toHaveBeenCalledWith('recovered-request')
+    expect(ctx.transport.upload).not.toHaveBeenCalled()
+    expect(JSON.stringify(ctx.updateBodies)).toContain('recovered-attachment')
+    expect(JSON.stringify(ctx.updateBodies)).toContain('retained-attachment')
+    expect(recovered.status).toBe('success')
+    expect(retained.status).toBe('success')
+  })
+
+  it('keeps a row enqueued after workers drain pending for the next resume', async () => {
+    const completed = makeRow(0, '2021100850612')
+    const late = makeRow(1, '2021100850613')
+    late.selected = false
+    late.status = 'failed'
+    late.error = '需要再次核对。'
+    const ctx = setup([completed, late])
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport)
+    let enqueuePromise: Promise<number> | undefined
+    const originalSave = ctx.repository.save.bind(ctx.repository)
+    ctx.repository.save = vi.fn(async (snapshot: JihuaTask) => {
+      if (snapshot.status === 'completed' && !enqueuePromise) enqueuePromise = runner.enqueue([late.id])
+      await originalSave(snapshot)
+    })
+
+    await runner.run()
+    expect(enqueuePromise).toBeDefined()
+    expect(await enqueuePromise).toBe(1)
+    expect(late).toMatchObject({ selected: true, status: 'pending', error: '需要再次核对。' })
+    expect(ctx.task.status).toBe('paused')
+    expect(ctx.task.pauseReason).toContain('队列已结束')
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['pause', 'cancel'] as const)('persists a requeue during %s without reviving the current run', async mode => {
+    const active = makeRow(0, '2021100850612')
+    const queued = makeRow(1, '2021100850613')
+    queued.selected = false
+    queued.status = 'failed'
+    queued.error = '待人工重试。'
+    const ctx = setup([active, queued])
+    const save = vi.spyOn(ctx.repository, 'save')
+    const uploadStarted = deferred()
+    const finishUpload = deferredValue<unknown>()
+    ctx.transport.upload = vi.fn(async (_file: File, _material: Material, _requestId: string, beforeSend: () => Promise<void>) => {
+      await beforeSend()
+      uploadStarted.resolve()
+      return finishUpload.promise
+    })
+    const runner = new JihuaRunner(ctx.task, ctx.repository, ctx.transport)
+    const run = runner.run()
+
+    await uploadStarted.promise
+    if (mode === 'pause') runner.pause()
+    else runner.cancel()
+    expect(await runner.enqueue([queued.id])).toBe(1)
+    expect(queued).toMatchObject({ selected: true, status: 'pending', error: '待人工重试。' })
+
+    if (mode === 'pause') {
+      finishUpload.resolve({ code: 200, data: [{ ID: 'active-upload' }] })
+      await run
+      expect(ctx.task.status).toBe('paused')
+    } else {
+      await run
+      expect(ctx.task.status).toBe('cancelled')
+      finishUpload.resolve({ code: 200, data: [{ ID: 'late-active-upload' }] })
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+
+    expect(queued.status).toBe('pending')
+    expect(ctx.transport.upload).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls.some(([snapshot]) =>
+      snapshot.rows.some(row => row.id === queued.id && row.status === 'pending' && row.selected && row.error === '待人工重试。'),
+    )).toBe(true)
   })
 
   it.each(['OA 上传失败（HTTP 524）；结果未确认。', '无法连接季华 OA；上传结果未确认，请先回读核对。'])(
@@ -543,6 +1159,7 @@ describe('Jihua runner recovery boundaries', () => {
 
     await expect(new JihuaRunner(ctx.task, ctx.repository, ctx.transport).run()).rejects.toThrow(/会话已变化/)
 
+    expect(ctx.task.pauseReason).toContain('会话已变化')
     expect(ctx.transport.request).not.toHaveBeenCalled()
     expect(ctx.transport.upload).not.toHaveBeenCalled()
     expect(firstGetFile).not.toHaveBeenCalled()

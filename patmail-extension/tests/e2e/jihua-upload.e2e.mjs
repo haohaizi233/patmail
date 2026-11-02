@@ -7,11 +7,20 @@ import { distDir, testResultsDir } from './support/paths.mjs'
 // Isolated Chromium and synthetic OPFS files only. Never attach to the user's Chrome or VPN.
 const resultDir = join(testResultsDir, 'jihua-upload')
 await mkdir(resultDir, { recursive: true })
-const report = { passed: false, isolated: true, realCustomerFiles: false, uploadRequests: 0, updates: 0, peakUploads: 0, cancellation: { passed: false } }
+const report = { passed: false, isolated: true, realCustomerFiles: false, uploadRequests: 0, updates: 0, peakUploads: 0, liveRequeue: { passed: false }, cancellation: { passed: false }, automaticRecovery: { passed: false } }
 const numbers = Array.from({ length: 9 }, (_, index) => `20211000000${String(index).padStart(2, '0')}`)
+const recoveryNumbers = Array.from({ length: 7 }, (_, index) => `2021100777${String(index).padStart(3, '0')}`)
 const cancellationNumber = '2021100888888'
 const cancellationFilename = `${cancellationNumber}-取消后恢复-递交合并档.pdf`
+const liveRequeueFilename = `${numbers[7]}-测试-递交合并档.pdf`
+const recoveryFilenames = recoveryNumbers.map(number => `${number}-测试-递交合并档.pdf`)
+// The importer presents and dispatches these application numbers in descending order.
+// Make the first visible row fail so five other uploads and the seventh queued row remain behind it.
+const recoveryFailNumber = recoveryNumbers.at(-1)
+const recoveryFailFilename = recoveryFilenames.at(-1)
+const recoveryLastFilename = recoveryFilenames[0]
 const records = new Map(numbers.map(number => [number, { ID: number, PATENT_NO: number, PATENT_NAME: '测试案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} }]))
+for (const number of recoveryNumbers) records.set(number, { ID: number, PATENT_NO: number, PATENT_NAME: '自动恢复回归案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} })
 records.set(cancellationNumber, { ID: cancellationNumber, PATENT_NO: cancellationNumber, PATENT_NAME: '取消回归案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} })
 records.get(numbers[0]).attachments.patentRequestAppendixList = [{ ID: 'existing', APPENDIX_NAME: 'existing.pdf' }]
 const missingNumber = '2021100999999'
@@ -28,6 +37,29 @@ const heldUploadGate = new Promise(resolve => { releaseHeldUpload = resolve })
 const heldUploadReached = new Promise(resolve => { resolveHeldUploadReached = resolve })
 const heldUploadFinished = new Promise(resolve => { resolveHeldUploadFinished = resolve })
 let heldUploadActive = false
+let releaseLiveRequeueUpload
+let resolveLiveRequeueUploadReached
+let resolveLiveRequeueUploadFinished
+let resolveSecondFailedAssociation
+const liveRequeueUploadGate = new Promise(resolve => { releaseLiveRequeueUpload = resolve })
+const liveRequeueUploadReached = new Promise(resolve => { resolveLiveRequeueUploadReached = resolve })
+const liveRequeueUploadFinished = new Promise(resolve => { resolveLiveRequeueUploadFinished = resolve })
+const secondFailedAssociation = new Promise(resolve => { resolveSecondFailedAssociation = resolve })
+let liveRequeueGateUsed = false
+let liveRequeueUploadActive = false
+let failAssociationAttempts = 0
+let recoveryScenarioActive = false
+let recoveryUploadStarts = 0
+let recoveryPeakUploads = 0
+let recovery524Responses = 0
+let recovery524ResponseAt = 0
+let recoveryLastUploadStartedAt = 0
+const recoveryInitialBatchFiles = []
+const recoveryProbeTimes = []
+let resolveRecoveryFirstSixUploads
+let resolveRecovery524Response
+const recoveryFirstSixUploads = new Promise(resolve => { resolveRecoveryFirstSixUploads = resolve })
+const recovery524Response = new Promise(resolve => { resolveRecovery524Response = resolve })
 const uploadedNames = []
 const updates = []
 const filenames = numbers.map(number => `${number}-测试-递交合并档.pdf`)
@@ -54,18 +86,37 @@ try {
     if (path === '/conow/file/upload' || path === '/conow/file/uploadAndOfc') {
       report.uploadRequests++
       report.peakUploads = Math.max(report.peakUploads, ++activeUploads)
+      if (recoveryScenarioActive) recoveryPeakUploads = Math.max(recoveryPeakUploads, activeUploads)
       const body = request.postDataBuffer().toString('utf8')
       const name = /filename="([^"]+)"/.exec(body)?.[1]
       assert.ok(name)
       assert.ok(body.includes('PAT_PATENT_PARAMETER'))
       assert.ok(body.includes('%PDF-1.7'))
       uploadedNames.push(name)
+      if (recoveryScenarioActive) {
+        recoveryUploadStarts++
+        if (recoveryUploadStarts <= 6) recoveryInitialBatchFiles.push(name)
+        if (recoveryUploadStarts === 6) resolveRecoveryFirstSixUploads()
+        if (name === recoveryLastFilename) recoveryLastUploadStartedAt = Date.now()
+      }
       const held = name === cancellationFilename
+      const liveRequeueHeld = name === liveRequeueFilename && !liveRequeueGateUsed
+      if (liveRequeueHeld) liveRequeueGateUsed = true
       try {
         if (held) {
           heldUploadActive = true
           resolveHeldUploadReached()
           await heldUploadGate
+        } else if (liveRequeueHeld) {
+          liveRequeueUploadActive = true
+          resolveLiveRequeueUploadReached()
+          await liveRequeueUploadGate
+        } else if (recoveryScenarioActive && name === recoveryFailFilename) {
+          await withTimeout(recoveryFirstSixUploads, 15000, 'The first six synthetic recovery uploads did not overlap')
+          recovery524Responses++
+          recovery524ResponseAt = Date.now()
+          resolveRecovery524Response(recovery524ResponseAt)
+          return await route.fulfill({ status: 524, contentType: 'text/html;charset=utf-8', body: '<html><title>fixture 524</title><body>fixture gateway timeout</body></html>' })
         } else {
           // Hold a complete upload window so source-page staging jitter cannot hide the six lanes.
           await new Promise(resolve => setTimeout(resolve, 1200))
@@ -78,6 +129,10 @@ try {
           heldUploadActive = false
           resolveHeldUploadFinished()
         }
+        if (liveRequeueHeld) {
+          liveRequeueUploadActive = false
+          resolveLiveRequeueUploadFinished()
+        }
       }
     }
     if (path === '/conow/pat/parameter/patent/update') {
@@ -86,6 +141,10 @@ try {
       updates.push(body)
       const record = records.get(body.patentParameter.ID)
       assert.equal(body.patentParameter.KEEP, 'unchanged')
+      if (body.patentParameter.ID === failNumber) {
+        failAssociationAttempts++
+        if (failAssociationAttempts === 2) resolveSecondFailedAssociation()
+      }
       if (body.patentParameter.ID === failNumber && failUpdate) return json({ code: 500, msg: 'fixture association rejected' })
       for (const [key, ids] of Object.entries(body)) if (key.endsWith('AppendixList')) record.attachments[key] = ids.map(ID => ({ ID }))
       return json({ code: 200 })
@@ -93,6 +152,7 @@ try {
     if (/^\/conow\/pat\/parameter\/(INVENTION|UTILITY)$/.test(path)) {
       const number = url.searchParams.get('PATENT_NUM')
       assert.ok(number, 'Search must use PATENT_NUM')
+      if (recoveryScenarioActive && number === recoveryFailNumber) recoveryProbeTimes.push(Date.now())
       const record = records.get(number)
       return json({ code: 200, total: record ? 1 : 0, rows: record ? [{ ID: record.ID, PATENT_NO: record.PATENT_NO }] : [] })
     }
@@ -144,8 +204,52 @@ try {
   await app.getByRole('button', { name: '连接并检测登录', exact: true }).click()
   await app.locator('.jh-session-state.session-connected').waitFor()
   await app.getByRole('button', { name: '开始上传', exact: true }).click()
+  await withTimeout(liveRequeueUploadReached, 30000, 'The first multipart for the live-requeue fixture did not reach its held route')
+  const failRow = app.locator('.jh-file-row').filter({ hasText: failNumber })
+  await failRow.locator('.jh-badge[data-status="failed"]').waitFor({ timeout: 30000 })
+  assert.equal(liveRequeueUploadActive, true, 'A different upload lane must remain in flight before manual requeue')
+  assert.equal(await app.getByRole('button', { name: '暂停上传', exact: true }).count(), 1,
+    'The original pipeline must still be running when the failed row is requeued')
+  assert.equal(failAssociationAttempts, 1, 'The target row must have failed its first association attempt')
+  assert.equal(uploadedNames.filter(name => name === `${failNumber}-测试-递交合并档.pdf`).length, 1,
+    'The target row must already have exactly one multipart upload')
+  await failRow.locator('button.jh-row-requeue').click()
+  await app.getByText(/已将 1 行重新入队/).waitFor({ timeout: 30000 })
+  await withTimeout(secondFailedAssociation, 30000, 'Requeued row did not attempt its second association while the pipeline was active')
+  await waitForPageCondition(app, number => {
+    const row = [...document.querySelectorAll('.jh-file-row')].find(node => node.textContent?.includes(number))
+    return row?.querySelector('.jh-badge[data-status="failed"]')
+  }, failNumber, { timeout: 30000 })
+  assert.equal(liveRequeueUploadActive, true, 'The independent upload must still be held after the row requeue')
+  assert.equal(failAssociationAttempts, 2, 'Manual requeue must retry the association once')
+  assert.equal(uploadedNames.filter(name => name === `${failNumber}-测试-递交合并档.pdf`).length, 1,
+    'Manual requeue must reuse the existing uploaded attachment ID without another multipart upload')
+  const failedRowUpdates = updates.filter(body => body.patentParameter?.ID === failNumber)
+  const attachmentLists = body => Object.fromEntries(Object.entries(body)
+    .filter(([key, value]) => key.endsWith('AppendixList') && Array.isArray(value))
+    .map(([key, value]) => [key, [...value]]))
+  assert.equal(failedRowUpdates.length, 2, 'The target record must have exactly two failed association attempts before release')
+  assert.ok(Object.values(attachmentLists(failedRowUpdates[0])).some(ids => ids.length > 0),
+    'The first failed association must carry the uploaded attachment ID')
+  assert.deepEqual(attachmentLists(failedRowUpdates[1]), attachmentLists(failedRowUpdates[0]),
+    'Manual requeue must reuse the same uploaded attachment ID')
+  const pipelineStillRunning = await app.getByRole('button', { name: '暂停上传', exact: true }).count() === 1
+  assert.ok(pipelineStillRunning, 'The pipeline must remain running after the live requeue')
+  report.liveRequeue = {
+    whilePipelineRunning: true,
+    independentUploadHeld: liveRequeueUploadActive,
+    failedRow: failNumber,
+    associationAttempts: failAssociationAttempts,
+    multipartUploadsForRow: uploadedNames.filter(name => name === `${failNumber}-测试-递交合并档.pdf`).length,
+    pipelineStillRunning,
+    sameAttachmentIdsReused: true,
+    passed: true
+  }
+  releaseLiveRequeueUpload()
+  await withTimeout(liveRequeueUploadFinished, 15000, 'Held live-requeue upload did not finish after release')
   await waitForPageCondition(app, () => document.querySelectorAll('.jh-badge[data-status="failed"]').length === 1 && ![...document.querySelectorAll('button')].some(node => node.textContent === '暂停上传'), null, { timeout: 90000 })
   assert.equal(report.peakUploads, 6)
+  assert.equal(await app.locator('.jh-badge[data-status="success"]').count(), 8)
   assert.ok(!uploadedNames.some(name => name.startsWith(numbers[0])), 'Existing category must be skipped')
   assert.equal(await app.locator('.jh-badge[data-status="already"]').count(), 1)
   assert.equal(await app.locator('.jh-badge[data-status="unmatched"]').count(), 2)
@@ -245,6 +349,8 @@ try {
   const cancelStartedAt = Date.now()
   await app.getByRole('button', { name: '取消任务', exact: true }).click()
   await waitForPageCondition(app, () => document.querySelector('.jh-board .jh-task-status')?.textContent?.includes('已取消，记录已保留'), null, { timeout: 15000 })
+  await waitForPageCondition(app, () => ['新建任务', '添加文件夹'].every(label =>
+    [...document.querySelectorAll('button')].some(node => node.textContent?.trim() === label && !node.disabled)), null, { timeout: 15000 })
   const cancelLatencyMs = Date.now() - cancelStartedAt
   assert.ok(cancelLatencyMs < 15000, `Cancel should settle while multipart is still held; took ${cancelLatencyMs}ms`)
   assert.equal(heldUploadActive, true, 'The synthetic multipart route must still be pending after cancellation')
@@ -308,14 +414,108 @@ try {
     associated
   }
   report.cancellation.passed = true
+  await waitForPageCondition(app, () => {
+    const status = document.querySelector('.jh-board .jh-task-status')?.textContent ?? ''
+    return status.includes('处理结束')
+      && ![...document.querySelectorAll('button')].some(node => node.textContent?.trim() === '暂停上传')
+  }, null, { timeout: 15000 })
+
+  // A synthetic 524 should trigger safe recovery, then drain the seventh queued application automatically.
+  await app.getByRole('button', { name: '新建任务', exact: true }).click()
+  await app.getByRole('dialog').getByRole('button', { name: '保留并新建', exact: true }).click()
+  await app.getByText('已选 0 / 0 行', { exact: true }).waitFor()
+  await app.evaluate(async names => {
+    const root = await navigator.storage.getDirectory()
+    const folder = await root.getDirectoryHandle('季华自动恢复回归目录', { create: true })
+    for (const name of names) {
+      const handle = await folder.getFileHandle(name, { create: true })
+      const writer = await handle.createWritable()
+      await writer.write('%PDF-1.7\nfixture automatic recovery content\n%%EOF')
+      await writer.close()
+    }
+    window.showDirectoryPicker = () => Promise.resolve(folder)
+  }, recoveryFilenames)
+  await app.getByRole('button', { name: '添加文件夹', exact: true }).click()
+  await app.getByText(`已选 0 / ${recoveryFilenames.length} 行`, { exact: true }).waitFor()
+  await app.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await app.getByText(`已选 ${recoveryFilenames.length} / ${recoveryFilenames.length} 行`, { exact: true }).waitFor()
+  await app.getByRole('button', { name: '连接并检测登录', exact: true }).click()
+  await app.locator('.jh-session-state.session-connected').waitFor()
+  assert.equal(activeUploads, 0, 'Automatic recovery fixture must start with no uploads from the previous task')
+  recoveryScenarioActive = true
+  await app.getByRole('button', { name: '开始上传', exact: true }).click()
+  await withTimeout(recoveryFirstSixUploads, 30000, 'The first six automatic-recovery uploads did not start')
+  assert.equal(recoveryUploadStarts, 6, 'Exactly six application uploads should start before the seventh is dispatched')
+  assert.equal(recoveryInitialBatchFiles.length, 6)
+  assert.equal(new Set(recoveryInitialBatchFiles).size, 6, 'The initial six upload lanes must each handle a distinct application')
+  assert.ok(recoveryInitialBatchFiles.includes(recoveryFailFilename), 'The 524 row must be part of the initial six-lane batch')
+  assert.equal(recoveryPeakUploads, 6, 'The isolated upload pipeline should reach six active lanes')
+  await withTimeout(recovery524Response, 15000, 'The isolated upload fixture did not return its synthetic HTTP 524')
+  assert.equal(recovery524Responses, 1)
+  assert.equal(recoveryUploadStarts, 6, 'The seventh upload must wait during 524 recovery backoff')
+  await app.getByText('正在自动恢复', { exact: false }).waitFor({ state: 'visible', timeout: 15000 })
+  const cancelEnabledDuringRecovery = await app.getByRole('button', { name: '取消任务', exact: true }).isEnabled()
+  assert.ok(cancelEnabledDuringRecovery, 'Cancellation must remain available during automatic recovery')
+
+  const unknownUploadRow = app.locator('.jh-file-row').filter({ hasText: recoveryFailNumber })
+  await waitForPageCondition(app, failureNumber => {
+    const row = [...document.querySelectorAll('.jh-file-row')].find(node => node.textContent?.includes(failureNumber))
+    return row?.querySelector('.jh-badge[data-status="verifying"]')
+  }, recoveryFailNumber, { timeout: 90000 })
+  await waitForPageCondition(app, () => {
+    const taskStatus = document.querySelector('.jh-task-status')?.textContent ?? ''
+    const successRows = document.querySelectorAll('.jh-badge[data-status="success"]').length
+    const continueButton = [...document.querySelectorAll('button')].some(node => node.textContent?.trim() === '继续上传')
+    return successRows === 6 && taskStatus.includes('有上传失败') && continueButton
+      && ![...document.querySelectorAll('button')].some(node => node.textContent?.trim() === '暂停上传')
+  }, null, { timeout: 90000 })
+  await unknownUploadRow.locator('.jh-badge[data-status="verifying"]').waitFor()
+  assert.ok((await unknownUploadRow.innerText()).includes('回执待确认'),
+    'The sent 524 request must remain an unknown receipt for manual review')
+  assert.equal(await app.getByRole('button', { name: '上传失败 1 行', exact: true }).count(), 1,
+    'The uncertain sent row must remain failed after automatic recovery')
+  const recoveredLastRow = app.locator('.jh-file-row').filter({ hasText: recoveryLastFilename })
+  await recoveredLastRow.locator('.jh-badge[data-status="success"]').waitFor({ timeout: 90000 })
+  const safeProbesAfter524 = recoveryProbeTimes.filter(timestamp => timestamp > recovery524ResponseAt)
+  assert.ok(safeProbesAfter524.length >= 1,
+    'Automatic recovery must perform a real safe PATENT_NUM GET probe after the HTTP 524')
+  assert.ok(recoveryLastUploadStartedAt > safeProbesAfter524[0],
+    'The seventh queued application must start only after the safe GET probe succeeds')
+  assert.ok(recoveryLastUploadStartedAt - recovery524ResponseAt >= 2500,
+    'The seventh queued application must wait through the automatic recovery backoff')
+  assert.equal(recoveryUploadStarts, 7, 'Automatic recovery should dispatch the one queued seventh application')
+  assert.equal(uploadedNames.filter(name => name === recoveryFailFilename).length, 1,
+    'The HTTP 524 multipart request must not be replayed automatically')
+  assert.equal(recoveryPeakUploads, 6, 'Automatic recovery must preserve the six-upload concurrency limit')
+  assert.equal(report.peakUploads, 6)
+  report.automaticRecovery = {
+    passed: true,
+    syntheticHttp524HtmlResponses: recovery524Responses,
+    initialConcurrentUploads: recoveryInitialBatchFiles.length,
+    safeGetProbesAfter524: safeProbesAfter524.length,
+    seventhUploadDelayMs: recoveryLastUploadStartedAt - recovery524ResponseAt,
+    seventhStartedAfterProbe: true,
+    totalUploadStarts: recoveryUploadStarts,
+    failedFilenameMultipartCount: uploadedNames.filter(name => name === recoveryFailFilename).length,
+    successRows: 6,
+    failedUnknownRows: 1,
+    lastQueuedRowSucceeded: true,
+    maxConcurrentUploads: recoveryPeakUploads,
+    cancelEnabledDuringRecovery,
+    continuedWithoutManualResume: true
+  }
+  recoveryScenarioActive = false
   report.passed = true
 } catch (error) {
   report.error = error.stack ?? String(error)
   if (app) await app.screenshot({ path: join(resultDir, 'failure.png'), fullPage: true }).catch(() => {})
   process.exitCode = 1
 } finally {
+  recoveryScenarioActive = false
   releaseHeldUpload?.()
   if (heldUploadActive) await withTimeout(heldUploadFinished, 3000, 'Releasing the held upload during cleanup timed out').catch(() => {})
+  releaseLiveRequeueUpload?.()
+  if (liveRequeueUploadActive) await withTimeout(liveRequeueUploadFinished, 3000, 'Releasing the held live-requeue upload during cleanup timed out').catch(() => {})
   if (context) await context.close()
   await writeFile(join(resultDir, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))

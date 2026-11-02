@@ -52,6 +52,7 @@ const pauseRequested = ref(false)
 const scannerProgressText = ref('')
 const taskHistory = ref<JihuaTaskSummary[]>([])
 const selectedHistoryId = ref('')
+const requeueInFlight = ref(false)
 
 let activeRunner: InstanceType<typeof JihuaRunner> | null = null
 let uiMutationQueue: Promise<void> = Promise.resolve()
@@ -98,6 +99,8 @@ const selectedRows = computed(() => taskRows.value.filter(isSelected))
 const selectedRunnableCount = computed(() => selectedRows.value.filter(row => !['success', 'already', 'excluded'].includes(row.status)).length)
 const busy = computed(() => Boolean(action.value) || localRunning.value || otherWorkbenchRunning.value)
 const canEdit = computed(() => !busy.value)
+const canRequeue = computed(() => !requeueInFlight.value && !otherWorkbenchRunning.value && !action.value
+  && (!localRunning.value || (task.value?.status === 'running' && !pauseRequested.value)))
 const canNewTask = computed(() => !['reset', 'history', 'cancel'].includes(action.value))
 const canCancel = computed(() => !['reset', 'history', 'cancel'].includes(action.value)
   && (Boolean(operationController) || localRunning.value || Boolean(task.value && !['completed', 'cancelled'].includes(task.value.status))))
@@ -121,10 +124,16 @@ const filteredRows = computed(() => {
   const needle = filterText.value
   return taskRows.value.filter(row => {
     const status = displayStatus(row)
-    if (statusFilter.value !== 'all' && status !== statusFilter.value) return false
+    if (statusFilter.value !== 'all' && status !== statusFilter.value && row.status !== statusFilter.value) return false
     if (!needle) return true
     return row.applicationNo.toLocaleLowerCase().includes(needle) || row.description.toLocaleLowerCase().includes(needle)
   })
+})
+const selectedRetryRows = computed(() => filteredRows.value.filter(row => isSelected(row) && retryableRow(row)))
+const pauseReason = computed(() => task.value?.status === 'paused' ? task.value.pauseReason ?? '' : '')
+const recoveryHint = computed(() => {
+  const recovery = task.value?.recovery
+  return recovery ? `客户平台响应异常，正在自动恢复（${recovery.attempt}/${recovery.maxAttempts}）。预计 ${new Date(recovery.retryAt).toLocaleTimeString('zh-CN')} 检查连接；恢复后继续队列，已发送文件保留原回执。` : ''
 })
 const filePageCount = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / PAGE_SIZE)))
 const visibleRows = computed(() => filteredRows.value.slice((filePage.value - 1) * PAGE_SIZE, filePage.value * PAGE_SIZE))
@@ -185,6 +194,20 @@ function materialForRow(row: JihuaRow): string {
 
 function materialLocked(row: JihuaRow): boolean {
   return Boolean(row.intent?.sent || row.receipt)
+}
+
+function retryableRow(row: JihuaRow): boolean { return row.status === 'failed' || row.status === 'unmatched' }
+function canSelectRow(row: JihuaRow): boolean { return canEdit.value || (canRequeue.value && retryableRow(row)) }
+function canEditRowMaterial(row: JihuaRow): boolean { return canSelectRow(row) && !materialLocked(row) }
+function retryHint(row: JihuaRow): string {
+  if (!retryableRow(row)) return ''
+  if (/扩展名|可确认的 Word|文件实际是网页|文件内容.*不符/.test(row.error)) return '核实真实文件格式，更正命名后重新扫描。'
+  if (/申请号.*格式|旧式申请号|文件名应包含/.test(row.error)) return '核对本地文件名中的申请号后重新扫描。'
+  if (row.intent?.sent && !row.receipt) return '重新入队先核对原回执；回执不可用时需人工核实。'
+  if (row.receipt) return '附件 ID 已保留，重新入队先核对关联。'
+  if (!materialForRow(row) || /支持的材料|材料类型未登记/.test(row.error)) return '选择该台账支持的材料后重新入队。'
+  if (/没有匹配到该申请号的台账/.test(row.error)) return '在平台补齐或核实案件后重新入队。'
+  return '查看详细原因，修正后重新入队。'
 }
 
 function materialOptionsFor(row: JihuaRow): Material[] {
@@ -380,6 +403,7 @@ async function cancelTask(): Promise<void> {
       if (!latest) return
       applyLocalOverrides(latest)
       if (latest.status !== 'completed') latest.status = 'cancelled'
+      delete latest.recovery
       for (const row of latest.rows) if (['checking', 'uploading', 'associating', 'verifying'].includes(row.status)) {
         row.status = 'pending'
         row.error = row.receipt ? '已取消；附件回执已保留，恢复后先核对关联。' : row.intent?.sent ? '已取消；请求已经发送，恢复后先核对原回执。' : '已取消；文件尚未完成上传。'
@@ -561,7 +585,12 @@ function toggleExtension(extension: Extension, event: Event): void {
 }
 
 async function editSelection(rowsToEdit: JihuaRow[], selected: boolean): Promise<void> {
-  if (!task.value || !canEdit.value) return
+  if (!task.value) return
+  if (localRunning.value && canRequeue.value) {
+    for (const row of rowsToEdit) if (retryableRow(row)) selectionOverrides.set(row.id, selected)
+    return
+  }
+  if (!canEdit.value) return
   const expectedId = task.value.id
   try {
     await withUploadUiLock(async () => {
@@ -575,7 +604,11 @@ async function editSelection(rowsToEdit: JihuaRow[], selected: boolean): Promise
 }
 
 async function editMaterial(row: JihuaRow, value: string): Promise<void> {
-  if (!task.value || !canEdit.value || materialLocked(row)) return
+  if (!task.value || !canEditRowMaterial(row)) return
+  if (localRunning.value) {
+    materialOverrides.set(row.id, value)
+    return
+  }
   const expectedId = task.value.id
   try {
     await withUploadUiLock(async () => {
@@ -586,6 +619,51 @@ async function editMaterial(row: JihuaRow, value: string): Promise<void> {
   } catch (error) {
     showActionError(error, '材料类型没有更新。')
   }
+}
+
+async function requeueRows(rows: JihuaRow[]): Promise<void> {
+  if (!task.value || !canRequeue.value) return
+  const ids = new Set(rows.filter(retryableRow).map(row => row.id))
+  if (!ids.size) return
+  const expectedId = task.value.id
+  const generation = operationGeneration
+  const currentRunner = activeRunner
+  requeueInFlight.value = true
+  errorMessage.value = ''
+  try {
+    let accepted = 0
+    if (localRunning.value && currentRunner) {
+      accepted = await currentRunner.enqueue([...ids], new Map(materialOverrides))
+    } else {
+      await withUploadUiLock(async () => {
+        const latest = await latestTaskFor(expectedId)
+        if (!latest) throw new Error('任务已变化，请刷新后重新选择。')
+        applyLocalOverrides(latest)
+        for (const row of latest.rows) if (ids.has(row.id) && retryableRow(row)) {
+          row.selected = true
+          row.status = 'pending'
+          row.updatedAt = Date.now()
+          accepted++
+        }
+        if (!accepted) return
+        latest.status = 'paused'
+        latest.pauseReason = undefined
+        delete latest.recovery
+        latest.updatedAt = Date.now()
+        await repository.save(latest)
+        if (generation === operationGeneration) task.value = latest
+      })
+    }
+    if (generation !== operationGeneration || task.value?.id !== expectedId) return
+    for (const id of ids) { selectionOverrides.delete(id); materialOverrides.delete(id) }
+    triggerRef(task)
+    publishUploadProgress()
+    notice.value = accepted
+      ? `已将 ${accepted} 行重新入队。${localRunning.value && task.value.status === 'running' && !task.value.writeFailureStreak?.circuitOpen && !task.value.pauseReason && !pauseRequested.value ? '将由当前流水线继续处理。' : '点击“继续上传”处理队列。'}已发送的请求先核对原回执，已有附件 ID 的先完成关联。`
+      : '这些行已在队列中或状态已变化，无需重复入队。'
+  } catch (error) {
+    if (generation === operationGeneration) showActionError(error, '重新入队没有完成，请刷新任务后重试。')
+  } finally { requeueInFlight.value = false }
 }
 
 function selectFiltered(selected: boolean): void {
@@ -805,7 +883,8 @@ function publishUploadProgress(): void {
   const failed = counted.filter(row => row.status === 'failed').length
   const already = counted.filter(row => row.status === 'already').length
   const unmatched = counted.filter(row => row.status === 'unmatched').length
-  const activePhase = active ? `${active.applicationNo || active.fileName} · ${rowStatusLabel[active.status]}`
+  const activePhase = current.recovery ? `平台退避检查 ${current.recovery.attempt}/${current.recovery.maxAttempts} · 恢复后自动继续`
+    : active ? `${active.applicationNo || active.fileName} · ${rowStatusLabel[active.status]}`
     : `已经传过 ${already} · 没匹配到 ${unmatched} · ${taskStatusLabel[current.status]}`
   const summary = `已处理 ${done}/${total} 行 · 成功 ${success} · 失败 ${failed}`
   const state = current.status === 'running' || current.status === 'pausing' ? 'run'
@@ -849,6 +928,7 @@ async function refreshTask(): Promise<void> {
         if (!latest) return null
         if (latest.status === 'running' || latest.status === 'pausing') {
           latest.status = 'paused'
+          delete latest.recovery
           for (const row of latest.rows) if (['checking', 'uploading', 'associating', 'verifying'].includes(row.status)) {
             row.status = 'pending'
             row.error = row.receipt ? '任务已恢复为暂停，附件回执已保留。' : row.intent?.sent ? '任务已恢复为暂停；继续时先核对原请求回执。' : '任务已恢复为暂停，可以继续或新建。'
@@ -937,7 +1017,8 @@ async function startOrResume(): Promise<void> {
     activeRunner = runner
     localRunning.value = true
     action.value = ''
-    runningCompletion = runner.run()
+    runningCompletion = runner.run({ resetWriteFailureStreak: ['paused', 'failed', 'cancelled'].includes(prepared.status)
+      && Boolean(prepared.writeFailureStreak?.circuitOpen || (prepared.writeFailureStreak?.upload ?? 0) >= 3 || (prepared.writeFailureStreak?.association ?? 0) >= 3) })
     await runningCompletion
     if (!isCurrentAction(operation)) return
     notice.value = prepared.status === 'completed' ? '所选行已处理结束，请查看上传成功、已经传过和没匹配到的各行结果。'
@@ -1050,6 +1131,8 @@ onUnmounted(() => {
   <p v-if="bootError" class="jh-alert card tone-pink" role="alert">{{ bootError }}</p>
   <p v-if="errorMessage" class="jh-alert card tone-pink" role="alert">{{ errorMessage }}</p>
   <p v-else-if="notice" class="jh-alert card tone-green" role="status">{{ notice }}</p>
+  <p v-if="pauseReason" class="jh-alert card tone-orange" role="status">暂停原因：{{ pauseReason }}</p>
+  <p v-if="recoveryHint" class="jh-alert card tone-orange" role="status">{{ recoveryHint }}</p>
 
   <div class="jh-workbench with-rail">
     <main class="col jh-main">
@@ -1067,8 +1150,9 @@ onUnmounted(() => {
           <button type="button" class="ghost" :disabled="!canCancel" @click="cancelTask">取消任务</button>
           <button type="button" class="ghost" :disabled="loading" @click="refreshTask">刷新任务</button>
           <button v-if="task && task.rows.length" type="button" class="ghost" @click="exportCsv">导出 CSV</button>
-          <button v-if="task && task.rows.length" type="button" class="ghost" :disabled="!canEdit" @click="selectFiltered(true)">全选筛选结果</button>
-          <button v-if="task && task.rows.length" type="button" class="ghost" :disabled="!canEdit" @click="selectFiltered(false)">取消筛选结果</button>
+          <button v-if="task && task.rows.length" type="button" class="ghost" :disabled="!canEdit && !canRequeue" @click="selectFiltered(true)">{{ localRunning ? '全选筛选中的异常' : '全选筛选结果' }}</button>
+          <button v-if="task && task.rows.length" type="button" class="ghost" :disabled="!canEdit && !canRequeue" @click="selectFiltered(false)">{{ localRunning ? '取消筛选中的异常' : '取消筛选结果' }}</button>
+          <button v-if="task && task.rows.length" type="button" class="ghost" :disabled="!canRequeue || !selectedRetryRows.length" @click="requeueRows(selectedRetryRows)">{{ requeueInFlight ? '正在重新入队…' : '重新入队所选异常' }}</button>
           <button v-if="task && task.rows.length && localRunning" type="button" class="ghost" :disabled="pauseRequested" @click="pauseUpload">{{ pauseRequested ? '正在暂停…' : '暂停上传' }}</button>
           <button v-else-if="task && task.rows.length" type="button" class="solid" :disabled="!canRun" @click="startOrResume">
             {{ action === 'prepare' || action === 'run' ? '正在准备…' : task.status === 'paused' || task.status === 'failed' || task.status === 'cancelled' ? '继续上传' : '开始上传' }}
@@ -1077,6 +1161,11 @@ onUnmounted(() => {
           <span v-else>{{ loading ? '正在恢复本机任务…' : '尚无文件任务' }}</span>
         </div>
         <p class="jh-retention-note hint">新建任务会保留原任务及待核实回执；需要时可从右侧历史任务恢复。</p>
+        <div v-if="taskSummary.failed || taskSummary.unmatched" class="toolbar jh-retry-summary" aria-label="异常行处理">
+          <button type="button" class="ghost" @click="statusFilter = 'failed'; filePage = 1">上传失败 {{ taskSummary.failed }} 行</button>
+          <button type="button" class="ghost" @click="statusFilter = 'unmatched'; filePage = 1">没匹配到 {{ taskSummary.unmatched }} 行</button>
+          <span class="hint">可逐行查看原因、修正材料后重新入队；回执待确认的失败行也会纳入“上传失败”。</span>
+        </div>
 
         <div v-if="selectedCount && invalidSelectedRows.length" class="jh-inline-warn tone-orange" role="status">
           {{ invalidSelectedRows.length }} 个已选文件缺少有效申请号或材料类型，将单独标记为“没匹配到”；其余可匹配文件会继续处理。
@@ -1086,10 +1175,10 @@ onUnmounted(() => {
         <template v-if="task && task.rows.length">
           <div class="filters jh-filters">
             <label>申请号或文件描述
-              <input v-model="appFilter" type="search" placeholder="筛选申请号 / 文件描述" :disabled="busy" />
+              <input v-model="appFilter" type="search" placeholder="筛选申请号 / 文件描述" />
             </label>
             <label>处理状态
-              <ThemeSelect v-model="statusFilter" :options="statusOptions" :disabled="busy" />
+              <ThemeSelect v-model="statusFilter" :options="statusOptions" />
             </label>
             <span class="jh-count">显示 {{ pageFrom }}–{{ pageTo }} / {{ filteredRows.length }}</span>
           </div>
@@ -1098,9 +1187,14 @@ onUnmounted(() => {
               <thead><tr><th>选</th><th>申请号</th><th>状态</th><th>案件名称</th><th>文件描述</th><th>本地文件</th><th>材料类型</th><th>进度 / 回执</th></tr></thead>
               <tbody>
                 <tr v-for="row in visibleRows" :key="row.id" class="jh-file-row">
-                  <td><input type="checkbox" :checked="isSelected(row)" :disabled="!canEdit" :aria-label="`选择 ${row.fileName}`" @change="editSelection([row], ($event.target as HTMLInputElement).checked)" /></td>
+                  <td><input type="checkbox" :checked="isSelected(row)" :disabled="!canSelectRow(row)" :aria-label="`选择 ${row.fileName}`" @change="editSelection([row], ($event.target as HTMLInputElement).checked)" /></td>
                   <td class="mono">{{ row.applicationNo || '未识别' }}</td>
-                  <td><span class="jh-badge theme-select-badge" :class="statusClass(row)" :data-status="displayStatus(row)">{{ statusLabel(row) }}</span></td>
+                  <td>
+                    <span class="jh-badge theme-select-badge" :class="statusClass(row)" :data-status="displayStatus(row)" :title="rowDetail(row)">{{ statusLabel(row) }}</span>
+                    <button v-if="retryableRow(row)" type="button" class="ghost jh-row-requeue" :disabled="!canRequeue" @click="requeueRows([row])">重新入队</button>
+                    <button v-if="row.intent?.sent && !row.receipt" type="button" class="ghost jh-row-recovery" :disabled="!canEdit" @click="confirmUnknownUpload(row)">核实后重试</button>
+                    <small v-if="retryHint(row)" class="jh-retry-hint">{{ retryHint(row) }}</small>
+                  </td>
                   <td>{{ row.caseName || '—' }}</td>
                   <td>{{ row.description || '—' }}</td>
                   <td class="jh-path" :title="row.relativePath">{{ row.relativePath }}</td>
@@ -1110,7 +1204,7 @@ onUnmounted(() => {
                       <ThemeSelect
                         :model-value="materialForRow(row)"
                         :options="materialChoiceOptions(row)"
-                        :disabled="!canEdit || materialLocked(row)"
+                        :disabled="!canEditRowMaterial(row)"
                         :title="materialLocked(row) ? '上传请求已发送或收到回执，材料类型已锁定。' : ''"
                         @update:model-value="editMaterial(row, String($event))"
                       />
@@ -1118,7 +1212,6 @@ onUnmounted(() => {
                   </td>
                   <td class="jh-detail">
                     {{ rowDetail(row) || `尝试 ${row.attempts} 次` }}
-                    <button v-if="row.intent?.sent && !row.receipt" type="button" class="ghost jh-row-recovery" :disabled="!canEdit" @click="confirmUnknownUpload(row)">核实后重试</button>
                   </td>
                 </tr>
                 <tr v-if="!visibleRows.length"><td colspan="8" class="jh-empty">没有符合当前筛选条件的文件。</td></tr>
@@ -1296,7 +1389,10 @@ onUnmounted(() => {
 .jh-file-table th:nth-child(6), .jh-file-table td:nth-child(6) { min-width: 250px; max-width: 360px; }
 .jh-file-table th:nth-child(7), .jh-file-table td:nth-child(7) { min-width: 190px; }
 .jh-file-table th:nth-child(8), .jh-file-table td:nth-child(8) { min-width: 250px; }
-.jh-row-recovery { display: block; height: 28px; margin-top: 8px; padding: 0 9px; color: var(--pink); font-size: 11px; }
+.jh-row-recovery, .jh-row-requeue { display: block; height: 28px; margin-top: 8px; padding: 0 9px; color: var(--pink); font-size: 11px; }
+.jh-retry-summary { margin: 8px 0; }
+.jh-retry-summary .hint { flex: 1 1 260px; font-size: 12px; line-height: 1.5; }
+.jh-retry-hint { display: block; max-width: 170px; margin-top: 6px; color: var(--sub); line-height: 1.5; }
 .jh-path { max-width: 360px; overflow-wrap: anywhere; color: var(--text); }
 .jh-descriptions { max-width: 480px; min-width: 250px !important; overflow-wrap: anywhere; }
 .jh-detail { max-width: 460px; overflow-wrap: anywhere; color: var(--text); }

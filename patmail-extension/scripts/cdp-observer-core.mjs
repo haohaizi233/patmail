@@ -550,6 +550,16 @@ export function safeNetworkResponseEvent(request, params) {
   }
   if (finiteNumber(params?.timestamp) && request.started) event.elapsedMs = Math.max(0, Math.round((params.timestamp - request.started) * 1000))
   if (Number.isInteger(response.status) && response.status >= 100 && response.status <= 599) event.status = response.status
+  const timing = response.timing ?? {}
+  for (const [key, start, end] of [
+    ['connectMs', timing.connectStart, timing.connectEnd],
+    ['sendMs', timing.sendStart, timing.sendEnd],
+    ['responseWaitMs', timing.sendEnd, timing.receiveHeadersStart],
+  ]) {
+    if (finiteNumber(start) && finiteNumber(end) && start >= 0 && end >= start && end - start <= 86_400_000) {
+      event[key] = Math.round(end - start)
+    }
+  }
   const mime = safeMimeType(response.mimeType)
   if (mime) event.mime = mime
   return event
@@ -579,15 +589,71 @@ export function summarizeJihuaTask(taskValue, classifyError) {
   const taskStatuses = ['ready', 'running', 'pausing', 'paused', 'completed', 'failed', 'cancelled']
   const rowStatuses = ['pending', 'checking', 'uploading', 'associating', 'verifying', 'success', 'failed', 'already', 'unmatched', 'excluded']
   const errorCategories = ['http_524', 'http_5xx', 'file_type', 'material_unmatched', 'source_invalid', 'login', 'session', 'timeout', 'network', 'receipt', 'file', 'storage', 'validation', 'remote', 'other']
+  // Keep this classifier local: this function is serialized into the browser page.
+  const reasonCategories = [
+    'material_unmapped', 'material_unsupported', 'case_not_found', 'case_ambiguous', 'application_format', 'application_type',
+    'stage_disabled', 'category_limit', 'http524', 'other5xx', 'file_html', 'doc_pdf', 'doc_zip', 'pdf_invalid', 'docx_invalid',
+    'doc_invalid', 'empty', 'large', 'permission', 'missing', 'receipt_unavailable', 'receipt_pending', 'association_unconfirmed',
+    'no_attachment_id', 'session', 'network', 'storage', 'timeout', 'other',
+  ]
+  const classifyReason = value => {
+    if (typeof value !== 'string' || !value.trim()) return null
+    const text = value.trim()
+    if (/(?:http|status(?:\s*code)?|状态码)\s*[:：]?\s*524\b/i.test(text)) return 'http524'
+    if (/(?:http|status(?:\s*code)?|状态码)\s*[:：]?\s*5\d{2}\b/i.test(text)) return 'other5xx'
+    if (/(?:不支持|不适用|unsupported|not supported).{0,16}(?:材料|material)|(?:材料|material).{0,24}(?:不支持|不适用|unsupported|not supported)|(?:台账|案件).{0,12}支持的材料/i.test(text)) return 'material_unsupported'
+    if (/材料类型.{0,12}(?:未登记|未配置|无法匹配|未匹配)|(?:没|未)匹配到材料类型|(?:material|category).{0,20}(?:unmapped|not registered|unmatched)/i.test(text)) return 'material_unmapped'
+    if (/没有匹配到该申请号的台账|(?:案件|台账).{0,16}(?:不存在|未找到)|case.{0,20}not found/i.test(text)) return 'case_not_found'
+    if (/多条相同申请号的台账|(?:多条|重复|不唯一).{0,12}(?:案件|台账|case)|case.{0,20}ambiguous|duplicate.{0,20}case/i.test(text)) return 'case_ambiguous'
+    if (/旧式申请号|仅支持\d+位中国专利申请号|文件名.{0,12}(?:应包含|缺少|格式无效)|申请号.{0,12}(?:格式无效|格式未匹配|仅支持\d+位|旧式)|(?:application\s*(?:no|number)|申请号).{0,24}(?:format|invalid)/i.test(text)) return 'application_format'
+    if (/申请号.{0,12}(?:类型未匹配|类型不支持)|(?:application\s*(?:no|number)|申请号).{0,24}(?:type|kind).{0,16}(?:unmatched|unsupported|invalid)/i.test(text)) return 'application_type'
+    if (/未启用该材料所属阶段|材料所属阶段.{0,12}未启用|stage.{0,16}disabled/i.test(text)) return 'stage_disabled'
+    if (/平台该类上限|(?:材料|附件).{0,16}(?:数量|份数).{0,12}超过.{0,12}上限|category.{0,16}limit/i.test(text)) return 'category_limit'
+    if (/文件实际是网页|(?:file|document).{0,16}(?:is|actual(?:ly)?).{0,8}(?:html|webpage)|<!doctype\s+html|<html\b/i.test(text)) return 'file_html'
+    if (/扩展名是\s*DOC.{0,20}实际是\s*PDF|DOC.{0,16}actual(?:ly)?\s+PDF|DOC extension.{0,16}PDF/i.test(text)) return 'doc_pdf'
+    if (/扩展名是\s*DOC.{0,20}(?:ZIP|压缩包)|DOC.{0,16}(?:ZIP container|archive)|ZIP 容器/i.test(text)) return 'doc_zip'
+    if (/PDF.{0,24}(?:扩展名不符|内容不符|无效)|(?:invalid|mismatch).{0,16}PDF|PDF.{0,16}(?:invalid|mismatch)/i.test(text)) return 'pdf_invalid'
+    if (/DOCX.{0,24}(?:扩展名不符|内容不符|无效)|(?:invalid|mismatch).{0,16}DOCX|DOCX.{0,16}(?:invalid|mismatch)/i.test(text)) return 'docx_invalid'
+    if (/(?:不是可确认的 Word 文档|Word 文档.{0,12}(?:无效|不符)|invalid.{0,16}(?:Word|DOC) document)/i.test(text)) return 'doc_invalid'
+    if (/文件为空|empty file|zero[- ]byte/i.test(text)) return 'empty'
+    if (/(?:文件|附件).{0,12}(?:过大|超过.{0,12}(?:大小|限制))|(?:file|attachment).{0,16}(?:too large|exceeds?.{0,12}(?:size|limit))/i.test(text)) return 'large'
+    if (/权限.{0,12}(?:未授权|不足|拒绝)|未授权.{0,12}(?:读取|目录)|permission.{0,16}(?:denied|not granted)|not authorized.{0,12}(?:read|directory)/i.test(text)) return 'permission'
+    if (/本地文件句柄丢失|本地文件.{0,12}(?:丢失|不存在)|文件.{0,12}(?:已不存在|找不到)|(?:local )?file handle.{0,12}(?:lost|missing)|missing local file/i.test(text)) return 'missing'
+    if (/原页面回执不可用|回执.{0,12}(?:不可用|丢失)|receipt.{0,16}(?:unavailable|lost)/i.test(text)) return 'receipt_unavailable'
+    if (/回执.{0,16}(?:尚未确认|未确认|超过时限|等待)|receipt.{0,20}(?:pending|not confirmed|timeout|waiting)/i.test(text)) return 'receipt_pending'
+    if (/回读未确认附件关联|未确认附件关联|附件关联.{0,12}(?:未确认|未完成)|association.{0,20}unconfirmed/i.test(text)) return 'association_unconfirmed'
+    if (/附件.{0,12}(?:缺少|没有|无).{0,8}ID|(?:缺少|没有|无).{0,8}附件\s*ID|(?:no|missing).{0,12}attachment\s*ID/i.test(text)) return 'no_attachment_id'
+    if (/登录|会话|\bsession\b|unauthori[sz]ed|\b401\b|\b403\b|标签页.{0,8}(?:失效|关闭)|页面.{0,8}(?:变化|关闭)/i.test(text)) return 'session'
+    if (/无法连接|连接失败|通信失败|网络|\bnetwork\b|\bfetch\b|NetworkError/i.test(text)) return 'network'
+    if (/indexeddb|持久化|存储|保存失败|\bstorage\b/i.test(text)) return 'storage'
+    if (/超过时限|超时|\btimeout\b|\btimed out\b/i.test(text)) return 'timeout'
+    return 'other'
+  }
   const rows = Array.isArray(taskValue.rows) ? taskValue.rows : []
   const maxRows = 50_000
   const rowsExamined = Math.min(rows.length, maxRows)
   const rowStatusCounts = Object.fromEntries(rowStatuses.map(status => [status, 0]))
   const rowErrorCounts = Object.fromEntries(errorCategories.map(category => [category, 0]))
   const taskErrorCounts = Object.fromEntries(errorCategories.map(category => [category, 0]))
+  const failedReasonCounts = Object.fromEntries(reasonCategories.map(category => [category, 0]))
+  const unmatchedReasonCounts = Object.fromEntries(reasonCategories.map(category => [category, 0]))
+  const taskReasonCounts = Object.fromEntries(reasonCategories.map(category => [category, 0]))
   let selectedCount = 0
   let sentCount = 0
   let pendingReceiptCount = 0
+  let lastTaskReason = null
+  const pauseReasonCode = classifyReason(taskValue.pauseReason)
+  const recoveryValue = taskValue.recovery && typeof taskValue.recovery === 'object' && !Array.isArray(taskValue.recovery)
+    ? taskValue.recovery
+    : null
+  const recovery = recoveryValue ? {
+    attempt: Number.isSafeInteger(recoveryValue.attempt) && recoveryValue.attempt >= 0 ? Math.min(recoveryValue.attempt, 2_147_483_647) : 0,
+    maxAttempts: Number.isSafeInteger(recoveryValue.maxAttempts) && recoveryValue.maxAttempts >= 0 ? Math.min(recoveryValue.maxAttempts, 2_147_483_647) : 0,
+    retryAt: typeof recoveryValue.retryAt === 'number' && Number.isFinite(recoveryValue.retryAt) && recoveryValue.retryAt > 0
+      ? Math.min(Math.max(1, Math.floor(recoveryValue.retryAt)), Number.MAX_SAFE_INTEGER)
+      : 0,
+    reasonCode: classifyReason(recoveryValue.reason),
+  } : null
   const countError = (counts, value) => {
     if (typeof classifyError !== 'function' || typeof value !== 'string' || !value.trim()) return
     const category = classifyError(value)
@@ -600,11 +666,27 @@ export function summarizeJihuaTask(taskValue, classifyError) {
     if (row.selected === true) selectedCount += 1
     if (row.intent?.sent === true) sentCount += 1
     if (row.intent?.sent === true && !row.receipt) pendingReceiptCount += 1
-    if (row.status === 'unmatched') rowErrorCounts.material_unmatched += 1
-    else countError(rowErrorCounts, row.error)
+    if (row.status === 'unmatched') {
+      rowErrorCounts.material_unmatched += 1
+      const reason = classifyReason(row.error)
+      if (Object.hasOwn(unmatchedReasonCounts, reason)) unmatchedReasonCounts[reason] += 1
+    } else {
+      countError(rowErrorCounts, row.error)
+      if (row.status === 'failed') {
+        const reason = classifyReason(row.error)
+        if (Object.hasOwn(failedReasonCounts, reason)) failedReasonCounts[reason] += 1
+      }
+    }
   }
   if (Array.isArray(taskValue.errors)) {
-    for (const error of taskValue.errors.slice(0, 500)) countError(taskErrorCounts, error)
+    for (const error of taskValue.errors.slice(0, 500)) {
+      countError(taskErrorCounts, error)
+      const reason = classifyReason(error)
+      if (Object.hasOwn(taskReasonCounts, reason)) {
+        taskReasonCounts[reason] += 1
+        lastTaskReason = reason
+      }
+    }
   }
   return {
     status: taskStatuses.includes(taskValue.status) ? taskValue.status : 'unknown',
@@ -617,6 +699,12 @@ export function summarizeJihuaTask(taskValue, classifyError) {
     rowStatusCounts,
     rowErrorCategories: rowErrorCounts,
     taskErrorCategories: taskErrorCounts,
+    failedReasons: failedReasonCounts,
+    unmatchedReasons: unmatchedReasonCounts,
+    taskReasons: taskReasonCounts,
+    lastTaskReason,
+    pauseReasonCode,
+    recovery,
   }
 }
 
@@ -625,10 +713,29 @@ export function safeJihuaTaskSummary(value) {
   const taskStatuses = ['ready', 'running', 'pausing', 'paused', 'completed', 'failed', 'cancelled', 'unknown']
   const rowStatuses = ['pending', 'checking', 'uploading', 'associating', 'verifying', 'success', 'failed', 'already', 'unmatched', 'excluded']
   const errorCategories = ['http_524', 'http_5xx', 'file_type', 'material_unmatched', 'source_invalid', 'login', 'session', 'timeout', 'network', 'receipt', 'file', 'storage', 'validation', 'remote', 'other']
+  const reasonCategories = [
+    'material_unmapped', 'material_unsupported', 'case_not_found', 'case_ambiguous', 'application_format', 'application_type',
+    'stage_disabled', 'category_limit', 'http524', 'other5xx', 'file_html', 'doc_pdf', 'doc_zip', 'pdf_invalid', 'docx_invalid',
+    'doc_invalid', 'empty', 'large', 'permission', 'missing', 'receipt_unavailable', 'receipt_pending', 'association_unconfirmed',
+    'no_attachment_id', 'session', 'network', 'storage', 'timeout', 'other',
+  ]
   const count = candidate => Number.isSafeInteger(candidate) && candidate >= 0 ? Math.min(candidate, 2_147_483_647) : 0
+  const retryTimestamp = candidate => typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0
+    ? Math.min(Math.max(1, Math.floor(candidate)), Number.MAX_SAFE_INTEGER)
+    : 0
   const safeCounts = (source, keys) => {
     const counts = objectValue(source) ?? {}
     return Object.fromEntries(keys.map(key => [key, count(counts[key])]))
+  }
+  const safeRecovery = source => {
+    const recovery = objectValue(source)
+    if (!recovery) return null
+    return {
+      attempt: count(recovery.attempt),
+      maxAttempts: count(recovery.maxAttempts),
+      retryAt: retryTimestamp(recovery.retryAt),
+      reasonCode: reasonCategories.includes(recovery.reasonCode) ? recovery.reasonCode : null,
+    }
   }
   return {
     status: taskStatuses.includes(value.status) ? value.status : 'unknown',
@@ -641,6 +748,12 @@ export function safeJihuaTaskSummary(value) {
     rowStatusCounts: safeCounts(value.rowStatusCounts, rowStatuses),
     rowErrorCategories: safeCounts(value.rowErrorCategories, errorCategories),
     taskErrorCategories: safeCounts(value.taskErrorCategories, errorCategories),
+    failedReasons: safeCounts(value.failedReasons, reasonCategories),
+    unmatchedReasons: safeCounts(value.unmatchedReasons, reasonCategories),
+    taskReasons: safeCounts(value.taskReasons, reasonCategories),
+    lastTaskReason: reasonCategories.includes(value.lastTaskReason) ? value.lastTaskReason : null,
+    pauseReasonCode: reasonCategories.includes(value.pauseReasonCode) ? value.pauseReasonCode : null,
+    recovery: safeRecovery(value.recovery),
   }
 }
 

@@ -62,6 +62,9 @@ export interface JihuaTask {
   scannedFiles: number
   excludedFiles: number
   errors: string[]
+  pauseReason?: string
+  recovery?: { attempt: number; maxAttempts: number; retryAt: number; reason: string }
+  writeFailureStreak?: { upload: number; association: number; circuitOpen?: boolean }
   session?: JihuaSession
 }
 export interface JihuaTaskSummary {

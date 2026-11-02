@@ -11,6 +11,7 @@ const rig = vi.hoisted(() => ({
   history: new Map<string, JihuaTask>(),
   runRunner: vi.fn(async () => {}),
   cancelRunner: vi.fn(),
+  enqueueRunner: vi.fn(async (_ids: readonly string[], _materials?: ReadonlyMap<string, string>) => 0),
   repository: {
     load: vi.fn(async () => rig.task),
     save: vi.fn(async (task: JihuaTask) => { rig.task = task }),
@@ -70,6 +71,7 @@ vi.mock('../../../src/jihua/runner', () => ({
   JihuaRunner: class {
     run = rig.runRunner
     cancel = rig.cancelRunner
+    enqueue = rig.enqueueRunner
     pause = vi.fn()
     constructor() {}
   }
@@ -113,6 +115,7 @@ beforeEach(() => {
   rig.history.clear()
   rig.runRunner.mockReset().mockResolvedValue(undefined)
   rig.cancelRunner.mockReset()
+  rig.enqueueRunner.mockReset().mockResolvedValue(0)
   rig.events = []
   rig.repository.load.mockImplementation(async () => rig.task)
   rig.repository.findArchivedUploads.mockResolvedValue([])
@@ -142,7 +145,114 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+function retryRow(id: string, status: JihuaTask['rows'][number]['status']): JihuaTask['rows'][number] {
+  return { id, rootId: 'root-1', relativePath: `${id}.pdf`, fileName: `${id}.pdf`, extension: 'pdf',
+    applicationNo: '2021100850612', caseName: '案件', description: '申请文件', materialKey: 'APPLY_FILE', selected: true,
+    status, error: '原错误说明', attempts: 2, updatedAt: 1 }
+}
+
 describe('Jihua upload workbench', () => {
+  it('requeues selected failed and unmatched rows while retaining sent state and successful results', async () => {
+    const failed = retryRow('failed', 'failed')
+    failed.intent = { requestId: 'sent', sessionKey: 'owner', tabId: 1, documentId: 'doc', sent: true }
+    failed.receipt = { attachments: [{ ID: 'retained-id' }] }
+    const unmatched = retryRow('unmatched', 'unmatched')
+    unmatched.materialKey = ''
+    const success = retryRow('success', 'success')
+    rig.task = taskWithRows([failed, unmatched, success])
+    mount()
+    await settle()
+    button('重新入队所选异常')?.click()
+    await settle()
+    expect(failed.status).toBe('pending')
+    expect(unmatched.status).toBe('pending')
+    expect(success.status).toBe('success')
+    expect(failed.intent.requestId).toBe('sent')
+    expect(failed.receipt.attachments[0]?.ID).toBe('retained-id')
+    expect(failed.error).toBe('原错误说明')
+    expect(failed.attempts).toBe(2)
+    expect(rig.task.status).toBe('paused')
+    expect(host?.textContent).toContain('已将 2 行重新入队')
+  })
+
+  it('includes a failed row with an unknown receipt in the failed filter and supports single-row requeue', async () => {
+    const failed = retryRow('unknown-receipt', 'failed')
+    failed.selected = false
+    failed.intent = { requestId: 'unknown', sessionKey: 'owner', tabId: 1, documentId: 'doc', sent: true }
+    rig.task = taskWithRows([failed, retryRow('other', 'pending')])
+    mount()
+    await settle()
+    button('上传失败 1 行')?.click()
+    await settle()
+    expect(host?.querySelectorAll('.jh-file-row')).toHaveLength(1)
+    expect(host?.querySelector('.jh-file-row')?.textContent).toContain('回执待确认')
+    host?.querySelector<HTMLButtonElement>('.jh-row-requeue')?.click()
+    await settle()
+    expect(failed.status).toBe('pending')
+    expect(failed.selected).toBe(true)
+    expect(failed.intent.requestId).toBe('unknown')
+    expect(failed.receipt).toBeUndefined()
+  })
+
+  it('shows the persisted platform pause reason', async () => {
+    rig.task = { ...taskWithRows([]), pauseReason: 'OA 上传失败（HTTP 524），已暂停新上传。' }
+    mount()
+    await settle()
+    expect(host?.textContent).toContain('暂停原因：OA 上传失败（HTTP 524）')
+  })
+
+  it('explains automatic recovery without blocking cancellation', async () => {
+    rig.task = { ...taskWithRows([]), status: 'running', recovery: { attempt: 1, maxAttempts: 3, retryAt: Date.now() + 3000, reason: 'HTTP 524' } }
+    // A real owner holds the lease while recovery runs, so this view observes instead of repairing it.
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: vi.fn(async (_key: string, _options: unknown, work: (lock: Lock | null) => unknown) => work(null)) } })
+    mount()
+    await settle()
+    expect(host?.textContent).toContain('正在自动恢复（1/3）')
+    expect(host?.textContent).toContain('恢复后继续队列')
+    expect(button('取消任务')?.disabled).toBe(false)
+  })
+
+  it('appends retries through the active runner without competing for its storage lease', async () => {
+    const failed = retryRow('retry-live', 'failed')
+    const pending = retryRow('normal-live', 'pending')
+    rig.task = { ...taskWithRows([failed, pending]), roots: [{ id: 'root-1', name: 'source' }], writeFailureStreak: { upload: 0, association: 0, circuitOpen: true } }
+    rig.roots = [{ id: 'root-1', name: 'source', handle: {
+      kind: 'directory', name: 'source', queryPermission: async () => 'granted', async *values() {}
+    } }]
+    rig.listJihuaTabs.mockResolvedValue([{ id: 9, title: '季华平台' }])
+    rig.connectJihuaTab.mockResolvedValue({
+      session: { key: 'owner', tabId: 9, documentId: 'doc-1', title: '季华平台' },
+      checkSession: vi.fn(async () => {}), request: vi.fn(async () => ({})), upload: vi.fn(async () => ({})),
+      receipt: vi.fn(async () => ({ state: 'missing' as const }))
+    })
+    let finishRun!: () => void
+    rig.runRunner.mockImplementation(() => {
+      if (rig.task) {
+        rig.task.status = 'running'
+        rig.task.writeFailureStreak = { upload: 0, association: 0, circuitOpen: false }
+      }
+      return new Promise(resolve => { finishRun = resolve })
+    })
+    rig.enqueueRunner.mockImplementation(async () => { failed.status = 'pending'; return 1 })
+    mount()
+    await settle()
+    button('连接并检测登录')?.click()
+    await settle()
+    button('继续上传')?.click()
+    await settle()
+    expect(rig.runRunner).toHaveBeenCalledOnce()
+    expect(rig.runRunner).toHaveBeenCalledWith({ resetWriteFailureStreak: true })
+    expect(host?.querySelector<HTMLInputElement>('.jh-filters input')?.disabled).toBe(false)
+    expect(host?.querySelector<HTMLButtonElement>('.jh-row-requeue')?.disabled).toBe(false)
+    const savesBefore = rig.repository.save.mock.calls.length
+    button('重新入队所选异常')?.click()
+    await settle()
+    expect(rig.enqueueRunner).toHaveBeenCalledWith(['retry-live'], expect.any(Map))
+    expect(rig.repository.save.mock.calls.length).toBe(savesBefore)
+    expect(host?.textContent).toContain('将由当前流水线继续处理')
+    finishRun()
+    await settle()
+  })
   it('scans names only and persists root and file handles before saving the task', async () => {
     const getFile = vi.fn(async () => new File(['must not read during scan'], 'private.pdf'))
     const fileHandle: LocalFileHandle = {
@@ -511,6 +621,7 @@ describe('Jihua upload workbench', () => {
     button('开始上传')?.click()
     await settle()
     expect(rig.runRunner).toHaveBeenCalledOnce()
+    expect(rig.runRunner).toHaveBeenCalledWith({ resetWriteFailureStreak: false })
     button('暂停上传')?.click()
     await settle()
     expect(button('取消任务')?.disabled).toBe(false)

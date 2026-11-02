@@ -15,6 +15,17 @@ function required<T extends (...args: never[]) => unknown>(name: string): T {
   return value as T
 }
 
+const jihuaReasonCategories = [
+  'material_unmapped', 'material_unsupported', 'case_not_found', 'case_ambiguous', 'application_format', 'application_type',
+  'stage_disabled', 'category_limit', 'http524', 'other5xx', 'file_html', 'doc_pdf', 'doc_zip', 'pdf_invalid', 'docx_invalid',
+  'doc_invalid', 'empty', 'large', 'permission', 'missing', 'receipt_unavailable', 'receipt_pending', 'association_unconfirmed',
+  'no_attachment_id', 'session', 'network', 'storage', 'timeout', 'other',
+]
+const reasonCounts = (overrides: Record<string, number> = {}): Record<string, number> => Object.fromEntries([
+  ...jihuaReasonCategories.map(category => [category, 0]),
+  ...Object.entries(overrides),
+]) as Record<string, number>
+
 describe('CDP observer endpoint policy', () => {
   it('enables Node 20 native WebSocket while leaving newer runtimes unchanged', () => {
     const nativeWebSocketFlags = required<(version: string, available: boolean) => string[]>('nativeWebSocketFlags')
@@ -357,6 +368,19 @@ describe('CDP observer target and event filtering', () => {
     })
   })
 
+  it('keeps only valid numeric response timing segments without headers or bodies', () => {
+    const safeNetworkResponseEvent = required<(request: Record<string, unknown>, params: Record<string, unknown>) => Record<string, unknown>>('safeNetworkResponseEvent')
+    const request = { source: 'jihua', origin: 'https://oa.jihualab.net', path: '/prod-api/conow/file/upload' }
+    const event = safeNetworkResponseEvent(request, { response: {
+      status: 524, headers: { authorization: 'private' }, body: 'private',
+      timing: { connectStart: 1, connectEnd: 5, sendStart: 8, sendEnd: 1508, receiveHeadersStart: 151508, private: 'secret' },
+    } })
+    expect(event).toEqual({ ...request, status: 524, connectMs: 4, sendMs: 1500, responseWaitMs: 150000 })
+    expect(safeNetworkResponseEvent(request, { response: { timing: {
+      connectStart: -1, connectEnd: 5, sendStart: 50, sendEnd: 40, receiveHeadersStart: Infinity,
+    } } })).toEqual(request)
+  })
+
   it('archives only progress/error metadata from runtime messages', () => {
     const safeRuntimeMetadata = required<(message: unknown) => Record<string, unknown> | null>('safeRuntimeMetadata')
     expect(safeRuntimeMetadata({
@@ -464,6 +488,12 @@ describe('CDP observer target and event filtering', () => {
         http_524: 0, http_5xx: 0, file_type: 0, material_unmatched: 0, source_invalid: 0,
         login: 0, session: 0, timeout: 1, network: 1, receipt: 0, file: 0, storage: 0, validation: 0, remote: 0, other: 0,
       },
+      failedReasons: reasonCounts({ session: 1, other: 1 }),
+      unmatchedReasons: reasonCounts({ material_unmapped: 1 }),
+      taskReasons: reasonCounts({ receipt_pending: 1, network: 1 }),
+      lastTaskReason: 'network',
+      pauseReasonCode: null,
+      recovery: null,
     })
     expect(JSON.stringify(summary)).not.toContain('CN202611020001')
     expect(JSON.stringify(summary)).not.toContain('申请材料')
@@ -479,6 +509,104 @@ describe('CDP observer target and event filtering', () => {
     expect(classifyJihuaErrorCategory('没匹配到材料类型：CN202611020001')).toBe('material_unmatched')
     expect(classifyJihuaErrorCategory('季华来源文件夹已失效：保密材料')).toBe('source_invalid')
     expect(classifyJihuaErrorCategory('OA 请求失败（HTTP 503）')).toBe('http_5xx')
+  })
+
+  it('separates fixed failure reasons by failed, unmatched, and latest task errors', () => {
+    const summarizeJihuaTask = required<(task: Record<string, unknown>, classifyError: (value: unknown) => string | null) => Record<string, unknown> | null>('summarizeJihuaTask')
+    const classifyJihuaErrorCategory = required<(value: unknown) => string | null>('classifyJihuaErrorCategory')
+    const safeJihuaTaskSummary = required<(value: Record<string, unknown>) => Record<string, unknown> | null>('safeJihuaTaskSummary')
+    const cases: Array<[string, string, 'failed' | 'unmatched']> = [
+      ['材料类型未登记', 'material_unmapped', 'unmatched'],
+      ['文件描述没有匹配到该台账支持的材料', 'material_unsupported', 'unmatched'],
+      ['没有匹配到该申请号的台账', 'case_not_found', 'unmatched'],
+      ['平台存在多条相同申请号的台账', 'case_ambiguous', 'unmatched'],
+      ['申请号格式无效', 'application_format', 'unmatched'],
+      ['该申请号类型未匹配', 'application_type', 'unmatched'],
+      ['平台当前未启用该材料所属阶段', 'stage_disabled', 'failed'],
+      ['平台该类上限为 2 份', 'category_limit', 'unmatched'],
+      ['OA 上传失败（HTTP 524）', 'http524', 'failed'],
+      ['OA 请求失败（HTTP 503）', 'other5xx', 'failed'],
+      ['文件实际是网页', 'file_html', 'failed'],
+      ['文件扩展名是 DOC，实际是 PDF', 'doc_pdf', 'failed'],
+      ['文件扩展名是 DOC，实际是 ZIP 容器', 'doc_zip', 'failed'],
+      ['文件内容与 PDF 扩展名不符', 'pdf_invalid', 'failed'],
+      ['文件内容与 DOCX 扩展名不符', 'docx_invalid', 'failed'],
+      ['文件内容不是可确认的 Word 文档', 'doc_invalid', 'failed'],
+      ['文件为空，未上传', 'empty', 'failed'],
+      ['文件超过大小限制', 'large', 'failed'],
+      ['本地目录读取权限未授权', 'permission', 'failed'],
+      ['本地文件句柄丢失', 'missing', 'failed'],
+      ['上次上传已发送，但原页面回执不可用', 'receipt_unavailable', 'failed'],
+      ['上次上传回执尚未确认，请稍后继续', 'receipt_pending', 'failed'],
+      ['台账回读未确认附件关联', 'association_unconfirmed', 'failed'],
+      ['上传响应没有附件 ID', 'no_attachment_id', 'failed'],
+      ['季华登录会话已变化', 'session', 'failed'],
+      ['无法连接季华 OA，请检查网络', 'network', 'failed'],
+      ['IndexedDB 持久化失败', 'storage', 'failed'],
+      ['上传超过时限', 'timeout', 'failed'],
+      ['CUSTOMER_SECRET_123', 'other', 'failed'],
+    ]
+    const summary = summarizeJihuaTask({
+      status: 'failed',
+      pauseReason: 'OA 上传失败（HTTP 524）',
+      recovery: {
+        attempt: 3,
+        maxAttempts: 3,
+        retryAt: Number.MAX_SAFE_INTEGER + 1,
+        reason: 'HTTP 524 PRIVATE_RECOVERY_REASON_456',
+        rawApplication: 'CN202611020001',
+      },
+      rows: [
+        ...cases.map(([error, , status]) => ({ status, error })),
+        { status: 'success', error: '文件实际是网页' },
+        { status: 'uploading', error: '文件实际是网页' },
+        { status: 'pending', error: '文件实际是网页' },
+      ],
+      errors: ['OA 上传失败（HTTP 524）', '上次上传回执尚未确认', '无法连接季华 OA'],
+    }, classifyJihuaErrorCategory)
+    const failedReasons = summary?.failedReasons as Record<string, number>
+    const unmatchedReasons = summary?.unmatchedReasons as Record<string, number>
+    const taskReasons = summary?.taskReasons as Record<string, number>
+    for (const [, reason, status] of cases) {
+      expect((status === 'failed' ? failedReasons : unmatchedReasons)[reason], `${status}:${reason}`).toBe(1)
+    }
+    expect(failedReasons.file_html).toBe(1)
+    expect(unmatchedReasons.file_html).toBe(0)
+    expect(taskReasons).toEqual(reasonCounts({ http524: 1, receipt_pending: 1, network: 1 }))
+    expect(summary?.lastTaskReason).toBe('network')
+    expect(summary?.pauseReasonCode).toBe('http524')
+    expect(summary?.recovery).toEqual({ attempt: 3, maxAttempts: 3, retryAt: Number.MAX_SAFE_INTEGER, reasonCode: 'http524' })
+    expect(safeJihuaTaskSummary(summary!)?.pauseReasonCode).toBe('http524')
+    expect(JSON.stringify(summary)).not.toContain('PRIVATE_RECOVERY_REASON_456')
+
+    const safeSummary = safeJihuaTaskSummary({
+      ...summary,
+      failedReasons: { ...failedReasons, injected: 'CUSTOMER_SECRET_123' },
+      unmatchedReasons: { ...unmatchedReasons, injected: 'CUSTOMER_SECRET_123' },
+      taskReasons: { ...taskReasons, injected: 'CUSTOMER_SECRET_123' },
+      lastTaskReason: 'CUSTOMER_SECRET_123',
+      pauseReasonCode: 'CUSTOMER_SECRET_123',
+      pauseReason: 'CUSTOMER_SECRET_123',
+      recovery: {
+        attempt: Number.MAX_SAFE_INTEGER,
+        maxAttempts: -1,
+        retryAt: Number.MAX_SAFE_INTEGER + 1,
+        reasonCode: 'http524',
+        reason: 'PRIVATE_RECOVERY_REASON_456',
+        applicationNo: 'CN202611020001',
+      },
+      rawError: 'CUSTOMER_SECRET_123',
+    })
+    expect(safeSummary?.lastTaskReason).toBeNull()
+    expect(JSON.stringify(safeSummary)).not.toContain('CUSTOMER_SECRET_123')
+    expect(JSON.stringify(safeSummary)).not.toContain('injected')
+    expect(JSON.stringify(safeSummary)).not.toContain('PRIVATE_RECOVERY_REASON_456')
+    expect(safeSummary?.recovery).toEqual({
+      attempt: 2_147_483_647,
+      maxAttempts: 0,
+      retryAt: Number.MAX_SAFE_INTEGER,
+      reasonCode: 'http524',
+    })
   })
 
   it('retains cancelled task state in both local and sanitized diagnostic summaries', () => {
@@ -505,6 +633,10 @@ describe('CDP observer target and event filtering', () => {
       rowStatusCounts: { ...(summary?.rowStatusCounts as Record<string, number>), failed: 4 },
       rowErrorCategories: { ...(summary?.rowErrorCategories as Record<string, number>), http_524: 3 },
       taskErrorCategories: { ...(summary?.taskErrorCategories as Record<string, number>), network: 2 },
+      failedReasons: { ...(summary?.failedReasons as Record<string, number>), http524: 4, injected: 2 },
+      unmatchedReasons: { ...(summary?.unmatchedReasons as Record<string, number>), material_unmapped: 5, injected: 2 },
+      taskReasons: { ...(summary?.taskReasons as Record<string, number>), network: 2, injected: 2 },
+      lastTaskReason: 'network',
       applicationNo: 'CN202611020001',
       fileName: 'private.docx',
       rowCount: Number.MAX_SAFE_INTEGER,
@@ -514,9 +646,16 @@ describe('CDP observer target and event filtering', () => {
     const rowStatusCounts = safeSummary?.rowStatusCounts as Record<string, unknown> | undefined
     const rowErrorCategories = safeSummary?.rowErrorCategories as Record<string, unknown> | undefined
     const taskErrorCategories = safeSummary?.taskErrorCategories as Record<string, unknown> | undefined
+    const failedReasons = safeSummary?.failedReasons as Record<string, unknown> | undefined
+    const unmatchedReasons = safeSummary?.unmatchedReasons as Record<string, unknown> | undefined
+    const taskReasons = safeSummary?.taskReasons as Record<string, unknown> | undefined
     expect(rowStatusCounts?.failed).toBe(4)
     expect(rowErrorCategories?.http_524).toBe(3)
     expect(taskErrorCategories?.network).toBe(2)
+    expect(failedReasons?.http524).toBe(4)
+    expect(unmatchedReasons?.material_unmapped).toBe(5)
+    expect(taskReasons?.network).toBe(2)
+    expect(safeSummary?.lastTaskReason).toBe('network')
     expect(JSON.stringify(safeSummary)).not.toContain('applicationNo')
     expect(JSON.stringify(safeSummary)).not.toContain('private.docx')
     expect(JSON.stringify(safeSummary)).not.toContain('customerName')
@@ -598,8 +737,10 @@ describe('CDP observer target and event filtering', () => {
 
     const task = {
       status: 'failed',
+      pauseReason: 'OA 请求失败（HTTP 503）',
+      recovery: { attempt: 2, maxAttempts: 3, retryAt: 1_799_999_999_999, reason: 'OA 请求失败（HTTP 503）' },
       rows: [{ status: 'failed', selected: true, error: '文件上传失败：CN202611020001 申请材料.docx', applicationNo: 'CN202611020001', fileName: '申请材料.docx' }],
-      errors: [],
+      errors: ['OA 请求失败（HTTP 503）'],
     }
     const emitted: Array<Record<string, unknown>> = []
     const transactionModes: string[] = []
@@ -671,7 +812,11 @@ describe('CDP observer target and event filtering', () => {
     expect(transactionModes).toEqual(['readonly'])
     expect(database.close).toHaveBeenCalledOnce()
     const summary = emitted.find(value => value.kind === 'jihua-task')?.summary
-    expect(summary).toMatchObject({ status: 'failed', rowCount: 1, selectedCount: 1, rowErrorCategories: { file: 1, remote: 0 } })
+    expect(summary).toMatchObject({
+      status: 'failed', rowCount: 1, selectedCount: 1, rowErrorCategories: { file: 1, remote: 0 },
+      failedReasons: { other: 1 }, taskReasons: { other5xx: 1 }, lastTaskReason: 'other5xx', pauseReasonCode: 'other5xx',
+      recovery: { attempt: 2, maxAttempts: 3, retryAt: 1_799_999_999_999, reasonCode: 'other5xx' },
+    })
     expect(JSON.stringify(emitted)).not.toContain('CN202611020001')
     expect(JSON.stringify(emitted)).not.toContain('申请材料.docx')
   })
