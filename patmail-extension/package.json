@@ -25,6 +25,8 @@
     "test:e2e:stream-download": "node tests/e2e/stream-download.e2e.mjs",
     "test:stream-bridge": "python -m unittest discover -s tests -p *bridge_test.py",
     "test:e2e:download-editor": "node tests/e2e/download-editor.e2e.mjs",
+    "test:e2e:prewarm-pagination": "node scripts/run-e2e.mjs prewarm-pagination",
+    "test:e2e:jihua-upload": "node scripts/run-e2e.mjs jihua-upload",
     "test:e2e:durable-download": "node tests/e2e/durable-download.e2e.mjs",
     "test:e2e:browser-download": "node tests/e2e/native-browser-download.e2e.mjs",
     "test:e2e:pipeline-fault": "node tests/e2e/native-pipeline-fault.e2e.mjs",

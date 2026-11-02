@@ -9,7 +9,7 @@
 | 组 | 入口 | 场景 | 用途 |
 |---|---|---|---|
 | **smoke** | `pnpm test:e2e:smoke` | extension、limits | PR 快速门禁（ci.yml `e2e-smoke`） |
-| **full** | `pnpm test:e2e:full` | smoke + workspace + download、browser-download、file-pages、download-editor、browser-download-store、native-stream-lifetime、resume-protocol、docs | main / 手动完整回归（e2e.yml `e2e-full`） |
+| **full** | `pnpm test:e2e:full` | smoke + workspace + download、browser-download、file-pages、download-editor、prewarm-pagination、browser-download-store、native-stream-lifetime、resume-protocol、docs | main / 手动完整回归（e2e.yml `e2e-full`） |
 | **legacy** | `pnpm test:e2e:legacy` | stream-download、durable-download、stream-bridge-unittest | 旧 Python 桥接下载协议兼容（e2e.yml `e2e-legacy`，需 python） |
 
 单跑：`node scripts/run-e2e.mjs <suite>`；`--bail` 首败即停。产出 `test-results/ci/e2e-<group>.json`。
@@ -28,6 +28,7 @@
 | ZIP 完整性 | download、stream-download | full/legacy | 条目顺序、CRC、字节数一致 |
 | 浏览器取消操作 | browser-download-store、native-stream-lifetime | full | 取消/暂停/恢复、终态判定 |
 | 文件管理分页 | file-pages | full | 全选翻页、下载工具条 |
+| 取名预热交接与缓存翻页 | prewarm-pagination | full | 已完成及在途取名不重复请求、下载进度接续、下载中翻页不重查源站 |
 | 工作台页面加载 | workspace | full | 单例导航、客户配置同步、跨页选择、任务来源/过期/冲突/撤销、只读写保护、账号隔离、SW 重启恢复、主世界菜单读取与授权打开、无 CSP 错误 |
 | 下载状态机回归 | download、resume-protocol、browser-download-store、native-stream-lifetime | full | 取消/暂停/502 有限重试/Range 续传/缓存命中/长度未知/终态与缓存清理顺序/SW 生命周期 |
 | 故障注入 | download-editor、resume-protocol、native-pipeline-fault* | full | 502/断流/重启注入，状态机最终状态（非页面文案） |
@@ -73,3 +74,7 @@
 失败时保留：Playwright Trace / 截图 / 浏览器 Console 错误 / Service Worker 错误 / 网络错误摘要
 （404 逐条记 URL）/ 关键任务状态快照，落 `test-results/`。报告统一脱敏：不写 Cookie、
 Authorization、Session Token、邮件地址明文、客户合同原文与业务敏感字段。
+
+## 7. jihua-upload：季华实验室传文
+
+`pnpm test:e2e:jihua-upload`（也属于 `full`）使用隔离 Chromium、生成的 OPFS 文件及完整拦截的季华平台响应。覆盖递归名称扫描不读正文、扩展名排除、六路申请号流水线、已有附件跳过、未匹配行、关联失败后刷新恢复复用附件 ID，以及 CSV 导出。测试不连接用户的 Chrome，不使用真实 Cookie，也不向生产平台上传。

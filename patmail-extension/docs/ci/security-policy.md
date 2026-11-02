@@ -60,6 +60,7 @@ pnpm scan:secrets --write-baseline  # 把当前发现登记进例外表（必须
 - EASY 业务 Origin（`http://183.36.43.66:88` 等）**只允许被 Playwright 路由拦截**（`tests/e2e/support/easy-mock.mjs`），未匹配路由返回 404 并大声告警，绝不透传。
 - 不使用真实 EASY 账号 / 生产 Cookie，不发真实发文与审核请求，不连生产库；浏览器 Profile 与扩展目录由 `tests/e2e/support/paths.mjs` 用 `mkdtemp` 隔离，不复用日常 Chrome Profile。
 - CI 环境无显示器下用 Persistent Context 加载 MV3 扩展（`tests/e2e/support/browser.mjs`），不假定 `browser.newContext()` 能加载扩展。
+- 季华传文仅新增 `https://oa.jihualab.net/*` 主机权限，不扩展 EASY 的来源/账号判定，也不向该站自动注入 EASY content script。独立通道只接受本扩展 `app.html`，固定顶层文档和用户绑定；MAIN 世界令牌仅用于同源请求，不进入工作台、存储或日志。隔离 E2E 完整拦截该域名，采用生成文件和模拟会话。
 
 ## 5. 供应链动作安全
 
