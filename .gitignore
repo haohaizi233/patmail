@@ -34,3 +34,11 @@ cookies.txt
 *.out
 .tmp-*
 __*.mjs
+
+# 运行 pull-sme-customers.py 生成的客户名单快照（含公司名/联系人等敏感数据），只留本机，不入仓
+/assets/sme-customers.json
+/public/assets/sme-customers.json
+/patmail-extension/src/assets/sme-customers.json
+
+# Vite 构建缓存
+.vite/
