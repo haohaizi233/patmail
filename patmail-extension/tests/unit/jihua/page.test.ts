@@ -53,6 +53,7 @@ vi.mock('../../../src/jihua/inventory', () => ({
   createJihuaTask: rig.createJihuaTask
 }))
 vi.mock('../../../src/jihua/materials', () => ({
+  normalizeApplicationNo: (value: string) => value.trim().toUpperCase().replace(/^CN/, '').replace(/[.\s-]/g, ''),
   MATERIALS: [{ key: 'APPLY_FILE', label: '申请文件', types: ['INVENTION'], limit: 10 }],
   materialByKey: (key: string) => key === 'APPLY_FILE'
     ? { key: 'APPLY_FILE', label: '申请文件', types: ['INVENTION'], limit: 10 }
@@ -192,6 +193,28 @@ describe('Jihua upload workbench', () => {
     expect(failed.selected).toBe(true)
     expect(failed.intent.requestId).toBe('unknown')
     expect(failed.receipt).toBeUndefined()
+  })
+
+  it('separates material and application issues and filters only unfinished rows requiring matching', async () => {
+    const missing = { ...retryRow('missing-material', 'unmatched'), materialKey: '' }
+    const international = { ...retryRow('international', 'pending'), applicationNo: 'PCT_CN2026_123456' }
+    const completed = { ...retryRow('completed', 'success'), materialKey: '' }
+    rig.task = taskWithRows([missing, international, completed])
+    mount()
+    await settle()
+    expect(host?.textContent).toContain('2 个已选待处理文件需要核对')
+    expect(host?.textContent).toContain('申请号或台账类型不支持 1 个')
+    expect(host?.textContent).toContain('材料未识别 1 个')
+    button('查看待匹配文件')?.click()
+    await settle()
+    expect(host?.querySelectorAll('.jh-file-row')).toHaveLength(2)
+  })
+
+  it('explains that HTTP 413 requires checking the platform size limit before retrying', async () => {
+    rig.task = taskWithRows([{ ...retryRow('too-large', 'failed'), error: 'OA 上传失败（HTTP 413）；结果未确认。' }])
+    mount()
+    await settle()
+    expect(host?.querySelector('.jh-retry-hint')?.textContent).toContain('平台拒绝了请求体大小')
   })
 
   it('shows the persisted platform pause reason', async () => {
@@ -369,7 +392,7 @@ describe('Jihua upload workbench', () => {
     mount()
     await settle()
 
-    expect(host?.querySelector('.test-page-head h1')?.textContent).toBe('计划实验室-文件导入')
+    expect(host?.querySelector('.test-page-head h1')?.textContent).toBe('季华实验室-文件导入')
     expect(host?.querySelector('.jh-back')?.textContent).toBe('回到工作流')
     expect(host?.querySelectorAll('select')).toHaveLength(0)
     expect(host?.querySelectorAll('.theme-select-trigger')).toHaveLength(4)
@@ -395,7 +418,7 @@ describe('Jihua upload workbench', () => {
     const rows: JihuaTask['rows'] = [
       {
         id: 'row-valid', rootId: 'root-1', relativePath: 'docs/2024012345-案件-申请文件.pdf', fileName: '2024012345-案件-申请文件.pdf',
-        extension: 'pdf', applicationNo: '2024012345', caseName: '案件', description: '申请文件', materialKey: 'APPLY_FILE',
+        extension: 'pdf', applicationNo: '2021100850612', caseName: '案件', description: '申请文件', materialKey: 'APPLY_FILE',
         selected: true, status: 'pending', error: '', attempts: 0, updatedAt: Date.now()
       },
       {

@@ -5,13 +5,14 @@ import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { bg } from '../../shell/assets'
 import { createJihuaRepository } from '../../jihua/repository'
 import { createJihuaTask, mergeInventory, scanDirectory } from '../../jihua/inventory'
-import { MATERIALS, materialByKey, materialForType } from '../../jihua/materials'
+import { MATERIALS, materialByKey, materialForType, normalizeApplicationNo } from '../../jihua/materials'
 import { connectJihuaTab, listJihuaTabs } from '../../jihua/transport'
 import { JihuaRunner } from '../../jihua/runner'
 import type { JihuaRepository, JihuaRow, JihuaSession, JihuaTask, JihuaTaskSummary, JihuaTransport, LocalDirectoryHandle, Material, SourceRoot } from '../../jihua/types'
 import { confirmDialog } from '../dialog'
 import { paintTaskCheckProgress, resetTaskCheckProgress, taskCheckProgress } from '../check-progress'
 
+defineProps<{ embedded?: boolean }>()
 const emit = defineEmits<{ back: [] }>()
 
 const LOCK_NAME = 'patmail-jihua-upload'
@@ -77,6 +78,7 @@ const rowStatusLabel: Record<JihuaRow['status'], string> = {
 }
 const statusOptions = [
   { value: 'all', label: '全部状态' },
+  { value: 'needs-matching', label: '待匹配文件' },
   { value: 'pending', label: '待处理' },
   { value: 'checking', label: '正在核对案件' },
   { value: 'uploading', label: '正在上传' },
@@ -117,14 +119,28 @@ const historyOptions = computed(() => taskHistory.value.map(item => ({
   label: `${new Date(item.createdAt).toLocaleString('zh-CN')} · ${item.rowCount} 个文件 · ${taskStatusLabel[item.status]}${item.unconfirmedCount ? ` · ${item.unconfirmedCount} 行待核对` : ''}`
 })))
 const sessionMatchesTask = computed(() => !task.value?.session || !transport.value || task.value.session.key === transport.value.session.key)
-const invalidSelectedRows = computed(() => selectedRows.value.filter(row => !row.applicationNo.trim() || !materialByKey(materialForRow(row))))
+const invalidSelectedRows = computed(() => selectedRows.value.filter(row => matchingIssue(row)))
+const matchingIssueSummary = computed(() => {
+  const counts = { application: 0, material: 0, unsupported: 0 }
+  for (const row of invalidSelectedRows.value) {
+    const issue = matchingIssue(row)
+    if (issue) counts[issue]++
+  }
+  return [
+    counts.application ? `申请号或台账类型不支持 ${counts.application} 个` : '',
+    counts.material ? `材料未识别 ${counts.material} 个` : '',
+    counts.unsupported ? `台账不支持该材料 ${counts.unsupported} 个` : '',
+  ].filter(Boolean).join('，')
+})
 const canRun = computed(() => Boolean(task.value && transport.value && task.value.roots.length && selectedRunnableCount.value > 0 && sessionMatchesTask.value && !busy.value))
 const filterText = computed(() => appFilter.value.trim().toLocaleLowerCase())
 const filteredRows = computed(() => {
   const needle = filterText.value
   return taskRows.value.filter(row => {
     const status = displayStatus(row)
-    if (statusFilter.value !== 'all' && status !== statusFilter.value && row.status !== statusFilter.value) return false
+    if (statusFilter.value === 'needs-matching') {
+      if (!matchingIssue(row)) return false
+    } else if (statusFilter.value !== 'all' && status !== statusFilter.value && row.status !== statusFilter.value) return false
     if (!needle) return true
     return row.applicationNo.toLocaleLowerCase().includes(needle) || row.description.toLocaleLowerCase().includes(needle)
   })
@@ -192,6 +208,16 @@ function materialForRow(row: JihuaRow): string {
   return materialOverrides.get(row.id) ?? row.materialKey
 }
 
+function matchingIssue(row: JihuaRow): 'application' | 'material' | 'unsupported' | '' {
+  if (['success', 'already', 'excluded'].includes(row.status)) return ''
+  const applicationNo = normalizeApplicationNo(row.applicationNo)
+  if (!/^\d{12}[\dX]$/.test(applicationNo) || !['1', '2'].includes(applicationNo[4])) return 'application'
+  const material = materialByKey(materialForRow(row))
+  if (!material) return 'material'
+  const type = row.record?.type ?? (applicationNo[4] === '1' ? 'INVENTION' : 'UTILITY')
+  return materialForType(material, type) ? '' : 'unsupported'
+}
+
 function materialLocked(row: JihuaRow): boolean {
   return Boolean(row.intent?.sent || row.receipt)
 }
@@ -201,6 +227,7 @@ function canSelectRow(row: JihuaRow): boolean { return canEdit.value || (canRequ
 function canEditRowMaterial(row: JihuaRow): boolean { return canSelectRow(row) && !materialLocked(row) }
 function retryHint(row: JihuaRow): string {
   if (!retryableRow(row)) return ''
+  if (/HTTP\s*413\b/i.test(row.error)) return '平台拒绝了请求体大小；请核实平台限制并缩小单个文件后重试。'
   if (/扩展名|可确认的 Word|文件实际是网页|文件内容.*不符/.test(row.error)) return '核实真实文件格式，更正命名后重新扫描。'
   if (/申请号.*格式|旧式申请号|文件名应包含/.test(row.error)) return '核对本地文件名中的申请号后重新扫描。'
   if (row.intent?.sent && !row.receipt) return '重新入队先核对原回执；回执不可用时需人工核实。'
@@ -837,7 +864,7 @@ async function createNewTask(): Promise<void> {
 }
 
 function clearJihuaProgress(): void {
-  if (['季华传文', '计划实验室-文件导入'].includes(taskCheckProgress.label)) resetTaskCheckProgress()
+  if (['季华传文', '计划实验室-文件导入', '季华实验室-文件导入'].includes(taskCheckProgress.label)) resetTaskCheckProgress()
 }
 
 async function ensureSourcePermissions(operation: ControlledAction): Promise<void> {
@@ -890,7 +917,7 @@ function publishUploadProgress(): void {
   const state = current.status === 'running' || current.status === 'pausing' ? 'run'
     : current.status === 'paused' || current.status === 'cancelled' ? 'hold'
       : current.status === 'completed' ? 'done' : 'fail'
-  paintTaskCheckProgress(done, total, runStartedAt || current.updatedAt, state, '计划实验室-文件导入', Date.now(), activePhase, summary)
+  paintTaskCheckProgress(done, total, runStartedAt || current.updatedAt, state, '季华实验室-文件导入', Date.now(), activePhase, summary)
 }
 
 async function refreshTask(): Promise<void> {
@@ -1075,7 +1102,7 @@ function exportCsv(): void {
   const url = URL.createObjectURL(new Blob([`\uFEFF${lines}`], { type: 'text/csv;charset=utf-8' }))
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = '计划实验室-文件导入结果.csv'
+  anchor.download = '季华实验室-文件导入结果.csv'
   anchor.click()
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
@@ -1121,7 +1148,8 @@ onUnmounted(() => {
 
 <template>
   <PageHead
-    title="计划实验室-文件导入"
+    v-if="!embedded"
+    title="季华实验室-文件导入"
     desc="只读取文件名来分组；确认案件、材料和登录会话后，再逐项上传。"
     :art="bg('让重复工作变简单.png')"
   >
@@ -1168,7 +1196,8 @@ onUnmounted(() => {
         </div>
 
         <div v-if="selectedCount && invalidSelectedRows.length" class="jh-inline-warn tone-orange" role="status">
-          {{ invalidSelectedRows.length }} 个已选文件缺少有效申请号或材料类型，将单独标记为“没匹配到”；其余可匹配文件会继续处理。
+          {{ invalidSelectedRows.length }} 个已选待处理文件需要核对：{{ matchingIssueSummary }}。将单独标记为“没匹配到”；其余可匹配文件会继续处理。
+          <button type="button" class="ghost" @click="statusFilter = 'needs-matching'">查看待匹配文件</button>
         </div>
         <div v-if="task?.status === 'ready' && !transport" class="jh-inline-warn tone-orange" role="status">连接并检测一个已登录的季华平台标签页后，才能开始上传。</div>
 

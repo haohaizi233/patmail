@@ -8,7 +8,7 @@ import { createReporter } from './support/report.mjs'
 const dist = distDir
 const sources = docsWorkflowsDir
 const report = createReporter()
-assert.deepEqual((await readdir(sources)).sort(), ['PCT提醒.md', 'PCT鹏城专案.md', 'README.md', '文件管理.md', '递交管理-已完成导出.md'].sort())
+assert.deepEqual((await readdir(sources)).sort(), ['PCT提醒.md', 'PCT鹏城专案.md', 'README.md', '文件管理.md', '递交管理-已完成导出.md', '季华实验室-文件导入.md'].sort())
 const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 } })
 const errors = []
 const runtimeLimitations = []
@@ -39,7 +39,7 @@ try {
   assert.equal(await docs.locator('.mermaid-content svg g.node').evaluateAll(nodes => nodes.filter(node => !node.textContent.trim()).length), 0)
   const indexCaption = (await docs.locator('.mermaid-figure figcaption').first().innerText()).trim()
   const counts = [{ file: 'README.md', diagrams: indexDiagrams }]
-  for (const [file, heading] of [['PCT提醒.md', 'PCT提醒工作流'], ['PCT鹏城专案.md', 'PCT鹏城专案工作流'], ['文件管理.md', '文件管理工作流']]) {
+  for (const [file, heading] of [['PCT提醒.md', 'PCT提醒工作流'], ['PCT鹏城专案.md', 'PCT鹏城专案工作流'], ['文件管理.md', '文件管理工作流'], ['季华实验室-文件导入.md', '季华实验室-文件导入']]) {
     await docs.getByRole('link', { name: file, exact: true }).click()
     await docs.getByRole('heading', { name: heading, exact: true }).waitFor()
     const source = await readFile(path.join(sources, file), 'utf8')
@@ -81,7 +81,10 @@ try {
       assert.equal(await actor.evaluate(el => getComputedStyle(el).rx), '12px')
     }
     counts.push({ file, diagrams: expected })
-    await docs.getByRole('link', { name: '工作流索引', exact: true }).click()
+    if (file === '季华实验室-文件导入.md') {
+      // This guide is also embedded in its workflow, where the view tabs own navigation.
+      await docs.getByRole('button', { name: 'README（工作流索引）', exact: true }).click()
+    } else await docs.getByRole('link', { name: '工作流索引', exact: true }).click()
     await docs.getByRole('heading', { name: '工作流索引', exact: true }).waitFor()
   }
   await docs.getByRole('link', { name: 'PCT提醒.md', exact: true }).click()

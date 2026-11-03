@@ -30,7 +30,7 @@ const usageEntries: DocEntry[] = Object.keys(usageFiles)
   .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
   .map(path => ({ title: usageTitle(path), load: usageFiles[path] }))
 
-/** 三个内置工作流各一篇；索引固定排第一，源文件随扩展离线打包。 */
+/** 每条工作流各一篇；索引固定排第一，源文件随扩展离线打包。 */
 const workflowFiles = import.meta.glob('../../../docs/workflows/*.md', {
   query: '?raw',
   import: 'default'

@@ -13,7 +13,7 @@ vi.mock('../../../src/app/pages/JihuaUploadPage.vue', async () => {
         const taskName = ref('')
         onMounted(() => { uploadRuntime.mounts += 1 })
         return () => h('section', { 'data-testid': 'jihua-runtime' }, [
-          h('h1', '计划实验室-文件导入'),
+          h('h1', '季华实验室-文件导入'),
           h('input', {
             'aria-label': '当前任务名称',
             value: taskName.value,
@@ -25,6 +25,10 @@ vi.mock('../../../src/app/pages/JihuaUploadPage.vue', async () => {
     })
   }
 })
+
+vi.mock('../../../src/app/components/DocsMarkdown.vue', () => ({
+  default: { props: ['source'], template: '<article data-testid="workflow-guide">{{ source }}</article>' }
+}))
 
 vi.mock('../../../src/app/composables/useWorkflowChoices', async () => {
   const { ref } = await import('vue')
@@ -141,14 +145,14 @@ afterEach(() => {
   window.location.hash = ''
 })
 
-describe('计划实验室上传入口', () => {
+describe('季华实验室上传入口', () => {
   it('keeps the standalone route and sidebar entry out of the app shell', async () => {
     mount('#/jihua-upload')
     await settle()
 
     const shell = host?.querySelector<HTMLElement>('[data-testid="shell"]')
     expect(shell?.dataset.page).toBe('首页')
-    expect([...shell?.querySelectorAll('nav button') ?? []].map(button => button.textContent?.trim())).not.toContain('计划实验室-文件导入')
+    expect([...shell?.querySelectorAll('nav button') ?? []].map(button => button.textContent?.trim())).not.toContain('季华实验室-文件导入')
     expect([...shell?.querySelectorAll('nav button') ?? []].map(button => button.textContent?.trim())).not.toContain('季华传文')
     expect(host?.querySelector('[data-testid="jihua-runtime"]')).toBeNull()
   })
@@ -157,26 +161,33 @@ describe('计划实验室上传入口', () => {
     mount()
     await settle()
 
-    const entry = [...(host?.querySelectorAll<HTMLButtonElement>('.sea-card') ?? [])]
-      .find(button => button.textContent?.includes('计划实验室-文件导入'))
+    const entry = [...(host?.querySelectorAll<HTMLButtonElement>('.sea-open') ?? [])]
+      .find(button => button.textContent?.includes('季华实验室-文件导入'))
     expect(entry).toBeDefined()
     entry?.click()
     await settle()
 
+    expect(host?.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe('流程说明')
+    expect(host?.querySelector('[data-testid="workflow-guide"]')?.textContent).toContain('递归')
+    clickButton('开始使用', host!.querySelector('[role="tablist"]')!)
+    await settle()
+
     const runtime = host?.querySelector<HTMLElement>('[data-testid="jihua-runtime"]')
-    expect(runtime?.textContent).toContain('计划实验室-文件导入')
+    expect(runtime?.textContent).toContain('季华实验室-文件导入')
     const taskName = runtime?.querySelector<HTMLInputElement>('input')
     if (taskName) {
       taskName.value = '上传中的任务'
       taskName.dispatchEvent(new Event('input', { bubbles: true }))
     }
-    clickButton('回到工作流', runtime!)
+    clickButton('回到工作流')
     await settle()
     expect(host?.querySelector('[data-testid="jihua-runtime"] input')).toHaveProperty('value', '上传中的任务')
 
-    const reopened = [...(host?.querySelectorAll<HTMLButtonElement>('.sea-card') ?? [])]
-      .find(button => button.textContent?.includes('计划实验室-文件导入'))
+    const reopened = [...(host?.querySelectorAll<HTMLButtonElement>('.sea-open') ?? [])]
+      .find(button => button.textContent?.includes('季华实验室-文件导入'))
     reopened?.click()
+    await settle()
+    clickButton('开始使用', host!.querySelector('[role="tablist"]')!)
     await settle()
     clickButton('首页')
     await settle()
@@ -185,6 +196,49 @@ describe('计划实验室上传入口', () => {
 
     expect(host?.querySelector<HTMLElement>('[data-testid="shell"]')?.dataset.page).toBe('工作流')
     expect(host?.querySelector('[data-testid="jihua-runtime"] input')).toHaveProperty('value', '上传中的任务')
+    expect(uploadRuntime.mounts).toBe(1)
+  })
+
+  it('provides a direct use entry and preserves the mounted task across guide and use tabs', async () => {
+    mount()
+    await settle()
+    clickButton('开始使用', host!.querySelector('.jihua-upload-card')!)
+    await settle()
+    const tabs = host!.querySelector('[role="tablist"]')!
+    const selected = () => tabs.querySelector('[aria-selected="true"]')
+    expect(selected()?.textContent?.trim()).toBe('开始使用')
+    const runtime = host!.querySelector<HTMLElement>('[data-testid="jihua-runtime"]')!
+    const input = runtime.querySelector('input')!
+    input.value = '保持当前上传和筛选'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    clickButton('流程说明', tabs)
+    await settle()
+    expect(runtime.closest('[role="tabpanel"]')).toHaveProperty('style.display', 'none')
+    expect(host!.querySelector('[data-testid="workflow-guide"]')).not.toBeNull()
+    clickButton('开始使用', tabs)
+    await settle()
+    expect(host!.querySelector('[data-testid="jihua-runtime"]')).toBe(runtime)
+    expect(input.value).toBe('保持当前上传和筛选')
+    expect(uploadRuntime.mounts).toBe(1)
+    expect(selected()?.getAttribute('aria-controls')).toBe(runtime.closest('[role="tabpanel"]')?.id)
+  })
+
+  it('supports keyboard switching with one selected and tabbable view', async () => {
+    mount()
+    await settle()
+    clickButton('流程说明', host!.querySelector('.jihua-upload-card')!)
+    await settle()
+    const tabs = [...host!.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    tabs[0].focus()
+    tabs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await settle()
+    expect(document.activeElement).toBe(tabs[1])
+    expect(tabs[1].getAttribute('aria-selected')).toBe('true')
+    expect(tabs.map(tab => tab.tabIndex)).toEqual([-1, 0])
+    tabs[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+    await settle()
+    expect(document.activeElement).toBe(tabs[0])
+    expect(tabs.map(tab => tab.getAttribute('aria-selected'))).toEqual(['true', 'false'])
     expect(uploadRuntime.mounts).toBe(1)
   })
 })

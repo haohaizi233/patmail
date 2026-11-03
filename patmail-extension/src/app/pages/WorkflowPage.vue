@@ -6,6 +6,8 @@ import PageHead from '../../shell/components/PageHead.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { bg } from '../../shell/assets'
 import JihuaUploadPage from './JihuaUploadPage.vue'
+import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
+import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
 import {
   cloneCatalog,
   cloneWorkflow,
@@ -46,6 +48,7 @@ import { confirmDialog } from '../dialog'
 type Screen = 'sea' | 'ocean' | 'flow' | 'jihua'
 
 const screen = ref<Screen>('sea')
+const jihuaView = ref<'guide' | 'use'>('use')
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
 const draft = ref<WorkflowDefinition | null>(null)
 const selectedId = ref('')
@@ -463,11 +466,18 @@ function chooseProc(param: WorkflowParam, id: string): void {
           <button v-if="!isSystemWorkflow(flow)" type="button" class="sea-remove" @click="removeFlow(flow)">拿掉</button>
         </div>
       </article>
-      <button type="button" class="card sea-card jihua-upload-card tone-pink" @click="screen = 'jihua'">
-        <b>计划实验室-文件导入</b>
-        <small>按申请号和文件描述整理文件，核对后使用已登录的季华平台会话上传。</small>
-        <span class="sea-badge">工作流工具</span>
-      </button>
+      <article class="sea-card jihua-upload-card">
+        <button type="button" class="sea-open" @click="jihuaView = 'guide'; screen = 'jihua'">
+          <b>季华实验室-文件导入</b>
+          <small>按申请号整理文件，使用已登录的季华平台会话核对并上传。</small>
+          <span class="sea-badge">工作流工具</span>
+          <em>流程说明 · 六路上传 · 逐行结果</em>
+        </button>
+        <div class="sea-actions">
+          <button type="button" class="sea-remove" @click="jihuaView = 'guide'; screen = 'jihua'">流程说明</button>
+          <button type="button" class="sea-remove" @click="jihuaView = 'use'; screen = 'jihua'">开始使用</button>
+        </div>
+      </article>
       <button type="button" class="sea-card sea-add" @click="openOcean">
         <b>从知识海洋加一条</b>
         <small>把会做的事挑出来，按你点的顺序排好。</small>
@@ -628,10 +638,12 @@ function chooseProc(param: WorkflowParam, id: string): void {
     </template>
   </div>
   <div v-show="screen === 'jihua'" class="workflow-jihua">
-    <JihuaUploadPage @back="screen = 'sea'" />
+    <WorkflowWorkspace
+      v-model:view="jihuaView" title="季华实验室-文件导入"
+      description="先看流程与材料规则，或直接使用工作台整理并上传文件。"
+      :guide="jihuaGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
+    >
+      <JihuaUploadPage embedded @back="screen = 'sea'" />
+    </WorkflowWorkspace>
   </div>
 </template>
-
-<style scoped>
-.jihua-upload-card { display: grid; gap: 8px; width: 100%; min-height: 96px; text-align: left; font: inherit; color: var(--text); cursor: pointer; }
-</style>

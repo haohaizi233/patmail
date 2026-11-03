@@ -11,6 +11,10 @@ const report = { passed: false, isolated: true, realCustomerFiles: false, upload
 const numbers = Array.from({ length: 9 }, (_, index) => `20211000000${String(index).padStart(2, '0')}`)
 const recoveryNumbers = Array.from({ length: 7 }, (_, index) => `2021100777${String(index).padStart(3, '0')}`)
 const cancellationNumber = '2021100888888'
+const isolationNumber = '2021100666666'
+const isolationFilenames = ['A有效文件', 'B无效文件', 'C有效文件'].map(name => `${isolationNumber}-${name}-首次检索报告文件.pdf`)
+const unknownSiblingNumber = '2021100555555'
+const unknownSiblingFilenames = ['A历史未知回执', 'B有效文件', 'C有效文件'].map(name => `${unknownSiblingNumber}-${name}-首次检索报告文件.pdf`)
 const cancellationFilename = `${cancellationNumber}-取消后恢复-递交合并档.pdf`
 const liveRequeueFilename = `${numbers[7]}-测试-递交合并档.pdf`
 const recoveryFilenames = recoveryNumbers.map(number => `${number}-测试-递交合并档.pdf`)
@@ -22,6 +26,8 @@ const recoveryLastFilename = recoveryFilenames[0]
 const records = new Map(numbers.map(number => [number, { ID: number, PATENT_NO: number, PATENT_NAME: '测试案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} }]))
 for (const number of recoveryNumbers) records.set(number, { ID: number, PATENT_NO: number, PATENT_NAME: '自动恢复回归案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} })
 records.set(cancellationNumber, { ID: cancellationNumber, PATENT_NO: cancellationNumber, PATENT_NAME: '取消回归案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} })
+records.set(isolationNumber, { ID: isolationNumber, PATENT_NO: isolationNumber, PATENT_NAME: '本地错误隔离案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} })
+records.set(unknownSiblingNumber, { ID: unknownSiblingNumber, PATENT_NO: unknownSiblingNumber, PATENT_NAME: '历史回执隔离案件', IS_HAVE_GER: 'TRUE', KEEP: 'unchanged', attachments: {} })
 records.get(numbers[0]).attachments.patentRequestAppendixList = [{ ID: 'existing', APPENDIX_NAME: 'existing.pdf' }]
 const missingNumber = '2021100999999'
 const failNumber = numbers[8]
@@ -63,6 +69,10 @@ const recovery524Response = new Promise(resolve => { resolveRecovery524Response 
 const uploadedNames = []
 const updates = []
 const filenames = numbers.map(number => `${number}-测试-递交合并档.pdf`)
+const signedNoticeFilename = `${numbers[2]}-测试-专利申请受理通知书(签章).pdf`
+const combinedNoticeFilename = `${numbers[3]}-测试-发明专利申请公布及进入实质审查阶段通知书.pdf`
+filenames[2] = signedNoticeFilename
+filenames[3] = combinedNoticeFilename
 filenames.push(`${numbers[1]}-名称-含连字符-新申请文档.pdf`, `${numbers[1]}-测试-没有对应的材料.pdf`, `${missingNumber}-未查到-递交合并档.pdf`)
 
 function withTimeout(promise, timeoutMs, message) {
@@ -169,7 +179,17 @@ try {
   const extensionId = new URL(worker.url()).host
   app = await context.newPage()
   await app.goto(`chrome-extension://${extensionId}/app.html#/workflow`)
-  await app.getByRole('button', { name: /计划实验室-文件导入/ }).click()
+  await app.locator('.jihua-upload-card .sea-open').click()
+  await app.getByRole('tab', { name: '流程说明', exact: true }).waitFor()
+  assert.equal(await app.getByRole('tab', { name: '流程说明', exact: true }).getAttribute('aria-selected'), 'true')
+  const guideSource = await readFile(new URL('../../docs/workflows/季华实验室-文件导入.md', import.meta.url), 'utf8')
+  const guideDiagrams = (guideSource.match(/^```mermaid$/gm) ?? []).length
+  await app.waitForFunction(count => document.querySelectorAll('.workflow-guide .mermaid-content > svg').length === count, guideDiagrams)
+  assert.ok(guideDiagrams >= 3)
+  assert.equal(await app.locator('.workflow-guide .mermaid-error').count(), 0)
+  assert.equal(await app.getByRole('heading', { name: '季华实验室-文件导入', exact: true }).count(), 1, 'One shared page title must own both views')
+  await app.screenshot({ path: join(resultDir, 'workflow-guide.png') })
+  await app.getByRole('tab', { name: '开始使用', exact: true }).click()
   assert.equal(new URL(app.url()).hash, '#/workflow', 'The importer belongs to the workflow view')
   await app.getByRole('button', { name: '添加文件夹', exact: true }).waitFor()
   await waitForPageCondition(app, () => ![...document.querySelectorAll('button')].find(node => node.textContent === '添加文件夹')?.disabled)
@@ -197,8 +217,12 @@ try {
   assert.equal(await app.evaluate(() => window.__fixtureReads), 0, 'Inventory must never call getFile')
   report.inventory = { rows: filenames.length, ignoredExtensions: 3, fileReadsDuringScan: 0, nestedDirectories: true }
   await app.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await app.getByRole('tab', { name: '流程说明', exact: true }).click()
+  await app.getByRole('tab', { name: '开始使用', exact: true }).click()
+  await app.getByText(`已选 ${filenames.length} / ${filenames.length} 行`, { exact: true }).waitFor()
+  assert.equal(await app.evaluate(() => window.__fixtureReads), 0, 'Switching views must preserve inventory without reading files')
   await app.getByRole('button', { name: '回到工作流', exact: true }).click()
-  await app.getByRole('button', { name: /计划实验室-文件导入/ }).click()
+  await app.locator('.jihua-upload-card').getByRole('button', { name: '开始使用', exact: true }).click()
   await app.getByText(`已选 ${filenames.length} / ${filenames.length} 行`, { exact: true }).waitFor()
   assert.equal(await app.evaluate(() => window.__fixtureReads), 0, 'Returning to the workflow retains inventory without file reads')
   await app.getByRole('button', { name: '连接并检测登录', exact: true }).click()
@@ -208,6 +232,10 @@ try {
   const failRow = app.locator('.jh-file-row').filter({ hasText: failNumber })
   await failRow.locator('.jh-badge[data-status="failed"]').waitFor({ timeout: 30000 })
   assert.equal(liveRequeueUploadActive, true, 'A different upload lane must remain in flight before manual requeue')
+  await app.getByRole('tab', { name: '流程说明', exact: true }).click()
+  assert.equal(liveRequeueUploadActive, true, 'Guide view must not cancel an active upload')
+  await app.getByRole('tab', { name: '开始使用', exact: true }).click()
+  report.workflowViews = { passed: true, guideDiagrams, sharedTitle: true, preservesSelectionAndActiveUpload: true }
   assert.equal(await app.getByRole('button', { name: '暂停上传', exact: true }).count(), 1,
     'The original pipeline must still be running when the failed row is requeued')
   assert.equal(failAssociationAttempts, 1, 'The target row must have failed its first association attempt')
@@ -253,12 +281,16 @@ try {
   assert.ok(!uploadedNames.some(name => name.startsWith(numbers[0])), 'Existing category must be skipped')
   assert.equal(await app.locator('.jh-badge[data-status="already"]').count(), 1)
   assert.equal(await app.locator('.jh-badge[data-status="unmatched"]').count(), 2)
+  assert.equal(records.get(numbers[2]).attachments.acptNoticeAppendixList.length, 1, 'Signed receipt notice must use the acceptance field')
+  assert.equal(records.get(numbers[3]).attachments.exaStageNoticeAppendixList.length, 1, 'Combined notice must use the user-selected examination-stage field')
+  assert.equal(records.get(numbers[3]).attachments.subExamPhaseNoticeAppendixList?.length ?? 0, 0, 'Combined notice must not also enter the publication field')
+  report.noticeAliases = { signedAcceptance: true, combinedExaminationStage: true, combinedPublicationFieldEmpty: true }
   const firstUploads = report.uploadRequests
   report.initialResults = { success: await app.locator('.jh-badge[data-status="success"]').count(), already: 1, unmatched: 2, failed: 1 }
   await app.screenshot({ path: join(resultDir, 'initial-results.png'), fullPage: true })
   // Reload proves real IndexedDB FileSystemHandles and uploaded IDs survive workbench refresh.
   await app.reload()
-  await app.getByRole('button', { name: /计划实验室-文件导入/ }).click()
+  await app.locator('.jihua-upload-card').getByRole('button', { name: '开始使用', exact: true }).click()
   await app.getByRole('button', { name: '连接并检测登录', exact: true }).click()
   await app.locator('.jh-session-state.session-connected').waitFor()
   failUpdate = false
@@ -505,6 +537,100 @@ try {
     continuedWithoutManualResume: true
   }
   recoveryScenarioActive = false
+  // One malformed source file must not fail valid siblings in the same material group.
+  await app.getByRole('button', { name: '新建任务', exact: true }).click()
+  await app.getByRole('dialog').getByRole('button', { name: '保留并新建', exact: true }).click()
+  await app.getByText('已选 0 / 0 行', { exact: true }).waitFor()
+  await app.evaluate(async names => {
+    const root = await navigator.storage.getDirectory()
+    const folder = await root.getDirectoryHandle('季华本地错误隔离回归目录', { create: true })
+    for (const [index, name] of names.entries()) {
+      const handle = await folder.getFileHandle(name, { create: true })
+      const writer = await handle.createWritable()
+      await writer.write(index === 1 ? 'invalid PDF fixture' : '%PDF-1.7\nfixture local isolation content\n%%EOF')
+      await writer.close()
+    }
+    window.showDirectoryPicker = () => Promise.resolve(folder)
+  }, isolationFilenames)
+  await app.getByRole('button', { name: '添加文件夹', exact: true }).click()
+  await app.getByText('已选 0 / 3 行', { exact: true }).waitFor()
+  await app.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await app.getByText('已选 3 / 3 行', { exact: true }).waitFor()
+  await app.getByRole('button', { name: '连接并检测登录', exact: true }).click()
+  await app.locator('.jh-session-state.session-connected').waitFor()
+  const uploadsBeforeIsolation = report.uploadRequests
+  const updatesBeforeIsolation = report.updates
+  await app.getByRole('button', { name: '开始上传', exact: true }).click()
+  await waitForPageCondition(app, () => {
+    const status = document.querySelector('.jh-task-status')?.textContent ?? ''
+    return document.querySelectorAll('.jh-badge[data-status="success"]').length === 2
+      && document.querySelectorAll('.jh-badge[data-status="failed"]').length === 1
+      && status.includes('有上传失败')
+  }, null, { timeout: 60000 })
+  const invalidSourceRow = app.locator('.jh-file-row').filter({ hasText: isolationFilenames[1] })
+  assert.ok((await invalidSourceRow.innerText()).includes('PDF'), 'Only the malformed source row should report a PDF validation failure')
+  assert.equal(report.uploadRequests - uploadsBeforeIsolation, 2, 'Only the two valid siblings should produce multipart requests')
+  assert.equal(uploadedNames.includes(isolationFilenames[1]), false, 'The malformed source must never reach the upload API')
+  const isolationUpdates = updates.slice(updatesBeforeIsolation).filter(body => body.patentParameter.ID === isolationNumber)
+  assert.equal(isolationUpdates.length, 1, 'The two valid sibling receipts should be associated in one update')
+  assert.equal(records.get(isolationNumber).attachments.firstResultAppendixList.length, 2)
+  assert.equal(new Set(isolationUpdates[0].firstResultAppendixList).size, 2, 'Association must contain two distinct valid attachment IDs')
+  report.localFailureIsolation = {
+    passed: true, successRows: 2, failedSourceRows: 1,
+    multipartRequests: report.uploadRequests - uploadsBeforeIsolation,
+    associationUpdates: isolationUpdates.length, associatedAttachmentIds: 2,
+    malformedSourceSent: false
+  }
+  // A historical sent request with no surviving document must not block unsent siblings.
+  await app.getByRole('button', { name: '新建任务', exact: true }).click()
+  await app.getByRole('dialog').getByRole('button', { name: '保留并新建', exact: true }).click()
+  await app.getByText('已选 0 / 0 行', { exact: true }).waitFor()
+  await app.evaluate(async names => {
+    const root = await navigator.storage.getDirectory()
+    const folder = await root.getDirectoryHandle('季华历史回执隔离回归目录', { create: true })
+    for (const name of names) {
+      const handle = await folder.getFileHandle(name, { create: true })
+      const writer = await handle.createWritable()
+      await writer.write('%PDF-1.7\nfixture unknown sibling content\n%%EOF')
+      await writer.close()
+    }
+    window.showDirectoryPicker = () => Promise.resolve(folder)
+  }, unknownSiblingFilenames)
+  await app.getByRole('button', { name: '添加文件夹', exact: true }).click()
+  await app.getByText('已选 0 / 3 行', { exact: true }).waitFor()
+  await app.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await app.getByRole('button', { name: '连接并检测登录', exact: true }).click()
+  await app.locator('.jh-session-state.session-connected').waitFor()
+  await app.evaluate(async filename => {
+    const db = await new Promise((resolve, reject) => { const request = indexedDB.open('patmail-jihua-inventory'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('tasks', 'readwrite')
+        const store = tx.objectStore('tasks')
+        const request = store.get('latest')
+        request.onsuccess = () => {
+          const task = request.result
+          const row = task.rows.find(item => item.fileName === filename)
+          row.intent = { requestId: crypto.randomUUID(), sessionKey: task.session.key, tabId: task.session.tabId, documentId: 'fixture-previous-document', sent: true, materialKey: row.materialKey, applicationNo: row.applicationNo }
+          store.put(task, 'latest')
+        }
+        tx.oncomplete = resolve
+        tx.onabort = () => reject(tx.error)
+        tx.onerror = () => reject(tx.error)
+      })
+    } finally { db.close() }
+  }, unknownSiblingFilenames[0])
+  const uploadsBeforeUnknownSibling = report.uploadRequests
+  await app.getByRole('button', { name: '开始上传', exact: true }).click()
+  await waitForPageCondition(app, () => document.querySelectorAll('.jh-badge[data-status="success"]').length === 2
+    && document.querySelectorAll('.jh-badge[data-status="verifying"]').length === 1
+    && (document.querySelector('.jh-task-status')?.textContent ?? '').includes('有上传失败'), null, { timeout: 60000 })
+  const historicalUnknownRow = app.locator('.jh-file-row').filter({ hasText: unknownSiblingFilenames[0] })
+  assert.ok((await historicalUnknownRow.innerText()).includes('原页面回执不可用'))
+  assert.equal(report.uploadRequests - uploadsBeforeUnknownSibling, 2)
+  assert.equal(uploadedNames.includes(unknownSiblingFilenames[0]), false, 'An unknown historical upload must never be replayed')
+  assert.equal(records.get(unknownSiblingNumber).attachments.firstResultAppendixList.length, 2)
+  report.unknownReceiptIsolation = { passed: true, successRows: 2, failedUnknownRows: 1, multipartRequests: 2, associatedAttachmentIds: 2, unknownRequestReplayed: false }
   report.passed = true
 } catch (error) {
   report.error = error.stack ?? String(error)
