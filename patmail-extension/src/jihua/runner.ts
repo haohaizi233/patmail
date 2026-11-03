@@ -151,6 +151,18 @@ export class JihuaRunner {
     })
   }
 
+  private async fileHandle(id: string): Promise<Awaited<ReturnType<JihuaRepository['getFile']>>> {
+    try { return await this.work(() => this.repository.getFile(id)) }
+    catch (error) {
+      if (this.cancelRequested || error instanceof LocalCancellation) throw new LocalCancellation()
+      if (sessionFailure(error) || platformUnavailable(error)) throw error
+      this.stopping = true
+      this.interruptRecoveryWaits()
+      this.storageFailure = error instanceof Error ? error : new Error(message(error))
+      throw this.storageFailure
+    }
+  }
+
   private checkpoint(): Promise<void> {
     if (this.storageFailure) return Promise.reject(this.storageFailure)
     this.task.updatedAt = Date.now()
@@ -624,10 +636,10 @@ export class JihuaRunner {
     // Selecting a parent directory and its child must not send the same physical file twice.
     const unique: JihuaRow[] = []
     for (const row of rows) {
-      const handle = await this.work(() => this.repository.getFile(row.id))
+      const handle = await this.fileHandle(row.id)
       let duplicate = false
       if (!row.intent && !row.receipt && handle?.isSameEntry) for (const kept of unique) {
-        const other = await this.work(() => this.repository.getFile(kept.id))
+        const other = await this.fileHandle(kept.id)
         if (other && await this.work(() => handle.isSameEntry!(other))) { duplicate = true; break }
       }
       if (duplicate) await this.state([row], 'excluded', '同一物理文件已由另一目录记录纳入，本行不重复上传。')
@@ -645,21 +657,38 @@ export class JihuaRunner {
         continue
       }
       if (row.intent?.sent) {
-        const sameDocument = row.intent.sessionKey === this.transport.session.key && row.intent.tabId === this.transport.session.tabId && row.intent.documentId === this.transport.session.documentId
-        if (!sameDocument) throw new JihuaError('上次上传已发送，但原页面回执不可用。请人工确认平台或暂存附件；没有重新上传。', 'unknown')
-        const recovered = await this.work(() => this.transport.receipt(row.intent!.requestId))
-        if (recovered.state !== 'done') throw new JihuaError(recovered.error || '上次上传回执尚未确认，请稍后继续；没有重新上传。', 'unknown')
-        row.receipt = parseUploadReceipt(recovered.value, Boolean(material.ofcType))
-        await this.resetWriteFailureStreak('upload')
-        await this.checkpoint()
-        await this.retireReceipt(row.intent.requestId)
+        try {
+          const sameDocument = row.intent.sessionKey === this.transport.session.key && row.intent.tabId === this.transport.session.tabId && row.intent.documentId === this.transport.session.documentId
+          if (!sameDocument) throw new JihuaError('上次上传已发送，但原页面回执不可用。请人工确认平台或暂存附件；没有重新上传。', 'unknown')
+          const recovered = await this.work(() => this.transport.receipt(row.intent!.requestId))
+          if (recovered.state !== 'done') throw new JihuaError(recovered.error || '上次上传回执尚未确认，请稍后继续；没有重新上传。', 'unknown')
+          row.receipt = parseUploadReceipt(recovered.value, Boolean(material.ofcType))
+          await this.resetWriteFailureStreak('upload')
+          await this.checkpoint()
+          await this.retireReceipt(row.intent.requestId)
+        } catch (error) {
+          if (this.cancelRequested || error instanceof LocalCancellation) throw new LocalCancellation()
+          if (this.storageFailure || sessionFailure(error) || platformUnavailable(error)) throw error
+          await this.state([row], 'failed', message(error))
+        }
         continue
       }
-      const handle = await this.work(() => this.repository.getFile(row.id))
-      if (!handle) throw new JihuaError('本地文件句柄丢失，请重新选择原目录后继续。')
-      if (handle.queryPermission && await this.work(() => handle.queryPermission!({ mode: 'read' })) !== 'granted') throw new JihuaError('本地目录读取权限未授权，请点击继续并重新授权目录。')
-      const file = await this.work(() => handle.getFile())
-      await this.work(() => validateFile(row, file))
+      const handle = await this.fileHandle(row.id)
+      let file: File
+      try {
+        if (!handle) throw new JihuaError('本地文件句柄丢失，请重新选择原目录后继续。')
+        if (handle.queryPermission && await this.work(() => handle.queryPermission!({ mode: 'read' })) !== 'granted') {
+          throw new JihuaError('本地目录读取权限未授权，请点击继续并重新授权目录。')
+        }
+        file = await this.work(() => handle.getFile())
+        await this.work(() => validateFile(row, file))
+      } catch (error) {
+        if (this.cancelRequested || error instanceof LocalCancellation) throw new LocalCancellation()
+        if (this.storageFailure) throw this.storageFailure
+        if (sessionFailure(error) || platformUnavailable(error)) throw error
+        await this.state([row], 'failed', message(error))
+        continue
+      }
       row.intent = { requestId: crypto.randomUUID(), sessionKey: this.transport.session.key, tabId: this.transport.session.tabId,
         documentId: this.transport.session.documentId, sent: false, materialKey: row.materialKey, applicationNo: row.applicationNo }
       await this.state([row], 'uploading')
@@ -671,6 +700,8 @@ export class JihuaRunner {
           row.intent!.sent = true
           await this.checkpoint()
           this.throwIfCancelled()
+          if (this.storageFailure) throw this.storageFailure
+          if (this.stopping) throw new Error('任务已暂停，文件未发送。')
         }))
         this.throwIfCancelled()
         row.receipt = parseUploadReceipt(value, Boolean(material.ofcType))
@@ -699,6 +730,8 @@ export class JihuaRunner {
       await this.retireReceipt(row.intent.requestId)
     }
     if (this.stopping) return
+    rows = rows.filter(row => row.receipt)
+    if (!rows.length) return
     // Re-read immediately before the write; never save the stale pre-upload form.
     const latest = await this.work(() => this.client.detail(record))
     if (this.stopping) return

@@ -134,6 +134,8 @@ const sourceAliasEntries = [
   ['递交合并档', 'PATENT_REQUEST'],
   ['递交文件合并档', 'PATENT_REQUEST'],
   ['新申请文档', 'APPLY_FILE'],
+  ['专利申请受理通知书(签章)', 'ACPT_NOTICE'],
+  ['发明专利申请公布及进入实质审查阶段通知书', 'EXA_STAGE_NOTICE'],
   ['费用减缴审批通知书', 'FEE_REDUCTION_APPROVAL_NOTICE'],
   ['手续合格通知书(著录项目变更)', 'COMPLIANCE_NOTICE'],
   ['实用新型专利证书', 'STATUS_RIGHT'],

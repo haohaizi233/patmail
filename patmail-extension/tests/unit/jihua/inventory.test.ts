@@ -53,6 +53,8 @@ describe('Jihua filename parsing', () => {
       ['费用减缴审批通知书', 'FEE_REDUCTION_APPROVAL_NOTICE'],
       ['手续合格通知书（著录项目变更）', 'COMPLIANCE_NOTICE'],
       ['实用新型专利证书(签章)', 'STATUS_RIGHT'],
+      ['专利申请受理通知书(签章)', 'ACPT_NOTICE'],
+      ['发明专利申请公布及进入实质审查阶段通知书', 'EXA_STAGE_NOTICE'],
     ] as const
 
     for (const [description, materialKey] of cases) {

@@ -68,6 +68,22 @@ async function readStoredTask(factory: IDBFactory): Promise<JihuaTask | undefine
 }
 
 describe('Jihua IndexedDB repository', () => {
+  it('repairs the newly registered notice aliases in existing tasks without rescanning or changing manual mappings', async () => {
+    const repository = createJihuaRepository(makeFactory())
+    const signed = legacyRow('signed', '专利申请受理通知书(签章)', { selected: true })
+    const combined = legacyRow('combined', '发明专利申请公布及进入实质审查阶段通知书', { selected: false })
+    const manual = { ...combined, id: 'manual', materialKey: 'SUB_EXAM_PHASE_NOTICE' }
+    const sent = { ...signed, id: 'sent', intent: { requestId: 'sent', sessionKey: 'owner', tabId: 1, documentId: 'doc', sent: true } }
+    await repository.save({ ...createTask('new-aliases'), rows: [signed, combined, manual, sent] })
+    const loaded = await repository.load()
+    expect(loaded?.rows).toMatchObject([
+      { id: 'signed', materialKey: 'ACPT_NOTICE', selected: true, status: 'pending', error: '' },
+      { id: 'combined', materialKey: 'EXA_STAGE_NOTICE', selected: false, status: 'pending', error: '' },
+      { id: 'manual', materialKey: 'SUB_EXAM_PHASE_NOTICE', status: 'unmatched' },
+      { id: 'sent', materialKey: 'ACPT_NOTICE', status: 'unmatched', intent: sent.intent },
+    ])
+  })
+
   it('persists a single latest task, file handles, and roots in separate stores', async () => {
     const repository = createJihuaRepository(makeFactory())
     const fileHandle = { kind: 'file', name: 'case.pdf' } as LocalFileHandle

@@ -101,7 +101,9 @@ export function parseFileName(name: string): ParsedFileName {
   const rawApplicationNo = baseName.slice(0, separator)
   const applicationNo = normalizeApplicationNo(rawApplicationNo)
   if (!APPLICATION_NO.test(applicationNo)) {
-    errors.push(LEGACY_APPLICATION_NO.test(applicationNo)
+    errors.push(/^PCT(?:[_/\s-]|$)/i.test(rawApplicationNo.trim())
+      ? 'PCT 国际申请号暂不支持自动传文；当前仅支持13位中国专利申请号'
+      : LEGACY_APPLICATION_NO.test(applicationNo)
       ? '9位旧式申请号目前不支持自动传文（仅支持13位中国专利申请号）'
       : '申请号格式无效；目前自动传文仅支持13位中国专利申请号')
   }

@@ -22,6 +22,9 @@ describe('Jihua material mapping', () => {
     expect(matchMaterial('费用减缴审批通知书')?.key).toBe('FEE_REDUCTION_APPROVAL_NOTICE')
     expect(matchMaterial('手续合格通知书（著录项目变更）')?.key).toBe('COMPLIANCE_NOTICE')
     expect(matchMaterial('实用新型专利证书')?.key).toBe('STATUS_RIGHT')
+    expect(matchMaterial('专利申请受理通知书(签章)')?.key).toBe('ACPT_NOTICE')
+    expect(matchMaterial('专利申请受理通知书（签章）')?.key).toBe('ACPT_NOTICE')
+    expect(matchMaterial('发明专利申请公布及进入实质审查阶段通知书')?.key).toBe('EXA_STAGE_NOTICE')
     expect(matchMaterial('实用新型专利证书（签章）')?.key).toBe('STATUS_RIGHT')
     expect(matchMaterial('发明专利证书(签章)')?.key).toBe('STATUS_RIGHT')
     expect(matchMaterial('第一次审查意见通知书')?.key).toBe('REVIEW_NOTICE')
@@ -34,7 +37,6 @@ describe('Jihua material mapping', () => {
     expect(matchMaterial('其他通知书')).toBeUndefined()
     expect(matchMaterial('审查业务专用函')).toBeUndefined()
     expect(matchMaterial('缴费通知书')).toBeUndefined()
-    expect(matchMaterial('发明专利申请公布及进入实质审查阶段通知书')).toBeUndefined()
     expect(matchMaterial('第N次补正通知书')).toBeUndefined()
   })
 
