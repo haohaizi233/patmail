@@ -601,6 +601,7 @@ export function summarizeJihuaTask(taskValue, classifyError) {
     const text = value.trim()
     if (/(?:http|status(?:\s*code)?|状态码)\s*[:：]?\s*524\b/i.test(text)) return 'http524'
     if (/(?:http|status(?:\s*code)?|状态码)\s*[:：]?\s*5\d{2}\b/i.test(text)) return 'other5xx'
+    if (/(?:http|status(?:\s*code)?|状态码)\s*[:：]?\s*413\b/i.test(text)) return 'large'
     if (/(?:不支持|不适用|unsupported|not supported).{0,16}(?:材料|material)|(?:材料|material).{0,24}(?:不支持|不适用|unsupported|not supported)|(?:台账|案件).{0,12}支持的材料/i.test(text)) return 'material_unsupported'
     if (/材料类型.{0,12}(?:未登记|未配置|无法匹配|未匹配)|(?:没|未)匹配到材料类型|(?:material|category).{0,20}(?:unmapped|not registered|unmatched)/i.test(text)) return 'material_unmapped'
     if (/没有匹配到该申请号的台账|(?:案件|台账).{0,16}(?:不存在|未找到)|case.{0,20}not found/i.test(text)) return 'case_not_found'

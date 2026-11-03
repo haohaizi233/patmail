@@ -511,6 +511,15 @@ describe('CDP observer target and event filtering', () => {
     expect(classifyJihuaErrorCategory('OA 请求失败（HTTP 503）')).toBe('http_5xx')
   })
 
+  it('classifies HTTP 413 as a request-size failure without retaining response details', () => {
+    const summarizeJihuaTask = required<(task: Record<string, unknown>, classifyError: (value: unknown) => string | null) => Record<string, unknown> | null>('summarizeJihuaTask')
+    const classifyJihuaErrorCategory = required<(value: unknown) => string | null>('classifyJihuaErrorCategory')
+    const summary = summarizeJihuaTask({ status: 'failed', rows: [{ status: 'failed', error: 'OA 上传失败（HTTP 413）；private response' }] }, classifyJihuaErrorCategory)
+    expect((summary?.failedReasons as Record<string, number>).large).toBe(1)
+    expect((summary?.failedReasons as Record<string, number>).other).toBe(0)
+    expect(JSON.stringify(summary)).not.toContain('private response')
+  })
+
   it('separates fixed failure reasons by failed, unmatched, and latest task errors', () => {
     const summarizeJihuaTask = required<(task: Record<string, unknown>, classifyError: (value: unknown) => string | null) => Record<string, unknown> | null>('summarizeJihuaTask')
     const classifyJihuaErrorCategory = required<(value: unknown) => string | null>('classifyJihuaErrorCategory')
