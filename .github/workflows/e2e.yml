@@ -29,6 +29,7 @@ jobs:
       - name: 构建
         run: node scripts/ci-check.mjs --steps build,manifest,dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: extension-dist
           path: patmail-extension/dist
@@ -57,6 +58,7 @@ jobs:
       - name: 上传报告与失败证据
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: report-e2e-full
           path: |
@@ -90,6 +92,7 @@ jobs:
       - name: 上传报告与失败证据
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: report-e2e-legacy
           path: |
@@ -110,6 +113,7 @@ jobs:
       - name: 上传覆盖率
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: report-coverage
           path: |
@@ -128,6 +132,7 @@ jobs:
       - name: 上传可复现性报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: report-repro
           path: |
@@ -160,6 +165,7 @@ jobs:
       - name: CI 报告与汇总门禁
         run: node scripts/ci-report.mjs --gate
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         if: always()
         with:
           name: full-gate-summary

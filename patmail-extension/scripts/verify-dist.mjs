@@ -123,6 +123,30 @@ const avatarCount = relativeNames.filter(name => name.startsWith('avatars/avatar
 if (avatarCount < 20) fail(`avatars 目录不完整（${avatarCount} 个，预期 ≥20）`)
 else note(`avatars 共 ${avatarCount} 个头像资源`)
 
+// ---- 中小客户快照：占位内容不得混入正式交付 ----
+// 真实名单由 scripts/pull-sme-customers.py 生成（敏感数据不入仓）；无数据环境（CI / SME_SNAPSHOT_STUB=1）
+// 走 ensure-sme-snapshot.mjs 的空占位（"stub": true）。占位构建只允许显式豁免的环境，其余一律拦下。
+const smeSnapshotPath = join(distDir, 'assets', 'sme-customers.json')
+if (existsSync(smeSnapshotPath)) {
+  let snapshot = null
+  try {
+    snapshot = JSON.parse(readFileSync(smeSnapshotPath, 'utf8'))
+  } catch {
+    fail('assets/sme-customers.json 不是合法 JSON')
+  }
+  if (snapshot) {
+    const isStub = snapshot.stub === true || (Array.isArray(snapshot.customers) && snapshot.customers.length === 0)
+    if (isStub) {
+      const message =
+        'assets/sme-customers.json 是占位快照（不含真实客户名单），不可交付：正式交付前在有数据库权限的机器上跑 scripts/pull-sme-customers.py 后重新构建'
+      if (process.env.GITHUB_ACTIONS === 'true' || process.env.SME_SNAPSHOT_STUB === '1') note(`⚠ ${message}`)
+      else fail(message)
+    } else if (Array.isArray(snapshot.customers)) {
+      note(`中小客户快照含 ${snapshot.customers.length} 条客户记录（takenAt ${snapshot.takenAt ?? '未知'}）`)
+    }
+  }
+}
+
 // ---- 3-6. 交付禁入物 ----
 for (const name of relativeNames) {
   const segments = name.split('/')

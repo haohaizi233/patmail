@@ -59,6 +59,7 @@ jobs:
       - name: 上传发布校验产物
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: release-bundle
           path: |
