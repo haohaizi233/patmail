@@ -1,0 +1,5 @@
+# 统一入库与工作区 LF：
+# Prettier 配置 endOfLine=lf，CI 在 Linux 上做格式检查；
+# Windows 下 core.autocrlf 会把检出文件转成 CRLF，导致本地 format:check 永远失败。
+# 这里显式 eol=lf 覆盖各平台默认，保证「提交 LF、检出 LF」。
+* text=auto eol=lf
