@@ -123,3 +123,21 @@ describe('limit mail submit', () => {
     expect(decodeURIComponent(savedCc.value)).toBe('商务甲(sales@example.com);')
   })
 })
+
+it('指定业务最终保存准确姓名和邮箱，不受其他商务的抄送检查扩写', async () => {
+  const calls: string[] = []
+  const saved: { params: URLSearchParams | null } = { params: null }
+  const result = await submitLimitMailBatch(transport({
+    limitMailCustomer: () => ({ ClientInfo: client(), objid: mail }),
+    ...contacts([{ cn_name: '陈冠宇', email: 'chen@example.com' }, { cn_name: '其他商务', email: 'other@example.com' }], []),
+    saveMailInfo: params => { saved.params = params; return { ClientInfo: client({ Result: false, Status: true }) } },
+    getFlowInfo: () => flowInfo(), getFlowSubmit: () => nodes([user]),
+    getUrgencyList: () => ({ ClientInfo: client(), UrgencyList: [{ urgency_id: urgency, urgency_code: 'CM', urgency_name: '普通', seq: 1 }] }),
+    getFlowLastStatus: () => ({ ClientInfo: client(), last_status: null }),
+    mailSubmit: () => ({ ClientInfo: client({ Result: true }) })
+  }, calls), user, [draft({ iprName: '陈冠宇', arbitrated: true, namedBusiness: true })])
+  expect(result.results[0]?.state).toBe('submitted')
+  expect(saved.params?.get('mail_to')).toBe('陈冠宇(chen@example.com);')
+  expect(saved.params?.get('mail_cc')).toBe('陈冠宇(chen@example.com);')
+  expect(result.results[0]?.to).toBe('陈冠宇(chen@example.com);')
+})

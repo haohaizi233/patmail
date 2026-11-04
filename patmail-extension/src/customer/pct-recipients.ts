@@ -48,6 +48,7 @@ export function sheetRecipientNames(
   mode: PctRecipientMode = 'ipr'
 ): { to: string; cc: string } {
   const ipr = sheetDisplayName(row.iprName)
+  if (row.namedBusiness && row.iprArbitrated) return { to: ipr, cc: ipr }
   if (row.iprArbitrated && ipr === '不用发') return { to: '不用发', cc: '' }
   if (row.iprArbitrated && ipr === '只发业务') return { to: '只发业务', cc: '' }
   if (mode !== 'lead' && row.iprArbitrated && addressName(row.iprName, true)) return { to: addressName(row.iprName, true), cc: (row.mailCc ?? '').trim() }
@@ -204,14 +205,20 @@ export function planPctRecipients(
   const ccAdded: Array<{ name: string; email: string }> = []
   const seenTo = new Set<string>()
   const seenCc = new Set<string>()
-  if (rows.length && rows.every(row => row.iprArbitrated && sheetDisplayName(row.iprName) === '只发业务')) {
-    addSales(contacts, toAdded, seenTo)
-    addSales(contacts, ccAdded, seenCc)
-    return withSheetCopies({
-      to: appendRecipientField(existing.to, people(toAdded)),
-      cc: appendRecipientField(existing.cc, people(ccAdded)),
-      notes
-    }, rows, contacts)
+  if (rows.some(row => row.iprArbitrated && sheetDisplayName(row.iprName) === '只发业务')) {
+    return { to: '', cc: '', notes: ['旧仲裁只写了「只发业务」，未指定具体姓名，请重新仲裁后再提交。'] }
+  }
+  if (rows.some(row => row.namedBusiness)) {
+    if (!rows.every(row => row.namedBusiness && row.iprArbitrated)) return { to: '', cc: '', notes: ['指定业务与普通收件人混在同一封，未写入。'] }
+    const sales = contacts.filter(item => item.group === 'sales' || /^(业务人员|商务|业务员)$/.test(item.role.trim()))
+    const names = [...new Set(rows.flatMap(row => listedNames(row.iprName)))]
+    if (!names.length) return { to: '', cc: '', notes: ['指定业务没有具体姓名，未写入。'] }
+    for (const name of names) {
+      const found = personByName(sales, name, '指定业务收件人')
+      if (found.note) notes.push(found.note)
+      pushPerson(toAdded, seenTo, found.person)
+    }
+    return { to: people(toAdded), cc: people(toAdded), notes }
   }
   if (mode === 'lead') {
     for (const name of [...new Set(rows.map(row => sheetDisplayName(row.leadName ?? '')).filter(Boolean))]) {

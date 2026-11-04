@@ -27,7 +27,7 @@ const props = withDefaults(defineProps<{
   procQueries?: Array<{ id: string; volumes: string }>
   seedToken?: number
   caseVolume?: string
-  sheetRows?: Array<{ ourVolume: string; procLabel?: string; mailTypeId?: string; customerName?: string; contactName?: string; iprName?: string; leadName?: string; mailTo?: string; mailCc?: string; iprCarried?: true; contactCarried?: true; leadCarried?: true; iprArbitrated?: true }>
+  sheetRows?: Array<{ ourVolume: string; procLabel?: string; mailTypeId?: string; customerName?: string; contactName?: string; iprName?: string; leadName?: string; mailTo?: string; mailCc?: string; iprCarried?: true; contactCarried?: true; leadCarried?: true; iprArbitrated?: true; namedBusiness?: true }>
   recipientMode?: 'ipr' | 'lead'
   inventorCustomers?: string[]
   flowByKey?: Record<string, string>

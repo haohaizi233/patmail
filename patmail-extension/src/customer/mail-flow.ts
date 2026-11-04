@@ -286,18 +286,14 @@ export function pctVolumeSlot(input: { customerVolume?: string; ourVolume?: stri
 function pickedType(nodes: Array<{ id: string; name: string }>, id: string): PctMailTypeNode | null {
   const text = id.trim()
   if (!text) return null
-  const found = nodes.find(node => node.id === text && node.name.trim())
+  const found = nodes.find(node => node.id === text && node.name.trim() && !nodes.some(child => (child as { parentId?: string }).parentId === node.id))
   return found ? { id: found.id, name: found.name } : null
 }
 
 /** 下拉里名称与完整全名一致才算对上。只包含其中几个词的不算。同名多于一项时不猜。 */
 export function matchMailTypeByName(nodes: Array<{ id: string; name: string }>, name: string): PctMailTypeNode | null {
-  const exact = byExactName(nodes, name)
-  if (exact) return exact
-  const text = name.trim()
-  if (!text) return null
-  const prefixed = nodes.filter(node => node.id.trim() && node.name.trim().startsWith(text))
-  return prefixed.length === 1 ? { id: prefixed[0].id, name: prefixed[0].name.trim() } : null
+  const parents = new Set(nodes.map(node => (node as { parentId?: string }).parentId).filter(Boolean))
+  return byExactName(nodes.filter(node => !parents.has(node.id)), name)
 }
 
 function byExactName(nodes: Array<{ id: string; name: string }>, name: string): PctMailTypeNode | null {
@@ -307,7 +303,7 @@ function byExactName(nodes: Array<{ id: string; name: string }>, name: string): 
   return found.length === 1 ? { id: found[0].id, name: found[0].name.trim() } : null
 }
 
-/** 先用工作流里点名的名称。这棵树没有那一项时，退回固定全名。完整名称后面多出来的后缀，只有唯一一条才算。 */
+/** 先用工作流里点名的名称。这棵树没有那一项时，退回固定全名。只接受完整名称完全一致的叶子节点。 */
 function namedMailType(nodes: Array<{ id: string; name: string }>, configured: string, fallback: string): PctMailTypeNode | null {
   const primary = matchMailTypeByName(nodes, configured || fallback)
   if (primary) return primary

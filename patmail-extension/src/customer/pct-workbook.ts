@@ -1,5 +1,7 @@
-import { pctRowsFromTable, type CarryMode } from './pct-sheet'
+import type { ProcedureMailTypeMapping } from '../mail/types'
+import { applyPctMailTypes, pctRowsFromTable, type CarryMode } from './pct-sheet'
 import { sheetDisplayName } from './pct-recipients'
+import { resolvePctRuntime } from '../workflow/pct-config'
 import type { PctRuntimeConfig } from '../workflow/pct-config'
 import type { PctTaskRow } from './types'
 import type { XlsxSheet } from './xlsx-table'
@@ -24,8 +26,8 @@ function isRemindSheet(name: string): boolean {
 }
 
 /** 导入时只解开这几张。期限监控和图片不读，避免大表把页面卡住。对不上名字时仍读第一张。 */
-export function isPctWorkbookSheet(name: string): boolean {
-  return isRemindSheet(name) || isNationalSheet(name) || isDetailSheet(name)
+export function isPctWorkbookSheet(name: string, custom: ProcedureMailTypeMapping[] = []): boolean {
+  return custom.some(item => item.procedure === name.trim()) || name.trim() === '提醒申请涉外外观' || isRemindSheet(name) || isNationalSheet(name) || isDetailSheet(name)
 }
 
 function shortCustomer(name: string): string {
@@ -170,27 +172,52 @@ export function pctRowsFromWorkbook(
   sheets: XlsxSheet[],
   mailTypes: Array<{ id: string; name: string }> = [],
   config?: PctRuntimeConfig,
-  carry: CarryMode = 'block'
+  carry: CarryMode = 'block',
+  custom: ProcedureMailTypeMapping[] = [],
+  fileName = ''
 ): PctWorkbookRead {
   const detail = sheets.find(sheet => isDetailSheet(sheet.name))
-  const namedRemind = sheets.filter(sheet => isRemindSheet(sheet.name))
-  const namedNational = sheets.filter(sheet => isNationalSheet(sheet.name))
-  const named = namedRemind.length + namedNational.length > 0
+  const namedRemind = sheets.filter(sheet => isRemindSheet(sheet.name) && !custom.some(item => item.procedure === sheet.name.trim()))
+  const namedNational = sheets.filter(sheet => isNationalSheet(sheet.name) && !custom.some(item => item.procedure === sheet.name.trim()))
+  const designSheets = sheets.filter(sheet => sheet.name.trim() === '提醒申请涉外外观')
+  const customSheets = sheets.filter(sheet => custom.some(item => item.procedure === sheet.name.trim()))
+  const named = customSheets.length + namedRemind.length + namedNational.length + designSheets.length > 0
+  const procColumn = resolvePctRuntime(config).columns.procLabel
+  const namedRows = (sheet: XlsxSheet, proc: string): string[][] => {
+    const header = [...(sheet.rows[0] ?? [])]
+    let index = header.findIndex(value => value.trim() === procColumn)
+    if (index < 0) { index = header.length; header.push(procColumn) }
+    return [header, ...sheet.rows.slice(1).map(source => {
+      const row = [...source]
+      // 空行不因补处理事项而成为业务行。
+      if (source.some(value => value.trim())) row[index] = proc
+      return row
+    })]
+  }
   const remindSheets = named ? namedRemind : sheets.filter(sheet => !isDetailSheet(sheet.name)).slice(0, 1)
   const nationalSheets = named ? namedNational : []
+  // 原站案件导出表没有事项列、Sheet 名又是 case_list；仅识别已知外观提醒文件命名。
+  const designHint = /^(外观提醒|提醒申请涉外外观)/.test(fileName) ? '提醒申请涉外外观' : ''
+  const fallbackRows = (sheet: XlsxSheet) => !named && designHint && !(sheet.rows[0] ?? []).some(value => value.trim() === procColumn)
+    ? namedRows(sheet, designHint) : sheet.rows
   const parts = [
-    ...remindSheets.map(sheet => pctRowsFromTable(sheet.rows, mailTypes, config, 'remind', carry)),
-    ...nationalSheets.map(sheet => pctRowsFromTable(sheet.rows, mailTypes, config, 'national', carry))
+    ...remindSheets.map(sheet => pctRowsFromTable(named ? namedRows(sheet, '提醒申请PCT') : fallbackRows(sheet), mailTypes, config, 'remind', carry)),
+    ...nationalSheets.map(sheet => pctRowsFromTable(namedRows(sheet, 'PCT进国家阶段官方绝限'), mailTypes, config, 'national', carry)),
+    ...designSheets.map(sheet => pctRowsFromTable(namedRows(sheet, sheet.name.trim()), mailTypes, config, 'design', carry)),
+    ...customSheets.map(sheet => pctRowsFromTable(namedRows(sheet, sheet.name.trim()), mailTypes, config, 'national', carry))
   ]
-  const merged = parts.flatMap(part => part.rows).slice(0, 5000)
+  const merged = applyPctMailTypes(parts.flatMap(part => part.rows).slice(0, 5000), mailTypes, config, custom)
   const noted = withDetailNotes(merged, detail ? detailLines(detail.rows) : [])
   const gaps = noted.filter(row => !row.iprName.trim())
   const decided = noted.filter(row => row.iprArbitrated).length
   const remindCount = noted.filter(row => row.letterKind !== 'national' && row.letterKind !== 'design').length
-  const nationalCount = noted.filter(row => row.letterKind === 'national' || row.letterKind === 'design').length
-  const hiddenRows = [...remindSheets, ...nationalSheets].reduce((sum, sheet) => sum + (sheet.hiddenRows ?? 0), 0)
+  const customCount = noted.filter(row => custom.some(item => item.procedure === row.procLabel)).length
+  const nationalCount = noted.filter(row => row.letterKind === 'national' && !custom.some(item => item.procedure === row.procLabel)).length
+  const designCount = noted.filter(row => row.letterKind === 'design').length
+  const hiddenRows = [...remindSheets, ...nationalSheets, ...designSheets, ...customSheets].reduce((sum, sheet) => sum + (sheet.hiddenRows ?? 0), 0)
   const notice = [
-    named ? `提醒申请 PCT ${remindCount} 行，进国家 ${nationalCount} 行。` : '',
+    !named && designHint ? '按外观提醒文件名识别处理事项「提醒申请涉外外观」。' : '',
+    named ? `提醒申请 PCT ${remindCount} 行，进国家 ${nationalCount} 行，涉外外观 ${designCount} 行${customCount ? `，自定义事项 ${customCount} 行` : ''}。` : '',
     hiddenRows ? `表格有筛选，隐藏的 ${hiddenRows} 行没有导入，导出也只含可见行。` : '',
     parts.map(part => part.notice).filter(Boolean).join(''),
     gaps.length ? `${gaps.length} 行 IPR 仍是空的，可以交给助手。` : '',
@@ -244,11 +271,16 @@ function clipCase(text: string | undefined): string {
   return `著录项目：\n${body}`
 }
 
+/** 旧版只发业务未保留具体人名，需使用原暂存材料重新仲裁。 */
+export function needsRecipientArbitration(row: Pick<PctTaskRow, 'iprName'>): boolean {
+  return !row.iprName.trim() || row.iprName.trim() === '只发业务'
+}
+
 function arbitrationUnits(rows: readonly PctTaskRow[]): ArbitrationUnit[] {
   const order: string[] = []
   const grouped = new Map<string, ArbitrationUnit>()
   for (const row of rows) {
-    if (row.iprName.trim()) continue
+    if (!needsRecipientArbitration(row)) continue
     const customer = row.customerName.trim()
     const key = customer || `行:${row.ourVolume}`
     const found = grouped.get(key)
@@ -297,12 +329,12 @@ export interface ArbitrationOptions {
 }
 
 function mailKindLine(): string {
-  return '这批是提醒申请 PCT 或 PCT 进国家。先看有没有单独点名这封提醒的句子，没有再用「所有邮件」「官文转达」「流程事务」「提醒」。初稿、检索、看稿、年费、办登、撰稿时限、总委和地址都不是这封信的收件人。下面几条都只看客户要求原文，著录项目里列出的人名本身不是要求。要求写了不发 PCT 提醒、不用发这种提醒、不用发涉外提醒的，整行写成：客户文号 我方文号｜不用发｜依据 一句。这条优先于同客户的主送技术联系人和所有邮件。要求单独写了 PCT 提醒、提醒 PCT、进国家提醒或国家提醒发给谁，就用那一条的人，身份按这一行著录项目写，不要改成只发业务。要求原文写了所有邮件只发业务或商务、不要发给客户、无需再发送给客户，或者原文点名的人在这一行里只是业务人员，整行写成：客户文号 我方文号｜只发业务｜依据 一句。著录项目里只有业务人员、客户要求又没指定发给谁，不是只发业务。所有邮件只发某个技术联系人、IPR 或客户联系人时，写这个人，不要写成只发业务。不要把业务员姓名写成收件人或抄送。要求说按案件备注发文时，用这一行著录项目里的案件备注；备注没有人名、又写了改主送负责人的，用这一行的公司负责人，身份写客户联系人；都对不上就拿不准。要求说主送第一申请人的 IPR 时，用著录项目里对上该申请人的联系人，身份写 IPR，对不上就拿不准。只有客户要求原文写了主送技术联系人时，才用这一行著录项目里的技术联系人，同客户别的案子的人不能拿来用。著录项目里有技术联系人，不等于客户要求主送技术联系人。不用发和只发业务不要写成拿不准，也不要写身份。'
+  return '这批事项以每一行的处理事项为准，包括提醒申请 PCT、PCT 进国家和涉外外观提醒。先看有没有单独点名这封提醒的句子，没有再用「所有邮件」「官文转达」「流程事务」「提醒」。初稿、检索、看稿、年费、办登、撰稿时限、总委和地址都不是这封信的收件人。下面几条都只看客户要求原文，著录项目里列出的人名本身不是要求。要求写了不发 PCT 提醒、不用发这种提醒、不用发涉外提醒的，整行写成：客户文号 我方文号｜不用发｜依据 一句。这条优先于同客户的主送技术联系人和所有邮件。要求单独写了 PCT 提醒、提醒 PCT、进国家提醒或国家提醒发给谁，就用那一条的人，身份按这一行著录项目写，不要改成只发业务。要求原文写了所有邮件只发业务或商务、不要发给客户、无需再发送给客户，或者原文点名的人在这一行里只是业务人员，必须从客户要求或本行著录项目找到具体业务员姓名，写成：客户文号 我方文号｜事项 原事项｜收件人 具体姓名｜身份 指定业务｜抄送 无｜抄送身份 无｜依据 点名的要求。不得只写「只发业务」。没有具体姓名或不能确认是本案业务员时写拿不准。著录项目里只有业务人员、客户要求又没指定发给谁，不是只发业务。所有邮件只发某个技术联系人、IPR 或客户联系人时，写这个人，不要写成只发业务。只有客户明确要求仅发业务时，才把具体业务员姓名写入收件人，身份写指定业务；不得扩成整个商务分组。要求说按案件备注发文时，用这一行著录项目里的案件备注；备注没有人名、又写了改主送负责人的，用这一行的公司负责人，身份写客户联系人；都对不上就拿不准。要求说主送第一申请人的 IPR 时，用著录项目里对上该申请人的联系人，身份写 IPR，对不上就拿不准。只有客户要求原文写了主送技术联系人时，才用这一行著录项目里的技术联系人，同客户别的案子的人不能拿来用。著录项目里有技术联系人，不等于客户要求主送技术联系人。不用发不要写成拿不准，也不要写身份。仅发业务必须写具体姓名和指定业务身份；找不到具体姓名才写拿不准。'
 }
 
 function priorityLine(iprOnly: boolean): string {
   if (iprOnly) {
-    return '优先级：1. 上面已经判成不用发或只发业务的，保持那种写法。其余客户要求里明确写了发给谁、抄送谁，就按要求。收件人和抄送都可以是 IPR、发明人、客户联系人的任意组合。2. 客户要求没有指定收件人时，收件人只写著录项目或表格里的技术联系人，身份写 IPR。著录项目里仅仅列出来的发明人、客户联系人，不是发信要求。3. 没有明确要求，也没有技术联系人时，这一行写成拿不准，收件人留空。不要用客户联系人名单、技术负责人或商务去顶。'
+    return '优先级：1. 上面已经判成不用发的保持原写法；仅发业务的必须写具体姓名和指定业务身份。其余客户要求里明确写了发给谁、抄送谁，就按要求。收件人和抄送都可以是 IPR、发明人、客户联系人的任意组合。2. 客户要求没有指定收件人时，收件人只写著录项目或表格里的技术联系人，身份写 IPR。著录项目里仅仅列出来的发明人、客户联系人，不是发信要求。3. 没有明确要求，也没有技术联系人时，这一行写成拿不准，收件人留空。不要用客户联系人名单、技术负责人或商务去顶。'
   }
   return '优先级：1. 上面已经判成不用发或只发业务的，保持那种写法，不要改成拿不准。其余客户要求里明确写了发给谁、抄送谁，就按要求写全，不要因为本批的兜底规则而漏写。收件人和抄送都可以是 IPR、发明人、客户联系人的任意组合，客户要求点名了技术联系人也照样写。2. 只有客户要求没有指定收件人时，这一行直接写成拿不准，收件人留空，提交时用「全选联系人」兜底。依据只写「客户要求没有指定发给谁」一句。著录项目或表格里即使有技术联系人，也不要写成收件人，不要写「按著录项目主送技术联系人」，不要把著录项目里有没有联系人写进依据，也不要用发明人、客户联系人名单、技术负责人或商务来顶。'
 }
@@ -312,8 +344,8 @@ function waveMessage(units: readonly ArbitrationUnit[], index: number, total: nu
   const text = [
     `请仲裁收件人和抄送。这是第 ${index}/${total} 批。材料只有下面这些文字：每一行的表格字段，以及核对时已经暂存的客户要求和著录项目。`,
     '每一行单独裁。第一客户联系人不同的，不能收成同一个人，也不能用一条结论盖住同客户的全部文号。',
-    'IPR 就是技术联系人。身份只能是：发明人、客户联系人、IPR。多人用顿号，身份与人名一一对应。',
-    '不要写商务、登录人、登陆人、密送、技术负责人。抄送商务、抄送登录人、密送登录人由系统在提交时默认追加。仲裁写了也会被丢掉，写抄送无也不会取消这些默认项。',
+    'IPR 就是技术联系人。普通收件人身份是：发明人、客户联系人、IPR。客户明确要求仅发业务时，收件人必须写具体姓名，身份写指定业务。多人用顿号，身份与人名一一对应。',
+    '除客户明确要求仅发业务的「指定业务」外，不要写商务、登录人、登陆人、密送、技术负责人。抄送商务、抄送登录人、密送登录人由系统在提交时默认追加。普通裁决写抄送无不会取消默认商务；指定业务裁决只使用点名人员，不再追加其他商务。',
     mailKindLine(),
     priorityLine(options.iprOnly === true) + '抄送只写第 1 条里额外要点名的人，没有就写无。',
     '每一行只写一行，用竖线分开，文号原样照抄。没有客户文号就写空。不要加尖括号，不要解释，不要写英文：',
@@ -380,7 +412,7 @@ export interface ArbitrationDecision {
   unsure: boolean
 }
 
-const ROLE_WORDS = ['发明人', '客户联系人', 'IPR', '技术联系人', '技术负责人', '商务', '登录人', '登陆人', '密送', '不用发']
+const ROLE_WORDS = ['指定业务', '发明人', '客户联系人', 'IPR', '技术联系人', '技术负责人', '商务', '登录人', '登陆人', '密送', '不用发']
 
 function blankParty(value: string): boolean {
   return !value || /^(无|空|没有|不抄送|拿不准|不用发|只发业务)/.test(value)
@@ -573,11 +605,12 @@ export function applyArbitrationReply(rows: readonly PctTaskRow[], text: string,
     const write = decisionFor(row)
     if (!write) return row
     written += 1
-    const { iprCarried: _carried, ...rest } = row
+    const { iprCarried: _carried, namedBusiness: _oldBusiness, mailCc: _oldCc, mailTo: _oldTo, ...rest } = row
     return {
       ...rest,
       iprName: write.recipient,
       iprArbitrated: true as const,
+      ...(write.role === '指定业务' ? { namedBusiness: true as const } : {}),
       ...(write.cc ? { mailCc: write.cc } : {})
     }
   })

@@ -147,7 +147,7 @@ describe('PCT 联系人追加', () => {
     expect(plan.cc).toContain('韩玉奎(hanyk001@cmhk.com);')
   })
 
-  it('只发业务时收件人和抄送都只放业务人员', () => {
+  it('旧版只发业务缺少具体姓名时阻止自动扩成业务分组', () => {
     const plan = planPctRecipients(
       [row({ customerName: '三一重能', iprName: '只发业务', iprArbitrated: true, contactName: '王佳' })],
       [
@@ -156,8 +156,9 @@ describe('PCT 联系人追加', () => {
       ],
       { to: '', cc: '' }
     )
-    expect(plan.to).toBe('蔡健中(cai@centips.com);')
-    expect(plan.cc).toBe('蔡健中(cai@centips.com);')
+    expect(plan.to).toBe('')
+    expect(plan.notes.join('')).toContain('请重新仲裁')
+    expect(plan.cc).toBe('')
     expect(plan.to).not.toContain('王佳')
     expect(sheetRecipientNames(row({ iprName: '不用发', iprArbitrated: true }))).toEqual({ to: '不用发', cc: '' })
     expect(sheetRecipientNames(row({ iprName: '只发业务', iprArbitrated: true }))).toEqual({ to: '只发业务', cc: '' })

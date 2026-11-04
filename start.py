@@ -1,34 +1,27 @@
-"""PatMail 一键启动。
+"""PatMail 开发构建入口。
 
-启动当前仓库里的本地服务，并在结束时一起关掉。
+在 patmail-extension 执行一次生产构建，结果写入 dist。
 
-- 插件：每次启动先在 patmail-extension 执行一次生产构建，结果写入 dist
-- 管理端原型：项目根目录的 Vite，地址 5173
 - 插件工作台是 dist 里的扩展页面，不另开本地端口
-- 下载由扩展在浏览器内完成，此开发启动器不启动下载桥接
+- 管理端原型是项目根目录的 Vite 开发预览，需要时手动运行根目录的 `pnpm dev`，本脚本不再启动它
+- 下载由扩展在浏览器内完成，本脚本不启动下载桥接
 """
 
 from __future__ import annotations
 
 import functools
 import os
-import re
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import threading
 import time
-import webbrowser
 import urllib.request
 import json
-from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-FRONTEND_PORT = 5173
-FRONTEND_URL = f"http://127.0.0.1:{FRONTEND_PORT}"
 EXTENSION = ROOT / "patmail-extension"
 STREAM_BRIDGE_PORT = 42843
 
@@ -36,7 +29,6 @@ processes: list[subprocess.Popen[str]] = []
 stopping = False
 bridge_stop = threading.Event()
 print = functools.partial(print, flush=True)
-recent_output: deque[str] = deque(maxlen=200)
 
 
 def reconfigure_output() -> None:
@@ -123,22 +115,6 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def ensure_frontend(runner: str) -> None:
-    vite_js = ROOT / "node_modules" / "vite" / "bin" / "vite.js"
-    if vite_js.is_file():
-        return
-    print("管理端依赖不完整，正在按锁文件恢复...")
-    # 只恢复根目录管理端。不能把插件目录算进这次安装，否则会改写锁文件。
-    result = subprocess.run(
-        [runner, "install", "--frozen-lockfile", "--ignore-workspace"],
-        cwd=ROOT,
-        env=tool_env(),
-        check=False,
-    )
-    if result.returncode != 0 or not vite_js.is_file():
-        fail("管理端依赖恢复失败。请在项目根目录查看 pnpm install 的输出。")
-
-
 def stop() -> None:
     global stopping
     if stopping:
@@ -169,27 +145,6 @@ def handle_stop(signum: int, _frame: object) -> None:
     stop()
     raise SystemExit(0)
 
-
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-VITE_LOCAL_URL_RE = re.compile(r"\bLocal\s*:\s*https?://\S+", re.IGNORECASE)
-
-
-def is_vite_local_url(line: str) -> bool:
-    """识别 Vite Local 地址；先移除色码，避免样式重置码打断标签。"""
-    return bool(VITE_LOCAL_URL_RE.search(ANSI_ESCAPE_RE.sub("", line)))
-
-
-def pipe_output(proc: subprocess.Popen[str], ready: threading.Event) -> None:
-    if proc.stdout is None:
-        return
-    for line in proc.stdout:
-        recent_output.append(line)
-        if is_vite_local_url(line):
-            ready.set()
-        try:
-            print(line, end="")
-        except UnicodeEncodeError:
-            print(line.encode("utf-8", "replace").decode("utf-8"), end="")
 
 def user_env_value(name: str) -> str:
     """用户级环境变量。setx 之后，已经在跑的终端（含它新开的页签）拿不到新值，所以直接读注册表。"""
@@ -247,240 +202,9 @@ def build_extension(runner: str) -> None:
         check=False,
     )
     if build.returncode != 0:
-        fail(f"插件编译失败，退出码 {build.returncode}。管理端没有启动。")
+        fail(f"插件编译失败，退出码 {build.returncode}。")
     print("插件编译完成。若 Chrome 已加载该扩展，请在扩展管理页重新加载。")
     print()
-
-
-def start_logged(runner: str, args: list[str], cwd: Path) -> subprocess.Popen[str]:
-    proc = subprocess.Popen(
-        [runner, *args],
-        cwd=cwd,
-        env=tool_env(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-    )
-    processes.append(proc)
-    return proc
-
-
-def port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind(("127.0.0.1", port))
-        except OSError:
-            return True
-    return False
-
-
-def port_owners(port: int) -> list[tuple[int, str]]:
-    """监听该端口的进程（PID，进程名）。非 Windows 直接返回空，退化为只报端口状态。"""
-    if sys.platform != "win32":
-        return []
-    listing = subprocess.run(
-        ["netstat", "-ano", "-p", "TCP"],
-        capture_output=True, text=True, errors="replace", check=False,
-    )
-    pids: list[int] = []
-    for line in listing.stdout.splitlines():
-        parts = line.split()
-        if (
-            len(parts) >= 5
-            and parts[0].upper() == "TCP"
-            and parts[3].upper() == "LISTENING"
-            and parts[1].rsplit(":", 1)[-1] == str(port)
-        ):
-            pid = int(parts[4])
-            if pid not in pids:
-                pids.append(pid)
-    owners: list[tuple[int, str]] = []
-    for pid in pids:
-        name = "未知进程"
-        task = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, errors="replace", check=False,
-        )
-        first = task.stdout.splitlines()[0] if task.stdout.strip() else ""
-        if first.startswith('"'):
-            name = first.split('","', 1)[0].strip('"')
-        owners.append((pid, name))
-    return owners
-
-
-def process_command_line(pid: int) -> str:
-    if sys.platform != "win32":
-        return ""
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
-        capture_output=True, text=True, errors="replace", check=False,
-    )
-    return result.stdout.strip()
-
-
-def is_ours(pid: int) -> bool:
-    """命令行里带着本项目路径，就是上次没退干净的残留进程。"""
-    return str(ROOT).lower() in process_command_line(pid).lower()
-
-
-def kill_pid(pid: int) -> None:
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-        )
-    else:
-        try:
-            os.kill(pid, 15)
-        except OSError:
-            pass
-
-
-def wait_port_free(port: int, timeout: float = 5.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not port_in_use(port):
-            return True
-        time.sleep(0.2)
-    return port_in_use(port) is False
-
-
-def reclaim_frontend_port() -> None:
-    """端口预检：本项目残留进程直接清掉，别的程序占用就把话说清楚再退出。"""
-    if not port_in_use(FRONTEND_PORT):
-        return
-    owners = port_owners(FRONTEND_PORT)
-    ours = [(pid, name) for pid, name in owners if is_ours(pid)]
-    if ours:
-        for pid, name in ours:
-            print(f"端口 {FRONTEND_PORT} 被上一次的残留进程占用（{name}，PID {pid}），自动清理...")
-            kill_pid(pid)
-        if wait_port_free(FRONTEND_PORT):
-            return
-    if not port_in_use(FRONTEND_PORT):
-        return
-    remaining = port_owners(FRONTEND_PORT)
-    detail = "、".join(f"{name}（PID {pid}）" for pid, name in remaining) or "未知进程"
-    fail(
-        f"端口 {FRONTEND_PORT} 被占用：{detail}。\n"
-        f"这是别的程序，不会自动结束它。请先关闭它，或改 start.py 里的 FRONTEND_PORT 后重试。"
-    )
-
-
-def http_ready(url: str, timeout: float = 5.0) -> bool:
-    """探活。首次请求 Vite 要做依赖预构建，超时给宽一点。"""
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(url, timeout=timeout) as response:
-            return response.status < 500
-    except OSError:
-        return False
-
-
-DEPENDENCY_ERROR_TOKENS = ("ERR_MODULE_NOT_FOUND", "Cannot find package", "Cannot find module", "ERR_PACKAGE_PATH")
-PORT_ERROR_TOKENS = ("EADDRINUSE", "already in use", "address already in use")
-
-
-def output_has(tokens: tuple[str, ...]) -> bool:
-    return any(token in line for line in recent_output for token in tokens)
-
-
-def recoverable_failure() -> bool:
-    """依赖损坏或端口冲突都可以自动修一次再试。"""
-    return output_has(DEPENDENCY_ERROR_TOKENS) or output_has(PORT_ERROR_TOKENS)
-
-
-def repair_frontend(runner: str) -> None:
-    if output_has(DEPENDENCY_ERROR_TOKENS):
-        print("管理端依赖损坏（缺包），正在按锁文件自动修复...")
-        result = subprocess.run(
-            [runner, "install", "--frozen-lockfile", "--ignore-workspace"],
-            cwd=ROOT,
-            env=tool_env(),
-            check=False,
-        )
-        if result.returncode != 0:
-            fail("管理端依赖自动修复失败。请在项目根目录手动运行 pnpm install 查看原因。")
-        print("依赖修复完成，重试启动。")
-    else:
-        print("端口疑似被残留进程占用，清理后重试启动...")
-
-
-def frontend_failure_message(returncode: int | None) -> str:
-    lines = [f"管理端启动失败，退出码 {returncode}。"]
-    owners = port_owners(FRONTEND_PORT)
-    if owners:
-        detail = "、".join(f"{name}（PID {pid}）" for pid, name in owners)
-        lines.append(f"端口 {FRONTEND_PORT} 当前被占用：{detail}。")
-        if any(is_ours(pid) for pid, _ in owners):
-            lines.append("占用者是本项目的残留进程，再运行一次 start.py 会自动清理。")
-        else:
-            lines.append(f"请先关闭占用该端口的程序，或改 start.py 里的 FRONTEND_PORT（当前 {FRONTEND_PORT}）。")
-    else:
-        lines.append(f"端口 {FRONTEND_PORT} 当前空闲，问题更可能出在依赖或 Vite 配置。")
-    tail = [line.rstrip() for line in recent_output if line.strip()][-15:]
-    if tail:
-        lines.append("管理端最近输出：")
-        lines.extend(f"  {line}" for line in tail)
-    return "\n".join(lines)
-
-
-def start_frontend(runner: str) -> subprocess.Popen[str]:
-    if not (ROOT / "package.json").is_file():
-        fail("项目根目录没有 package.json，无法启动管理端。")
-    ensure_frontend(runner)
-    reclaim_frontend_port()
-    return start_logged(
-        runner,
-        ["exec", "vite", "--host", "127.0.0.1", "--port", str(FRONTEND_PORT), "--strictPort"],
-        ROOT,
-    )
-
-
-def wait_for_ready_or_exit(
-    proc: subprocess.Popen[str], ready: threading.Event, timeout: float
-) -> bool:
-    """等待地址日志或 Vite 退出，避免已退出的进程空等完整启动时限。"""
-    deadline = time.monotonic() + timeout
-    while not ready.is_set():
-        if proc.poll() is not None:
-            return False
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        ready.wait(timeout=min(0.1, remaining))
-    return True
-
-
-def start_frontend_with_recovery(runner: str) -> subprocess.Popen[str]:
-    """带容灾的启动：端口预检、失败自动修复重试一次、就绪用 HTTP 探活。"""
-    for attempt in (1, 2):
-        recent_output.clear()
-        frontend = start_frontend(runner)
-        ready = threading.Event()
-        output_reader = threading.Thread(target=pipe_output, args=(frontend, ready), daemon=True)
-        output_reader.start()
-        if wait_for_ready_or_exit(frontend, ready, timeout=40) and frontend.poll() is None:
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline and not http_ready(FRONTEND_URL):
-                time.sleep(0.5)
-            if http_ready(FRONTEND_URL):
-                webbrowser.open(FRONTEND_URL)
-            else:
-                print(f"管理端进程在跑，但 {FRONTEND_URL} 暂时探不通，请看上方日志。")
-            return frontend
-        if frontend.poll() is None:
-            print("管理端还没有打印访问地址，请查看上方日志。")
-            return frontend
-        output_reader.join(timeout=1)
-        if attempt == 1 and recoverable_failure():
-            repair_frontend(runner)
-            continue
-        fail(frontend_failure_message(frontend.returncode))
-    raise AssertionError("unreachable")
 
 
 def main() -> None:
@@ -496,17 +220,12 @@ def main() -> None:
         fail("未找到 pnpm 或 npm。请先安装 Node.js。")
 
     print("PatMail")
-    print(f"管理端原型  {FRONTEND_URL}")
     print(f"插件目录    {EXTENSION / 'dist'}")
-    print("每次启动都会先编译插件。工作台跟着扩展走：在 Chrome 里点 PatMail 图标，或在 EASY 页面点「打开工作台」。")
-    print("按 Ctrl+C 停止。")
+    print("工作台跟着扩展走：在 Chrome 里点 PatMail 图标，或在 EASY 页面点「打开工作台」。")
+    print("管理端原型不再随本脚本启动；要看原型，在项目根目录运行 pnpm dev。")
     print()
 
     build_extension(runner)
-    frontend = start_frontend_with_recovery(runner)
-    code = frontend.wait()
-    stop()
-    raise SystemExit(code)
 
 
 def start_stream_bridge() -> None:

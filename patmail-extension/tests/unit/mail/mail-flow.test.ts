@@ -31,10 +31,10 @@ describe('PCT 提醒文号', () => {
     expect(pctMailTypeFor({ customerVolume: '  ', ourVolume: 'PA2518728CND' }, mailTypes)?.id).toBe('93f289c5-f3c5-4f6d-a90b-50ac1fb8d092')
   })
 
-  it('固定全名后面只有一条更长的名称时仍对上，两条就不猜', () => {
+  it('固定全名后有后缀也不匹配', () => {
     expect(matchPctMailTypes([
       { id: '71d067a3-d1a3-4d4b-87f9-38ea9d96bf70', name: '提醒申请PCT（贵方案号）-深圳市-中小' }
-    ]).customerVolume?.id).toBe('71d067a3-d1a3-4d4b-87f9-38ea9d96bf70')
+    ]).customerVolume).toBeNull()
     expect(matchPctMailTypes([
       { id: '71d067a3-d1a3-4d4b-87f9-38ea9d96bf70', name: '提醒申请PCT（贵方案号）-深圳市-甲' },
       { id: '82e178b4-e2b4-4e5c-98fa-49fb0ea7cf81', name: '提醒申请PCT（贵方案号）-深圳市-乙' }

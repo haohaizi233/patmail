@@ -1,3 +1,4 @@
+import { isProcedureMapping, validProcedureMappings } from '../customer/procedure-mapping'
 import { plainClone } from '../automation/snapshot'
 import type { BodyRule, CustomerMailPolicy, CustomerRecipientTemplate, DefaultReviewer, DefaultSender, DescriptionMailTypeMapping, MailRuleBundle, OperatorSignature, SubjectRule } from './types'
 import { isQueryGuid } from '../query/query-validator'
@@ -81,6 +82,9 @@ export function readMailRules(value: unknown, ownerId: string): { bundle: MailRu
   if (!Array.isArray(record.policies) || !Array.isArray(record.mappings) || !Array.isArray(record.recipients) || !Array.isArray(record.signatures)) {
     return { bundle: emptyMailRules(ownerId), writable: false, warning: '发文配置有无法识别的条目，未覆盖原数据。' }
   }
+  if (record.procedureMappings !== undefined && (!Array.isArray(record.procedureMappings) || !record.procedureMappings.every(isProcedureMapping) || !validProcedureMappings(record.procedureMappings))) {
+    return { bundle: emptyMailRules(ownerId), writable: false, warning: '处理事项映射无法识别，未覆盖原数据。' }
+  }
   const policies = record.policies.filter(isPolicy)
   const mappings = Array.isArray(record.mappings) ? record.mappings.filter(isMapping) : []
   const recipients = Array.isArray(record.recipients) ? record.recipients.filter(isRecipient) : []
@@ -104,7 +108,7 @@ export function readMailRules(value: unknown, ownerId: string): { bundle: MailRu
   if (signaturePref === undefined) {
     return { bundle: emptyMailRules(ownerId), writable: false, warning: '默认签名无法识别，未覆盖原数据。' }
   }
-  return { bundle: { version: 1, revision: record.revision, ownerId, policies, mappings, recipients, signatures, subject: record.subject, body: record.body, defaultReviewer: reviewer, defaultSender: sender, defaultSignatureId: signaturePref }, writable: true }
+  return { bundle: { version: 1, revision: record.revision, ownerId, policies, mappings, ...(record.procedureMappings ? { procedureMappings: record.procedureMappings } : {}), recipients, signatures, subject: record.subject, body: record.body, defaultReviewer: reviewer, defaultSender: sender, defaultSignatureId: signaturePref }, writable: true }
 }
 
 function readDefaultReviewer(value: unknown): DefaultReviewer | null {

@@ -56,6 +56,7 @@ function isPctRow(value: unknown): value is PctTaskRow {
   if (!shortText(row.contactName, 80) || !shortText(row.iprName, 80) || !shortText(row.procLabel, 80)) return false
   if (row.contactCarried !== undefined && row.contactCarried !== true) return false
   if (row.iprCarried !== undefined && row.iprCarried !== true) return false
+  if (row.namedBusiness !== undefined && (row.namedBusiness !== true || row.iprArbitrated !== true)) return false
   if (row.iprArbitrated !== undefined && row.iprArbitrated !== true) return false
   if (row.leadName !== undefined && !shortText(row.leadName, 80)) return false
   if (row.leadCarried !== undefined && row.leadCarried !== true) return false

@@ -1,5 +1,6 @@
 import { createApp, h, nextTick, type App } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CURRENT_ENVIRONMENT } from '../../../src/api/config'
 import QueryTemplateSection from '../../../src/floating/QueryTemplateSection.vue'
 import { MessageType, type ContentRequest, type ContentResponse, type MessageBridge } from '../../../src/shared/message'
 
@@ -30,6 +31,7 @@ const SAVED = '045eb1fc-e77a-4d50-98df-cbfcc9e5f4e7'
 const RECIPE = { newFilename: 'app_no;-;case_name;-;file_desc', fileNameType: 'colname;txt;colname;txt;colname' }
 let app: App | undefined
 let writes: ContentRequest[] = []
+let fileTypeRequests: ContentRequest[] = []
 let rejectSave = false
 afterEach(() => {
   app?.unmount(); app = undefined; document.body.innerHTML = ''
@@ -38,7 +40,7 @@ afterEach(() => {
 async function settle() { for (let i = 0; i < 40; i++) { await Promise.resolve(); await nextTick() } }
 
 async function mount() {
-  writes = []
+  writes = []; fileTypeRequests = []
   const request: MessageBridge['request'] = async message => {
     if (message.type === MessageType.ScanFileSearchForm) return { type: MessageType.FileSearchFormResult, payload: { fields: [] } }
     if (message.type === MessageType.ListHistoryQueries) return { type: MessageType.HistoryQueriesResult, payload: { ok: true, data: [] } }
@@ -54,6 +56,10 @@ async function mount() {
     }
     if (message.type === MessageType.LoadDictionary) {
       const kind = message.payload.kind
+      if (kind === 'fileType') {
+        fileTypeRequests.push(message)
+        return { type: MessageType.DictionaryResult, payload: { ok: true, data: { kind: 'fileType', caseTypeId: message.payload.caseTypeId, nodes: [], rootIds: [], diagnostics: [] } } }
+      }
       const options = kind === 'picker' ? [{ value: ID, label: '华峰官文', metadata: RECIPE }] : [
         { value: 'app_no', label: '申请号' }, { value: 'fixtxt', label: '固定字符' },
         { value: 'case_name', label: '案件名称' }, { value: 'file_desc', label: '文件描述' }
@@ -139,4 +145,9 @@ describe('下载文件名模板的保存与删除', () => {
     expect(document.body.textContent).toContain('模板名称已存在！')
     expect(templateOptions(selects()[0])).toEqual(['华峰官文'])
   })
+})
+
+it('未手选案件类型也按原站默认专利热加载文件描述', async () => {
+  await mount()
+  expect(fileTypeRequests).toContainEqual({ type: MessageType.LoadDictionary, payload: { kind: 'fileType', force: false, caseTypeId: CURRENT_ENVIRONMENT.caseTypeId } })
 })

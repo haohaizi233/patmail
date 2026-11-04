@@ -11,7 +11,7 @@ import { fillSheetEmails } from '../../customer/customer-page'
 import { IC_LOOKUP_WIDTH } from '../../customer/ic-flow-lookup'
 import { MAILED_UNFINISHED_REVIEW, SKIP_SEND_REVIEW, reviewNeedsArbitration, type IcFlowHit } from '../../customer/pct-flow-status'
 import { paintTaskCheckProgress, resetTaskCheckProgress, sessionInterrupted } from '../check-progress'
-import { applyArbitrationReply, arbitrationAllowed, checkedSourceSheets, iprArbitrationWaves, isPctWorkbookSheet, missedSourceSheets, pctRowsFromWorkbook, shouldAutoArbitrate, type ArbitrationDecision } from '../../customer/pct-workbook'
+import { needsRecipientArbitration, applyArbitrationReply, arbitrationAllowed, checkedSourceSheets, iprArbitrationWaves, isPctWorkbookSheet, missedSourceSheets, pctRowsFromWorkbook, shouldAutoArbitrate, type ArbitrationDecision } from '../../customer/pct-workbook'
 import { applyPctMailTypes, buildPctTask, clonePctTask, matchSheetCtrlProcs, PCT_WORKFLOW_TASK_KEY, procGapNotes, readWorkflowTask, recarryCustomerContacts, summarizePctTask, volumesOf, writeWorkflowTask } from '../../customer/pct-sheet'
 import type { CustomerQueryProfile, PctTaskRow } from '../../customer/types'
 import { arbitratedMark, carriedMark, sheetDisplayName, sheetRecipientNames, usesInventorSheet } from '../../customer/pct-recipients'
@@ -155,7 +155,7 @@ const styleNotes = computed(() => {
     return [`「${name}」在客户管理里保存的发文方式是${label ? `「${label}」` : '另一种'}。提交仍按勾选逐件单个来文，不会按那种方式把没勾的并进来。`]
   })
 })
-const procGaps = computed(() => procGapNotes(rows.value, runtime.value.procLabel))
+const procGaps = computed(() => procGapNotes(rows.value.filter(row => !props.rules?.procedureMappings?.some(item => item.procedure === row.procLabel)), runtime.value.procLabel))
 const outcomePack = computed(() => {
   const empty = { text: '', bars: [] as Array<{ key: string; label: string; count: number; color: string; percent: number }> }
   if (!rows.value.length) return empty
@@ -372,12 +372,16 @@ async function onSheet(event: Event): Promise<void> {
   try {
     await new Promise(resolve => window.setTimeout(resolve, 0))
     if (generation !== sheetImportToken) return
-    const parsed = pctRowsFromWorkbook(await readXlsxSheets(await file.arrayBuffer(), isPctWorkbookSheet), props.mailTypes, runtime.value, carryAcrossBreaks.value ? 'cross' : 'block')
+    const parsed = pctRowsFromWorkbook(await readXlsxSheets(await file.arrayBuffer(), name => isPctWorkbookSheet(name, props.rules?.procedureMappings)), props.mailTypes, runtime.value, carryAcrossBreaks.value ? 'cross' : 'block', props.rules?.procedureMappings, file.name)
     if (generation !== sheetImportToken) return
-    rows.value = applyPctMailTypes(parsed.rows, props.mailTypes, runtime.value)
+    rows.value = applyPctMailTypes(parsed.rows, props.mailTypes, runtime.value, props.rules?.procedureMappings)
     resetSheetPages()
     gapWaves.value = iprArbitrationWaves(rowsForArbitration(), {}, {}, { iprOnly: arbitrateIprOnly.value })
     sheetNotice.value = parsed.notice
+    if (!rows.value.length) {
+      status.value = parsed.notice || '没有读到可导入的业务行，请核对表头和处理事项。'
+      return
+    }
     await new Promise(resolve => window.setTimeout(resolve, 0))
     if (generation !== sheetImportToken) return
     buildPreview()
@@ -393,7 +397,7 @@ watch(() => [props.mailTypes, runtime.value] as const, () => {
   if (!rows.value.length || !props.mailTypes.length || !rows.value.some(row => !row.mailTypeId)) return
   const next = rows.value.map(row => {
     if (row.mailTypeId) return row
-    return applyPctMailTypes([row], props.mailTypes, runtime.value)[0] ?? row
+    return applyPctMailTypes([row], props.mailTypes, runtime.value, props.rules?.procedureMappings)[0] ?? row
   })
   if (next.every((row, index) => row.mailTypeId === rows.value[index]?.mailTypeId)) return
   rows.value = next
@@ -1295,11 +1299,15 @@ const progressPercent = computed(() => {
 })
 
 async function startSheetQuery(): Promise<void> {
+  if (!rows.value.length) {
+    limitPhase.value = 'idle'
+    limitNote.value = sheetNotice.value || '没有可查询的表格行，请先完成导入。'
+    return
+  }
   const token = ++sheetQueryToken
   limitPhase.value = 'run'
   for (const key of Object.keys(limitByKey)) delete limitByKey[key]
   limitNote.value = '正在查期限监控…'
-  if (!rows.value.length) return
   if (!bridge || connection.value.sessionStatus !== 'authenticated') {
     holdLimit = true
     limitPhase.value = 'run'
@@ -1751,8 +1759,8 @@ async function askGaps(retried = false): Promise<void> {
     if (token !== sheetQueryToken || icPhase.value !== 'done') return
     return askGaps(true)
   }
-  const gaps = rows.value.filter(row => !row.iprName.trim() && reviewNeedsArbitration(sheetStatus(row).review, allowMailedUnfinished.value))
-  const settled = rows.value.filter(row => !row.iprName.trim() && !reviewNeedsArbitration(sheetStatus(row).review, allowMailedUnfinished.value)).length
+  const gaps = rows.value.filter(row => needsRecipientArbitration(row) && reviewNeedsArbitration(sheetStatus(row).review, allowMailedUnfinished.value))
+  const settled = rows.value.filter(row => needsRecipientArbitration(row) && !reviewNeedsArbitration(sheetStatus(row).review, allowMailedUnfinished.value)).length
   if (!gaps.length) return
   askingGap.value = true
   try {
@@ -1798,7 +1806,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
     <div class="card-head"><h2>按工作流发文</h2></div>
     <p v-if="workflowId === FILE_MANAGE_ID" class="hint">选择已经绑好文件管理的客户。按这位客户保存的查询条件和发文方式查出文件。文件描述按发文映射对上发文类型。收件人是案件联系人，抄送是默认发件人和商务，审核人是默认审核人，标题用标题模板，正文用发文页邮件签名下拉里的格式。所属部门包含研发本部时，在文件描述右侧写入全部发明人，顿号分隔。</p>
     <p v-else-if="workflowId === FILING_EXPORT_ID" class="hint">这条工作流不发文：在下面的查询表单里现场查出递交记录并勾选（逐行、全选本页、全选所有都行），点「导出 Excel」，下表逐件出导出预览，取完数自动下载九列 Excel（我方文号、申请日、案件流向、处理事项、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态，首行冻结；表格下方顺延一张前10大退回横向柱状图）。每件只打两个接口：流程历史加人员部门。</p>
-    <p v-else class="hint">一次读「提醒申请PCT」和「PCT进国家」两张表。进国家有客户文号就用贵方案号，没有客户文号就用我方案号。外观用涉外外观那一种。同一客户里空着的联系人默认只在连成整块时顺延补上，中间隔了别的客户就断开；「同客户隔行也顺延补上」打开后不受截断影响。完全空着的，核对时会带上客户要求和著录项目里的发明人、客户联系人。交给助手时只使用这份暂存，不再查客户名单或案件。助手按文号把收件人写回这一行。核对完成后可以导出，在原表上加一列审核状态。邮箱那一列不读。</p>
+    <p v-else class="hint">按工作表名称识别「提醒申请PCT」「PCT进国家阶段官方绝限」「提醒申请涉外外观」，并写入处理事项。进国家有客户文号就用贵方案号，没有客户文号就用我方案号。外观同样按客户文号选择「提醒涉外外观申请（贵方案号）」或「提醒外观申请（我方案号）」，发文类型按完整名称精确匹配。同一客户里空着的联系人默认只在连成整块时顺延补上，中间隔了别的客户就断开；「同客户隔行也顺延补上」打开后不受截断影响。完全空着的，核对时会带上客户要求和著录项目里的发明人、客户联系人。交给助手时只使用这份暂存，不再查客户名单或案件。助手按文号把收件人写回这一行。核对完成后可以导出，在原表上加一列审核状态。邮箱那一列不读。</p>
     <div class="form-grid">
       <div v-if="workflowOptions.length === 0" class="span-all">
         <EmptyGuide text="还没有工作流。去工作流里看 PCT提醒。" action="去工作流" hash="/workflow" />
@@ -1835,7 +1843,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
       <p v-if="sheetNotice" class="hint">{{ sheetNotice }}</p>
       <div class="arbitrate-bar">
         <span v-if="gapWaves.length" v-hint="arbitrationHint">
-          <button type="button" class="ghost" :disabled="askingGap || !arbitrationReady" @click="askGaps()">交给助手仲裁空着的收件人和抄送{{ gapWaves.length > 1 ? `（分 ${gapWaves.length} 批）` : '' }}</button>
+          <button type="button" class="ghost" :disabled="askingGap || !arbitrationReady" @click="askGaps()">交给助手仲裁待确认的收件人和抄送{{ gapWaves.length > 1 ? `（分 ${gapWaves.length} 批）` : '' }}</button>
         </span>
         <button v-if="icPhase === 'done' && rows.length" type="button" class="ghost" @click="exportChecked">导出核对表</button>
         <button v-if="arbitrationBoard.length" type="button" class="ghost" @click="arbitrationOpen = true">仲裁结果 {{ arbitrationBoard.length }}</button>
@@ -1956,7 +1964,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
           <button type="button" class="ghost tiny" @click="exportArbitration">导出仲裁结果</button>
           <button type="button" aria-label="关闭" @click="arbitrationOpen = false">×</button>
         </header>
-        <p>收件人只在 IPR（技术联系人）、发明人和客户联系人里选。商务、登录人、密送登录人仍按默认追加，不在这张表里改。没有要求也没有技术联系人的行留空，拿不准的行没有填进表格。「信任AI」按写回的人提交，空行再按发文规则勾选；「直接全选」不采用写回的收件人。</p>
+        <p>普通收件人在 IPR（技术联系人）、发明人和客户联系人里选；客户明确要求仅发业务时，列出具体姓名，身份为「指定业务」。普通裁决仍默认追加商务；「指定业务」只使用点名人员，不扩成整个业务分组。登录人和密送规则保持原配置。没有要求也没有技术联系人的行留空，拿不准的行没有填进表格。「信任AI」按写回的人提交，空行再按发文规则勾选；「直接全选」不采用写回的收件人。</p>
         <div class="arbitration-scroll">
           <table class="grid">
             <thead>

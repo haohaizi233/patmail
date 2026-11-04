@@ -12,7 +12,6 @@ import { buildQueryXml } from '../query/query-xml'
 import { fallbackFields, formCheckDiff, formFieldKey, hiddenFormFields, mergeFormFields, overlayFieldOptions, pageSelectOptions } from '../query/form-page'
 import { activateOptionFallback, FILE_BASIC_OPTION_FIELDS, FILE_FLOW_OPTION_FIELDS, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberDictionaries, rememberFormFields, savedChoices, scopeSavedChoices, subscribeOptionFallback } from '../query/option-fallback'
 import { describeOptionPull, describeOptionUpdate, OPTION_PULL_FALLBACK, OPTION_PULL_UNCHANGED } from '../query/option-pull-notes'
-import FileTypePicker from './FileTypePicker.vue'
 import EmptyGuide from '../app/components/EmptyGuide.vue'
 import { peekHistoryList, readHistoryList, saveHistoryList } from '../query/history-list-cache'
 import { historyLabels } from '../query/history-labels'
@@ -119,7 +118,6 @@ const dictionaryNote = ref('')
 const downloadHint = ref('')
 const downloadSaving = ref(false)
 const checkingForm = ref(false)
-const showFileTree = ref(false)
 const fileTypeRoots = ref<string[]>([])
 const editingTemplate = ref(false)
 const editingCustomer = ref(false)
@@ -676,7 +674,6 @@ function restoreTemplate(): void {
   typedKeys.value = {}
   namePartsEdited.value = false
   nameParts.value = storedDownloadParts()
-  showFileTree.value = false
 }
 function dictionaryFor(key: string): { name: string; dictionary: NormalizedDictionary } | undefined {
   const flowKey = key === 'file_status' ? 'fileStatus' : key === 'flow_direction' ? 'caseDirection' : key === 'proc_status' ? 'procStatus'
@@ -717,8 +714,9 @@ const fileTypeMessage = ref('')
 const fileDropNote = ref('')
 const fileExpanded = ref<Record<string, boolean>>({})
 let fileTypeSerial = 0
-const selectedCaseTypeId = computed(() => formValue('case_type').trim())
-async function loadFileTypes(caseTypeId: string): Promise<void> {
+const selectedCaseTypeId = computed(() => effectiveCaseType())
+async function loadFileTypes(caseTypeId: string, force = false): Promise<void> {
+  caseTypeId = caseTypeId.trim() || CURRENT_ENVIRONMENT.caseTypeId
   const serial = ++fileTypeSerial
   fileTypeNodes.value = []
   fileTypeRoots.value = []
@@ -729,7 +727,7 @@ async function loadFileTypes(caseTypeId: string): Promise<void> {
     return
   }
   const response = await props.bridge.request({
-    type: MessageType.LoadDictionary, payload: { kind: 'fileType', force: false, caseTypeId }
+    type: MessageType.LoadDictionary, payload: { kind: 'fileType', force, caseTypeId }
   })
   if (serial !== fileTypeSerial) return
   if (response.type !== MessageType.DictionaryResult || !response.payload.ok) {
@@ -738,6 +736,10 @@ async function loadFileTypes(caseTypeId: string): Promise<void> {
     return
   }
   if (response.payload.data.kind !== 'fileType') return
+  if (!Array.isArray(response.payload.data.nodes) || !Array.isArray(response.payload.data.rootIds)) {
+    fileTypeMessage.value = '文件描述响应格式异常，请重新读取。'
+    return
+  }
   fileTypeNodes.value = response.payload.data.nodes
   fileTypeRoots.value = response.payload.data.rootIds
   if (response.payload.data.rootIds.length === 0) fileTypeMessage.value = '这个案件类型下面没有文件描述。'
@@ -1442,7 +1444,7 @@ async function checkAgainstPage(): Promise<void> {
     const [response, summary] = await Promise.all([
       props.bridge.request({ type: MessageType.ScanFileSearchForm }, ticket.signal),
       loadDictionaries(ticket.id, ticket.signal, true),
-      /^[0-9a-f-]{36}$/i.test(caseTypeId) ? loadFileTypes(caseTypeId) : Promise.resolve()
+      loadFileTypes(caseTypeId)
     ])
     if (!loads.isCurrent(ticket.id)) return
     if (response.type !== MessageType.FileSearchFormResult) {
@@ -1552,7 +1554,7 @@ watch(() => [props.userId, props.mode, props.origin] as const, () => {
   void ensureHotFields(false)
 }, { immediate: true })
 watch(() => props.seedToken, () => { applySeed() })
-watch(selectedCaseTypeId, id => { void loadFileTypes(id) }, { immediate: true })
+watch(() => [selectedCaseTypeId.value, props.userId, props.origin] as const, ([id]) => { void loadFileTypes(id) }, { immediate: true })
 watch(resolved, (next) => {
   const copy = { ...openExtra.value }
   let changed = false
@@ -1739,19 +1741,7 @@ watch(selectedCustomerId, () => {
             </div>
             <div v-else :class="cellClass(cell)">
               <span>{{ cell.label }}</span>
-              <span class="file-summary">
-                <em v-hint.clip="fileDisplay(cell.key) || '未选择'">{{ fileSummary(cell.key) }}</em>
-                <button type="button" class="text-button" @click="showFileTree = !showFileTree">{{ showFileTree ? '收起' : '修改' }}</button>
-                <button v-if="formValue(cell.key)" type="button" class="text-button" @click="setOverride(cell.key, '')">清除</button>
-                <button v-if="fileTruncated(cell.key)" type="button" class="text-button" @click="toggleFileExpand(cell.key)">{{ fileExpanded[cell.key] ? '收起全文' : '展开全部' }}</button>
-              </span>
-            </div>
-            <div v-if="cell.kind === 'files' && showFileTree" class="query-cell span-all">
-              <span></span>
-              <FileTypePicker v-if="fileTypeRoots.length" :nodes="fileTypeNodes" :root-ids="fileTypeRoots" :model-value="formValue('filetype')" :history-text="displayValues.filetype" @update:model-value="setOverride('filetype', $event)" />
-              <p v-else-if="!isQueryGuid(selectedCaseTypeId)" class="hint">先选定案件类型，才能挑选文件描述。</p>
-              <p v-else-if="fileTypeMessage" class="hint">{{ fileTypeMessage }}</p>
-              <p v-else class="hint">正在读取文件描述…</p>
+              <TreeOptionSelect :options="fileTypeNodes.map(node => ({ value: node.id, label: node.name, selectable: node.selectable, ...(node.parentId ? { parent: node.parentId } : {}) }))" :model-value="formValue(cell.key)" :multiple="true" :status="fileTypeRoots.length ? 'ready' : fileTypeMessage ? 'empty' : 'loading'" :empty-text="fileTypeMessage" @retry="loadFileTypes(selectedCaseTypeId, true)" @update:model-value="setOverride(cell.key, $event)" />
             </div>
           </template>
         </div>

@@ -48,6 +48,7 @@ export interface LimitMailSubmitItem {
   ccName?: string
   /** 这一行的收件人来自仲裁。提交时仍追加商务，不按发明人特例改收件人。 */
   arbitrated?: true
+  namedBusiness?: true
   /** 客户要求这封提醒不用发。不创建发文，也不改走全选联系人。 */
   hold?: 'skip'
   /** 发文映射里的默认发件人。草稿没有发件邮箱时写入这一条。 */
@@ -208,7 +209,7 @@ export function limitMailLetterLabel(item: { procId: string; procIds?: string[] 
 export function limitMailItems(input: {
   procIds: string[]
   rows: Array<{ procId: string; caseVolume: string; ctrlProc?: string }>
-  sheetRows: Array<{ ourVolume: string; customerVolume?: string; procLabel?: string; mailTypeId?: string; customerName?: string; contactName?: string; iprName?: string; leadName?: string; mailTo?: string; mailCc?: string; iprArbitrated?: true }>
+  sheetRows: Array<{ ourVolume: string; customerVolume?: string; procLabel?: string; mailTypeId?: string; customerName?: string; contactName?: string; iprName?: string; leadName?: string; mailTo?: string; mailCc?: string; iprArbitrated?: true; namedBusiness?: true }>
   mode: 'ipr' | 'lead'
   specials?: ReadonlySet<string>
   /** auto：有名字的行按写回的收件人提交，空着的行按发文规则勾选客户联系人兜底。all：不采用仲裁写回的结论，原表有名字的行照表格提交，空行和仲行按发文规则勾选。checked：空着的行按发文规则勾选。named：只提交有名字的行。 */
@@ -246,8 +247,9 @@ export function limitMailItems(input: {
     const source = named[0] ?? hitRows[0]
     const customerName = source?.customerName?.trim() ?? ''
     const iprName = lookupName(source?.iprName)
+    if (source?.iprArbitrated && iprName === '只发业务' && input.address !== 'all') return { ok: false, message: '仲裁未写明具体业务收件人，请重新仲裁；没有创建发文。' }
     const leadName = lookupName(source?.leadName)
-    const primaryName = input.mode === 'lead' ? leadName : iprName
+    const primaryName = source?.namedBusiness ? iprName : input.mode === 'lead' ? leadName : iprName
     /** 直接全选只是不采用仲裁写回的结论：原表有名字的行照表格提交；空行和仲裁写回的行清掉，按发文规则全勾。 */
     const checked = input.address === 'all'
       ? (!primaryName || source?.iprArbitrated === true)
@@ -256,7 +258,7 @@ export function limitMailItems(input: {
         : input.address === 'auto'
           ? !primaryName
           : false
-    if (input.mode === 'lead' && !leadName && !checked) return { ok: false, message: `文号 ${row.caseVolume} 表格里没有技术负责人，没有提交。` }
+    if (input.mode === 'lead' && !source?.namedBusiness && !leadName && !checked) return { ok: false, message: `文号 ${row.caseVolume} 表格里没有技术负责人，没有提交。` }
     if (input.address === 'auto' || input.address === 'all' ? (!primaryName && !checked) : (!iprName && !checked)) continue
     /** 直接全选里清掉仲裁结论的行：收件人、抄送、仲裁标记都置空。其他模式的兜底行保留表格里的抄送。 */
     const bare = input.address === 'all' && checked
@@ -275,6 +277,7 @@ export function limitMailItems(input: {
       ...(checked ? { contacts: 'all' as const } : {}),
       ...(!bare && ccName ? { ccName } : {}),
       ...(!bare && source?.iprArbitrated ? { arbitrated: true as const } : {}),
+      ...(!bare && source?.namedBusiness ? { namedBusiness: true as const } : {}),
       ...(!bare && iprName === '不用发' ? { hold: 'skip' as const } : {}),
       ...(senderId ? { senderId } : {}),
       ...(input.reviewerId && isQueryGuid(input.reviewerId) ? { reviewerId: input.reviewerId } : {})
@@ -298,7 +301,7 @@ export function limitMailItems(input: {
       grouped.set(`hold:${item.procId}`, { ...item, procIds: [item.procId], mailStyle: '1' as const })
       continue
     }
-    const key = [item.mailTypeId, item.customerName, item.mode, item.inventor, canonicalNameList(item.iprName), canonicalNameList(item.leadName), canonicalNameList(item.ccName), item.contacts].join('\u0001')
+    const key = [item.mailTypeId, item.customerName, item.mode, item.inventor, item.namedBusiness, canonicalNameList(item.iprName), canonicalNameList(item.leadName), canonicalNameList(item.ccName), item.contacts].join('\u0001')
     const found = grouped.get(key)
     if (found) found.procIds = [...limitMailProcIds(found), item.procId]
     else grouped.set(key, { ...item, procIds: [item.procId], mailStyle: '1' as const })
@@ -605,7 +608,8 @@ function hintRow(item: LimitMailSubmitItem): PctTaskRow {
     procLabel: '',
     mailTypeLabel: '',
     mailCc: item.ccName,
-    ...(item.arbitrated ? { iprArbitrated: true as const } : {})
+    ...(item.arbitrated ? { iprArbitrated: true as const } : {}),
+    ...(item.namedBusiness ? { namedBusiness: true as const } : {})
   }
 }
 
@@ -628,7 +632,7 @@ async function writeRecipients(transport: EasyTransport, mailId: string, item: L
   if (!contacts.ok) return { ok: false, message: '发文联系人没有读到，没有写入收件人，也没有提交。' }
   if (!contacts.data.complete) return { ok: false, message: retryCreatedDraft(contacts.data.message || '发文联系人没有读全，没有写入收件人，也没有提交。') }
   const sales = contacts.data.rows.filter(row => row.group === 'sales' && row.email.includes('@') && !/[();；]/.test(row.email))
-  if (!sales.length) return { ok: false, message: '发文页没有商务邮箱，没有提交。' }
+  if (!sales.length && !item.namedBusiness) return { ok: false, message: '发文页没有商务邮箱，没有提交。' }
   const existingTo = cellText(info.row, 'mail_to', true)
   const existingCc = cellText(info.row, 'mail_cc', true)
   if (existingTo === null || existingCc === null) return { ok: false, message: '发文草稿的收件人字段读不全，没有改地址。' }
@@ -665,7 +669,7 @@ async function writeRecipients(transport: EasyTransport, mailId: string, item: L
   const caution = plan.notes.find(note => /请认真核对/.test(note)) ?? ''
   const blocking = plan.notes.find(note => note !== caution)
   const missing = blocking || (!plan.to.includes('@') ? '收件人没有对上邮箱，没有提交。' : '')
-  const salesInCc = sales.every(row => plan.cc.toLowerCase().includes(row.email.trim().toLowerCase()))
+  const salesInCc = item.namedBusiness || sales.every(row => plan.cc.toLowerCase().includes(row.email.trim().toLowerCase()))
   if (missing || !plan.to.includes('@') || !salesInCc) {
     return { ok: false, message: missing || '商务没有写进抄送，没有提交。' }
   }
@@ -694,6 +698,7 @@ async function writeRecipients(transport: EasyTransport, mailId: string, item: L
     const head = caution || '收件人已按发文规则勾上客户联系人，抄送已含业务人员。'
     return { ok: true, note: `${head}${skippedRule}${finished}${senderNote}`, to: plan.to, cc: plan.cc }
   }
+  if (item.namedBusiness) return { ok: true, note: `仅写入指定业务人员：${item.iprName}。${finished}${senderNote}`, to: plan.to, cc: plan.cc }
   if (item.arbitrated && sheetDisplayName(item.iprName) === '只发业务') return { ok: true, note: `收件人和抄送只写了发文页上的业务人员。${finished}${senderNote}`, to: plan.to, cc: plan.cc }
   return { ok: true, note: `${item.mode === 'lead' ? '收件人已写入技术负责人，抄送已含 IPR 和商务。' : '收件人已写入 IPR，抄送已含商务。'}${finished}${senderNote}`, to: plan.to, cc: plan.cc }
 }

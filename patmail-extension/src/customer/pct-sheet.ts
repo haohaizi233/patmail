@@ -1,3 +1,5 @@
+import { matchMailTypePath } from './mail-type-path'
+import type { ProcedureMailTypeMapping } from '../mail/types'
 import { isPctTask } from './guards'
 import { isQueryGuid } from '../query/query-validator'
 import { resolvePctRuntime, type PctRuntimeConfig } from '../workflow/pct-config'
@@ -15,19 +17,23 @@ function cell(row: string[], index: number): string {
 export const NATIONAL_PROC_LABEL = 'PCT进国家阶段官方绝限'
 export const NATIONAL_OUR_TYPE = '提醒PCT申请进入国家案件（我方案号）'
 export const NATIONAL_CUSTOMER_TYPE = '提醒PCT申请进入国家案件（贵方案号）'
+export const DESIGN_OUR_TYPE = '提醒外观申请（我方案号）'
 export const DESIGN_CUSTOMER_TYPE = '提醒涉外外观申请（贵方案号）'
 
-/** 进国家绝限和提醒一样：有客户文号用贵方案号，没有客户文号用我方案号。外观只用贵方案号那一种。专案和普通提醒共用。 */
+/** 进国家绝限和提醒一样：有客户文号用贵方案号，没有客户文号用我方案号。外观同样按客户文号选择贵方或我方。专案和普通提醒共用。 */
 export function nationalTypeName(input: { ourVolume?: string; customerVolume?: string; procLabel?: string; letterKind?: PctTaskRow['letterKind'] }): string {
-  if (input.letterKind === 'design' || /外观/.test(input.procLabel ?? '')) return DESIGN_CUSTOMER_TYPE
+  if (input.letterKind === 'design' || ['提醒申请涉外外观', '提醒涉外外观申请'].includes(input.procLabel ?? '')) return input.customerVolume?.trim() ? DESIGN_CUSTOMER_TYPE : DESIGN_OUR_TYPE
   if (input.customerVolume?.trim()) return NATIONAL_CUSTOMER_TYPE
   return NATIONAL_OUR_TYPE
 }
 
-export function pctRowsFromTable(table: string[][], mailTypes: Array<{ id: string; name: string }> = [], config?: PctRuntimeConfig, sheetKind: 'remind' | 'national' = 'remind', carry: CarryMode = 'block'): { rows: PctTaskRow[]; notice: string } {
+export function pctRowsFromTable(table: string[][], mailTypes: Array<{ id: string; name: string }> = [], config?: PctRuntimeConfig, sheetKind: 'remind' | 'national' | 'design' = 'remind', carry: CarryMode = 'block'): { rows: PctTaskRow[]; notice: string } {
   const runtime = resolvePctRuntime(config)
   const header = (table[0] ?? []).map(item => item.trim())
-  const column = (name: string) => header.indexOf(name)
+  const column = (name: string, aliases: string[] = []) => {
+    for (const label of [name, ...aliases]) { const index = header.indexOf(label); if (index >= 0) return index }
+    return -1
+  }
   const our = column(runtime.columns.ourVolume)
   const proc = column(runtime.columns.procLabel)
   if (our < 0 || proc < 0) {
@@ -35,8 +41,8 @@ export function pctRowsFromTable(table: string[][], mailTypes: Array<{ id: strin
   }
   const customer = column(runtime.columns.customerVolume)
   const name = column(runtime.columns.customerName)
-  const contact = column(runtime.columns.contactName)
-  const ipr = column(runtime.columns.iprName)
+  const contact = column(runtime.columns.contactName, ['案件客户联系人', '客户联系人'])
+  const ipr = column(runtime.columns.iprName, ['案件客户联系人IPR', '案件客户联系人(IPR)', '客户联系人IPR'])
   const lead = runtime.columns.leadName ? column(runtime.columns.leadName) : -1
   const rows: PctTaskRow[] = []
   let skipped = 0
@@ -47,7 +53,7 @@ export function pctRowsFromTable(table: string[][], mailTypes: Array<{ id: strin
     const customerVolume = cell(source, customer)
     const procLabel = cell(source, proc)
     const physicalKey = normalizeCustomerName(cell(source, name)) || ''
-    const letterKind: PctTaskRow['letterKind'] = /外观/.test(procLabel) ? 'design' : sheetKind
+    const letterKind: PctTaskRow['letterKind'] = ['提醒申请涉外外观', '提醒涉外外观申请'].includes(procLabel) ? 'design' : procLabel === NATIONAL_PROC_LABEL ? 'national' : sheetKind
     const slot = letterKind === 'remind' ? pctVolumeSlot({ customerVolume, ourVolume }, runtime) : null
     if (letterKind === 'remind' ? !slot || !ourVolume : !ourVolume && !customerVolume) {
       skipped += 1
@@ -76,7 +82,7 @@ export function pctRowsFromTable(table: string[][], mailTypes: Array<{ id: strin
   }
   const carried = carryCustomerContacts(rows, carry)
   if (!carried.rows.length) return { rows: [], notice: skipped ? '表格里没有同时带我方文号、并能判断发文类型的行。' : '表格里没有数据行。' }
-  const other = sheetKind === 'remind' ? carried.rows.filter(row => row.procLabel && row.procLabel !== runtime.procLabel).length : 0
+  const other = sheetKind === 'remind' ? carried.rows.filter(row => row.letterKind === 'remind' && row.procLabel && row.procLabel !== runtime.procLabel).length : 0
   const notice = [
     `读到 ${carried.rows.length} 行。`,
     carried.filled
@@ -194,12 +200,22 @@ export function volumesOf(rows: PctTaskRow[]): string[] {
   return splitCaseVolumes(joinCaseVolumes(rows.map(row => row.ourVolume)))
 }
 
-export function applyPctMailTypes(rows: PctTaskRow[], mailTypes: Array<{ id: string; name: string }>, config?: PctRuntimeConfig): PctTaskRow[] {
+export function applyPctMailTypes(rows: PctTaskRow[], mailTypes: Array<{ id: string; name: string }>, config?: PctRuntimeConfig, custom: ProcedureMailTypeMapping[] = []): PctTaskRow[] {
   return rows.map(row => {
+    const customRows = custom.filter(item => item.procedure === row.procLabel)
+    if (customRows.length) {
+      const specific = customRows.filter(item => item.condition === (row.customerVolume.trim() ? 'customer' : 'our'))
+      const matches = specific.length ? specific : customRows.filter(item => item.condition === 'none')
+      const name = matches.length === 1 ? matches[0].mailTypeName : ''
+      const picked = name ? matchMailTypePath(mailTypes, name, matches[0].mailTypePath) : null
+      const { mailTypeId: _oldId, mailTypeRadioIndex: _oldRadio, ...clean } = row
+      return { ...clean, mailTypeLabel: name, ...(picked ? { mailTypeId: picked.id } : {}) }
+    }
     if (row.letterKind === 'national' || row.letterKind === 'design') {
       const name = nationalTypeName(row)
       const picked = matchMailTypeByName(mailTypes, name)
-      return { ...row, mailTypeLabel: picked?.name ?? name, ...(picked ? { mailTypeId: picked.id } : {}) }
+      const { mailTypeId: _oldId, mailTypeRadioIndex: _oldRadio, ...clean } = row
+      return { ...clean, mailTypeLabel: picked?.name ?? name, ...(picked ? { mailTypeId: picked.id } : {}) }
     }
     const picked = pctMailTypeFor(row, mailTypes, config)
     if (!picked) return row

@@ -123,12 +123,21 @@ export interface DefaultSender {
   label: string
 }
 
+export interface ProcedureMailTypeMapping {
+  id: string
+  procedure: string
+  condition: 'none' | 'customer' | 'our'
+  mailTypeName: string
+  mailTypePath?: string
+}
+
 export interface MailRuleBundle {
   version: 1
   revision: number
   ownerId: string
   policies: CustomerMailPolicy[]
   mappings: DescriptionMailTypeMapping[]
+  procedureMappings?: ProcedureMailTypeMapping[]
   recipients: CustomerRecipientTemplate[]
   signatures: OperatorSignature[]
   subject: SubjectRule

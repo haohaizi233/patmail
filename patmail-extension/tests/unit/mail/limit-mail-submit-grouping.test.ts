@@ -167,12 +167,8 @@ describe('limit mail submit', () => {
       mode: 'ipr',
       address: 'auto'
     })
-    expect(withheld.ok && withheld.items).toHaveLength(2)
-    expect(withheld.ok && withheld.items[0]?.hold).toBe('skip')
-    expect(withheld.ok && withheld.items[0]?.contacts).toBeUndefined()
-    expect(withheld.ok && withheld.items[1]?.iprName).toBe('只发业务')
-    expect(withheld.ok && withheld.items[1]?.contacts).toBeUndefined()
-    expect(withheld.ok && withheld.items[1]?.hold).toBeUndefined()
+    expect(withheld.ok).toBe(false)
+    expect(!withheld.ok && withheld.message).toContain('具体业务收件人')
     const current: WorkflowNode = { listId: list1, seq: 1, next: '9', nodeId: first, nodeCode: 'FIRST', nodeName: '启动', allowSkip: null, allowEdit: true, userType: '', parallel: false, needAllAudit: false, reviewers: [], reviewerFormat: 'structured' }
     expect(pickMailSubmitNodes([current]).ok).toBe(false)
     expect(buildMailSubmit({
