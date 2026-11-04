@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { buildOptionTree, searchOptionTree, type TreeOption } from '../../query/option-tree'
+import { buildOptionTree, searchOptionTree, toggleTreeSelection, type TreeOption } from '../../query/option-tree'
 import { menuBoxStyle, placeMenu, treeMenuWidth } from './theme-select'
 import TreeOptionNode from './TreeOptionNode.vue'
 
@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
   status?: 'loading' | 'ready' | 'empty' | 'partial' | 'invalid'
   emptyText?: string
   /** 多选（checkbox，带「全选」）或单选（radio，选中即收起）。对应原站 TreeUser 的 SelectType。 */
+  leavesOnly?: boolean
   multiple?: boolean
 }>(), { modelValue: '', disabled: false, multiple: true })
 const emit = defineEmits<{ 'update:modelValue': [value: string]; open: []; retry: [] }>()
@@ -100,7 +101,8 @@ function selectAll(): void {
   const next = new Set(selected.value)
   const ids = found.value ? found.value.visible : tree.value.byId.keys()
   for (const id of ids) {
-    if (tree.value.byId.has(id)) next.add(id)
+    const node = tree.value.byId.get(id)
+    if (node && node.selectable !== false && (!found.value || node.label.toLowerCase().includes(applied.value.trim().toLowerCase()))) next.add(id)
   }
   emit('update:modelValue', [...next].join(','))
 }
@@ -112,15 +114,13 @@ function confirm(): void {
 
 function toggle(id: string): void {
   if (!props.multiple) {
+    if (tree.value.byId.get(id)?.selectable === false || (props.leavesOnly && tree.value.byId.get(id)?.childIds.length)) return
     emit('update:modelValue', id)
     close()
     trigger.value?.focus()
     return
   }
-  const next = new Set(selected.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  emit('update:modelValue', [...next].join(','))
+  emit('update:modelValue', toggleTreeSelection(tree.value, selected.value, id).join(','))
 }
 
 function expand(id: string): void {
@@ -184,7 +184,7 @@ onBeforeUnmount(() => {
           <button type="button" class="theme-tree-query" @click="search">查询</button>
         </div>
         <div class="theme-tree-list">
-          <TreeOptionNode v-for="id in tree.roots" :key="id" :node-id="id" :by-id="tree.byId" :selected="selected" :expanded="expanded" :visible="found ? found.visible : null" :trail="[]" :multiple="multiple" :input-name="radioName" @toggle="toggle" @expand="expand" />
+          <TreeOptionNode v-for="id in tree.roots" :key="id" :node-id="id" :by-id="tree.byId" :selected="selected" :expanded="expanded" :visible="found ? found.visible : null" :trail="[]" :multiple="multiple" :leaves-only="leavesOnly" :input-name="radioName" @toggle="toggle" @expand="expand" />
           <p v-if="tree.roots.length === 0" class="theme-select-empty">没有可选的选项。原站没有返回这个下拉的数据。</p>
           <p v-else-if="found && found.visible.size === 0" class="theme-select-empty">没有匹配的选项。</p>
         </div>

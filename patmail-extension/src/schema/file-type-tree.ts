@@ -32,7 +32,7 @@ export function buildFileTypeTree(rows: unknown[]): BuiltFileTypeTree {
     const source = row as FileTypeSource
     const id = text(source.id)
     const name = text(source.name)
-    if (!isQueryGuid(id) || !name) {
+    if ((!isQueryGuid(id) && !(id.split('_').length === 2 && id.split('_').every(isQueryGuid))) || !name) {
       diagnostics.push('忽略了缺少 ID 或名称的文件描述节点。')
       continue
     }
@@ -43,7 +43,7 @@ export function buildFileTypeTree(rows: unknown[]): BuiltFileTypeTree {
     seen.add(id)
     const order = typeof source.seq === 'number' && Number.isFinite(source.seq) ? source.seq : nodes.length
     const treeType = text((source as { TreeType?: unknown }).TreeType)
-    nodes.push({ id, name, parentId: text(source.pid), order, childIds: [], ...(treeType ? { treeType } : {}) })
+    nodes.push({ id, name, parentId: text(source.pid), order, childIds: [], ...(treeType ? { treeType } : {}), ...(!isQueryGuid(id) ? { selectable: false } : {}) })
   }
   const byId = new Map(nodes.map(node => [node.id, node]))
   const roots: FileTypeNode[] = []
