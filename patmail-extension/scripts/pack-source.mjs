@@ -7,7 +7,8 @@ import { forbiddenDeliveryNames } from './delivery-guard.mjs'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const outputDir = join(root, 'test-results')
 mkdirSync(outputDir, { recursive: true })
-const output = join(outputDir, 'patmail-source.zip')
+// tar 参数一律用相对路径（cwd=root）：MSYS tar 会把带盘符的绝对路径当成远程主机名。
+const output = 'test-results/patmail-source.zip'
 const include = [
   'src',
   'tests',

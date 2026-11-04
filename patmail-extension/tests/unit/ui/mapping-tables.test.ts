@@ -1,10 +1,10 @@
-import { createApp, createVNode, nextTick, type App } from 'vue'
+import { createApp, createVNode, nextTick, type App, type Component } from 'vue'
 import { afterEach, expect, it, vi } from 'vitest'
 import DescriptionEditor from '../../../src/app/components/rules/DescriptionMailTypeEditor.vue'
 import ProcedureEditor from '../../../src/app/components/rules/ProcedureMailTypeMapping.vue'
 let app: App | undefined
 let host: HTMLDivElement
-function mount(component: typeof DescriptionEditor | typeof ProcedureEditor, props: Record<string, unknown>) {
+function mount(component: Component, props: Record<string, unknown>) {
   host = document.createElement('div'); document.body.append(host)
   app = createApp({ render: () => createVNode(component, props) }); app.directive('hint', {}); app.mount(host)
 }

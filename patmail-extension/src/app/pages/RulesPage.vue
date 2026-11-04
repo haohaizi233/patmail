@@ -3,16 +3,14 @@ import { importProcedureMappings } from '../../customer/procedure-mapping-import
 
 import { CURRENT_ENVIRONMENT } from '../../api/config'
 import { validProcedureMappings } from '../../customer/procedure-mapping'
-import { matchMailTypeByName } from '../../customer/mail-flow'
 import { matchMailTypePath } from '../../customer/mail-type-path'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import { computed, inject, ref, watch } from 'vue'
 import { plainClone } from '../../automation/snapshot'
-import { mergeImportedMappings, removeCustomerPolicy, upsertCustomerPolicy, upsertMapping } from '../../mail'
+import { mergeImportedMappings, upsertMapping } from '../../mail'
 import { readXlsxRows } from '../../customer/xlsx-table'
-import type { MailRuleBundle, ProcedureMailTypeMapping, SendMode } from '../../mail/types'
-import type { LimitMailStyle, QuerySurfaceId } from '../../customer/types'
+import type { MailRuleBundle, ProcedureMailTypeMapping } from '../../mail/types'
 import { isQueryGuid } from '../../query/query-validator'
 import { scopeFromConnection, type ExpectedAccountScope } from '../../shared/connection'
 import { MessageType, type MessageBridge } from '../../shared/message'
@@ -189,39 +187,6 @@ async function persist(mutate: (bundle: MailRuleBundle) => void): Promise<void> 
 
 function addresses(value: string): string[] {
   return value.split(/[\s,;]+/).map(item => item.trim()).filter(Boolean)
-}
-
-async function savePolicy(policy: { customerProfileId: string; querySurface: QuerySurfaceId | ''; sendMode: SendMode | ''; limitMailStyle: LimitMailStyle | ''; remark: string; replaceKey: string }): Promise<void> {
-  if (!draft.value) return
-  if (!policy.customerProfileId) { message.value = '请选择客户。'; return }
-  if (policy.querySurface !== 'file' && policy.querySurface !== 'limit') {
-    message.value = '请选择查询方式。'
-    return
-  }
-  if (policy.querySurface === 'file' && policy.sendMode !== 'merge_by_customer_description' && policy.sendMode !== 'single_file') {
-    message.value = '请选择这个查询方式下的发文方式。'
-    return
-  }
-  if (policy.querySurface === 'limit' && policy.limitMailStyle !== '1' && policy.limitMailStyle !== '2' && policy.limitMailStyle !== '3') {
-    message.value = '请选择这个查询方式下的发文方式。'
-    return
-  }
-  const result = upsertCustomerPolicy(draft.value.policies, {
-    customerProfileId: policy.customerProfileId,
-    querySurface: policy.querySurface,
-    sendMode: policy.sendMode,
-    limitMailStyle: policy.limitMailStyle,
-    remark: policy.remark,
-    replaceKey: policy.replaceKey
-  })
-  if (!result.ok) { message.value = result.message; return }
-  await persist(bundle => { bundle.policies = result.policies })
-}
-
-async function removePolicy(target: { customerProfileId: string; querySurface: QuerySurfaceId; remark: string }): Promise<void> {
-  await persist(bundle => {
-    bundle.policies = removeCustomerPolicy(bundle.policies, target)
-  })
 }
 
 async function saveMapping(input: { description: string; mailTypeId: string; mailTypeName: string }): Promise<void> {

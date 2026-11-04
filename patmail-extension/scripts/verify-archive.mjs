@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { forbiddenDeliveryNames } from './delivery-guard.mjs'
 
@@ -19,7 +19,8 @@ function officialKind(name) {
 }
 
 function listArchive(archive) {
-  const listed = spawnSync(process.env.TAR || 'tar', ['-tf', archive], { encoding: 'utf8' })
+  // tar 参数用文件名、cwd 用所在目录：MSYS tar 会把带盘符的绝对路径当成远程主机名。
+  const listed = spawnSync(process.env.TAR || 'tar', ['-tf', basename(archive)], { cwd: dirname(archive), encoding: 'utf8' })
   if (listed.status !== 0) {
     console.error('压缩包无法列出内容。')
     process.exit(listed.status ?? 1)

@@ -14,7 +14,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 - [季华实验室代理机构管理平台：附件上传与台账更新](external-platforms/jihualab.md)
 - [季华平台附件分类与关联字段](external-platforms/jihualab-attachments.md)
 
-按「入口 + Call」去重后，本索引共 **389** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
+按「入口 + Call」去重后，本索引共 **390** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
 
 表里的「骨架」链到 14–43 的响应字段，「01」到「13」链到页面怎么读这些字段。两边都有的 Call，字段骨架看抓包文档，页面含义看专题文档。
 
@@ -67,7 +67,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [42-案件页读取.md](42-案件页读取.md) | 案件页 CaseManage.aspx 的权限、读取和留痕。9 个 Call |
 | [43-首页与待办.md](43-首页与待办.md) | 首页与流程待办页 ProcessNew.aspx。6 个 Call |
 
-14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。下面的入口表才是去重后的 389。
+14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。下面的入口表才是去重后的 390。
 
 ## 抓包里需要单独看的几条
 
@@ -98,7 +98,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [Bill.ashx](#billashx) | 23 |
 | [PatentAction.ashx](#patentactionashx) | 22 |
 | [Report.ashx](#reportashx) | 20 |
-| [BaseInfo.ashx](#baseinfoashx) | 19 |
+| [BaseInfo.ashx](#baseinfoashx) | 20 |
 | [Notice.ashx](#noticeashx) | 12 |
 | [Login.ashx](#loginashx) | 9 |
 | [Eflow.ashx](#eflowashx) | 6 |
@@ -121,7 +121,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [Rule.ashx](#ruleashx) | 1 |
 | [TNotice.ashx](#tnoticeashx) | 1 |
 | [UploadFile.aspx](#uploadfileaspx) | 1 |
-| 合计 | 389 |
+| 合计 | 390 |
 
 ## 全部接口
 

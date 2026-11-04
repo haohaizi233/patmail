@@ -17,7 +17,7 @@ import { peekHistoryList, readHistoryList, saveHistoryList } from '../query/hist
 import { historyLabels } from '../query/history-labels'
 import { confirmDialog } from '../app/dialog'
 import { TemplateLoadCoordinator } from '../query/load-coordinator'
-import { optionsForCaseType, looksLikeInternalIds, normalizeFileDescriptionValue, previewFileDescription, resolveFileDescriptionDisplay, resolveInternalIdDisplay, resolveMultiLabel } from '../schema'
+import { optionsForCaseType, normalizeFileDescriptionValue, resolveMultiLabel } from '../schema'
 import type { FileTypeNode } from '../api/dictionaries'
 import type { QueryTemplate } from '../query/query-types'
 import { isQueryGuid } from '../query/query-validator'
@@ -485,74 +485,9 @@ function checked(key: string): boolean {
   const value = formValue(key).trim().toLowerCase()
   return value === 'on' || value === 'true' || value === '1' || value === '是'
 }
-/** 显示文案不再自己截断：一行摆得下就完整显示，放不下由 CSS 省略号或悬浮提示兜底。 */
 /** 原站文件查询页的案件类型下拉默认选中专利，查询提交空案件类型时也按默认案件类型查。案件状态下拉这类按案件类型收窄的选项同口径：没选案件类型就按当前环境默认的专利收。 */
 function effectiveCaseType(): string {
   return formValue('case_type') || CURRENT_ENVIRONMENT.caseTypeId
-}
-function storedLabel(key: string, value: string): string {
-  const page = PAGE_OPTIONS[key]?.find(item => item.value === value)
-  if (page) return page.label
-  const dictionary = dictionaryFor(key)
-  if (dictionary) {
-    const options = dictionary.dictionary.options[0]?.metadata?.caseTypeId
-      ? optionsForCaseType(dictionary.name, dictionary.dictionary.options, effectiveCaseType())
-      : dictionary.dictionary.options
-    const display = resolveInternalIdDisplay(value, options, key === 'filetype')
-    if (!display.unresolved) return display.text
-  }
-  if (key === 'filetype') {
-    return resolveFileDescriptionDisplay({
-      savedIds: value,
-      descriptions: fileTypeNodes.value,
-      historyText: displayValues.value.filetype
-    }).text
-  }
-  if (displayValues.value[key] && !looksLikeInternalIds(displayValues.value[key])) return displayValues.value[key]
-  const ids = value.split(',').map(item => item.trim()).filter(Boolean)
-  if (ids.length > 0 && ids.every(part => isQueryGuid(part))) return ids.length > 1 ? `已选 ${ids.length} 项` : '已选择'
-  if (looksLikeInternalIds(value)) return `已选 ${ids.length || 1} 项`
-  return value
-}
-function namedShown(key: string): string {
-  // 勾选出来的内部 ID 永远换成人名显示，不能把 GUID 串摆在输入框里。
-  if (temporaryActive.value[key] && typedKeys.value[key]) return temporary.value[key] ?? ''
-  const value = formValue(key)
-  return value ? storedLabel(key, value) : ''
-}
-/** 文件描述摘要。刚勾完还没落模板的值也要换成人名，不能把 GUID 串直接摆出来。 */
-function fileDisplay(key: string): string {
-  const value = formValue(key)
-  if (!value) return ''
-  return resolveFileDescriptionDisplay({
-    savedIds: value,
-    descriptions: fileTypeNodes.value,
-    historyText: displayValues.value.filetype
-  }).text
-}
-function fileSummary(key: string): string {
-  const value = formValue(key)
-  if (!value) return '未选择'
-  const display = resolveFileDescriptionDisplay({
-    savedIds: value,
-    descriptions: fileTypeNodes.value,
-    historyText: displayValues.value.filetype
-  })
-  const preview = previewFileDescription(display)
-  if (!preview.short || preview.short === '未设置') return '未选择'
-  return fileExpanded.value[key] ? display.text : preview.short
-}
-function fileTruncated(key: string): boolean {
-  const value = formValue(key)
-  if (!value) return false
-  return previewFileDescription(resolveFileDescriptionDisplay({
-    savedIds: value,
-    descriptions: fileTypeNodes.value,
-    historyText: displayValues.value.filetype
-  })).truncated
-}
-function toggleFileExpand(key: string): void {
-  fileExpanded.value = { ...fileExpanded.value, [key]: !fileExpanded.value[key] }
 }
 /** 模板和手填的文件描述可能混进名字、空段或中文逗号：查询前换回内部 ID，换不了的点名提示，不再整条拒绝。 */
 function cleanFileDescription(fields: Record<string, string>): void {
@@ -712,7 +647,6 @@ function liveScope(): ExpectedAccountScope | null {
 const fileTypeMessage = ref('')
 /** 模板里换不回内部 ID 的文件描述项，套用和查询时点名提示，不整条拒绝查询。 */
 const fileDropNote = ref('')
-const fileExpanded = ref<Record<string, boolean>>({})
 let fileTypeSerial = 0
 const selectedCaseTypeId = computed(() => effectiveCaseType())
 async function loadFileTypes(caseTypeId: string, force = false): Promise<void> {
@@ -861,7 +795,6 @@ function resetBase(): void {
   baseFields.value = {}
   baseName.value = ''
   fileDropNote.value = ''
-  fileExpanded.value = {}
   collapsedByUser.value = {}
   restoreTemplate()
 }
@@ -1135,7 +1068,8 @@ async function deleteSelectedSite(): Promise<void> {
     let unlinked = true
     if (scope) {
       for (const local of localTemplates.value.filter(item => item.sourceQueryId === queryId)) {
-        const { sourceQueryId: _removed, ...rest } = local
+        const rest = { ...local }
+        delete rest.sourceQueryId
         const saved = await workspace.call({
           action: 'saveQueryTemplate',
           expectedScope: scope,

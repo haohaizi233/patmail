@@ -1,7 +1,6 @@
 import { mailTypePath, matchMailTypePath, type MailTypePathNode } from './mail-type-path'
 import type { ProcedureMailTypeMapping } from '../mail/types'
 import type { TreeOption } from '../query/option-tree'
-import { matchMailTypeByName } from './mail-flow'
 import { isProcedureMapping, PROCEDURE_MAIL_MAPPINGS, validProcedureMappings } from './procedure-mapping'
 
 export function procedureConditionLabel(condition: ProcedureMailTypeMapping['condition']): string {
