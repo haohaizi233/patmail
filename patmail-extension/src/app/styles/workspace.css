@@ -526,3 +526,6 @@
   .docs-tree { width: 170px; }
   .docs-body { min-width: 0; padding: 14px; }
 }
+
+.mapping-search { width: min(100%, 460px); margin: 10px 0; height: 36px; }
+.description-picker { display: block; width: 100%; }
