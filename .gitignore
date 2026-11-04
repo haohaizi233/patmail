@@ -42,3 +42,9 @@ __*.mjs
 
 # Vite 构建缓存
 .vite/
+
+# 助手的项目工作日志/记忆目录（本机工作数据），不入仓
+.workbuddy/
+
+# JVM 崩溃日志（hs_err_pid*.log），排查用完即弃，不入仓
+hs_err_pid*.log
