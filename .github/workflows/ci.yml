@@ -116,7 +116,7 @@ jobs:
         with:
           name: extension-dist
           path: patmail-extension/dist
-          retention-days: 14
+          retention-days: 1
       - name: 上传校验报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -142,10 +142,15 @@ jobs:
       - name: 安装 Chromium（锁定 playwright 版本对应浏览器）
         run: npx playwright install --with-deps chromium
       - name: 下载构建产物
+        id: dist-artifact
+        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: extension-dist
           path: patmail-extension/dist
+      - name: 构建产物缺失时本地构建兜底（artifact 上传失败不再连坐）
+        if: steps.dist-artifact.outcome != 'success'
+        run: node scripts/ci-check.mjs --steps build
       - name: E2E Smoke（扩展启动 / EASY 绑定 / 文件查询 / 期限查询）
         run: node scripts/run-e2e.mjs smoke
       - name: 上传 E2E 报告与失败证据
@@ -172,6 +177,7 @@ jobs:
         with:
           node-version: 22
       - name: 汇总各 Job 报告
+        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: report-*
