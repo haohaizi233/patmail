@@ -27,6 +27,8 @@ export interface PctTaskRow {
   sheetPrevCustomer?: string
   /** 处理细节里裁出来的收件人。页面标（仲），发给原站时仍用原名。不用发和发明人只显示，不写入收件人。 */
   iprArbitrated?: true
+  /** 仲裁明确要求仅发给 iprName 中点名的业务人员。 */
+  namedBusiness?: true
   /** 提醒申请 PCT、进国家，或涉外外观。没写时按提醒申请 PCT。 */
   letterKind?: 'remind' | 'national' | 'design'
   /** 这一行 IPR 是空的。处理细节或案件要求里摘下来的一句。 */

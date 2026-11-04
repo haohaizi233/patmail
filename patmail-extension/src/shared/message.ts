@@ -191,7 +191,7 @@ export type ContentRequest =
   | Request<'CANCEL_FILE_SEARCH'> | Request<'CANCEL_LIMIT_MONITOR'> | Response<'SEARCH_FILES', { query: FileSearchQuery; continuation?: { querySessionId: string }; timeoutMs?: number; batch?: true }>
   | Response<'SEARCH_LIMIT_MONITOR', { query: LimitMonitorQuery; timeoutMs?: number }>
   | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number; batch?: true }>
-  | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
+  | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; namedBusiness?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
   | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true; taskId?: string; saveAsNew?: true; browserTarget?: string; deduplicate?: true; resolvedNames?: Record<string, string>; caseScopes?: Record<string, string> }>
@@ -663,18 +663,19 @@ function isAccountReviewerResult(value: unknown): value is ApiResult<AccountRevi
 function isLimitMailSubmitItem(value: unknown): boolean {
   if (!isRecord(value)) return false
   const keys = Object.keys(value)
-  const allowed = ['procId', 'procIds', 'mailTypeId', 'mailStyle', 'mailId', 'mode', 'inventor', 'customerName', 'contactName', 'iprName', 'leadName', 'contacts', 'ccName', 'arbitrated', 'hold', 'senderId', 'reviewerId']
+  const allowed = ['procId', 'procIds', 'mailTypeId', 'mailStyle', 'mailId', 'mode', 'inventor', 'customerName', 'contactName', 'iprName', 'leadName', 'contacts', 'ccName', 'arbitrated', 'namedBusiness', 'hold', 'senderId', 'reviewerId']
   if (!keys.every(key => allowed.includes(key))) return false
   if (!keys.includes('mode') || !keys.includes('customerName') || !keys.includes('contactName') || !keys.includes('iprName') || !keys.includes('leadName')) return false
   if (value.mode !== 'ipr' && value.mode !== 'lead') return false
   if (value.inventor !== undefined && value.inventor !== true && value.inventor !== false) return false
   if (value.contacts !== undefined && value.contacts !== 'all') return false
+  if (value.namedBusiness !== undefined && (value.namedBusiness !== true || value.arbitrated !== true || value.contacts === 'all')) return false
   if (value.arbitrated !== undefined && value.arbitrated !== true) return false
   if (value.hold !== undefined && value.hold !== 'skip') return false
   if (!isShortText(value.customerName, 120) || !isShortText(value.contactName, 80) || !isShortText(value.iprName, 200) || !isShortText(value.leadName, 80)) return false
   if (value.ccName !== undefined && !isShortText(value.ccName, 200)) return false
   if (value.contacts !== 'all' && !value.iprName.trim()) return false
-  if (value.contacts !== 'all' && value.mode === 'lead' && !value.leadName.trim()) return false
+  if (value.contacts !== 'all' && !value.namedBusiness && value.mode === 'lead' && !value.leadName.trim()) return false
   if (!isQueryGuid(String(value.procId)) || !isQueryGuid(String(value.mailTypeId)) || (value.mailStyle !== '1' && value.mailStyle !== '2')) return false
   if (value.mailId !== undefined && !isQueryGuid(String(value.mailId))) return false
   if (value.senderId !== undefined && !isQueryGuid(String(value.senderId))) return false
