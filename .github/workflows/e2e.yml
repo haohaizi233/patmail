@@ -2,6 +2,9 @@
 # 覆盖：完整测试产物、全量浏览器回归、下载故障注入与续传、旧桥接协议兼容、覆盖率、构建可复现性。
 name: E2E Full
 
+env:
+  SME_SNAPSHOT_STUB: "1"
+
 on:
   push:
     branches: [main]
@@ -36,9 +39,13 @@ jobs:
           retention-days: 1
 
   e2e-full:
-    name: E2E Full（下载 / 取消 / 续传 / 分页 / 故障注入）
+    name: E2E Full (${{ matrix.group }})
     needs: [build]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [full-functional, full-lifetime]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
@@ -59,13 +66,13 @@ jobs:
         if: steps.dist-artifact.outcome != 'success'
         run: node scripts/ci-check.mjs --steps build
       - name: 执行 Full E2E
-        run: node scripts/run-e2e.mjs full
+        run: node scripts/run-e2e.mjs ${{ matrix.group }}
       - name: 上传报告与失败证据
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         continue-on-error: true
         with:
-          name: report-e2e-full
+          name: report-e2e-${{ matrix.group }}
           path: |
             patmail-extension/test-results/ci
             patmail-extension/test-results/junit

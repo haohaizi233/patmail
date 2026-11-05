@@ -4,6 +4,16 @@
 每个脚本 = 独立进程 + 独立扩展副本（`tests/e2e/support/paths.mjs` 的 `mkdtemp`）+ 动态端口，
 串行执行互不干扰；EASY 业务 Origin 全量由 `tests/e2e/support/easy-mock.mjs` 路由拦截。
 
+CI 的 `e2e-full` 使用两片 matrix，在独立 runner 上并行，片内仍串行：
+
+- `full-lifetime`：仅 `native-stream-lifetime`，保留跨五分钟边界的真实下载验证。
+- `full-functional`：`full` 中其余全部场景，直接从完整列表派生，新增场景自动归入此片。
+
+`fail-fast: false` 保证其中一片失败后另一片仍完成取证。每片上传独立的 `report-e2e-<group>`，JSON 文件名也包含分组名，合并报告时互不覆盖；`ci-report.mjs` 汇总两片，Full Gate 要求整个 matrix 成功。旧桥接组继续独立运行，不参与分片。
+本地 `pnpm test:e2e:full` 保持原来的完整串行入口；也可用 `node scripts/run-e2e.mjs full-functional` 或 `full-lifetime` 单跑一片。
+
+切片依据：2026-11-04 的运行 `41814222923` 中，full 共约 617 秒，生命周期长测占 362.5 秒，其余约 255 秒。两片理想测试关键路径约 363 秒，实际还取决于 runner 排队、依赖安装和构建产物下载或重建耗时。
+
 ## 1. 分组
 
 | 组 | 入口 | 场景 | 用途 |

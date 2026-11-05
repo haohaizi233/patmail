@@ -3,7 +3,7 @@
  * E2E 分组执行器（PR Smoke / Full E2E / Legacy Compatibility）。
  *
  * 每个 *.e2e.mjs 都是独立进程、独立扩展副本（tests/e2e/support/paths.mjs 用 mkdtemp 隔离
- * dist 与下载目录），端口全部走 listen(0) 动态分配，因此串行执行即可保证互不干扰。
+ * dist 与下载目录），端口全部走 listen(0) 动态分配。CI 的 full 两片在独立 runner 并行，片内串行。
  *
  * 分组（详见 docs/ci/e2e-matrix.md）：
  *   smoke  = 扩展启动 + Service Worker + EASY 绑定 + 文件查询 + 期限查询（PR 快速门禁）
@@ -11,7 +11,7 @@
  *            + 原生下载 / ZIP / 取消 / 续传 / 分页 / 故障注入等完整场景
  *   legacy = 旧 Python 桥接下载协议兼容（127.0.0.1:42843）+ 桥接单元测试
  *
- * 用法：node scripts/run-e2e.mjs [smoke|full|legacy|all|<suite 名>] [--bail]
+ * 用法：node scripts/run-e2e.mjs [smoke|full|full-functional|full-lifetime|legacy|all|<suite 名>] [--bail]
  * 产出：test-results/ci/e2e-<group>.json
  */
 import { spawnSync } from 'node:child_process'
@@ -66,6 +66,9 @@ const GROUPS = {
   ],
   legacy: ['stream-download', 'durable-download', 'stream-bridge-unittest'],
 }
+// 长测需要真实等待六分钟；单独一片，其余从 full 派生，新增场景自动进入功能片。
+GROUPS['full-lifetime'] = ['native-stream-lifetime']
+GROUPS['full-functional'] = GROUPS.full.filter(name => !GROUPS['full-lifetime'].includes(name))
 
 const args = process.argv.slice(2)
 const bail = args.includes('--bail')

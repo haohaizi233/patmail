@@ -85,7 +85,7 @@ const testRow = level => {
 }
 
 const e2eReport = () => {
-  const groups = ['smoke', 'full', 'legacy', 'all']
+  const groups = ['smoke', 'full', 'full-functional', 'full-lifetime', 'legacy', 'all']
     .map(group => readJson(join(reportDir, `e2e-${group}.json`)))
     .filter(Boolean)
   const suites = groups.flatMap(item => item.suites ?? [])
