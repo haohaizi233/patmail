@@ -14,12 +14,17 @@
  * 用法：pnpm release:check [--tag vX.Y.Z]（tag 缺省取 GITHUB_REF_NAME）
  * 产出：test-results/ci/release-report.json
  */
-import { execSync } from 'node:child_process'
+import { execSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
+const checked = spawnSync(process.execPath, [join(root, 'scripts', 'verify-dist.mjs'), '--delivery'], {
+  cwd: root,
+  stdio: 'inherit',
+})
+if (checked.status !== 0) process.exit(checked.status ?? 1)
 const reportDir = join(root, 'test-results', 'ci')
 const args = process.argv.slice(2)
 const tagIndex = args.indexOf('--tag')

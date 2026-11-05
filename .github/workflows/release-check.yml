@@ -2,6 +2,10 @@
 # 明确不做：Chrome Web Store 发布、CRX 签名、访问/轮换签名私钥（历史 dist.pem 只作风险登记）。
 name: Release Check
 
+# 发布校验必须提供真实客户快照，不能使用 CI 的空占位名单。
+env:
+  SME_SNAPSHOT_STUB: "0"
+
 on:
   workflow_dispatch:
   push:

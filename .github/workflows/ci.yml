@@ -7,6 +7,9 @@
 # 权限最小化：只读 contents；不接触任何 Secret；并发取消只作用于同分支/同 PR。
 name: CI
 
+env:
+  SME_SNAPSHOT_STUB: "1"
+
 on:
   pull_request:
   push:

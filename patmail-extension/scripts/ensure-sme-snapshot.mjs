@@ -5,7 +5,7 @@
  * 真实快照由 scripts/pull-sme-customers.py 从备份数据库生成（含公司名/联系人等敏感数据，不入仓），
  * 干净检出（如 GitHub Actions）没有这份文件，构建产物会缺 manifest 声明的 web_accessible_resources。
  * 文件缺失时：
- *   - GitHub Actions（GITHUB_ACTIONS）或显式 SME_SNAPSHOT_STUB=1 → 写一份确定性的空占位快照，
+ *   - 显式 SME_SNAPSHOT_STUB=1 → 写一份确定性的空占位快照，
  *     让构建与 verify:manifest / verify:dist 在无数据环境下能跑通；
  *   - 其他情况 → 直接报错，避免把没有客户名单的构建误当成正式交付。
  *
@@ -26,7 +26,7 @@ const targets = [
   join(root, 'src', 'assets', 'sme-customers.json'),
 ]
 
-const stubAllowed = process.env.GITHUB_ACTIONS === 'true' || process.env.SME_SNAPSHOT_STUB === '1'
+const stubAllowed = process.env.SME_SNAPSHOT_STUB === '1'
 
 if (existsSync(targets[0])) {
   console.log('中小客户快照已存在，直接复用（内容不会被覆盖）。')

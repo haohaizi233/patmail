@@ -14,6 +14,13 @@ if (!existsSync(dist)) {
   process.exit(1)
 }
 
+// 交付入口始终严格校验，显式调试豁免也不能放行空名单。
+const checked = spawnSync(process.execPath, [join(root, 'scripts', 'verify-dist.mjs'), '--delivery'], {
+  cwd: root,
+  stdio: 'inherit',
+})
+if (checked.status !== 0) process.exit(checked.status ?? 1)
+
 function walk(directory, base) {
   const names = []
   for (const name of readdirSync(directory)) {

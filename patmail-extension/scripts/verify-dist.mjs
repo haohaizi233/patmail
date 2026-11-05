@@ -13,7 +13,7 @@
  *   8. 浏览器能否加载由 E2E Smoke（tests/e2e/extension.e2e.mjs）真实覆盖，这里保证加载前提成立。
  *
  * 同时产出 SHA-256 校验清单，供发布追溯使用。
- * 用法：pnpm verify:dist
+ * 用法：pnpm verify:dist；node scripts/verify-dist.mjs --delivery 强制交付校验（禁止占位豁免）
  * 产出：test-results/ci/dist-report.json、test-results/ci/artifact-manifest.json
  */
 import { createHash } from 'node:crypto'
@@ -139,7 +139,7 @@ if (existsSync(smeSnapshotPath)) {
     if (isStub) {
       const message =
         'assets/sme-customers.json 是占位快照（不含真实客户名单），不可交付：正式交付前在有数据库权限的机器上跑 scripts/pull-sme-customers.py 后重新构建'
-      if (process.env.GITHUB_ACTIONS === 'true' || process.env.SME_SNAPSHOT_STUB === '1') note(`⚠ ${message}`)
+      if (!process.argv.includes('--delivery') && process.env.SME_SNAPSHOT_STUB === '1') note(`⚠ ${message}`)
       else fail(message)
     } else if (Array.isArray(snapshot.customers)) {
       note(`中小客户快照含 ${snapshot.customers.length} 条客户记录（takenAt ${snapshot.takenAt ?? '未知'}）`)

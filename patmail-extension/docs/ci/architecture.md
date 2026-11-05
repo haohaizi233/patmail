@@ -78,6 +78,9 @@ patmail-extension/test-results/
 
 `test-results/` 由 `.gitignore`（仓库根与 patmail-extension）排除，不进入提交。
 
+普通 CI / E2E 显式设置 `SME_SNAPSHOT_STUB=1`，允许无客户数据的检出生成、校验空占位快照。`GITHUB_ACTIONS` 本身不提供豁免。
+Release Check 设置 `SME_SNAPSHOT_STUB=0`，需要先提供真实客户快照；`pack:delivery` 和 `release:check` 始终调用 `verify-dist.mjs --delivery`，即使环境设置了占位豁免，也拒绝空名单。
+
 ## 7. 报告口径（Phase 10）
 
 `summary.md` 固定包含：Commit、Branch、Node、pnpm、Chromium、Typecheck、Lint、Unit、Integration、Regression、E2E、Coverage、Build、Security、Artifacts、Duration。
