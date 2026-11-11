@@ -1,7 +1,7 @@
 import { fileMailAddresses, type FileMailConfig } from './file-mail-config'
 import { retryCreatedDraft, transientEasyFailure, type EasyTransport } from '../api/transport'
 import { isRecord } from '../api/response-guards'
-import { buildMailCustomerParams, readMailCustomer, readMailInfo, readSaveMailInfo, SAVE_KEYS, saveParams, signatureParams } from '../mail/easy/contracts'
+import { buildMailCustomerParams, listParams, readTableRows, readMailCustomer, readMailInfo, readSaveMailInfo, SAVE_KEYS, saveParams, signatureParams } from '../mail/easy/contracts'
 import { mailBccToSave } from '../mail/easy/bcc'
 import { loadMailContactText } from '../mail/easy/mail-contacts'
 import { operatorSignatureHtml, readSignatureHtml } from '../mail/easy/signature-read'
@@ -425,6 +425,26 @@ function mailInfoParams(mailId: string): URLSearchParams {
   return params
 }
 
+/** 恢复草稿前核对原站完整附件集合，防止改单封后沿用旧合并草稿。只读，不修改附件。 */
+async function reusedFilesMatch(transport: EasyTransport, mailId: string, expected: string[]): Promise<boolean> {
+  const actual: string[] = []
+  for (let page = 1; page <= 21; page += 1) {
+    const loaded = await transport.post('getMailFile', listParams('GetMailFile', mailId, page))
+    if (!loaded.ok) return false
+    const parsed = readTableRows(loaded.data, 'file_id', 'file_name')
+    if (parsed.state !== 'known') return false
+    actual.push(...parsed.rows.map(row => row.id.toLowerCase()))
+    if (actual.length > expected.length || (parsed.total !== null && parsed.total > expected.length)) return false
+    const complete = parsed.total !== null ? actual.length === parsed.total : parsed.rows.length < 5
+    if (complete) {
+      const wanted = [...expected].map(id => id.toLowerCase()).sort()
+      return actual.length === wanted.length && actual.sort().every((id, i) => id === wanted[i])
+    }
+    if (!parsed.rows.length) return false
+  }
+  return false
+}
+
 async function submitOne(transport: EasyTransport, item: FileManageSubmitItem): Promise<FileManageSubmitResult[]> {
   let mailId = item.mailId ?? ''
   if (item.recall && mailId) {
@@ -432,6 +452,9 @@ async function submitOne(transport: EasyTransport, item: FileManageSubmitItem): 
     if (gate === 'unread') return spread(item, { fileId: item.fileId, mailId, state: 'unknown', message: '发文状态没有读到，没有再创建。' })
     if (gate === 'pending') return spread(item, { fileId: item.fileId, mailId, state: 'failed', message: '这封还在审核里，没有再创建。' })
     mailId = ''
+  }
+  if (mailId && !await reusedFilesMatch(transport, mailId, fileIdsOf(item))) {
+    return spread(item, { fileId: item.fileId, mailId, state: 'created', message: '已有草稿的附件与本次选择不一致或未能完整核对，没有写入或提交。请先到 EASY 核对原草稿。' })
   }
   if (!mailId) {
     const params = buildMailCustomerParams(previewOf(item))
