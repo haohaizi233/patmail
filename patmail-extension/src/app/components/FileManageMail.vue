@@ -256,7 +256,6 @@ function rebuild(files: FileManageFile[]): void {
     mailStyle: profile.fileMailStyle === 'single_file' ? 'single_file' : 'merge_by_customer_description',
     files,
     mappings: props.rules?.mappings ?? [],
-    mailTypeOverride: profile.fileMailConfig?.mailType,
     subject: profile.fileMailConfig?.title ? { ...(props.rules?.subject ?? { countInjection: false, anchor: '', missingAnchor: 'keep' as const, version: 1 }), template: profile.fileMailConfig.title } : props.rules?.subject ?? null,
     hasSender: Boolean(pickedSender.value),
     hasReviewer: Boolean(reviewer.value),

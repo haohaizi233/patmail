@@ -32,15 +32,17 @@ function mapping(text: string, mailTypeId: string): DescriptionMailTypeMapping {
 }
 
 describe('文件管理工作流规划', () => {
-  it('客户固定类型覆盖缺失映射，独立标题生效', () => {
-    const planned = planFileManageLetters({
-      customerName: '甲', mailStyle: 'single_file',
+  it('旧客户类型覆盖不能绕过固定映射缺失检查', () => {
+    const input = {
+      customerName: '甲', mailStyle: 'single_file' as const,
       files: [{ fileId, fileName: '甲.pdf', fileDescription: '未映射描述', customerName: '甲' }],
       mappings: [], mailTypeOverride: { id: typeId, name: '客户专属类型' },
       subject: { ...subject, template: '{客户名称}-{发文类型}' },
       hasSender: true, hasReviewer: true, hasSignature: true
-    })
-    expect(planned.letters[0]).toMatchObject({ blocked: '', mailTypeId: typeId, subject: '甲-客户专属类型' })
+    }
+    const planned = planFileManageLetters(input)
+    expect(planned.letters[0]?.blocked).toContain('发文映射里没有')
+    expect(planned.letters[0]?.mailTypeId).toBe('')
   })
 
   it('单个来文逐文件规划，同描述也各自用原站 mailstyle=2 提交', () => {

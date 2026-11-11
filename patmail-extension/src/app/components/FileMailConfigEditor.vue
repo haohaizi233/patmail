@@ -3,7 +3,6 @@ import { computed, inject, ref } from 'vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { cloneFileMailConfig, type FileMailConfig } from '../../customer/file-mail-config'
 import { fetchMailSenders } from '../../customer/mailset-load'
-import { fetchMailTypeNodes } from '../../customer/mail-type-load'
 import { fetchMailboxSignature } from '../../mail/signature-load'
 import { appendRecipientField } from '../../mail/easy/contracts'
 import { MessageType, type MessageBridge } from '../../shared/message'
@@ -14,7 +13,7 @@ const emit = defineEmits<{ 'update:modelValue': [FileMailConfig | undefined] }>(
 const bridge = inject<MessageBridge>('bridge')
 type Field = keyof FileMailConfig
 const fields: Array<{ key: Field; label: string }> = [
-  { key: 'mailType', label: '发文类型' }, { key: 'to', label: '追加收件人' },
+  { key: 'to', label: '追加收件人' },
   { key: 'cc', label: '抄送' }, { key: 'sender', label: '发件人' },
   { key: 'reviewer', label: '审核人' }, { key: 'title', label: '标题模板' }, { key: 'signature', label: '签名' }
 ]
@@ -82,11 +81,6 @@ async function load(kind: string, force = false): Promise<void> {
       options.value.senderAddresses = result.items.filter(x => x.email).map(x => ({ value: `${x.name}(${x.email});`, label: x.label }))
       messages.value[kind] = result.message
       if (!result.message) loaded.add(kind)
-    } else if (kind === 'mailType') {
-      const result = await fetchMailTypeNodes(bridge, force)
-      options.value.mailType = result.nodes.filter(x => isQueryGuid(x.id)).map(x => ({ value: x.id, label: x.name }))
-      messages.value[kind] = result.message
-      if (!result.message) loaded.add(kind)
     } else if (kind === 'signature') {
       const result = await fetchMailboxSignature(bridge, force)
       options.value.signature = (result.data?.items ?? []).map(x => ({ value: x.id, label: x.name }))
@@ -121,10 +115,9 @@ async function load(kind: string, force = false): Promise<void> {
     <h3>此客户的发文设置</h3>
     <p class="hint">直接修改即可自定义；留空或选择“使用默认”会沿用原有规则。只影响这条客户工作流。</p>
     <div class="mail-settings-grid">
-    <div v-for="field in fields" :key="field.key" class="mail-setting" :class="{ 'is-wide': field.key === 'to' || field.key === 'cc' }" :data-field="field.key">
-      <div class="mail-setting-title"><strong>{{ field.label }}</strong><span>{{ config[field.key] !== undefined ? '已自定义' : '默认' }}</span></div>
-      <template>
-        <template v-if="['mailType', 'sender', 'reviewer', 'signature'].includes(field.key)">
+    <div v-for="field in fields" :key="field.key" class="mail-setting stack-form" :class="{ 'is-wide': field.key === 'to' || field.key === 'cc' }" :data-field="field.key">
+      <div class="mail-setting-title"><strong>{{ field.label }}</strong><span class="hint">{{ config[field.key] !== undefined ? '已自定义' : '默认' }}</span></div>
+        <template v-if="['sender', 'reviewer', 'signature'].includes(field.key)">
           <ThemeSelect :model-value="(config[field.key] as { id?: string } | undefined)?.id ?? ''" :options="choices(field.key)" placeholder="留空使用默认" @open="load(field.key)" @update:model-value="select(field.key, String($event))" />
           <button type="button" class="text-button" @click="load(field.key, true)">重新读取{{ field.label }}</button>
           <p class="hint load-note" role="status">{{ messages[field.key] || ' ' }}</p>
@@ -141,9 +134,9 @@ async function load(kind: string, force = false): Promise<void> {
           <p class="hint load-note" role="status">{{ messages.contacts || ' ' }}</p>
         </template>
         <template v-else-if="field.key === 'cc'">
-          <label><input type="checkbox" :checked="cc.sender" @change="setCcSource('sender', ($event.target as HTMLInputElement).checked)" /> 抄送发件人</label>
+          <label class="check-line"><input type="checkbox" :checked="cc.sender" @change="setCcSource('sender', ($event.target as HTMLInputElement).checked)" /> 抄送发件人</label>
           <ThemeSelect v-if="cc.sender" :model-value="cc.senderAddress ?? ''" :options="addressChoices('sender')" placeholder="本封使用的发件人" @open="load('sender')" @update:model-value="patchCc('senderAddress', String($event))" />
-          <label><input type="checkbox" :checked="cc.sales" @change="setCcSource('sales', ($event.target as HTMLInputElement).checked)" /> 抄送商务</label>
+          <label class="check-line"><input type="checkbox" :checked="cc.sales" @change="setCcSource('sales', ($event.target as HTMLInputElement).checked)" /> 抄送商务</label>
           <ThemeSelect v-if="cc.sales" :model-value="cc.salesAddress ?? ''" :options="addressChoices('sales')" placeholder="原站按本封案件返回的商务" @open="load('contacts')" @update:model-value="patchCc('salesAddress', String($event))" />
           <ThemeSelect model-value="" :options="options.contacts ?? []" placeholder="从客户联系人中追加抄送" @open="load('contacts')" @update:model-value="appendContact(String($event), 'cc')" />
           <textarea :value="cc.extra ?? ''" placeholder="继续追加：姓名(邮箱); 或 邮箱;" @input="patchCc('extra', ($event.target as HTMLTextAreaElement).value)" />
@@ -151,7 +144,6 @@ async function load(kind: string, force = false): Promise<void> {
           <p class="hint load-note" role="status">{{ messages.contacts || messages.sender || ' ' }}</p>
           <p class="hint">全部取消且不追加地址，表示不抄送；两项勾选且下拉留空、不追加地址时恢复默认。</p>
         </template>
-      </template>
     </div>
     </div>
   </section>
@@ -161,13 +153,11 @@ async function load(kind: string, force = false): Promise<void> {
 .file-mail-config { min-width: 0; }
 .file-mail-config h3 { margin: 0 0 8px; }
 .mail-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 20px; margin-top: 18px; }
-.mail-setting { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mail-setting { display: flex; flex-direction: column; gap: 8px; min-width: 0; max-width: none; }
 .mail-setting.is-wide { grid-column: 1 / -1; }
-.mail-setting-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.mail-setting-title span { font-size: 12px; color: #8492ad; }
+.mail-setting-title { font-size: 13px; color: #66758f; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .mail-setting label { display: flex; align-items: center; gap: 6px; }
 .mail-setting :deep(.theme-select) { display: block; width: 100%; }
-.mail-setting textarea, .mail-setting input:not([type=checkbox]) { border: 1px solid #eadff0; border-radius: 10px; background: #fff; padding: 8px 10px; color: inherit; font: inherit; }
 .mail-setting textarea { min-height: 64px; resize: vertical; width: 100%; box-sizing: border-box; }
 .mail-setting input:not([type=checkbox]) { width: 100%; box-sizing: border-box; }
 .mail-setting .hint { margin: 0; }

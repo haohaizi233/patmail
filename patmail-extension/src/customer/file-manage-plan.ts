@@ -113,7 +113,6 @@ export function planFileManageLetters(input: {
   mailStyle: FileMailStyle
   files: FileManageFile[]
   mappings: DescriptionMailTypeMapping[]
-  mailTypeOverride?: { id: string; name: string }
   subject: SubjectRule | null
   hasSender: boolean
   hasReviewer: boolean
@@ -146,14 +145,12 @@ export function planFileManageLetters(input: {
   for (const [key, files] of buckets) {
     const description = files[0]?.fileDescription.trim() ?? ''
     const fileBlock = files.map(blockFile).find(Boolean) ?? ''
-    const matched = input.mailTypeOverride && isQueryGuid(input.mailTypeOverride.id)
-      ? { mailTypeId: input.mailTypeOverride.id, mailTypeName: input.mailTypeOverride.name }
-      : description ? matchDescription(description, input.mappings) : 'missing'
+    const matched = description ? matchDescription(description, input.mappings) : 'missing'
     const mailTypeId = typeof matched === 'object' ? matched.mailTypeId : ''
     const mailTypeName = typeof matched === 'object' ? matched.mailTypeName : ''
     const subject = subjectOf(input.subject, groupOf(key, description, files, input.mailStyle), input.customerName, mailTypeName, input.now)
     const blocked = fileBlock
-      || (!description && !input.mailTypeOverride ? '文件描述是空的，没有对上发文类型。' : '')
+      || (!description ? '文件描述是空的，没有对上发文类型。' : '')
       || (matched === 'conflict' ? '这个文件描述对上了多种发文类型，没有创建。' : '')
       || (matched === 'missing' ? '发文映射里没有这个文件描述。' : '')
       || (!input.hasSender ? '还没有默认发件人。到发文映射里设一个。' : '')

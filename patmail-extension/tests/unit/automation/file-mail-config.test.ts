@@ -10,10 +10,10 @@ describe('客户文件发文配置', () => {
   it('真实配置包保存并重新创建服务后仍可读，修改读出值不会污染仓库', async () => {
     const bundles = new MemoryBundleRepository()
     const repository = new BundleCustomerRepository(bundles)
-    const profile = await new CustomerQueryService(repository).save({ name: '甲', baseTemplateId: 'base', overrides: {}, enabled: true, fileMailConfig: { title: '{客户名称}', cc: { sender: false, sales: false } } })
+    const profile = await new CustomerQueryService(repository).save({ name: '甲', baseTemplateId: 'base', overrides: {}, enabled: true, fileMailConfig: { cc: { sender: false, sales: false } } })
     const reloaded = new BundleCustomerRepository(bundles)
     const read = (await reloaded.get(profile.id))!
-    expect(read.fileMailConfig).toEqual({ title: '{客户名称}', cc: { sender: false, sales: false } })
+    expect(read.fileMailConfig).toEqual({ cc: { sender: false, sales: false } })
     read.fileMailConfig!.cc!.sender = true
     expect((await reloaded.get(profile.id))?.fileMailConfig?.cc?.sender).toBe(false)
   })
@@ -33,6 +33,10 @@ describe('客户文件发文配置', () => {
     expect(isFileMailConfig({ to: 'not-an-email' })).toBe(false)
     expect(isFileMailConfig({ cc: { sender: 'false', sales: true } })).toBe(false)
     expect(isFileMailConfig({ injected: true })).toBe(false)
+    const legacy = { mailType: { id: '11111111-1111-4111-8111-111111111111', name: '旧类型' }, title: '客户标题', cc: { sender: false, sales: false } }
+    expect(isFileMailConfig(legacy)).toBe(true)
+    expect(cloneFileMailConfig(legacy)).toEqual({ title: '客户标题', cc: { sender: false, sales: false } })
+
     const source = { cc: { sender: true, sales: false } }
     const copy = cloneFileMailConfig(source)!
     copy.cc!.sender = false

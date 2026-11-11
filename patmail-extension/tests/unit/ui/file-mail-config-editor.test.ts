@@ -12,7 +12,7 @@ const id = '11111111-1111-4111-8111-111111111111'
 const cleanup: Array<() => void> = []
 afterEach(() => cleanup.splice(0).forEach(fn => fn()))
 async function settle() { for (let i = 0; i < 6; i++) { await Promise.resolve(); await nextTick() } }
-function mount(initial?: FileMailConfig) {
+function mount(initial?: FileMailConfig, defaults?: FileMailConfig) {
   const model = ref(initial)
   const key = ref('a')
   const request = vi.fn(async (message: { type: string; payload: { kind?: string } }) => {
@@ -24,7 +24,7 @@ function mount(initial?: FileMailConfig) {
     } } }
   })
   const el = document.createElement('div'); document.body.appendChild(el)
-  const app = createApp({ setup: () => () => h(FileMailConfigEditor, { key: key.value, modelValue: model.value, customerId: id, 'onUpdate:modelValue': (value: FileMailConfig | undefined) => { model.value = value } }) })
+  const app = createApp({ setup: () => () => h(FileMailConfigEditor, { key: key.value, modelValue: model.value, defaults, customerId: id, 'onUpdate:modelValue': (value: FileMailConfig | undefined) => { model.value = value } }) })
   app.provide('bridge', { request }); app.mount(el)
   cleanup.push(() => { app.unmount(); el.remove() })
   return { el, model, key, request }
@@ -37,6 +37,8 @@ describe('客户发文设置编辑器', () => {
   it('直接展示设置，展开热加载只请求一次；选择和清除即自定义与默认', async () => {
     const { el, model, request, key } = mount()
     expect(el.textContent).not.toContain('自定义审核人')
+    expect(el.querySelector('[data-field=mailType]')).toBeNull()
+    expect(el.querySelector('[data-field=title]')).toBeNull()
     const select = el.querySelector<HTMLElement>('[data-field=reviewer]')!.querySelector('select')!
     select.dispatchEvent(new Event('focus')); await settle()
     select.dispatchEvent(new Event('focus')); await settle()
@@ -47,6 +49,13 @@ describe('客户发文设置编辑器', () => {
     const restored = el.querySelector<HTMLElement>('[data-field=reviewer]')!.querySelector('select')!
     expect(restored.value).toBe(id)
     restored.value = ''; restored.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(model.value).toBeUndefined()
+  })
+  it('选回当前默认审核人不保存覆盖', async () => {
+    const { el, model } = mount({ reviewer: { id: '22222222-2222-4222-8222-222222222222', name: '另一审核人' } }, { reviewer: { id, name: '审核甲' } })
+    const select = el.querySelector<HTMLElement>('[data-field=reviewer]')!.querySelector('select')!
+    select.dispatchEvent(new Event('focus')); await settle()
+    select.value = id; select.dispatchEvent(new Event('change', { bubbles: true })); await settle()
     expect(model.value).toBeUndefined()
   })
   it('保留显式不抄送和追加地址，恢复原有两个来源时自动继承默认', async () => {

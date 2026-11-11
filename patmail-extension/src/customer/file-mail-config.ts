@@ -3,7 +3,6 @@ import { isQueryGuid } from '../query/query-validator'
 import { appendRecipientField } from '../mail/easy/contracts'
 
 export interface FileMailConfig {
-  mailType?: { id: string; name: string }
   sender?: { id: string; label: string }
   reviewer?: { id: string; name: string }
   signature?: { id: string; name: string }
@@ -25,6 +24,7 @@ export function validAddressList(value: unknown): value is string {
 
 export function isFileMailConfig(value: unknown): value is FileMailConfig {
   if (!isRecord(value) || !Object.keys(value).every(key => ['mailType', 'sender', 'reviewer', 'signature', 'title', 'to', 'cc'].includes(key))) return false
+  // 旧 mailType 字段仍校验接受，避免历史配置导致整条客户被过滤；克隆/保存时移除。
   for (const key of ['mailType', 'sender', 'reviewer', 'signature']) {
     const item = value[key]
     if (item === undefined) continue
@@ -43,8 +43,10 @@ export function isFileMailConfig(value: unknown): value is FileMailConfig {
 
 export function cloneFileMailConfig(value: FileMailConfig | undefined): FileMailConfig | undefined {
   if (value === undefined) return undefined
-  return { ...value,
-    ...(value.mailType ? { mailType: { ...value.mailType } } : {}),
+  // 兼容读取旧客户，但清除已取消的类型覆盖；发文类型只由固定映射决定。
+  const clean = { ...value }
+  Reflect.deleteProperty(clean, 'mailType')
+  return { ...clean,
     ...(value.sender ? { sender: { ...value.sender } } : {}),
     ...(value.reviewer ? { reviewer: { ...value.reviewer } } : {}),
     ...(value.signature ? { signature: { ...value.signature } } : {}),
