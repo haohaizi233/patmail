@@ -35,7 +35,7 @@ describe('客户文件发文配置', () => {
     expect(isFileMailConfig({ injected: true })).toBe(false)
     const legacy = { mailType: { id: '11111111-1111-4111-8111-111111111111', name: '旧类型' }, title: '客户标题', cc: { sender: false, sales: false } }
     expect(isFileMailConfig(legacy)).toBe(true)
-    expect(cloneFileMailConfig(legacy)).toEqual({ title: '客户标题', cc: { sender: false, sales: false } })
+    expect(cloneFileMailConfig(legacy)).toEqual({ cc: { sender: false, sales: false } })
 
     const source = { cc: { sender: true, sales: false } }
     const copy = cloneFileMailConfig(source)!

@@ -241,11 +241,9 @@ export class EasyTransport {
         signal: controller.signal
       })
       if (response.status === 401 || response.status === 403 || loginRedirect(response, this.origin)) {
-        await response.body?.cancel().catch(() => {})
         return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请在原网站重新登录。', response.status)
       }
       if (!response.ok) {
-        await response.body?.cancel().catch(() => {})
         return apiError('HTTP_ERROR', response.status === 502 ? 'EASY 网关异常。' :
           response.status === 503 ? 'EASY 服务暂不可用。' : 'EASY 返回 HTTP 错误。', response.status)
       }

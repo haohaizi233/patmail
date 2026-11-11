@@ -256,7 +256,7 @@ function rebuild(files: FileManageFile[]): void {
     mailStyle: profile.fileMailStyle === 'single_file' ? 'single_file' : 'merge_by_customer_description',
     files,
     mappings: props.rules?.mappings ?? [],
-    subject: profile.fileMailConfig?.title ? { ...(props.rules?.subject ?? { countInjection: false, anchor: '', missingAnchor: 'keep' as const, version: 1 }), template: profile.fileMailConfig.title } : props.rules?.subject ?? null,
+    subject: props.rules?.subject ?? null,
     hasSender: Boolean(pickedSender.value),
     hasReviewer: Boolean(reviewer.value),
     hasSignature: Boolean(signatureToken())
@@ -524,7 +524,7 @@ function fileNames(letter: FileManageLetterPlan): string {
         <p class="hint">发文方式：{{ styleLabel }}。收件人是案件联系人。抄送按客户配置（未配置则为发件人和商务），发件人是{{ pickedSender ? `（${pickedSender.label}）` : '' }}。审核人是{{ reviewer ? reviewer.name : '还没设' }}。签名是{{ signatureChoice ? signatureChoice.name : '还没设' }}。</p>
         <p v-if="!pickedSender" class="hint">发件人未设置或客户选择已失效，请在客户配置或发文映射中检查。</p>
         <p v-if="!reviewer" class="hint">审核人未设置，请在客户配置或发文映射中检查。</p>
-        <p v-if="!customer.fileMailConfig?.title && !rules?.subject.template.trim()" class="hint">还没有标题模板。到发文映射里写一条。</p>
+        <p v-if="!rules?.subject.template.trim()" class="hint">还没有标题模板。到发文映射里写一条。</p>
         <p v-if="!signatureChoice" class="hint">签名未设置或客户选择已失效，请在客户配置或发文映射中检查。</p>
         <button type="button" class="solid" :disabled="searching || sending" @click="search">{{ searching ? '正在查询…' : '按绑定条件查询' }}</button>
       </template>

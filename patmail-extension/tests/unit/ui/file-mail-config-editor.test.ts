@@ -12,7 +12,7 @@ const id = '11111111-1111-4111-8111-111111111111'
 const cleanup: Array<() => void> = []
 afterEach(() => cleanup.splice(0).forEach(fn => fn()))
 async function settle() { for (let i = 0; i < 6; i++) { await Promise.resolve(); await nextTick() } }
-function mount(initial?: FileMailConfig, defaults?: FileMailConfig) {
+function mount(initial?: FileMailConfig, defaults?: FileMailConfig, section: 'all' | 'contacts' | 'people' = 'all') {
   const model = ref(initial)
   const key = ref('a')
   const request = vi.fn(async (message: { type: string; payload: { kind?: string } }) => {
@@ -24,7 +24,7 @@ function mount(initial?: FileMailConfig, defaults?: FileMailConfig) {
     } } }
   })
   const el = document.createElement('div'); document.body.appendChild(el)
-  const app = createApp({ setup: () => () => h(FileMailConfigEditor, { key: key.value, modelValue: model.value, defaults, customerId: id, 'onUpdate:modelValue': (value: FileMailConfig | undefined) => { model.value = value } }) })
+  const app = createApp({ setup: () => () => h(FileMailConfigEditor, { key: key.value, modelValue: model.value, defaults, section, customerId: id, 'onUpdate:modelValue': (value: FileMailConfig | undefined) => { model.value = value } }) })
   app.provide('bridge', { request }); app.mount(el)
   cleanup.push(() => { app.unmount(); el.remove() })
   return { el, model, key, request }
@@ -34,6 +34,14 @@ async function check(el: HTMLElement, text: string, checked: boolean) {
   const input = label.querySelector('input')!; input.checked = checked; input.dispatchEvent(new Event('change', { bubbles: true })); await settle()
 }
 describe('客户发文设置编辑器', () => {
+  it('联系人设置与发件人审核人签名可分开放到两栏和底部', () => {
+    const contacts = mount(undefined, undefined, 'contacts').el
+    const people = mount(undefined, undefined, 'people').el
+    expect([...contacts.querySelectorAll('[data-field]')].map(x => x.getAttribute('data-field'))).toEqual(['to', 'cc'])
+    expect([...people.querySelectorAll('[data-field]')].map(x => x.getAttribute('data-field'))).toEqual(['sender', 'reviewer', 'signature'])
+    expect(people.querySelector('.is-people')).not.toBeNull()
+  })
+
   it('直接展示设置，展开热加载只请求一次；选择和清除即自定义与默认', async () => {
     const { el, model, request, key } = mount()
     expect(el.textContent).not.toContain('自定义审核人')

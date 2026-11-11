@@ -6,7 +6,6 @@ export interface FileMailConfig {
   sender?: { id: string; label: string }
   reviewer?: { id: string; name: string }
   signature?: { id: string; name: string }
-  title?: string
   /** 追加到案件联系人。 */
   to?: string
   /** 缺省继承；显式关闭两个来源允许不抄送。 */
@@ -43,9 +42,10 @@ export function isFileMailConfig(value: unknown): value is FileMailConfig {
 
 export function cloneFileMailConfig(value: FileMailConfig | undefined): FileMailConfig | undefined {
   if (value === undefined) return undefined
-  // 兼容读取旧客户，但清除已取消的类型覆盖；发文类型只由固定映射决定。
+  // 兼容读取旧客户，但清除已取消的类型和标题覆盖；这两项继续沿用原有规则。
   const clean = { ...value }
   Reflect.deleteProperty(clean, 'mailType')
+  Reflect.deleteProperty(clean, 'title')
   return { ...clean,
     ...(value.sender ? { sender: { ...value.sender } } : {}),
     ...(value.reviewer ? { reviewer: { ...value.reviewer } } : {}),

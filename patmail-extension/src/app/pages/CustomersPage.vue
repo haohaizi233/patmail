@@ -75,7 +75,6 @@ const fileMailDefaults = computed<FileMailConfig>(() => {
     ...(bundle?.defaultSender ? { sender: { id: bundle.defaultSender.mailsetId, label: bundle.defaultSender.label } } : {}),
     ...(bundle?.defaultReviewer ? { reviewer: { id: bundle.defaultReviewer.userId, name: bundle.defaultReviewer.name } } : {}),
     ...(signatureId ? { signature: { id: signatureId, name: '发文映射默认签名' } } : {}),
-    ...(bundle?.subject.template ? { title: bundle.subject.template } : {})
   }
 })
 
@@ -649,7 +648,8 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
         </label>
         <p class="hint">可留空。写上一句，表格里就能看出这一条是哪一套。</p>
       </div>
-      <FileMailConfigEditor v-if="surface === 'file' && workflow === 'file-manage'" :key="`${editingId}|${customerPick}|${connection.easyOrigin}|${connection.operatorId}`" v-model="fileMailConfig" :customer-id="keptCustomerId || customerPick" :defaults="fileMailDefaults" />
+      <FileMailConfigEditor section="contacts" v-if="surface === 'file' && workflow === 'file-manage'" :key="`${editingId}|${customerPick}|${connection.easyOrigin}|${connection.operatorId}`" v-model="fileMailConfig" :customer-id="keptCustomerId || customerPick" :defaults="fileMailDefaults" />
+      <FileMailConfigEditor section="people" v-if="surface === 'file' && workflow === 'file-manage'" :key="`people|${editingId}|${customerPick}|${connection.easyOrigin}|${connection.operatorId}`" v-model="fileMailConfig" :customer-id="keptCustomerId || customerPick" :defaults="fileMailDefaults" />
       </div>
       <div v-if="editingId" class="hint">
         <p>客户要求按原网站客户编号读取，只在这里看，不会改原网站。</p>
@@ -675,10 +675,11 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
 <style scoped>
 .customer-edit-layout { display: grid; grid-template-columns: minmax(0, 720px); gap: 28px; align-items: start; }
 .customer-edit-layout.has-mail-settings { grid-template-columns: minmax(300px, .85fr) minmax(0, 1.15fr); }
+.customer-edit-layout :deep(.file-mail-config.is-people) { grid-column: 1 / -1; border: 0; padding: 0; }
 .customer-basic-settings { width: 100%; min-width: 0; }
-.customer-edit-layout :deep(.file-mail-config) { border-left: 1px solid #f4e1eb; padding-left: 26px; }
+.customer-edit-layout :deep(.file-mail-config:not(.is-people)) { border-left: 1px solid #f4e1eb; padding-left: 26px; }
 @media (max-width: 1050px) {
   .customer-edit-layout.has-mail-settings { grid-template-columns: minmax(0, 1fr); }
-  .customer-edit-layout :deep(.file-mail-config) { border-left: 0; border-top: 1px solid #f4e1eb; padding: 22px 0 0; }
+  .customer-edit-layout :deep(.file-mail-config:not(.is-people)) { border-left: 0; border-top: 1px solid #f4e1eb; padding: 22px 0 0; }
 }
 </style>

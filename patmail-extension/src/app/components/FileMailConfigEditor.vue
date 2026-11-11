@@ -8,15 +8,28 @@ import { appendRecipientField } from '../../mail/easy/contracts'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import { isQueryGuid } from '../../query/query-validator'
 
-const props = defineProps<{ modelValue?: FileMailConfig; customerId: string; defaults?: FileMailConfig }>()
+const props = withDefaults(
+  defineProps<{
+    modelValue?: FileMailConfig
+    customerId: string
+    defaults?: FileMailConfig
+    section?: 'all' | 'contacts' | 'people'
+  }>(),
+  {
+    modelValue: undefined,
+    defaults: undefined,
+    section: 'all'
+  }
+)
 const emit = defineEmits<{ 'update:modelValue': [FileMailConfig | undefined] }>()
 const bridge = inject<MessageBridge>('bridge')
 type Field = keyof FileMailConfig
 const fields: Array<{ key: Field; label: string }> = [
   { key: 'to', label: '追加收件人' },
   { key: 'cc', label: '抄送' }, { key: 'sender', label: '发件人' },
-  { key: 'reviewer', label: '审核人' }, { key: 'title', label: '标题模板' }, { key: 'signature', label: '签名' }
+  { key: 'reviewer', label: '审核人' }, { key: 'signature', label: '签名' }
 ]
+const visibleFields = computed(() => fields.filter(field => props.section === 'all' || (props.section === 'contacts' ? ['to', 'cc'].includes(field.key) : ['sender', 'reviewer', 'signature'].includes(field.key))))
 const loaded = new Set<string>()
 const options = ref<Record<string, Array<{ value: string; label: string }>>>({})
 const messages = ref<Record<string, string>>({})
@@ -26,7 +39,6 @@ const config = computed(() => props.modelValue ?? {})
 const cc = computed(() => config.value.cc ?? { sender: true, sales: true })
 function patch(key: Field, value: unknown): void {
   const next = cloneFileMailConfig(props.modelValue) ?? {}
-  if (key === 'title' && typeof value === 'string' && value.trim() === props.defaults?.title?.trim()) value = undefined
   if (value === undefined || (typeof value === 'string' && !value.trim())) delete next[key]
   else Object.assign(next, { [key]: value })
   emit('update:modelValue', Object.keys(next).length ? next : undefined)
@@ -111,20 +123,16 @@ async function load(kind: string, force = false): Promise<void> {
 </script>
 
 <template>
-  <section class="file-mail-config">
-    <h3>此客户的发文设置</h3>
-    <p class="hint">直接修改即可自定义；留空或选择“使用默认”会沿用原有规则。只影响这条客户工作流。</p>
+  <section class="file-mail-config" :class="{ 'is-people': section === 'people' }">
+    <h3 v-if="section !== 'people'">此客户的发文设置</h3>
+    <p v-if="section !== 'people'" class="hint">直接修改即可自定义；留空或选择“使用默认”会沿用原有规则。只影响这条客户工作流。</p>
     <div class="mail-settings-grid">
-    <div v-for="field in fields" :key="field.key" class="mail-setting stack-form" :class="{ 'is-wide': field.key === 'to' || field.key === 'cc' }" :data-field="field.key">
+    <div v-for="field in visibleFields" :key="field.key" class="mail-setting stack-form" :class="{ 'is-wide': field.key === 'to' || field.key === 'cc' }" :data-field="field.key">
       <div class="mail-setting-title"><strong>{{ field.label }}</strong><span class="hint">{{ config[field.key] !== undefined ? '已自定义' : '默认' }}</span></div>
         <template v-if="['sender', 'reviewer', 'signature'].includes(field.key)">
           <ThemeSelect :model-value="(config[field.key] as { id?: string } | undefined)?.id ?? ''" :options="choices(field.key)" placeholder="留空使用默认" @open="load(field.key)" @update:model-value="select(field.key, String($event))" />
           <button type="button" class="text-button" @click="load(field.key, true)">重新读取{{ field.label }}</button>
           <p class="hint load-note" role="status">{{ messages[field.key] || ' ' }}</p>
-        </template>
-        <template v-else-if="field.key === 'title'">
-          <input :value="config.title ?? ''" maxlength="500" :placeholder="defaults?.title || '留空使用默认标题模板'" @input="patch('title', ($event.target as HTMLInputElement).value)" />
-          <p class="hint">支持现有模板变量，例如 {客户名称}、{文件描述}、{发文类型}。</p>
         </template>
         <template v-else-if="field.key === 'to'">
           <p class="hint">保留案件联系人，在后面追加这些收件人。</p>
@@ -163,5 +171,7 @@ async function load(kind: string, force = false): Promise<void> {
 .mail-setting .hint { margin: 0; }
 .mail-setting .text-button { align-self: flex-end; }
 .load-note { height: 1.5em; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-people .mail-settings-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 0; }
+@media (max-width: 700px) { .is-people .mail-settings-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 1200px) { .mail-settings-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>
