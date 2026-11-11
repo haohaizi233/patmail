@@ -94,12 +94,20 @@ function updatePosition(): void {
     240,
     menuWidthForLabels(labels)
   )
-  menuStyle.value = menuBoxStyle(placed)
+  const next = menuBoxStyle(placed)
+  if (Object.keys(next).some(key => next[key] !== menuStyle.value[key])) menuStyle.value = next
 }
 
 function scrollHighlight(): void {
   if (highlight.value < 0) return
-  menu.value?.querySelector(`#${CSS.escape(optionId(highlight.value))}`)?.scrollIntoView({ block: 'nearest' })
+  const list = menu.value
+  const row = list?.querySelector<HTMLElement>(`#${CSS.escape(optionId(highlight.value))}`)
+  if (!list || !row) return
+  const top = row.offsetTop
+  const bottom = top + row.offsetHeight
+  // 只移动列表内部，不能让 scrollIntoView 带动页面或表单的滚动容器。
+  if (top < list.scrollTop) list.scrollTop = top
+  else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight
 }
 
 function closeOthers(): void {
@@ -113,12 +121,13 @@ function show(): void {
   const index = props.options.findIndex(item => current.value != null && item.value !== '' && sameOptionValue(item.value, current.value))
   // 已选的那条不在当前显示的前 100 条里时不高亮，避免高亮到错行。
   highlight.value = index >= 0 && index < listed.value.length ? index : (index >= 0 ? -1 : 0)
+  updatePosition()
   opened.value = true
   closeOthers()
   emit('open')
   void nextTick(() => {
     updatePosition()
-    if (searchable.value) searchBox.value?.focus()
+    if (searchable.value) searchBox.value?.focus({ preventScroll: true })
     scrollHighlight()
   })
 }
@@ -133,7 +142,7 @@ function choose(option: Option): void {
   emit('update:modelValue', option.value)
   emit('change', option.value)
   close()
-  trigger.value?.focus()
+  trigger.value?.focus({ preventScroll: true })
 }
 
 function onKey(event: KeyboardEvent): void {
@@ -188,6 +197,13 @@ watch(opened, (value) => {
 function onSearchKey(event: KeyboardEvent): void {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End' || event.key === 'Enter' || event.key === 'Escape') onKey(event)
 }
+
+// 异步选项到达后重新测量，不重开菜单、不滚动页面、不重复抢焦点。
+watch(() => props.options, () => {
+  if (!opened.value) return
+  if (highlight.value >= listed.value.length) highlight.value = listed.value.length ? 0 : -1
+  void nextTick(updatePosition)
+})
 
 watch(query, (value) => {
   if (!opened.value || !value.trim()) return
