@@ -1,3 +1,7 @@
+import { handleHagueSessionMessage } from './hague-session'
+import { handleHagueDraftMessage } from './hague-draft'
+import { HAGUE_DRAFT_CHANNEL } from '../hague/draft-contract'
+import { HAGUE_SESSION_CHANNEL } from '../hague/session-contract'
 import { indexedTransactionStore, ExecutionLedger } from '../automation/ledger'
 import { IndexedTaskStore } from '../automation/indexed-store'
 import { IndexedEvidenceStore, MemoryEvidenceStore } from '../automation/evidence-store'
@@ -418,6 +422,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (isRecord(message) && (message.channel === BROWSER_FILE_CHANNEL || message.channel === NATIVE_NAVIGATION_CHANNEL)) return
   if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
   if (sender.id !== chrome.runtime.id) return
+  if (isRecord(message) && message.channel === HAGUE_DRAFT_CHANNEL) {
+    void handleHagueDraftMessage(message, sender).then(sendResponse, () => sendResponse({ ok:false, error:'eHague 草稿操作结果不确定，请检查原站。' }))
+    return true
+  }
+  if (isRecord(message) && message.channel === HAGUE_SESSION_CHANNEL) {
+    void handleHagueSessionMessage(message, sender).then(sendResponse, () => sendResponse({ ok: false, error: 'eHague 登录态验证失败，请重新检测。' }))
+    return true
+  }
   if (isRecord(message) && message.channel === JIHUA_CHANNEL) {
     void handleJihuaMessage(message, sender).then(sendResponse, (error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message.slice(0, 500) : '季华页面没有完成操作。' }))
     return true

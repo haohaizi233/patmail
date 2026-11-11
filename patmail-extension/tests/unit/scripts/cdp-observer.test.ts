@@ -285,7 +285,7 @@ describe('CDP observer target and event filtering', () => {
     expect(`${cli}\n${core}`).not.toMatch(/playwright|connectOverCDP/i)
   })
 
-  it('selects only the PatMail app, its extension workers, and the EASY host', () => {
+  it('selects only the PatMail app, its extension workers, and the EASY / Jihua / Hague hosts', () => {
     const selectTargets = required<(targets: Array<Record<string, unknown>>, knownIds?: Set<string>) => Array<{ targetId: string; source: string }>>('selectTargets')
     const targets = [
       { targetId: 'app', type: 'page', title: 'PatMail', url: 'chrome-extension://abc123/app.html' },
@@ -293,12 +293,18 @@ describe('CDP observer target and event filtering', () => {
       { targetId: 'worker', type: 'service_worker', title: '', url: 'chrome-extension://abc123/background.js' },
       { targetId: 'easy', type: 'page', title: 'EASY', url: 'http://183.36.43.66:88/Default.aspx' },
       { targetId: 'jihua', type: 'page', title: '季华 OA', url: 'https://oa.jihualab.net:443/workbench' },
+      { targetId: 'hague', type: 'page', title: 'WIPO Hague', url: 'https://hague.wipo.int/#/landing/home' },
       { targetId: 'lookalike', type: 'page', title: 'Other', url: 'https://183.36.43.660/' },
       { targetId: 'jihua-http', type: 'page', title: 'Other', url: 'http://oa.jihualab.net/' },
       { targetId: 'jihua-port', type: 'page', title: 'Other', url: 'https://oa.jihualab.net:8443/' },
       { targetId: 'jihua-lookalike', type: 'page', title: 'Other', url: 'https://oa.jihualab.net.attacker.example/' },
       { targetId: 'jihua-credentials', type: 'page', title: 'Other', url: 'https://user@oa.jihualab.net/' },
       { targetId: 'jihua-worker', type: 'service_worker', title: 'Other', url: 'https://oa.jihualab.net/' },
+      { targetId: 'hague-http', type: 'page', title: 'Other', url: 'http://hague.wipo.int/#/landing/home' },
+      { targetId: 'hague-port', type: 'page', title: 'Other', url: 'https://hague.wipo.int:8443/#/landing/home' },
+      { targetId: 'hague-lookalike', type: 'page', title: 'Other', url: 'https://hague.wipo.int.attacker.example/' },
+      { targetId: 'hague-credentials', type: 'page', title: 'Other', url: 'https://user@hague.wipo.int/#/landing/home' },
+      { targetId: 'hague-worker', type: 'service_worker', title: 'Other', url: 'https://hague.wipo.int/' },
       { targetId: 'other-extension', type: 'page', title: 'Other', url: 'chrome-extension://different/options.html' },
       { targetId: 'unrelated', type: 'page', title: 'News', url: 'https://example.test/' },
     ]
@@ -308,6 +314,7 @@ describe('CDP observer target and event filtering', () => {
       { targetId: 'worker', source: 'app' },
       { targetId: 'easy', source: 'easy' },
       { targetId: 'jihua', source: 'jihua' },
+      { targetId: 'hague', source: 'hague' },
     ])
     expect(selectTargets([{ targetId: 'easy', type: 'page', title: 'Other', url: 'https://example.test/' }])).toEqual([])
   })
@@ -354,6 +361,20 @@ describe('CDP observer target and event filtering', () => {
       .toEqual({ origin: 'https://oa.jihualab.net', path: '/prod-api/conow/pat/parameter/:type' })
     expect(safeNetworkUrl('https://oa.jihualab.net/private/CN202611020001.docx', '', 'jihua'))
       .toEqual({ origin: 'https://oa.jihualab.net', path: '/other' })
+  })
+
+  it('keeps Hague network metadata to HTTPS WIPO origins and paths without query strings or post bodies', () => {
+    const safeNetworkUrl = required<(url: string, postData?: string, source?: string) => Record<string, unknown>>('safeNetworkUrl')
+    expect(safeNetworkUrl('https://hague.wipo.int/api/v1/workbench?token=secret#/landing/home', 'Call=Private&token=secret', 'hague'))
+      .toEqual({ origin: 'https://hague.wipo.int', path: '/api/v1/workbench' })
+    expect(safeNetworkUrl('https://www3.wipo.int/auth/session?ticket=secret', '', 'hague'))
+      .toEqual({ origin: 'https://www3.wipo.int', path: '/auth/session' })
+    expect(safeNetworkUrl('http://hague.wipo.int/api/v1/workbench', '', 'hague'))
+      .toEqual({ origin: '', path: '/' })
+    expect(safeNetworkUrl('https://hague.wipo.int:8443/api/v1/workbench', '', 'hague'))
+      .toEqual({ origin: '', path: '/' })
+    expect(safeNetworkUrl('https://other.example/api?token=secret', '', 'hague'))
+      .toEqual({ origin: '', path: '/' })
   })
 
   it('records only safe response status, MIME, and timing metadata', () => {

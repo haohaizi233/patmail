@@ -6,7 +6,9 @@ import PageHead from '../../shell/components/PageHead.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { bg } from '../../shell/assets'
 import JihuaUploadPage from './JihuaUploadPage.vue'
+import HaguePage from './HaguePage.vue'
 import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
+import hagueGuide from '../../../docs/hague-workflow.md?raw'
 import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
 import {
   cloneCatalog,
@@ -45,9 +47,10 @@ import { useWorkflowChoices } from '../composables/useWorkflowChoices'
 import { useQuerySurfaces } from '../composables/useQuerySurfaces'
 import { confirmDialog } from '../dialog'
 
-type Screen = 'sea' | 'ocean' | 'flow' | 'jihua'
+type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague'
 
 const screen = ref<Screen>('sea')
+const hagueView = ref<'guide' | 'use'>('use')
 const jihuaView = ref<'guide' | 'use'>('use')
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
 const draft = ref<WorkflowDefinition | null>(null)
@@ -432,7 +435,7 @@ function chooseProc(param: WorkflowParam, id: string): void {
 </script>
 
 <template>
-  <div v-show="screen !== 'jihua'" class="workflow-main">
+  <div v-show="screen !== 'jihua' && screen !== 'hague'" class="workflow-main">
     <header v-if="screen === 'flow' && draft" class="page-head flow-head">
       <Bunny />
       <div class="flow-head-fields">
@@ -465,6 +468,11 @@ function chooseProc(param: WorkflowParam, id: string): void {
           <button type="button" class="sea-remove" @click="copyFlow(flow)">复制副本</button>
           <button v-if="!isSystemWorkflow(flow)" type="button" class="sea-remove" @click="removeFlow(flow)">拿掉</button>
         </div>
+      </article>
+      <article class="sea-card">
+        <button type="button" class="sea-open" @click="screen = 'hague'">
+          <b>海牙新申请</b><small>选择总文件夹，批量解析案件材料、读取知易通并统一仲裁。</small><span class="sea-badge">材料准备</span><em>嵌套目录 · 视图核对 · Agent 仲裁</em>
+        </button>
       </article>
       <article class="sea-card jihua-upload-card">
         <button type="button" class="sea-open" @click="jihuaView = 'guide'; screen = 'jihua'">
@@ -636,6 +644,15 @@ function chooseProc(param: WorkflowParam, id: string): void {
       </section>
     </div>
     </template>
+  </div>
+  <div v-if="screen === 'hague'" class="workflow-hague">
+    <WorkflowWorkspace
+      v-model:view="hagueView" title="海牙新申请"
+      description="把案件材料放进来，逐案核对图片与信息，再交给助手整理。"
+      :guide="hagueGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
+    >
+      <HaguePage embedded :is-active="screen === 'hague' && hagueView === 'use'" />
+    </WorkflowWorkspace>
   </div>
   <div v-show="screen === 'jihua'" class="workflow-jihua">
     <WorkflowWorkspace

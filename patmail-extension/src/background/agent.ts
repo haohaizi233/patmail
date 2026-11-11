@@ -595,7 +595,7 @@ async function createTaskFromSearch(
 }
 
 /** 工作台的助手请求。probe 只测连通；turn 走工具循环并写入记忆。 */
-export async function handleAgentChat(payload: { action?: unknown; message?: unknown; id?: unknown; title?: unknown; plain?: unknown }, host: WorkspaceHost): Promise<ApiResult<AgentTurnView>> {
+export async function handleAgentChat(payload: { action?: unknown; message?: unknown; id?: unknown; title?: unknown; plain?: unknown; skill?: unknown }, host: WorkspaceHost): Promise<ApiResult<AgentTurnView>> {
   const area = host.area as LocalArea
   const config = await loadAgentConfig(area)
   const action = payload.action
@@ -678,7 +678,7 @@ export async function handleAgentChat(payload: { action?: unknown; message?: unk
     const turn = await runAgentTurn(config, loaded, message, toolContext(host, loaded, abort.signal), (next, options) => chat(next, { ...options, signal: abort.signal }), async state => {
       if (abort.signal.aborted) return
       await saveMemory(area, state)
-    }, publishActivity, action === 'turn' && payload.plain === true)
+    }, publishActivity, action === 'turn' && payload.skill === 'hague-filing-arbitration' ? 'hague-filing-arbitration' : action === 'turn' && payload.plain === true)
     return { ok: true, data: await viewOf(area, turn.reply, config.model, turn.steps, turn.memory) }
   } catch (error) {
     if (error instanceof LlmError) return apiError(error.code, error.message, error.status)

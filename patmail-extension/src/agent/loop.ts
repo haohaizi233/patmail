@@ -1,3 +1,4 @@
+import { HAGUE_ARBITRATION_SYSTEM, type HAGUE_ARBITRATION_SKILL } from './hague-skill'
 import { activityDetail } from './trace'
 import type { AgentConfig } from './config'
 import { chatCompletion, LlmError, llmFailureKind, type AssistantToolCall, type ChatChoice, type ChatMessage, type ChatOutcome } from './llm'
@@ -534,7 +535,7 @@ async function runToolBatch(state: AgentMemoryState, calls: AssistantToolCall[],
 }
 
 /** 一轮用户请求：先裁工具结果，再按工具调用循环。正文要过闸门，步数用尽时再要一次不带工具的收尾。 */
-export async function runAgentTurn(config: AgentConfig, memory: AgentMemoryState, userText: string, ctx: ToolContext, complete: Complete = chatCompletion, onMemory?: (state: AgentMemoryState) => Promise<void>, onActivity?: (label: string, thought?: string, detail?: string) => void, plain = false): Promise<AgentTurnResult> {
+export async function runAgentTurn(config: AgentConfig, memory: AgentMemoryState, userText: string, ctx: ToolContext, complete: Complete = chatCompletion, onMemory?: (state: AgentMemoryState) => Promise<void>, onActivity?: (label: string, thought?: string, detail?: string) => void, plain: boolean | typeof HAGUE_ARBITRATION_SKILL = false): Promise<AgentTurnResult> {
   const resolved = resolveSlash(userText)
   if (resolved.kind === 'local' || resolved.kind === 'unknown') {
     return { reply: resolved.message, steps: 0, memory, history: visibleHistory(memory) }
@@ -599,9 +600,14 @@ export async function runAgentTurn(config: AgentConfig, memory: AgentMemoryState
           onActivity?.('正在写', shownDraft)
         }
       }
-      const chatState = plain ? { ...current, summary: '', turns: plainTurns(current.turns) } : current
+      const chatState = plain ? {
+        ...current,
+        summary: '',
+        turns: plainTurns(current.turns),
+        ...(plain === 'hague-filing-arbitration' ? { facts: [] } : {})
+      } : current
       return complete(active, {
-        messages: toChat(chatState, plain ? ARBITRATION_SYSTEM : SYSTEM_PROMPT),
+        messages: toChat(chatState, plain === 'hague-filing-arbitration' ? HAGUE_ARBITRATION_SYSTEM : plain ? ARBITRATION_SYSTEM : SYSTEM_PROMPT),
         ...(withTools && !plain ? { tools: agentToolSchemas([
           ...state.turns.filter(turn => turn.role === 'user').map(turn => [turn.content, turn.guidance].filter(Boolean).join('\n')),
           ...plan.map(step => [step.tool, step.args].filter(Boolean).join(' ')),
@@ -715,12 +721,12 @@ export async function runAgentTurn(config: AgentConfig, memory: AgentMemoryState
 
   const traces: ToolTrace[] = []
   if (plain) {
-    onActivity?.('正在仲裁收件人和抄送')
+    onActivity?.(plain === 'hague-filing-arbitration' ? '正在仲裁海牙申请材料' : '正在仲裁收件人和抄送')
     const outcome = await askOrKeep(false)
     const choice = outcome.choices[0]
-    if (!choice || choice.toolCalls.length > 0) return finish(choice?.content.trim() || '这批没有裁出收件人。', 1)
+    if (!choice || choice.toolCalls.length > 0) return finish(choice?.content.trim() || (plain === 'hague-filing-arbitration' ? '本批海牙材料未返回有效结果。' : '这批没有裁出收件人。'), 1)
     const settled = await resumeCut(choice)
-    return finish(replyText(settled, config.thinking) || '这批没有裁出收件人。', 1)
+    return finish(replyText(settled, config.thinking) || (plain === 'hague-filing-arbitration' ? '本批海牙材料未返回有效结果。' : '这批没有裁出收件人。'), 1)
   }
   let unknownStreak = 0
   let candidate = ''

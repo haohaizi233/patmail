@@ -1,3 +1,4 @@
+import { isFileMailConfig, type FileMailConfig } from '../customer/file-mail-config'
 import type { PageInfo, PageSnapshot } from './types'
 import { isPageInfo, isPageSnapshot, isRecord } from './guards'
 import { isEasyOrigin } from '../api/config'
@@ -99,6 +100,10 @@ export const MessageType = {
   CaseBusFlowResult: 'CASE_BUS_FLOW_RESULT',
   LookupIcFlow: 'LOOKUP_IC_FLOW',
   LookupIcFlowResult: 'LOOKUP_IC_FLOW_RESULT',
+  CancelHagueRead: 'CANCEL_HAGUE_READ',
+  CancelHagueReadResult: 'CANCEL_HAGUE_READ_RESULT',
+  ReadHagueCase: 'READ_HAGUE_CASE',
+  ReadHagueCaseResult: 'READ_HAGUE_CASE_RESULT',
   ReadCaseFields: 'READ_CASE_FIELDS',
   ReadCaseFieldsResult: 'READ_CASE_FIELDS_RESULT',
   ReadFilingFlow: 'READ_FILING_FLOW',
@@ -192,7 +197,7 @@ export type ContentRequest =
   | Response<'SEARCH_LIMIT_MONITOR', { query: LimitMonitorQuery; timeoutMs?: number }>
   | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number; batch?: true }>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; namedBusiness?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
-  | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string }> }>
+  | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string; addresses?: Pick<FileMailConfig, 'to' | 'cc'> }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
   | Response<'DOWNLOAD_FILES', { items: Array<{ fileId: string; fileNo: string; fileName: string }>; selection: FileDownloadSelection | null; stripAppNoDot: boolean; progressId?: string; detached?: true; archiveName?: string; stream?: true; taskId?: string; saveAsNew?: true; browserTarget?: string; deduplicate?: true; resolvedNames?: Record<string, string>; caseScopes?: Record<string, string> }>
   | Response<'EXPORT_CASE_CONTACTS', { volumes: string[] }>
@@ -202,6 +207,8 @@ export type ContentRequest =
   | Response<'READ_CASE_DEMANDS', { caseId: string }>
   | Response<'READ_CASE_BUS_FLOW', { caseId: string; procId: string }>
   | Response<'LOOKUP_IC_FLOW', { rows: IcFlowAsk[] }>
+  | Response<'READ_HAGUE_CASE', { caseVolume: string; batchId?: string }>
+  | Response<'CANCEL_HAGUE_READ', { batchId: string }>
   | Response<'READ_CASE_FIELDS', { caseVolume: string }>
   | Response<'READ_FILING_FLOW', { filingId: string }>
   | Response<'READ_USER_INFO', { userId: string }>
@@ -282,7 +289,7 @@ export type BackgroundRequest =
   | Response<'DOWNLOAD_STATE', { downloadId: number }>
   | Response<'STREAM_DOWNLOAD', StreamDownloadCommand>
   | Response<'BROWSER_STREAM_DOWNLOAD', StreamDownloadCommand>
-  | Response<'AGENT_CHAT', { action: 'probe' | 'turn'; message: string } | { action: 'turn'; message: string; plain: true } | { action: 'answer'; message: string } | { action: 'history' | 'reset' | 'facts' | 'compact' | 'stop' | 'create' } | { action: 'create'; title: string } | { action: 'open' | 'remove'; id: string } | { action: 'rename'; id: string; title: string }>
+  | Response<'AGENT_CHAT', { action: 'probe' | 'turn'; message: string } | { action: 'turn'; message: string; plain: true } | { action: 'turn'; message: string; skill: 'hague-filing-arbitration' } | { action: 'answer'; message: string } | { action: 'history' | 'reset' | 'facts' | 'compact' | 'stop' | 'create' } | { action: 'create'; title: string } | { action: 'open' | 'remove'; id: string } | { action: 'rename'; id: string; title: string }>
 export type BackgroundResponse =
   | Response<'PAUSE_DOWNLOAD_RESULT', { ok: true }>
   | Response<'DISCARD_DOWNLOAD_RESULT', { ok: true }>
@@ -418,6 +425,8 @@ export type ContentResponse =
   | Response<'CASE_DEMAND_RESULT', ApiResult<CaseDemandAsset>>
   | Response<'CASE_BUS_FLOW_RESULT', ApiResult<{ gate: 'open' | 'pending' | 'done' }>>
   | Response<'LOOKUP_IC_FLOW_RESULT', ApiResult<{ items: IcFlowHit[] }>>
+  | Response<'CANCEL_HAGUE_READ_RESULT', { cancelled: boolean }>
+  | Response<'READ_HAGUE_CASE_RESULT', { text: string }>
   | Response<'READ_CASE_FIELDS_RESULT', { text: string }>
   | Response<'READ_FILING_FLOW_RESULT', ApiResult<FilingFlowRow[]>>
   | Response<'READ_USER_INFO_RESULT', ApiResult<FilingUser>>
@@ -689,10 +698,10 @@ function isLimitMailSubmitItem(value: unknown): boolean {
 function isFileManageSubmitItem(value: unknown): boolean {
   if (!isRecord(value)) return false
   const keys = Object.keys(value)
-  const allowed = ['fileId', 'fileIds', 'fileNames', 'mailTypeId', 'mailStyle', 'mailId', 'recall', 'subject', 'senderId', 'senderName', 'senderEmail', 'reviewerId', 'reviewerName', 'signature']
+  const allowed = ['fileId', 'fileIds', 'fileNames', 'mailTypeId', 'mailStyle', 'mailId', 'recall', 'subject', 'senderId', 'senderName', 'senderEmail', 'reviewerId', 'reviewerName', 'signature', 'addresses']
   if (!keys.every(key => allowed.includes(key))) return false
   if (!isQueryGuid(String(value.fileId)) || !isQueryGuid(String(value.mailTypeId)) || !isQueryGuid(String(value.senderId)) || !isQueryGuid(String(value.reviewerId))) return false
-  if (value.mailStyle !== '1') return false
+  if (value.mailStyle !== '1' && value.mailStyle !== '2') return false
   if (value.mailId !== undefined && !isQueryGuid(String(value.mailId))) return false
   if (value.recall !== undefined && value.recall !== true) return false
   if (value.recall === true && !isQueryGuid(String(value.mailId))) return false
@@ -700,6 +709,7 @@ function isFileManageSubmitItem(value: unknown): boolean {
   if (!isShortText(value.senderName, 80) || !value.senderName.trim()) return false
   if (!isShortText(value.senderEmail, 120) || !value.senderEmail.includes('@') || /[();；]/.test(value.senderEmail)) return false
   if (!isShortText(value.reviewerName, 80) || !value.reviewerName.trim()) return false
+  if (value.addresses !== undefined && (!isRecord(value.addresses) || !Object.keys(value.addresses).every(k => k === 'to' || k === 'cc') || !isFileMailConfig(value.addresses))) return false
   if (!isShortText(value.signature, 4000) || !value.signature.trim()) return false
   if (!Array.isArray(value.fileIds) || !Array.isArray(value.fileNames)) return false
   if (value.fileIds.length === 0 || value.fileIds.length > 100 || value.fileIds.length !== value.fileNames.length) return false
@@ -804,6 +814,10 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.LookupIcFlow:
       return isRecord(value.payload) && Array.isArray(value.payload.rows) && value.payload.rows.length > 0 && value.payload.rows.length <= 100 &&
         value.payload.rows.every(isIcFlowAsk) && Object.keys(value.payload).length === 1
+    case MessageType.CancelHagueRead:
+      return isRecord(value.payload) && typeof value.payload.batchId === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(value.payload.batchId) && Object.keys(value.payload).length === 1
+    case MessageType.ReadHagueCase:
+      return isRecord(value.payload) && typeof value.payload.caseVolume === 'string' && value.payload.caseVolume.trim().length > 0 && value.payload.caseVolume.length <= 80 && (value.payload.batchId === undefined || (typeof value.payload.batchId === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(value.payload.batchId))) && Object.keys(value.payload).every(k => k === 'caseVolume' || k === 'batchId')
     case MessageType.ReadCaseFields:
       return isRecord(value.payload) && typeof value.payload.caseVolume === 'string' && value.payload.caseVolume.trim().length > 0 &&
         value.payload.caseVolume.length <= 80 && Object.keys(value.payload).length === 1
@@ -1037,6 +1051,10 @@ export function isMessage(value: unknown): value is AppMessage {
       return isCaseBusFlowResult(value.payload)
     case MessageType.LookupIcFlowResult:
       return isIcFlowResult(value.payload)
+    case MessageType.CancelHagueReadResult:
+      return isRecord(value.payload) && typeof value.payload.cancelled === 'boolean' && Object.keys(value.payload).length === 1
+    case MessageType.ReadHagueCaseResult:
+      return isRecord(value.payload) && typeof value.payload.text === 'string' && value.payload.text.length <= 100000 && Object.keys(value.payload).length === 1
     case MessageType.ReadCaseFieldsResult:
       return isRecord(value.payload) && typeof value.payload.text === 'string' && value.payload.text.length <= 8000 && Object.keys(value.payload).length === 1
     case MessageType.ReadFilingFlowResult:
@@ -1123,6 +1141,7 @@ function isAgentChatRequest(value: unknown): boolean {
   if (value.action !== 'probe' && value.action !== 'turn') return false
   if (typeof value.message !== 'string' || value.message.trim().length === 0 || value.message.length > AGENT_TURN_CHARS) return false
   const keys = Object.keys(value)
+  if (value.action === 'turn' && value.skill === 'hague-filing-arbitration') return keys.length === 3 && keys.includes('skill')
   if (value.action === 'turn' && value.plain === true) return keys.length === 3 && keys.includes('plain')
   return keys.length === 2
 }
@@ -1184,13 +1203,15 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.RestoreWorkflow || value.type === MessageType.DiagnoseExistingMail ||
     value.type === MessageType.RunReadonlyAcceptance ||
     value.type === MessageType.CallEasy ||
+    value.type === MessageType.CancelHagueRead ||
+    value.type === MessageType.ReadHagueCase ||
     value.type === MessageType.ReadCaseFields ||
     value.type === MessageType.ReadFilingFlow ||
     value.type === MessageType.ReadUserInfo
   )
 }
 
-const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES'])
+const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'CANCEL_HAGUE_READ', 'READ_HAGUE_CASE', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES'])
 const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SAVE_FILE_TEMP_NAME', 'DELETE_FILE_TEMP_NAME', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE'])
 
 /** 不允许转发时给出原因。写开关关掉时，创建、保存和查询模板写回都停在这里。 */

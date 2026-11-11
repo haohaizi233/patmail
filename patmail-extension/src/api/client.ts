@@ -1,3 +1,6 @@
+import { HagueReadError } from '../hague/read-error'
+import { hagueNetworkPool } from '../hague/concurrency'
+import { loadHagueCase } from '../hague/easy'
 import { documentedCallAllowed, documentedParams, summarizeEasyPayload } from './documented-call'
 import { DownloadTokens } from './download-tokens'
 import { DownloadNameRequests } from './download-name-requests'
@@ -503,6 +506,28 @@ export class EasyRuntime {
   }
 
   /** 按我方文号读仲裁用的固定栏。不解释该选谁，也不创建发文。 */
+  private readonly hagueReads = new Map<string, Set<AbortController>>()
+  private readonly cancelledHagueBatches = new Map<string, number>()
+  cancelHagueRead(batchId: string): void {
+    this.cancelledHagueBatches.set(batchId, Date.now())
+    for (const [id, time] of this.cancelledHagueBatches) if (Date.now() - time > 600_000) this.cancelledHagueBatches.delete(id)
+    for (const controller of this.hagueReads.get(batchId) ?? []) controller.abort()
+  }
+  async readHagueCase(caseVolume: string, batchId = 'legacy'): Promise<string> {
+    const controller = new AbortController()
+    if (this.cancelledHagueBatches.has(batchId)) throw new HagueReadError('已停止')
+    const reads = this.hagueReads.get(batchId) ?? new Set<AbortController>()
+    reads.add(controller); this.hagueReads.set(batchId, reads)
+    try {
+      if (!(await this.confirmAccountRead())) throw new HagueReadError('请先在 EASY 原网站登录并检测登录状态。')
+      if (controller.signal.aborted) throw new HagueReadError('已停止')
+      return await loadHagueCase(caseVolume, (operation, params) => this.transport.post(operation, params, controller.signal, undefined, undefined, hagueNetworkPool))
+    } finally {
+      controller.abort(); reads.delete(controller)
+      if (!reads.size) this.hagueReads.delete(batchId)
+    }
+  }
+
   readCaseFields(caseVolume: string): Promise<string> {
     return (async (): Promise<string> => {
       if (!(await this.confirmAccountRead())) return '请先在 EASY 原网站登录并检测登录状态。'

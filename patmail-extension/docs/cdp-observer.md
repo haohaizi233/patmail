@@ -1,6 +1,6 @@
 # 本机 CDP 日志服务
 
-服务使用 Node 原生 WebSocket 连接 Chrome CDP，记录 PatMail / EASY 的下载链路及季华 OA 文件导入诊断。根目录和扩展目录的 `pnpm build` 都先启动或复用服务，再执行编译。重复编译不会重复创建监听进程；Chrome 暂时未开启 CDP 时服务保持等待并重连。
+服务使用 Node 原生 WebSocket 连接 Chrome CDP，记录 PatMail / EASY 的下载链路、季华 OA 文件导入诊断及 WIPO 海牙（`https://hague.wipo.int`）页面诊断。根目录和扩展目录的 `pnpm build` 都先启动或复用服务，再执行编译。重复编译不会重复创建监听进程；Chrome 暂时未开启 CDP 时服务保持等待并重连。
 
 日志目录是项目根的 `log/cdp`，即 `D:\desktop\project\patmail\log\cdp`。按 UTC 小时分 JSONL 文件，每 60 秒清理超过 24 小时的记录，包括处于保留边界的文件；例如文件名中的 `03` 时对应北京时间 `11` 时。配置和当前服务状态保存在同目录的 JSON 文件中，整个 `log` 目录由 Git 忽略。
 
@@ -31,6 +31,10 @@ pnpm cdp:stop
 网络响应在 CDP 提供有效时间分段时，还记录 `connectMs`、`sendMs`、`responseWaitMs` 三个数值，分别用于区分建连、发送数据、发送结束后等待响应头的耗时。不会保存响应头或正文；旧事件无法补采这些分段。
 
 例如，`rowErrorCategories.http_524` 增加时，应关联 `source: "jihua"` 的上传路由状态和耗时；`pendingReceiptCount` 表示已发送而尚未保存成功附件回执的行数，不表示可安全重新上传。历史事件无法补采；2026-11-02 更新前的守护进程没有选择 OA 页面。
+
+## WIPO 海牙（Hague）
+
+监听精确的 `https://hague.wipo.int` 页面（默认 443 端口，包括 `https://hague.wipo.int/#/landing/home` 等前端路由）。`source: "hague"` 的网络记录只保留 HTTPS `wipo.int` 域名的 `origin`、`path`、HTTP 状态、MIME、耗时和字节数，不记录查询参数、URL 片段、请求头、Cookie 或请求/响应正文。扩展 `manifest.json` 的 `host_permissions` 同步包含 `https://hague.wipo.int/*`。
 
 ## 下载 UUID 保存名的原因与恢复
 

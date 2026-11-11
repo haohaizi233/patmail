@@ -1,3 +1,4 @@
+import { hagueReadResponse } from '../hague/read-error'
 import { isContentRequest, MessageType, type ContentResponse, type FileSearchFormField, type MessageBridge, type QuerySurfaceEntry } from '../shared/message'
 import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
@@ -325,6 +326,11 @@ const bridge: MessageBridge = {
       case MessageType.LookupIcFlow:
         return { type: MessageType.LookupIcFlowResult,
           payload: await easyRuntime.lookupIcFlow(message.payload.rows) }
+      case MessageType.CancelHagueRead:
+        easyRuntime.cancelHagueRead(message.payload.batchId)
+        return { type: MessageType.CancelHagueReadResult, payload: { cancelled: true } }
+      case MessageType.ReadHagueCase:
+        return hagueReadResponse(() => easyRuntime.readHagueCase(message.payload.caseVolume, message.payload.batchId))
       case MessageType.ReadCaseFields:
         return { type: MessageType.ReadCaseFieldsResult,
           payload: { text: await easyRuntime.readCaseFields(message.payload.caseVolume) } }

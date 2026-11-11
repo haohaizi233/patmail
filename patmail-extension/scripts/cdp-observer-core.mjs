@@ -420,6 +420,20 @@ function isJihuaTarget(target) {
   }
 }
 
+function isHagueTarget(target) {
+  if (!target || target.type !== 'page' || typeof target.url !== 'string') return false
+  try {
+    const url = new URL(target.url)
+    return url.protocol === 'https:'
+      && url.hostname === 'hague.wipo.int'
+      && url.port === ''
+      && !url.username
+      && !url.password
+  } catch {
+    return false
+  }
+}
+
 export function selectTargets(targets, knownExtensionIds = new Set()) {
   const extensionIds = new Set([DEFAULT_PATMAIL_EXTENSION_ID, ...knownExtensionIds])
   for (const target of targets ?? []) {
@@ -439,6 +453,10 @@ export function selectTargets(targets, knownExtensionIds = new Set()) {
     }
     if (isJihuaTarget(target)) {
       selected.push({ targetId: target.targetId, source: 'jihua' })
+      continue
+    }
+    if (isHagueTarget(target)) {
+      selected.push({ targetId: target.targetId, source: 'hague' })
       continue
     }
     const extensionId = extensionIdFromUrl(target.url)
@@ -517,6 +535,13 @@ export function safeNetworkUrl(value, postData = '', source = '') {
       return { origin: '', path: '/' }
     }
     return { origin: 'https://oa.jihualab.net', path: safeJihuaPath(url.pathname) }
+  }
+  if (url.hostname === 'hague.wipo.int' || source === 'hague') {
+    const isWipoHost = url.hostname === 'hague.wipo.int' || url.hostname.endsWith('.wipo.int')
+    if (url.protocol !== 'https:' || !isWipoHost || url.port !== '' || url.username || url.password) {
+      return { origin: '', path: '/' }
+    }
+    return { origin: url.origin, path: url.pathname.slice(0, 2048) }
   }
   let call
   for (const [key, value] of url.searchParams) {
@@ -2146,7 +2171,7 @@ class CdpObserverService {
   }
 
   handleNetworkRequest(target, sessionId, params) {
-    const postData = target.source === 'jihua' ? '' : params.request?.postData
+    const postData = target.source === 'jihua' || target.source === 'hague' ? '' : params.request?.postData
     const url = safeNetworkUrl(params.request?.url, postData, target.source)
     if (!url.origin || url.origin === 'null') return
     const key = `${sessionId}:${params.requestId}`

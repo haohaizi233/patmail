@@ -1,3 +1,4 @@
+import type { PermitPool } from '../utils/permit-pool'
 import { documentedCallAllowed } from './documented-call'
 import { fileSearchTimeoutMs } from './file-search-params'
 import { trustedOrigin } from './config'
@@ -12,7 +13,7 @@ export type EasyOperation =
   | 'getFlowInfo' | 'getFlowHistory' | 'getUrgencyList' | 'getFlowSubmit' | 'getFlowLastStatus' | 'caseBusFlow' | 'showUserInfo'
   | 'limitMonitor' | 'limitMailCustomer' | 'mailSubmit' | 'mailProcess' | 'processAP' | 'processEF' | 'getIsNewCpc'
   | 'agencySearchCase' | 'agencyCaseInfo' | 'patentCaseData' | 'icSearch' | 'customerList'
-  | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName' | 'fileDownload'
+  | 'hagueApplicants' | 'haguePriorities' | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName' | 'fileDownload'
   | 'filingSearch' | 'filingFlowNode' | 'contractInit'
 
 export interface TransportOptions {
@@ -79,6 +80,8 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   getIsNewCpc: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetIsNewCPC' },
   agencySearchCase: { path: '/AjaxServers/AgencyAction.ashx', call: 'AgencySearchCase' },
   agencyCaseInfo: { path: '/AjaxServers/AgencyAction.ashx', call: 'GetCaseInfo' },
+  hagueApplicants: { path: '/AjaxServers/PatentAction.ashx', call: 'GetCaseApplicant' },
+  haguePriorities: { path: '/AjaxServers/PatentAction.ashx', call: 'GetCasePriority' },
   caseManageInfo: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetCaseInfo' },
   caseCustomField: { path: '/AjaxServers/BaseInfo.ashx', call: 'GetCustomField' },
   caseInventor: { path: '/AjaxServers/PatentAction.ashx', call: 'GetCaseInventor' },
@@ -145,14 +148,14 @@ export class EasyTransport {
   }
 
   /** 只读请求遇到网关 502/503 时再试。写请求不重试，避免一次 502 后面又创建出第二封；打包下载也不重试，免得在原站留两份临时包。 */
-  async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void): Promise<ApiResult<unknown>> {
+  async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
     const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'fileTempSave' && operation !== 'fileTempDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload'
-    let result = await this.postOnce(operation, params, signal, timeoutMs, onBytes)
+    let result = await this.postOnce(operation, params, signal, timeoutMs, onBytes, networkPool)
     for (let attempt = 1; retryable && !result.ok && (result.error.status === 502 || result.error.status === 503) && attempt < 3; attempt += 1) {
       if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
       await new Promise(resolve => setTimeout(resolve, 200 * attempt))
       if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
-      result = await this.postOnce(operation, params, signal, timeoutMs)
+      result = await this.postOnce(operation, params, signal, timeoutMs, onBytes, networkPool)
     }
     return result
   }
@@ -173,14 +176,14 @@ export class EasyTransport {
   }
 
   /** Handler、Call、方法和目标 Origin 由内部白名单固定，页面消息不能提供 URL。 */
-  private async postOnce(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void): Promise<ApiResult<unknown>> {
+  private async postOnce(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
     if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
     const route = ROUTES[operation]
     if (!route || params.getAll('Call').length !== 1 || params.get('Call') !== route.call) {
       return apiError('INVALID_QUERY', '业务请求类型无效。')
     }
     if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
-    return this.sendForm(route.path, params, this.waitMs(operation, timeoutMs), signal, onBytes)
+    return this.sendForm(route.path, params, this.waitMs(operation, timeoutMs), signal, onBytes, networkPool)
   }
 
   /** DownLoad 打包后取压缩包的地址（原站把隐藏 iframe 指到这里，浏览器负责落盘）。 */
@@ -210,8 +213,11 @@ export class EasyTransport {
   }
 
   /** Handler 和 Call 已由上层收口。Cookie 只随当前页面发出，不读出来。 */
-  private async sendForm(path: string, params: URLSearchParams, timeoutMs: number, signal?: AbortSignal, onBytes?: (received: number) => void): Promise<ApiResult<unknown>> {
+  private async sendForm(path: string, params: URLSearchParams, timeoutMs: number, signal?: AbortSignal, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
     if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
+    let release: (() => void) | undefined
+    try { release = await networkPool?.acquire(signal) } catch { return apiError('REQUEST_ABORTED', '请求已取消。') }
+    if (signal?.aborted) { release?.(); return apiError('REQUEST_ABORTED', '请求已取消。') }
     const controller = new AbortController()
     let timedOut = false
     const onExternalAbort = () => controller.abort()
@@ -233,9 +239,11 @@ export class EasyTransport {
         signal: controller.signal
       })
       if (response.status === 401 || response.status === 403 || loginRedirect(response, this.origin)) {
+        await response.body?.cancel().catch(() => {})
         return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请在原网站重新登录。', response.status)
       }
       if (!response.ok) {
+        await response.body?.cancel().catch(() => {})
         return apiError('HTTP_ERROR', response.status === 502 ? 'EASY 网关异常。' :
           response.status === 503 ? 'EASY 服务暂不可用。' : 'EASY 返回 HTTP 错误。', response.status)
       }
@@ -255,6 +263,8 @@ export class EasyTransport {
           text += decoder.decode()
         } finally { reader.releaseLock() }
       } else text = await response.text()
+      // The body has arrived. Release before parsing, validation, and caller cleanup.
+      release?.(); release = undefined
       const body = text.trim()
       if (body.startsWith('<')) {
         return apiError(looksLikeLoggedOutHtml(body) ? 'SESSION_EXPIRED' : 'UNEXPECTED_HTML',
@@ -270,6 +280,7 @@ export class EasyTransport {
       if (signal?.aborted || controller.signal.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
       return apiError('NETWORK_ERROR', '无法连接 EASY，请检查网络。')
     } finally {
+      release?.()
       clearTimeout(timer)
       signal?.removeEventListener('abort', onExternalAbort)
     }

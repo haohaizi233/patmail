@@ -24,6 +24,7 @@ export function createFullPageBridge(): MessageBridge {
       // 新界面只等短受理，最终结果走独立任务消息；旧调用保留原等待预算。
       const downloadWait = message.type === MessageType.DownloadFiles ? (message.payload.detached ? 70_000 : 1_800_000) : 0
       const slow = contactExport || submitWait > 0 || message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor
+        || message.type === MessageType.ReadHagueCase
         || message.type === MessageType.ListMailProcesses || message.type === MessageType.ListFlowReviewers
         || message.type === MessageType.ReadCaseDemands
         || message.type === MessageType.ReadCaseBusFlow
@@ -34,7 +35,7 @@ export function createFullPageBridge(): MessageBridge {
         || message.type === MessageType.LoadDictionary || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm
       const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor || message.type === MessageType.SearchFiling
         ? fileSearchTimeoutMs(message.payload.timeoutMs) + 15_000 : 0
-      const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, message.type === MessageType.ResolveDownloadNames ? 300_000 : lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || downloadWait || searchWait || (slow ? 70_000 : 30_000))
+      const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, message.type === MessageType.ReadHagueCase || message.type === MessageType.ResolveDownloadNames ? 300_000 : lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || downloadWait || searchWait || (slow ? 70_000 : 30_000))
       if (response?.type === MessageType.Error) return response
       const forwarded = response?.type === MessageType.WorkspaceResult ? response.payload.forwarded : null
       if (forwarded && forwarded.type === MessageType.Error) return forwarded

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AssistantJobRequest } from '../assistant-job'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { AGENT_FRAME_KEY, normalizeAgentFrame, resizeAgentFrame, type AgentFrame, type ResizeEdge } from '../agent-frame'
 import { AGENT_ASK_SESSION_NAME_KEY } from '../../agent/memory'
@@ -14,7 +15,7 @@ import { sendToBackground } from '../../utils/runtime'
 
 interface Bubble { role: 'user' | 'assistant'; content: string }
 interface SessionCard { id: string; title: string; updatedAt: string; active: boolean }
-interface Job { kind: 'turn' | 'facts' | 'compact' | 'reset'; display: string; message: string; label: string; arbitration?: true; progress?: string }
+interface Job { kind: 'turn' | 'facts' | 'compact' | 'reset'; display: string; message: string; label: string; arbitration?: true; progress?: string; workflow?: AssistantJobRequest }
 type AgentRequest = Extract<BackgroundRequest, { type: typeof MessageType.AgentChat }>
 type AskOk = { ok: true; reply: string; history: Bubble[]; sessions: SessionCard[]; activeId: string }
 type AskResult = AskOk | { ok: false; message: string }
@@ -36,6 +37,7 @@ const renameDraft = ref('')
 const aside = ref<string[]>([])
 const QUEUE_HEAD = 3
 const queue = ref<Job[]>([])
+let activeWorkflow: AssistantJobRequest | undefined
 const arbitrationLeft = ref<string[]>([])
 const arbitrationTotal = ref(0)
 const batchProgress = ref('')
@@ -382,6 +384,7 @@ function removeSession(id: string): Promise<void> {
 }
 
 async function reset(): Promise<void> {
+  for (const queued of queue.value) queued.workflow?.reject(new Error('助手任务队列已清空，请在海牙工作台重试。'))
   queue.value = []
   arbitrationLeft.value = []
   arbitrationTotal.value = 0
@@ -423,7 +426,8 @@ async function finishJob(): Promise<void> {
   box.value?.focus()
   if (pendingReset) {
     pendingReset = false
-    queue.value = []
+    for (const queued of queue.value) queued.workflow?.reject(new Error('助手任务队列已清空，请在海牙工作台重试。'))
+  queue.value = []
     arbitrationLeft.value = []
     arbitrationTotal.value = 0
     queueOpen.value = false
@@ -488,11 +492,19 @@ async function retry(): Promise<void> {
 }
 
 async function runJob(job: Job): Promise<void> {
+  if (job.workflow?.signal?.aborted) { job.workflow.reject(new Error('已停止')); await finishJob(); return }
+  activeWorkflow = job.workflow
+  const abortWorkflow = () => {
+    stopped = true
+    void sendToBackground({ type: MessageType.AgentChat, payload: { action: 'stop' } }, 8000)
+  }
+  job.workflow?.signal?.addEventListener('abort', abortWorkflow, { once: true })
+  job.workflow?.onStart?.()
   stopped = false
   note.value = ''
   if (job.kind === 'turn') {
     aside.value = []
-    const shown = job.arbitration ? job.message : job.display
+    const shown = job.arbitration || job.workflow ? job.message : job.display
     const last = history.value.at(-1)
     if (!(last?.role === 'user' && last.content === shown)) {
       history.value = [...history.value, { role: 'user', content: shown }]
@@ -538,13 +550,14 @@ async function runJob(job: Job): Promise<void> {
     }
     const result = await ask({
       type: MessageType.AgentChat,
-      payload: job.arbitration ? { action: 'turn', message: job.message, plain: true } : { action: 'turn', message: job.message }
+      payload: job.workflow ? { action: 'turn', message: job.message, skill: job.workflow.skill } : job.arbitration ? { action: 'turn', message: job.message, plain: true } : { action: 'turn', message: job.message }
     })
     if (stopped) {
       arbitrationLeft.value = []
       arbitrationTotal.value = 0
       note.value = '已停下。'
       retryJob.value = job
+      job.workflow?.reject(new Error('已停下。'))
       return
     }
     if (!result.ok) {
@@ -553,9 +566,11 @@ async function runJob(job: Job): Promise<void> {
         arbitrationTotal.value = 0
       }
       note.value = result.message
+      job.workflow?.reject(new Error(result.message))
       retryJob.value = job
     } else {
       retryJob.value = null
+      job.workflow?.resolve(splitAgentReply(result.reply).answer || result.reply)
       if (job.arbitration) {
         const reply = result.reply.trim()
         const last = history.value.at(-1)
@@ -574,7 +589,12 @@ async function runJob(job: Job): Promise<void> {
         applyTurn(result)
       }
     }
+  } catch (error) {
+    job.workflow?.reject(error instanceof Error ? error : new Error('AI 助手处理失败。'))
+    if (!job.workflow) throw error
   } finally {
+    job.workflow?.signal?.removeEventListener('abort', abortWorkflow)
+    activeWorkflow = undefined
     await finishJob()
   }
 }
@@ -931,6 +951,16 @@ function onArbitrate(event: Event): void {
 }
 
 holdAgentPort()
+function onWorkflowJob(event: Event): void {
+  const request = (event as CustomEvent<AssistantJobRequest>).detail
+  if (!request || typeof request.message !== 'string' || typeof request.resolve !== 'function' || typeof request.reject !== 'function') return
+  request.accepted = true
+  open.value = true
+  const job: Job = { kind: 'turn', display: request.label, label: request.label, message: request.message, workflow: request }
+  if (busy.value) queue.value = [...queue.value, job]
+  else void runJob(job)
+}
+window.addEventListener('patmail-agent-workflow', onWorkflowJob)
 window.addEventListener('patmail-arbitrate', onArbitrate)
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener(onRuntimeMessage)
@@ -939,6 +969,9 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
 window.addEventListener('keydown', onEscape)
 window.addEventListener('resize', onViewport)
 onUnmounted(() => {
+  activeWorkflow?.reject(new Error('AI 助手已关闭'))
+  window.removeEventListener('patmail-agent-workflow', onWorkflowJob)
+  for (const job of queue.value) job.workflow?.reject(new Error('AI 助手已关闭'))
   window.removeEventListener('patmail-arbitrate', onArbitrate)
   window.removeEventListener('keydown', onEscape)
   window.removeEventListener('resize', onViewport)

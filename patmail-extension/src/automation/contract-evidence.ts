@@ -21,29 +21,29 @@ export const CONTRACT_EVIDENCE: ContractEvidence[] = [
   {
     handler: '/AjaxServers/Notice.ashx', call: 'MailCustomer', method: 'POST', contentType: FORM,
     requestFields: ['Call', '_file_ids', '_file_names', 'mailstyle', 'mailtype', 'log_pagename'],
-    fieldSources: '已核对的发文创建请求。单个来文的 mailstyle 仍未知。',
-    responseShape: '页面成功条件是 objid。响应正文没有保存。',
+    fieldSources: '2026-11-11 HAR entry 45：单个来文 mailstyle=2；合并仍为 1。',
+    responseShape: '2026-11-11 HAR：ClientInfo.Status=true、Result=false，顶层 objid 为邮件 GUID。',
     successCondition: '出现 objid。缺 objid 按未知处理，不能重试。',
-    responseCaptured: false, source: 'captured-request', status: 'pending',
-    note: '不能为了补响应在正式客户记录上重试。'
+    responseCaptured: true, source: 'captured-response', status: 'verified',
+    note: '已从用户提供的 HAR 核对，不重放真实创建请求。'
   },
   {
     handler: '/AjaxServers/Mail.ashx', call: 'SaveMailInfo', method: 'POST', contentType: FORM,
     requestFields: ['Call', 'mail_id', 'mail_type', 'customer_id', 'mail_to', 'mail_subject', 'mail_body'],
     fieldSources: '保存字段名来自页面脚本和字段对照。customer_id 只用邮件快照里的 GUID。',
-    responseShape: '正文未保存。',
+    responseShape: '2026-11-11 HAR entry 148：ClientInfo.Status=true、Result=false。',
     successCondition: 'ClientInfo.Status=true 只表示请求被接受的页面判断，仍要回读。',
-    responseCaptured: false, source: 'page-script', status: 'pending',
+    responseCaptured: true, source: 'captured-response', status: 'verified',
     note: 'Status=false 是失败。超时进入 UNKNOWN。'
   },
   {
     handler: '/AjaxServers/Mail.ashx', call: 'SaveMailRalteCaseFile', method: 'POST', contentType: FORM,
     requestFields: ['Call', 'mail_id', 'file_ids'],
     fieldSources: 'mail.js 用勾选文件的 objid 以分号拼接。HAR 里这次值为空。',
-    responseShape: '正文未保存。',
+    responseShape: '2026-11-11 HAR entry 150：ClientInfo.Status=true、Result=true。',
     successCondition: 'Status=true 不是关联成功。必须回读 GetMailFile。',
-    responseCaptured: false, source: 'captured-request', status: 'pending',
-    note: '格式未核对时保持 BINDING_BLOCKED，不调用。'
+    responseCaptured: true, source: 'captured-response', status: 'verified',
+    note: '关联格式按 mail.js 的分号拼接；成功后仍回读 GetMailFile。'
   },
   {
     handler: '/AjaxServers/Common.ashx', call: 'GetFlowInfo', method: 'POST', contentType: FORM,
