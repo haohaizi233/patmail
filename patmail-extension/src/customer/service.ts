@@ -1,3 +1,4 @@
+import { isFileMailConfig, cloneFileMailConfig } from './file-mail-config'
 import { isQueryGuid } from '../query/query-validator'
 import { newUuid } from '../utils/uuid'
 import { caseContactSkills } from './skills'
@@ -16,6 +17,7 @@ export class CustomerQueryService {
     if (!name) throw new Error('请填写客户名称。')
     if (input.easyCustomerId && !isQueryGuid(input.easyCustomerId)) throw new Error('原网站客户 ID 必须是已确认的 GUID。')
     if (!input.baseTemplateId.trim()) throw new Error('请选择基础模板。')
+    if (input.fileMailConfig !== undefined && !isFileMailConfig(input.fileMailConfig)) throw new Error('客户发文配置格式无效，请检查下拉选项和邮箱地址。')
     const existing = input.id ? await this.repository.get(input.id) : null
     const skills = caseContactSkills(name)
     const profile: CustomerQueryProfile = {
@@ -24,6 +26,7 @@ export class CustomerQueryService {
       ...(input.easyCustomerId ? { easyCustomerId: input.easyCustomerId } : {}),
       baseTemplateId: input.baseTemplateId.trim(),
       overrides: { ...input.overrides },
+      ...(input.fileMailConfig ? { fileMailConfig: cloneFileMailConfig(input.fileMailConfig) } : {}),
       ...(input.querySurface ? { querySurface: input.querySurface } : {}),
       ...(input.workflowId ? { workflowId: input.workflowId } : {}),
       ...(input.workflowRemark?.trim() ? { workflowRemark: input.workflowRemark.trim().slice(0, 40) } : {}),

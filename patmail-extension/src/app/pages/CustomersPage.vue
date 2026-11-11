@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onUnmounted, ref, watch } from 'vue'
+import FileMailConfigEditor from '../components/FileMailConfigEditor.vue'
+import { cloneFileMailConfig, isFileMailConfig, type FileMailConfig } from '../../customer/file-mail-config'
 import PageHead from '../../shell/components/PageHead.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { bg } from '../../shell/assets'
@@ -65,6 +67,18 @@ const name = ref('')
 const surface = ref<QuerySurfaceId | ''>('')
 const workflow = ref<WorkflowId | ''>('')
 const mailStyle = ref('')
+const fileMailConfig = ref<FileMailConfig>()
+const fileMailDefaults = computed<FileMailConfig>(() => {
+  const bundle = rules.value
+  const signatureId = bundle?.defaultSignatureId?.startsWith('site:') ? bundle.defaultSignatureId.slice(5) : ''
+  return {
+    ...(bundle?.defaultSender ? { sender: { id: bundle.defaultSender.mailsetId, label: bundle.defaultSender.label } } : {}),
+    ...(bundle?.defaultReviewer ? { reviewer: { id: bundle.defaultReviewer.userId, name: bundle.defaultReviewer.name } } : {}),
+    ...(signatureId ? { signature: { id: signatureId, name: '发文映射默认签名' } } : {}),
+    ...(bundle?.subject.template ? { title: bundle.subject.template } : {})
+  }
+})
+
 const workflowRemark = ref('')
 const remarkBox = ref<HTMLInputElement | null>(null)
 const reviewChoice = ref('')
@@ -113,6 +127,7 @@ watch(workflowMailbox, (sender) => {
 })
 
 function chooseCustomer(value: string): void {
+  if (customerPick.value !== value) fileMailConfig.value = undefined
   customerPick.value = value
   const found = customerCatalog.value.find(item => item.id.toLowerCase() === value.toLowerCase())
   if (!found) return
@@ -257,6 +272,7 @@ function describe(item: { boundQuery?: Record<string, string>; overrides: Record
 function edit(id: string): void {
   const profile = customers.value.find(item => item.id === id)
   if (!profile) return
+  fileMailConfig.value = cloneFileMailConfig(profile.fileMailConfig)
   editingId.value = profile.id
   name.value = profile.name
   const savedId = profile.easyCustomerId && isQueryGuid(profile.easyCustomerId) ? profile.easyCustomerId : ''
@@ -328,6 +344,7 @@ async function loadDemands(): Promise<void> {
 }
 
 function cancel(): void {
+  fileMailConfig.value = undefined
   editingId.value = ''
   name.value = ''
   customerPick.value = ''
@@ -390,6 +407,7 @@ function openContacts(id: string): void {
 }
 
 async function save(goAfter: boolean): Promise<void> {
+  if (surface.value === 'file' && workflow.value === 'file-manage' && fileMailConfig.value && !isFileMailConfig(fileMailConfig.value)) { formMessage.value = '发文配置无效，请检查下拉选择和邮箱地址（姓名(邮箱); 或 邮箱;）。'; return }
   formMessage.value = ''
   const selected = customerCatalog.value.find(item => item.id.toLowerCase() === customerPick.value.toLowerCase())
   if (selected) {
@@ -433,6 +451,7 @@ async function save(goAfter: boolean): Promise<void> {
       ...(remark ? { workflowRemark: remark } : {}),
       ...(surface.value === 'limit' ? { limitMailStyle: mailStyle.value as LimitMailStyle } : {}),
       ...(surface.value === 'file' ? { fileMailStyle: mailStyle.value as FileMailStyle } : {}),
+      ...(surface.value === 'file' && workflow.value === 'file-manage' && fileMailConfig.value ? { fileMailConfig: cloneFileMailConfig(fileMailConfig.value) } : {}),
       ...(surface.value === 'limit' && isQueryGuid(reviewChoice.value) && pickedReviewerName.value ? {
         reviewerId: reviewChoice.value,
         reviewerName: pickedReviewerName.value,
@@ -559,7 +578,8 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
     </section>
     <form class="card" @submit.prevent="save(false)">
       <h2>{{ editingId ? '修改客户' : '添加客户' }}</h2>
-      <div class="stack-form">
+      <div class="customer-edit-layout" :class="{ 'has-mail-settings': surface === 'file' && workflow === 'file-manage' }">
+      <div class="stack-form customer-basic-settings">
         <label>客户名称
           <ThemeSelect :model-value="customerPick" placeholder="请选择客户" empty-text="客户名单还没读到。点下面的重新读取。" :options="customerOptions" @update:model-value="chooseCustomer(String($event))" />
         </label>
@@ -576,7 +596,7 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
         </label>
         <template v-if="activeWorkflow">
           <p v-if="surface === 'limit'" class="hint">{{ activeWorkflow.label }}里，表格能决定的项按列走。这里选择表格决定不了的模式。</p>
-          <p v-else class="hint">{{ activeWorkflow.label }}按这位客户绑定的查询条件和下面的发文方式执行。发件人、审核人、标题和签名用发文映射里的配置。</p>
+          <p v-else class="hint">{{ activeWorkflow.label }}按这位客户绑定的查询条件和下面的发文方式执行。下方可为这条客户工作流单独配置发文；未设置的项目沿用发文映射默认。</p>
           <template v-for="mode in activeWorkflow.modes" :key="mode.id">
             <div v-if="mode.id === 'mail_style'">
               <label>{{ mode.label }}
@@ -612,7 +632,7 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
               </template>
               <button type="button" class="text-button" @click="loadMailTypes(true)">重新读取发文类型</button>
             </div>
-            <p v-else class="hint"><strong>{{ mode.label }}</strong>：{{ mode.decidedBy }}</p>
+            <p v-else-if="workflow !== 'file-manage'" class="hint"><strong>{{ mode.label }}</strong>：{{ mode.decidedBy }}</p>
           </template>
         </template>
         <div v-else-if="surface === 'file'">
@@ -623,10 +643,13 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
           <p v-if="mailStyle === defaultStyle" class="hint">当前就是默认：同客户合并发文。</p>
         </div>
         <p v-else-if="!surface" class="hint">先选查询入口。期限监控会带出已封装的工作流。</p>
+
         <label>备注
           <input ref="remarkBox" v-model="workflowRemark" type="text" maxlength="40" placeholder="同一客户有多条时写一句，方便分辨" />
         </label>
         <p class="hint">可留空。写上一句，表格里就能看出这一条是哪一套。</p>
+      </div>
+      <FileMailConfigEditor v-if="surface === 'file' && workflow === 'file-manage'" :key="`${editingId}|${customerPick}|${connection.easyOrigin}|${connection.operatorId}`" v-model="fileMailConfig" :customer-id="keptCustomerId || customerPick" :defaults="fileMailDefaults" />
       </div>
       <div v-if="editingId" class="hint">
         <p>客户要求按原网站客户编号读取，只在这里看，不会改原网站。</p>
@@ -648,3 +671,14 @@ watch(() => `${connection.value.easyOrigin}\n${connection.value.operatorId}`, (n
     </form>
   </template>
 </template>
+
+<style scoped>
+.customer-edit-layout { display: grid; grid-template-columns: minmax(0, 720px); gap: 28px; align-items: start; }
+.customer-edit-layout.has-mail-settings { grid-template-columns: minmax(300px, .85fr) minmax(0, 1.15fr); }
+.customer-basic-settings { width: 100%; min-width: 0; }
+.customer-edit-layout :deep(.file-mail-config) { border-left: 1px solid #f4e1eb; padding-left: 26px; }
+@media (max-width: 1050px) {
+  .customer-edit-layout.has-mail-settings { grid-template-columns: minmax(0, 1fr); }
+  .customer-edit-layout :deep(.file-mail-config) { border-left: 0; border-top: 1px solid #f4e1eb; padding: 22px 0 0; }
+}
+</style>

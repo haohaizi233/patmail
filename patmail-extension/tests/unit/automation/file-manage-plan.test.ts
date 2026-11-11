@@ -1,8 +1,11 @@
+import { isContentRequest, MessageType } from '../../../src/shared/message'
 import { describe, expect, it } from 'vitest'
 import { bodyWithSignature, planFileManageLetters, senderAddress } from '../../../src/customer/file-manage-plan'
 import { classifyMailFlow, fileManageSubmitShouldHalt, formatPeople, matchConfiguredReviewer, nextFileManageAttempt } from '../../../src/customer/file-manage-submit'
 import type { DescriptionMailTypeMapping, SubjectRule } from '../../../src/mail/types'
 import type { WorkflowNode } from '../../../src/workflow/types'
+import { buildMailCustomerParams } from '../../../src/mail/easy/contracts'
+import type { MailDraftPreview } from '../../../src/mail/types'
 
 const fileId = '71d067a3-d1a3-4d4b-87f9-38ea9d96bf70'
 const typeId = '82e178b4-e2b4-4e5c-98fa-49fb0ea7cf81'
@@ -29,6 +32,50 @@ function mapping(text: string, mailTypeId: string): DescriptionMailTypeMapping {
 }
 
 describe('文件管理工作流规划', () => {
+  it('客户固定类型覆盖缺失映射，独立标题生效', () => {
+    const planned = planFileManageLetters({
+      customerName: '甲', mailStyle: 'single_file',
+      files: [{ fileId, fileName: '甲.pdf', fileDescription: '未映射描述', customerName: '甲' }],
+      mappings: [], mailTypeOverride: { id: typeId, name: '客户专属类型' },
+      subject: { ...subject, template: '{客户名称}-{发文类型}' },
+      hasSender: true, hasReviewer: true, hasSignature: true
+    })
+    expect(planned.letters[0]).toMatchObject({ blocked: '', mailTypeId: typeId, subject: '甲-客户专属类型' })
+  })
+
+  it('单个来文逐文件规划，同描述也各自用原站 mailstyle=2 提交', () => {
+    const planned = planFileManageLetters({
+      customerName: '甲',
+      mailStyle: 'single_file',
+      files: [
+        { fileId, fileName: '甲.pdf', fileDescription: '专利证书', customerName: '甲' },
+        { fileId: otherType, fileName: '乙.pdf', fileDescription: '专利证书', customerName: '甲' }
+      ],
+      mappings: [mapping('专利证书', typeId)],
+      subject,
+      hasSender: true,
+      hasReviewer: true,
+      hasSignature: true
+    })
+    expect(planned.letters).toHaveLength(2)
+    for (const letter of planned.letters) {
+      expect(letter.blocked).toBe('')
+      expect(letter.files).toHaveLength(1)
+      const result = buildMailCustomerParams({
+        sendMode: 'single_file',
+        mailTypeId: letter.mailTypeId,
+        fileIds: letter.files.map(file => file.fileId),
+        files: letter.files
+      } as MailDraftPreview)
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.params.get('mailstyle')).toBe('2')
+        expect(result.params.get('_file_ids')).toBe(letter.files[0]?.fileId)
+        expect(result.params.get('_file_names')).toBe(letter.files[0]?.fileName)
+      }
+    }
+  })
+
   it('同一文件描述合成一封，类型、标题按映射和模板', () => {
     const planned = planFileManageLetters({
       customerName: '鹏城实验室',
@@ -154,6 +201,11 @@ describe('文件管理工作流规划', () => {
       reviewerName: '审',
       signature: '此致'
     }
+    expect(isContentRequest({ type: MessageType.SubmitFileManage, payload: { userId: typeId, items: [{ ...item, mailStyle: '2' }] } })).toBe(true)
+    expect(isContentRequest({ type: MessageType.SubmitFileManage, payload: { userId: typeId, items: [{ ...item, mailStyle: '3' }] } })).toBe(false)
+    expect(isContentRequest({ type: MessageType.SubmitFileManage, payload: { userId: typeId, items: [{ ...item, addresses: { to: '追加(extra@example.com);', cc: { sender: false, sales: true } } }] } })).toBe(true)
+    expect(isContentRequest({ type: MessageType.SubmitFileManage, payload: { userId: typeId, items: [{ ...item, addresses: { to: 'invalid-email' } }] } })).toBe(false)
+
     const recalled = nextFileManageAttempt(item, { fileId, mailId: otherType, state: 'submitted' })
     expect(recalled.action === 'send' && recalled.item.recall && recalled.item.mailId).toBe(otherType)
     expect(nextFileManageAttempt(item, { fileId, mailId: '', state: 'submitted' }).action).toBe('send')

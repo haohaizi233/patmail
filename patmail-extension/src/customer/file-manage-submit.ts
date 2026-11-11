@@ -1,6 +1,7 @@
+import { fileMailAddresses, type FileMailConfig } from './file-mail-config'
 import { retryCreatedDraft, transientEasyFailure, type EasyTransport } from '../api/transport'
 import { isRecord } from '../api/response-guards'
-import { appendRecipientField, buildMailCustomerParams, readMailCustomer, readMailInfo, readSaveMailInfo, SAVE_KEYS, saveParams, signatureParams } from '../mail/easy/contracts'
+import { buildMailCustomerParams, readMailCustomer, readMailInfo, readSaveMailInfo, SAVE_KEYS, saveParams, signatureParams } from '../mail/easy/contracts'
 import { mailBccToSave } from '../mail/easy/bcc'
 import { loadMailContactText } from '../mail/easy/mail-contacts'
 import { operatorSignatureHtml, readSignatureHtml } from '../mail/easy/signature-read'
@@ -33,7 +34,7 @@ export interface FileManageSubmitItem {
   fileIds: string[]
   fileNames: string[]
   mailTypeId: string
-  mailStyle: '1'
+  mailStyle: '1' | '2'
   mailId?: string
   /** 本地记过已提交。先读这封邮件现在的流程，再决定沿用还是另建。 */
   recall?: boolean
@@ -45,6 +46,7 @@ export interface FileManageSubmitItem {
   reviewerName: string
   /** 原站签名是下拉项编号。操作员签名是要写成 HTML 的正文。 */
   signature: string
+  addresses?: Pick<FileMailConfig, 'to' | 'cc'>
 }
 
 export interface FileManageSubmitResult {
@@ -329,7 +331,8 @@ function previewOf(item: FileManageSubmitItem): MailDraftPreview {
     subject: item.subject,
     body: '',
     signature: '',
-    sendMode: 'merge_by_customer_description',
+    // 2026-11-11 HAR 确认：单个来文 mailstyle=2。
+    sendMode: item.mailStyle === '2' ? 'single_file' : 'merge_by_customer_description',
     status: 'ready',
     issues: [],
     ruleVersions: {},
@@ -390,7 +393,8 @@ async function writeLetter(transport: EasyTransport, mailId: string, item: FileM
   }
   const business = formatPeople(sales)
   const sender = formatPeople([{ name: item.senderName, email: item.senderEmail }])
-  const cc = appendRecipientField(sender.value, business.value)
+  const addresses = fileMailAddresses(item.addresses, to.value, business.value, { name: item.senderName, email: item.senderEmail })
+  const cc = addresses.cc
   const signature = await signatureHtmlOf(transport, item)
   if (!signature.ok) return signature
   const rawBody = typeof info.row.mail_body === 'string' ? info.row.mail_body : ''
@@ -399,7 +403,7 @@ async function writeLetter(transport: EasyTransport, mailId: string, item: FileM
   const row = withInventors.html === rawBody ? info.row : { ...info.row, mail_body: withInventors.html }
   const bcc = await mailBccToSave(info.row, mailId, customerId, (operation, params) => transport.post(operation, params))
   if (bcc === null) return { ok: false, message: '发文草稿的密送读不全，没有改地址。' }
-  const fields = saveFields(row, item, mailId, to.value, cc, signature.html, bcc)
+  const fields = saveFields(row, item, mailId, addresses.to, cc, signature.html, bcc)
   if (!fields) return { ok: false, message: '发文草稿的主题、正文或发件邮箱读不全，没有改地址。' }
   const saved = await transport.post('saveMailInfo', saveParams(fields))
   if (!saved.ok) return { ok: false, message: '保存收件人的响应无法确认，没有提交。再点一次会沿用这封发文，不会重新创建。' }
@@ -410,7 +414,7 @@ async function writeLetter(transport: EasyTransport, mailId: string, item: FileM
   const skipped = [...to.skipped, ...business.skipped, ...sender.skipped]
   const left = skipped.length ? `写不成的没有写入：${skipped.join('、')}。` : ''
   const inventors = withInventors.note ? `${withInventors.note}` : ''
-  return { ok: true, note: `收件人是案件联系人，抄送是默认发件人和商务，正文写入发文页邮件签名下拉里的格式。${inventors}${left}` }
+  return { ok: true, note: `收件人保留案件联系人并按客户配置追加，抄送按客户配置（未设置时为发件人和商务），正文写入所选签名格式。${inventors}${left}` }
 }
 
 function mailInfoParams(mailId: string): URLSearchParams {

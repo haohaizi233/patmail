@@ -24,7 +24,7 @@ export const LIMIT_MAIL_STYLES: { value: LimitMailStyle; label: string }[] = [
 /**
  * 文件管理「选择发文模式」弹层，页面是 FileSearchMail.aspx。
  * 来源：API/07。默认项是「同客户合并发文」，提交值 mailstyle=1。
- * 单个来文在文件分组里有，这次抓包没有它的 mailstyle，所以不写成数字。
+ * 2026-11-11 HAR 确认单个来文 mailstyle=2；本地仍逐文件规划，一封只传一个文件。
  */
 export const FILE_MAIL_STYLES: { value: FileMailStyle; label: string }[] = [
   { value: 'merge_by_customer_description', label: '同客户合并发文' },

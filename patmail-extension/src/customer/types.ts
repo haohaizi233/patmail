@@ -1,8 +1,9 @@
+import type { FileMailConfig } from './file-mail-config'
 import type { FileDownloadSelection } from '../mail/download-name'
 
 export type QuerySurfaceId = 'file' | 'limit'
 export type LimitMailStyle = '1' | '2' | '3'
-/** 文件管理弹层 FileSearchMail.aspx。合并发文的 mailstyle=1 已核对，单个来文的提交值还没有。 */
+/** 文件管理弹层 FileSearchMail.aspx。合并 mailstyle=1，单个来文 mailstyle=2，均已核对。 */
 export type FileMailStyle = 'merge_by_customer_description' | 'single_file'
 export type ReviewTarget = 'self'
 
@@ -86,6 +87,7 @@ export interface CustomerQueryProfile {
   limitMailStyle?: LimitMailStyle
   /** 文件管理弹层里的发文模式。只在查询入口是文件查询时使用。 */
   fileMailStyle?: FileMailStyle
+  fileMailConfig?: FileMailConfig
   /** 查询页最后一次提交的字段，不是操作步骤。 */
   boundQuery?: Record<string, string>
   /** 文件查询里选中的下载名称。不参与查询，发文时用来生成文件名。 */

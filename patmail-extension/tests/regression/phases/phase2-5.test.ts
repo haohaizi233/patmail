@@ -1,3 +1,4 @@
+import { setWriteSwitchOpen } from '../../../src/settings/write-switch'
 import { describe, expect, it, vi } from 'vitest'
 import { EasyRuntime } from '../../../src/api/client'
 import { EasyTransport } from '../../../src/api/transport'
@@ -102,7 +103,7 @@ describe('客户身份和映射', () => {
 })
 
 describe('创建契约', () => {
-  it('builds merge requests in file order and refuses an unconfirmed single send', () => {
+  it('builds merge and confirmed single requests in file order', () => {
     const preview = previewOf([selected(fileB), selected(fileA)])
     const params = buildMailCustomerParams(preview)
     expect(params.ok).toBe(true)
@@ -112,13 +113,15 @@ describe('创建契约', () => {
     expect(params.params.get('mailtype')).toBe(mailType)
     expect(params.params.get('_file_ids')?.split(';')).toEqual([fileA, fileB])
     expect(params.params.get('_file_names')?.split(';')).toHaveLength(2)
-    expect(buildMailCustomerParams({ ...preview, sendMode: 'single_file' }).ok).toBe(false)
+    const single = buildMailCustomerParams({ ...preview, sendMode: 'single_file' })
+    expect(single.ok && single.params.get('mailstyle')).toBe('2')
     expect(buildMailCustomerParams({ ...preview, fileIds: [fileA] }).ok).toBe(false)
     expect(readMailCustomer({ ...client, objid: mailId })).toMatchObject({ status: 'ok', data: { mailId } })
     expect(readMailCustomer({ ...client }).status).toBe('unknown')
   })
 
   it('does not call EASY when the production gate is closed', async () => {
+    await setWriteSwitchOpen(false)
     const fetcher = vi.fn<typeof fetch>()
     const runtime = new MailExecutionRuntime(new EasyTransport(origin, { fetcher }), new MemoryExecutionStore(), productionGate, origin)
     const preview = previewOf([selected(fileA)])
@@ -127,7 +130,8 @@ describe('创建契约', () => {
     expect(first.record.requestSent).toBe(false)
     expect(fetcher).not.toHaveBeenCalled()
     const single = previewOf([selected(fileA)], { ...rules(), policies: [{ ...rules().policies[0]!, sendMode: 'single_file' }] })
-    expect((await runtime.create(user, single, claimOf(single))).blockers.join('')).toContain('mailstyle')
+    expect((await runtime.create(user, single, claimOf(single))).blockers.join('')).toContain('写开关')
+    await setWriteSwitchOpen(true)
   })
 
   it('keeps an unknown create from being sent again', async () => {

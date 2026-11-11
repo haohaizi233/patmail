@@ -1,3 +1,4 @@
+import { cloneFileMailConfig } from './file-mail-config'
 import { updateBundle, type QueryBundleRepository } from '../storage/query-bundle'
 import type { CustomerQueryProfile } from './types'
 
@@ -9,7 +10,7 @@ export interface CustomerRepository {
 }
 
 function clone(profile: CustomerQueryProfile): CustomerQueryProfile {
-  return { ...profile, overrides: { ...profile.overrides }, ...(profile.easyCustomerId ? { easyCustomerId: profile.easyCustomerId } : {}) }
+  return { ...profile, ...(profile.fileMailConfig ? { fileMailConfig: cloneFileMailConfig(profile.fileMailConfig) } : {}), overrides: { ...profile.overrides }, ...(profile.easyCustomerId ? { easyCustomerId: profile.easyCustomerId } : {}) }
 }
 
 export class BundleCustomerRepository implements CustomerRepository {

@@ -11,6 +11,7 @@ describe('前端写开关', () => {
   })
 
   it('默认打开', () => {
+    expect(liveWriteBlockers('single_file')).toEqual([])
     expect(isWriteSwitchOpen()).toBe(true)
     expect(productionWriteAllowed()).toBe(true)
     expect(liveWriteBlockers('merge_by_customer_description').some(item => item.includes('写开关'))).toBe(false)

@@ -1,3 +1,4 @@
+import { isFileMailConfig } from './file-mail-config'
 import { isFileSearchBusinessField } from '../api/file-search-params'
 import { isFileDownloadSelection } from '../mail/download-name'
 import { isForbiddenFieldName } from '../query/field-registry'
@@ -21,6 +22,7 @@ export function isCustomerProfile(value: unknown): value is CustomerQueryProfile
   if (profile.workflowRemark !== undefined && (typeof profile.workflowRemark !== 'string' || profile.workflowRemark.length > 40)) return false
   if (profile.limitMailStyle !== undefined && !isLimitMailStyle(profile.limitMailStyle)) return false
   if (profile.fileMailStyle !== undefined && !isFileMailStyle(profile.fileMailStyle)) return false
+  if (profile.fileMailConfig !== undefined && !isFileMailConfig(profile.fileMailConfig)) return false
   if (profile.reviewTarget !== undefined && profile.reviewTarget !== 'self') return false
   if (profile.reviewerId !== undefined && (typeof profile.reviewerId !== 'string' || !isQueryGuid(profile.reviewerId))) return false
   if (profile.reviewerName !== undefined && (typeof profile.reviewerName !== 'string' || !profile.reviewerName.trim() || profile.reviewerName.length > 80)) return false

@@ -54,22 +54,26 @@ const options = computed(() => bound.value.map(item => ({
 })))
 const customer = computed(() => bound.value.find(item => sameOptionValue(item.id, customerId.value)) ?? null)
 const pickedSender = computed(() => {
-  const saved = props.rules?.defaultSender
+  const custom = customer.value?.fileMailConfig?.sender
+  const saved = custom ? { mailsetId: custom.id, label: custom.label } : props.rules?.defaultSender
   if (!saved || !isQueryGuid(saved.mailsetId)) return null
   const live = props.senders.find(item => item.id.toLowerCase() === saved.mailsetId.toLowerCase())
+  if (custom && !live) return null
   const address = senderAddress(live ?? { label: saved.label })
   return address ? { id: saved.mailsetId, ...address, label: saved.label } : null
 })
 const reviewer = computed(() => {
-  const saved = props.rules?.defaultReviewer
+  const custom = customer.value?.fileMailConfig?.reviewer
+  const saved = custom ? { userId: custom.id, name: custom.name } : props.rules?.defaultReviewer
   if (!saved || !isQueryGuid(saved.userId) || !saved.name.trim()) return null
   return saved
 })
-const signatureChoice = computed(() => defaultSignatureChoice(
-  signatureChoices(siteSignatures.value, props.rules?.signatures ?? [], connection.value.operatorId),
-  props.rules?.defaultSignatureId ?? null,
-  reservedSignatureId.value || null
-))
+const signatureChoice = computed(() => {
+  const custom = customer.value?.fileMailConfig?.signature
+  const choices = signatureChoices(siteSignatures.value, props.rules?.signatures ?? [], connection.value.operatorId)
+  if (custom) return choices.find(item => item.source === 'site' && item.id === custom.id) ?? null
+  return defaultSignatureChoice(choices, props.rules?.defaultSignatureId ?? null, reservedSignatureId.value || null)
+})
 const readyLetters = computed(() => letters.value.filter(item => !item.blocked && item.mailTypeId && item.subject))
 const pickedLetters = computed(() => readyLetters.value.filter(item => picked.value.includes(item.key)))
 const allReadyPicked = computed(() => readyLetters.value.length > 0 && readyLetters.value.every(item => picked.value.includes(item.key)))
@@ -252,7 +256,8 @@ function rebuild(files: FileManageFile[]): void {
     mailStyle: profile.fileMailStyle === 'single_file' ? 'single_file' : 'merge_by_customer_description',
     files,
     mappings: props.rules?.mappings ?? [],
-    subject: props.rules?.subject ?? null,
+    mailTypeOverride: profile.fileMailConfig?.mailType,
+    subject: profile.fileMailConfig?.title ? { ...(props.rules?.subject ?? { countInjection: false, anchor: '', missingAnchor: 'keep' as const, version: 1 }), template: profile.fileMailConfig.title } : props.rules?.subject ?? null,
     hasSender: Boolean(pickedSender.value),
     hasReviewer: Boolean(reviewer.value),
     hasSignature: Boolean(signatureToken())
@@ -286,6 +291,12 @@ async function search(): Promise<void> {
     notice.value = '绑定的查询条件不能用来查询。'
     return
   }
+  const searchCustomerId = profile.id
+  const searchOrigin = connection.value.easyOrigin
+  const searchOperator = connection.value.operatorId
+  const searchRevision = profile.revision
+  const stillCurrent = () => customer.value?.id === searchCustomerId && customer.value?.revision === searchRevision
+    && connection.value.easyOrigin === searchOrigin && connection.value.operatorId === searchOperator
   searching.value = true
   notice.value = ''
   outcomes.value = {}
@@ -301,6 +312,7 @@ async function search(): Promise<void> {
         type: MessageType.SearchFiles,
         payload: { query: { ...query, pageIndex: page, pageSize: 100 } }
       })
+      if (!stillCurrent()) return
       if (response.type !== MessageType.SearchFilesResult) {
         notice.value = response.type === MessageType.Error ? response.payload.message : '文件查询返回了意外结果。'
         return
@@ -318,6 +330,7 @@ async function search(): Promise<void> {
       return
     }
     const named = await renameForMail(files, profile.fileDownloadName)
+    if (!stillCurrent()) return
     if (!named.ok) {
       notice.value = named.message
       return
@@ -350,14 +363,15 @@ function itemOf(letter: FileManageLetterPlan): FileManageSubmitItem | null {
     fileIds: letter.files.map(file => file.fileId),
     fileNames: letter.files.map(file => file.fileName),
     mailTypeId: letter.mailTypeId,
-    mailStyle: '1',
+    mailStyle: customer.value?.fileMailStyle === 'single_file' ? '2' : '1',
     subject: letter.subject,
     senderId: sender.id,
     senderName: sender.name,
     senderEmail: sender.email,
     reviewerId: person.userId,
     reviewerName: person.name,
-    signature
+    signature,
+    addresses: customer.value?.fileMailConfig ? { to: customer.value.fileMailConfig.to, cc: customer.value.fileMailConfig.cc } : undefined
   }
 }
 
@@ -461,7 +475,19 @@ watch(() => connection.value.sessionStatus, (status) => {
   if (status === 'authenticated') void loadSignatures()
 }, { immediate: true })
 
-watch(signatureChoice, () => {
+watch(customerId, (next, previous) => {
+  if (next === previous) return
+  letters.value = []
+  foundFiles.value = []
+  picked.value = []
+  outcomes.value = {}
+  notes.value = []
+  notice.value = ''
+}, { flush: 'sync' })
+
+watch(() => customer.value?.fileMailConfig, () => { if (foundFiles.value.length) rebuild(foundFiles.value) }, { deep: true })
+
+watch([signatureChoice, pickedSender, reviewer], () => {
   if (foundFiles.value.length) rebuild(foundFiles.value)
 })
 
@@ -490,17 +516,17 @@ function fileNames(letter: FileManageLetterPlan): string {
     <template v-else>
       <div class="form-grid">
         <label>客户
-          <ThemeSelect v-model="customerId" placeholder="选择客户" :options="options" />
+          <ThemeSelect v-model="customerId" placeholder="选择客户" :options="options" :disabled="searching || sending" />
         </label>
       </div>
       <template v-if="customer">
         <p class="hint">查询条件：{{ summarizeBoundQuery(customer.boundQuery) }}</p>
         <p v-if="customer.fileDownloadName" class="hint">发文文件名：{{ downloadNameText(customer.fileDownloadName) }}。查询仍用原来的条件，文件名在发文前按这个下载名称生成。</p>
-        <p class="hint">发文方式：{{ styleLabel }}。收件人是案件联系人。抄送是默认发件人{{ pickedSender ? `（${pickedSender.label}）` : '' }}，同时抄送商务。审核人是{{ reviewer ? reviewer.name : '还没设' }}。签名是{{ signatureChoice ? signatureChoice.name : '还没设' }}。</p>
-        <p v-if="!pickedSender" class="hint">还没有默认发件人。到发文映射里设一个。</p>
-        <p v-if="!reviewer" class="hint">还没有默认审核人。到发文映射里设一个。</p>
-        <p v-if="!rules?.subject.template.trim()" class="hint">还没有标题模板。到发文映射里写一条。</p>
-        <p v-if="!signatureChoice" class="hint">还没有默认签名。到发文映射里选一条，或添加操作员签名。</p>
+        <p class="hint">发文方式：{{ styleLabel }}。收件人是案件联系人。抄送按客户配置（未配置则为发件人和商务），发件人是{{ pickedSender ? `（${pickedSender.label}）` : '' }}。审核人是{{ reviewer ? reviewer.name : '还没设' }}。签名是{{ signatureChoice ? signatureChoice.name : '还没设' }}。</p>
+        <p v-if="!pickedSender" class="hint">发件人未设置或客户选择已失效，请在客户配置或发文映射中检查。</p>
+        <p v-if="!reviewer" class="hint">审核人未设置，请在客户配置或发文映射中检查。</p>
+        <p v-if="!customer.fileMailConfig?.title && !rules?.subject.template.trim()" class="hint">还没有标题模板。到发文映射里写一条。</p>
+        <p v-if="!signatureChoice" class="hint">签名未设置或客户选择已失效，请在客户配置或发文映射中检查。</p>
         <button type="button" class="solid" :disabled="searching || sending" @click="search">{{ searching ? '正在查询…' : '按绑定条件查询' }}</button>
       </template>
       <p v-if="notice" class="hint">{{ notice }}</p>
@@ -529,8 +555,8 @@ function fileNames(letter: FileManageLetterPlan): string {
             <td class="files"><span class="clip wrap" v-hint.clip="fileNames(letter)">{{ fileNames(letter) }}</span></td>
             <td class="desc"><span class="clip wrap" v-hint.clip="letter.description || '没有描述'">{{ letter.description || '没有描述' }}</span></td>
             <td class="type"><span class="clip wrap" v-hint.clip="letter.mailTypeName || '没对上'">{{ letter.mailTypeName || '没对上' }}</span></td>
-            <td class="to"><span class="clip wrap" v-hint.clip="'案件联系人'">案件联系人</span></td>
-            <td class="cc"><span class="clip wrap" v-hint.clip="'默认发件人，商务'">默认发件人，商务</span></td>
+            <td class="to"><span class="clip wrap" v-hint.clip="customer?.fileMailConfig?.to || '案件联系人'">案件联系人{{ customer?.fileMailConfig?.to ? '＋客户追加' : '' }}</span></td>
+            <td class="cc"><span class="clip wrap" v-hint.clip="customer?.fileMailConfig?.cc ? '按客户抄送配置' : '发件人，商务'">{{ customer?.fileMailConfig?.cc ? '按客户配置' : '发件人，商务' }}</span></td>
             <td class="title"><span class="clip one" v-hint.clip="letter.subject || '还没有标题'">{{ letter.subject || '还没有标题' }}</span></td>
             <td class="state"><span class="clip wrap" v-hint.clip="statusOf(letter)">{{ statusOf(letter) }}</span></td>
           </tr>

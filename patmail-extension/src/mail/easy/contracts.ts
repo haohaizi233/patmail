@@ -8,12 +8,12 @@ const MAIL_CUSTOMER_PAGE = 'FileSearchMail.aspx'
 const MAIL_PAGE = 'mail.aspx'
 
 export function mailStyleValue(mode: SendMode): string | null {
-  return mode === 'merge_by_customer_description' ? '1' : null
+  return mode === 'merge_by_customer_description' ? '1' : mode === 'single_file' ? '2' : null
 }
 
 export function buildMailCustomerParams(preview: MailDraftPreview): { ok: true; params: URLSearchParams } | { ok: false; message: string } {
   const style = mailStyleValue(preview.sendMode)
-  if (!style) return { ok: false, message: '单个来文的 mailstyle 尚未确认，不能创建。' }
+  if (!style) return { ok: false, message: '发文方式无效，不能创建。' }
   if (!isQueryGuid(preview.mailTypeId)) return { ok: false, message: '发文类型不是 EASY GUID。' }
   if (preview.fileIds.length === 0 || preview.fileIds.length !== preview.files.length) {
     return { ok: false, message: '文件 ID 与文件名称数量不一致。' }

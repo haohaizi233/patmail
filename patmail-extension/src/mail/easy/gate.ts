@@ -7,12 +7,12 @@ export function mailWritesEnabled(): boolean {
   return isWriteSwitchOpen()
 }
 
-/** 抓包只确认了合并发文 mailstyle=1。创建和保存的响应原文还没落下。关联文件的分隔符已从 mail.js 核对。 */
+/** 2026-11-11 HAR 确认单个来文 mailstyle=2、创建 objid、保存 Status 和关联 Result 响应。 */
 export const WRITE_CONTRACT = {
   mergeMailStyleConfirmed: true,
-  singleMailStyleConfirmed: false,
-  mailCustomerBodyCaptured: false,
-  saveResponseBodyCaptured: false,
+  singleMailStyleConfirmed: true,
+  mailCustomerBodyCaptured: true,
+  saveResponseBodyCaptured: true,
   relatedFileIdFormatConfirmed: true
 } as const
 
@@ -28,7 +28,7 @@ export function liveWriteBlockers(mode: SendMode): string[] {
   if (!WRITE_CONTRACT.mailCustomerBodyCaptured) reasons.push('MailCustomer 的响应正文还没有核对，不能创建。')
   if (!WRITE_CONTRACT.saveResponseBodyCaptured) reasons.push('SaveMailInfo 的响应正文还没有核对，不能保存。')
   if (!WRITE_CONTRACT.relatedFileIdFormatConfirmed) reasons.push('SaveMailRalteCaseFile 的 file_ids 格式还没有核对。')
-  if (mode === 'single_file' || !WRITE_CONTRACT.singleMailStyleConfirmed && mode !== 'merge_by_customer_description') {
+  if (mode === 'single_file' && !WRITE_CONTRACT.singleMailStyleConfirmed) {
     reasons.push('单个来文的 mailstyle 还没有在抓包里出现。')
   }
   if (mode === 'merge_by_customer_description' && !WRITE_CONTRACT.mergeMailStyleConfirmed) reasons.push('合并发文的 mailstyle 未确认。')
