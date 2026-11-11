@@ -20,6 +20,7 @@
     "test:coverage": "vitest run --coverage",
     "test:all": "vitest run && node tests/e2e/extension.e2e.mjs && node tests/e2e/limit-query.e2e.mjs && node tests/e2e/download.e2e.mjs && node tests/e2e/native-browser-download.e2e.mjs && node tests/e2e/file-pages.e2e.mjs",
     "test:e2e": "node tests/e2e/extension.e2e.mjs && node tests/e2e/limit-query.e2e.mjs && node tests/e2e/download.e2e.mjs && node tests/e2e/native-browser-download.e2e.mjs && node tests/e2e/file-pages.e2e.mjs",
+    "test:e2e:file-manage": "node tests/e2e/file-manage-customer.e2e.mjs",
     "test:e2e:files": "node tests/e2e/file-pages.e2e.mjs",
     "test:e2e:download": "node tests/e2e/download.e2e.mjs",
     "test:e2e:stream-download": "node tests/e2e/stream-download.e2e.mjs",
