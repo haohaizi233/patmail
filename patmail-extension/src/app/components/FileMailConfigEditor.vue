@@ -165,6 +165,9 @@ async function load(kind: string, force = false): Promise<void> {
 .mail-setting.is-wide { grid-column: 1 / -1; }
 .mail-setting-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .mail-setting-title span { font-size: 12px; color: #8492ad; }
+.mail-setting label { display: flex; align-items: center; gap: 6px; }
+.mail-setting :deep(.theme-select) { display: block; width: 100%; }
+.mail-setting textarea, .mail-setting input:not([type=checkbox]) { border: 1px solid #eadff0; border-radius: 10px; background: #fff; padding: 8px 10px; color: inherit; font: inherit; }
 .mail-setting textarea { min-height: 64px; resize: vertical; width: 100%; box-sizing: border-box; }
 .mail-setting input:not([type=checkbox]) { width: 100%; box-sizing: border-box; }
 .mail-setting .hint { margin: 0; }
