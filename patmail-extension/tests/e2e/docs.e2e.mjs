@@ -31,7 +31,11 @@ try {
   await app.goto(`chrome-extension://${id}/app.html`)
   await app.getByRole('button', { name: '文档', exact: true }).click()
   const docs = app.getByRole('dialog', { name: 'PatMail 文档', exact: true })
-  await docs.getByRole('button', { name: 'README（工作流索引）', exact: true }).click()
+  await docs.getByRole('button', { name: '下载去重算法', exact: true }).click()
+  await docs.getByRole('heading', { name: '下载去重算法', exact: true }).waitFor()
+  await docs.getByRole('link', { name: '查询模板', exact: true }).click()
+  await docs.getByRole('heading', { name: '查询模板', exact: true }).waitFor()
+  await docs.getByRole('button', { name: '工作流总览', exact: true }).click()
   await docs.getByRole('heading', { name: '工作流索引', exact: true }).waitFor()
   const indexSource = await readFile(path.join(sources, 'README.md'), 'utf8')
   const indexDiagrams = (indexSource.match(/^```mermaid$/gm) ?? []).length
@@ -83,7 +87,7 @@ try {
     counts.push({ file, diagrams: expected })
     if (file === '季华实验室-文件导入.md') {
       // This guide is also embedded in its workflow, where the view tabs own navigation.
-      await docs.getByRole('button', { name: 'README（工作流索引）', exact: true }).click()
+      await docs.getByRole('button', { name: '工作流总览', exact: true }).click()
     } else await docs.getByRole('link', { name: '工作流索引', exact: true }).click()
     await docs.getByRole('heading', { name: '工作流索引', exact: true }).waitFor()
   }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { DOC_GROUPS, type DocEntry } from '../docs'
+import { DOC_GROUPS, resolveDocLink, type DocEntry } from '../docs'
 import DocsMarkdown from './DocsMarkdown.vue'
 
 const open = ref(false)
@@ -15,6 +15,9 @@ async function show(entry: DocEntry): Promise<void> {
   const loader = entry.load
   if (!loader) return
   active.value = entry
+  for (const parent of DOC_GROUPS.flatMap(group => group.entries)) {
+    if (parent.children?.includes(entry) && !sectionOpen(parent)) openSections.value.push(parent)
+  }
   loading.value = true
   source.value = ''
   const token = ++loadToken
@@ -37,7 +40,7 @@ function sectionOpen(entry: DocEntry): boolean {
 }
 
 function navigate(file: string): void {
-  const entry = DOC_GROUPS.find(group => group.name === '工作流')?.entries.find(item => item.file === file)
+  const entry = resolveDocLink(DOC_GROUPS, active.value, file)
   if (entry) void show(entry)
 }
 

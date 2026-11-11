@@ -13,7 +13,7 @@
 | `GetUrgencyList` | POST `Common.ashx` | 是 | verified | `Result=false` 且 `Status=true` 仍可读列表。 |
 | `GetFlowLastStatus` | POST `Common.ashx` | 是 | verified | 比较 `update_time_ss`。`status=-1` 且没有 last_status 视为一致。 |
 | `GetFlowSubmit` | POST `Common.ashx` | 否 | pending | 已有 HAR 响应长度为 0，出现过 502。节点字段来自页面脚本。 |
-| `MailCustomer` | POST `Notice.ashx` | 否 | pending | 请求字段已核对。响应正文未保存。单个来文的 `mailstyle` 未知。 |
+| `MailCustomer` | POST `Notice.ashx` | 否 | pending | 请求字段已核对。响应正文未保存。2026-11-11 已补证单个来文 `mailstyle=2` 和创建响应 `objid`，详见 `API/07-发文与邮件.md`。 |
 | `SaveMailInfo` | POST `Mail.ashx` | 否 | pending | 字段名来自页面脚本。`customer_id` 只用快照 GUID。必须回读。 |
 | `SaveMailRalteCaseFile` | POST `Mail.ashx` | 否 | pending | HAR 中 `file_ids` 为空。格式未核对时保持 `BINDING_BLOCKED`。 |
 | `FlowSubmit` | POST `Common.ashx` | 否 | pending | 参数名来自页面脚本。不在传输白名单。生产路径不调用。 |

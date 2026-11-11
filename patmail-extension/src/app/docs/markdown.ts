@@ -10,7 +10,7 @@ const parser = new Marked({
     image: ({ text }) => escape(text),
     link(token) {
       const label = this.parser.parseInline(token.tokens)
-      if (/^(?:\.\/)?[^/#:]+\.md$/i.test(token.href)) {
+      if (!/^(?:[a-z]+:|\/|#)/i.test(token.href) && /\.md(?:#.*)?$/i.test(token.href)) {
         return `<a href="#" data-doc-file="${escape(token.href.replace(/^\.\//, ''))}">${label}</a>`
       }
       if (/^https?:|^mailto:/i.test(token.href)) {

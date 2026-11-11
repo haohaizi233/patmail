@@ -19,7 +19,7 @@
 
 页面成功条件是响应里的 `objid`，随后打开 `mail.aspx?objid=`。本次抓包响应 234 字节，正文没有保存。运行时把缺少 `objid`、无法解析或超时视为 `UNKNOWN`，不自动再调 `MailCustomer`。
 
-单个来文的 `mailstyle` 没有在抓包里出现。这个分支不能创建。
+2026-11-11 补证：用户提供的 HAR 已确认单个来文 `mailstyle=2`，创建响应包含邮件 `objid`，该分支已接入。详见根目录 `API/07-发文与邮件.md`。
 
 `LimitMailCustomer` 不属于本阶段。
 
