@@ -216,8 +216,10 @@ export class EasyTransport {
   private async sendForm(path: string, params: URLSearchParams, timeoutMs: number, signal?: AbortSignal, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
     if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
     let release: (() => void) | undefined
-    try { release = await networkPool?.acquire(signal) } catch { return apiError('REQUEST_ABORTED', '请求已取消。') }
-    if (signal?.aborted) { release?.(); return apiError('REQUEST_ABORTED', '请求已取消。') }
+    if (networkPool) {
+      try { release = await networkPool.acquire(signal) } catch { return apiError('REQUEST_ABORTED', '请求已取消。') }
+      if (signal?.aborted) { release?.(); return apiError('REQUEST_ABORTED', '请求已取消。') }
+    }
     const controller = new AbortController()
     let timedOut = false
     const onExternalAbort = () => controller.abort()

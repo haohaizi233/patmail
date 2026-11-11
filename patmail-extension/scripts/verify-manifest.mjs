@@ -30,7 +30,8 @@ const PERMISSION_AUDIT = {
   alarms: '下载任务续期、会话检测与后台任务的定时调度（MV3 SW 会被回收，靠 alarms 唤醒）。',
   downloads: '原生浏览器下载落盘与下载终态确认（v1.6.1 下载机制核心）。',
   webNavigation: '工作台页面关闭/导航事件监听，用于下载取消与页面池回收。',
-  debugger: 'eHague Summary 临时 Page.printToPDF，固定官方站点/文档/案件，结束即 detach；不监听凭据，不更改下载行为（docs/ci/security-policy.md §4.1）。',
+  debugger:
+    'eHague Summary 临时 Page.printToPDF，固定官方站点/文档/案件，结束即 detach；不监听凭据，不更改下载行为（docs/ci/security-policy.md §4.1）。',
 }
 const KNOWN_CONTENT_SCRIPTS = ['content.js']
 const REQUIRED_DIST_FILES = ['background.js', 'content.js', 'app.html', 'popup.js', 'manifest.json']

@@ -5,7 +5,7 @@ import ThemeSelect from '../../../src/shell/components/ThemeSelect.vue'
 describe('下拉菜单热加载稳定性', () => {
   it('首帧即定位，热加载不滚动外层页面，菜单保持展开', async () => {
     const scroll = vi.fn()
-    const previous = HTMLElement.prototype.scrollIntoView
+    const previous = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
     HTMLElement.prototype.scrollIntoView = scroll
     const options = ref([{ value: '', label: '使用默认' }])
     const el = document.createElement('div'); document.body.appendChild(el)
@@ -23,6 +23,7 @@ describe('下拉菜单热加载稳定性', () => {
       expect(document.querySelector('[role=listbox]')).toBe(menu)
       expect(trigger.getAttribute('aria-expanded')).toBe('true')
       expect(scroll).not.toHaveBeenCalled()
-    } finally { app.unmount(); el.remove(); HTMLElement.prototype.scrollIntoView = previous }
+    } finally { app.unmount(); el.remove(); if (previous) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', previous)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView') }
   })
 })

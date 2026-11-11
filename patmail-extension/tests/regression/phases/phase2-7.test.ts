@@ -359,7 +359,7 @@ describe('接口契约与写开关', () => {
     expect(CONTRACT_EVIDENCE.find(item => item.call === 'GetFlowSubmit')).toMatchObject({ responseCaptured: false, status: 'pending' })
     expect(CONTRACT_EVIDENCE.find(item => item.call === 'FlowSubmit')?.responseCaptured).toBe(false)
     expect(CONTRACT_EVIDENCE.find(item => item.call === 'EndEmailFlowd')?.source).toBe('unverified')
-    expect(CONTRACT_EVIDENCE.find(item => item.call === 'MailCustomer')?.responseCaptured).toBe(false)
+    expect(CONTRACT_EVIDENCE.find(item => item.call === 'MailCustomer')?.responseCaptured).toBe(true)
     const calls: string[] = []
     const runtime = new EasyRuntime(origin, {
       fetcher: async (_url, init) => {

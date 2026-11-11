@@ -1,3 +1,4 @@
+import { setWriteSwitchOpen } from '../../../src/settings/write-switch'
 import { describe, expect, it, vi } from 'vitest'
 import { EasyTransport } from '../../../src/api/transport'
 import { productionGate, type MailWriteGate } from '../../../src/mail/easy/gate'
@@ -214,7 +215,9 @@ describe('Phase 2.5 收口', () => {
     release()
     await Promise.all([first, second])
     expect(creates).toBe(2)
+    await setWriteSwitchOpen(false)
     expect(productionGate.blockers('merge_by_customer_description').length).toBeGreaterThan(0)
+    await setWriteSwitchOpen(true)
     expect(productionWorkflowGate.blockers().join('')).toContain('跨标签页')
   })
 })
