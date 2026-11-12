@@ -13,6 +13,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 - [季华实验室代理机构管理平台：附件上传与台账更新](external-platforms/jihualab.md)
 - [季华平台附件分类与关联字段](external-platforms/jihualab-attachments.md)
+- [WIPO eHague：接口逆向、表单字段与草稿调用契约](external-platforms/hague.md)
 
 按「入口 + Call」去重后，本索引共 **390** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
 
