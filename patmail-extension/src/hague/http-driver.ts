@@ -5,6 +5,8 @@ import type { DraftCommand, DraftReceipt } from './draft-contract'
 const quoted=(text:string,key:string)=>new RegExp(`(?:^|[,\\s{])${key}:\\s*['"]([^'"]*)['"]`).exec(text)?.[1]
 /** Static PrimeFaces metadata parser. It never evaluates script text. */
 export function jsfAction(script:string,element:HTMLElement,doc:Document):JsfAction|null {
+  const mojarra=/mojarra\.ab\(this,event,['"]([^'"]+)['"],['"]([^'"]*)['"],['"]([^'"]*)['"]\)/.exec(script)
+  if(mojarra)return{source:element.id,event:mojarra[1],process:mojarra[2],update:mojarra[3]}
   const ab=/PrimeFaces\.ab\(\{([\s\S]*?)\}\)/.exec(script)?.[1]
   if(ab){return {source:quoted(ab,'s')??element.id,form:quoted(ab,'f'),process:quoted(ab,'p'),update:quoted(ab,'u'),event:quoted(ab,'e')}}
   const remote=/\b(selectOffice|processFile)\s*\(/.exec(script)?.[1]
@@ -33,6 +35,11 @@ export class HagueHttpDriver {
       const element=event.target instanceof HTMLElement?event.target.closest<HTMLElement>('button,input,select,textarea,a'):null
       if(!element)return
       try{
+        if(event.type==='input'&&element instanceof HTMLInputElement&&element.id.endsWith(':inputAutoComplete:input')){
+          const hidden=this.state.document.getElementById(element.id.replace(/:inputAutoComplete:input$/,':inputHidden')) as HTMLInputElement|null
+          if(hidden)hidden.value=element.value
+          return
+        }
         const script=element.getAttribute(event.type==='change'?'onchange':'onclick')??''
         const action=jsfAction(script,element,this.state.document)
         if(action){
@@ -47,8 +54,23 @@ export class HagueHttpDriver {
     }
     this.state.document.addEventListener('click',dispatch,true)
     this.state.document.addEventListener('change',dispatch,true)
+    this.state.document.addEventListener('input',dispatch,true)
   }
+  private checkFailure():void{const failure=this.commandFailure??this.state.failure;if(failure)throw failure}
   async initialize():Promise<void>{await this.state.get()}
+  async resume(reference:string):Promise<void>{
+    if(!/^\d+$/.test(reference))throw new Error('恢复的 WIPO reference 无效。')
+    await this.initialize()
+    const draftTab=[...this.state.document.querySelectorAll<HTMLButtonElement>('#quickSearchPanel button')].find(e=>/^Draft\(s\)/.test(e.textContent?.trim()??''))
+    if(!draftTab)throw new Error('未识别 Draft(s) 接口入口。')
+    draftTab.click();await this.state.settle()
+    const row=[...this.state.document.querySelectorAll<HTMLTableRowElement>('#portfolio tbody tr')].find(r=>r.cells[0]?.textContent?.trim()===`WIPO${reference}`)
+    if(!row)throw new Error('Draft(s) 未精确找到本案编号，未创建替代草稿。')
+    const open=[...row.querySelectorAll<HTMLElement>('button,a')].filter(e=>/^(?:Open|Edit)$|Open\/edit/i.test((e.getAttribute('title')??'')+' '+(e.textContent?.trim()??'')))
+    if(open.length!==1)throw new Error('本案打开动作无法唯一识别，未操作其他记录。')
+    open[0].click();await this.state.settle()
+    if(this.state.reference!==reference||!this.state.location.pathname.endsWith('/application.xhtml'))throw new Error('恢复未确认本案编辑器和编号，未继续写入。')
+  }
   private async remote(name:string,params?:Record<string,string>):Promise<void>{
     const definition=[...this.state.document.querySelectorAll('script')].map(s=>s.textContent??'').find(s=>new RegExp(`${name}\\s*=\\s*function`).test(s))
     const action=definition?jsfAction(definition,this.state.document.createElement('button'),this.state.document):null
@@ -78,16 +100,15 @@ export class HagueHttpDriver {
     this.running=true
     try{
       const required=command.op==='parties'?['Designationform','refreshDesignationUI']:['locarno','design','openDesign','upload','legend','closeDesign'].includes(command.op)?['designForm','refreshDesignUI']:['description','creator','priority','publication','signature'].includes(command.op)?[{description:'DescriptionForm',creator:'CreatorForm',priority:'PriorityForm',publication:'PublicationForm',signature:'signForm'}[command.op as 'description'|'creator'|'priority'|'publication'|'signature'],'refreshOptionsUI']:null
-      if(required&&!this.state.document.getElementById(required[0]))await this.remote(required[1])
-      const owner=this
-      const shim={PrimeFaces:{ajax:{Queue:{isEmpty(){if(owner.commandFailure)throw owner.commandFailure;return owner.state.pending===0}}},widgets:{reproDTW:{cfg:{paginator:{rowCount:this.reproCount(),rows:10}}}}}}
-      const context={document:this.state.document,location:this.state.location,window:shim,virtual:true,idle:async()=>{await this.state.settle();if(this.commandFailure)throw this.commandFailure}}
+      if(required&&(required[1]==='refreshOptionsUI'||!this.state.document.getElementById(required[0])))await this.remote(required[1])
+      const shim={PrimeFaces:{ajax:{Queue:{isEmpty:()=>{this.checkFailure();return this.state.pending===0}}},widgets:{reproDTW:{cfg:{paginator:{rowCount:this.reproCount(),rows:10}}}}}}
+      const context={document:this.state.document,location:this.state.location,window:shim,virtual:true,idle:async()=>{await this.state.settle();this.checkFailure()}}
       let result:DraftReceipt
       if(command.op==='upload'){await this.upload(command);shim.PrimeFaces.widgets.reproDTW.cfg.paginator.rowCount=this.reproCount();result={ok:true}}
       else result=await executeDraftPage(command,reference,context)
       // Navigation buttons return before AJAX; settle the owning chain before exposing its receipt.
       await this.state.settle()
-      if(this.commandFailure)throw this.commandFailure
+      this.checkFailure()
       if(!result.ok){this.commandFailure=new Error(result.error);return result}
       const snapshot=await executeDraftPage({op:'inspect'},reference??this.state.reference,context)
       if(command.op==='create'&&(snapshot.page!=='application'||!snapshot.reference))throw new Error('接口创建回执未确认编辑器和 WIPO reference，结果待核对。')

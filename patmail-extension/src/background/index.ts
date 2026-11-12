@@ -1,6 +1,9 @@
+import { DOCUMENT_EXPORT_CHANNEL } from '../shared/document-export'
+import { handleDocumentExport } from './document-export'
 import { handleHagueSessionMessage } from './hague-session'
 import { handleHagueDraftMessage } from './hague-draft'
 import { HAGUE_DRAFT_CHANNEL } from '../hague/draft-contract'
+import { HAGUE_HTTP_CHANNEL, handleHagueHttp } from './hague-http'
 import { HAGUE_SESSION_CHANNEL } from '../hague/session-contract'
 import { indexedTransactionStore, ExecutionLedger } from '../automation/ledger'
 import { IndexedTaskStore } from '../automation/indexed-store'
@@ -48,6 +51,7 @@ const workerScope = globalThis as unknown as {
 workerScope.addEventListener('fetch', event => { nativeTarget.handleFetch(event) })
 workerScope.addEventListener('activate', event => { event.waitUntil(workerScope.clients.claim()) })
 const browserDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), nativeTarget.host, nativeTarget.status)
+const documentDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), request => nativeTarget.host(request), targetId => nativeTarget.status(targetId))
 
 watchWriteSwitch()
 // 扩展 Service Worker 不能用顶层 await，否则 Chrome 直接拒绝启动，工具栏点击没有监听。
@@ -158,14 +162,14 @@ const connectionReady = (async () => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   streamDownloads.cancelTab(tabId)
-  browserDownloads.cancelTab(tabId)
+  browserDownloads.cancelTab(tabId); documentDownloads.cancelTab(tabId)
   reinjected.delete(tabId)
   connection.detach(tabId)
   persistConnection()
 })
 // tabs.loading也会因EASY内部mframe加载而出现；只有真正顶层导航才销毁来源文档。
 chrome.webNavigation?.onBeforeNavigate.addListener(({ tabId, frameId }) => {
-  if (frameId === 0) { streamDownloads.cancelTab(tabId); browserDownloads.cancelTab(tabId) }
+  if (frameId === 0) { streamDownloads.cancelTab(tabId); browserDownloads.cancelTab(tabId); documentDownloads.cancelTab(tabId) }
 })
 let sessionReadTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -422,6 +426,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (isRecord(message) && (message.channel === BROWSER_FILE_CHANNEL || message.channel === NATIVE_NAVIGATION_CHANNEL)) return
   if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
   if (sender.id !== chrome.runtime.id) return
+  if (isRecord(message) && message.channel === DOCUMENT_EXPORT_CHANNEL) {
+    void handleDocumentExport(message, sender, documentDownloads).then(sendResponse)
+    return true
+  }
+  if (isRecord(message) && message.channel === HAGUE_HTTP_CHANNEL) {
+    void handleHagueHttp(message,sender).then(sendResponse,()=>sendResponse({ok:false,error:'海牙接口结果待核对。'}))
+    return true
+  }
   if (isRecord(message) && message.channel === HAGUE_DRAFT_CHANNEL) {
     void handleHagueDraftMessage(message, sender).then(sendResponse, () => sendResponse({ ok:false, error:'eHague 草稿操作结果不确定，请检查原站。' }))
     return true

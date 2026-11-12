@@ -44,6 +44,7 @@ try{
   window.addEventListener('patmail-agent-workflow',event=>{const job=event.detail;job.accepted=true;const refs=[...job.message.matchAll(/^案件文号：(.+)$/gm)].map(m=>m[1]);job.resolve(JSON.stringify({results:refs.map(caseVolume=>({caseVolume,decision:{applicant,creators:[{sourceName:'张三',givenName:'san',familyName:'zhang'}],parties:['EM','JP'],publicationMonths:6,priorities:[],warnings:[],evidence:['fixture']}}))}))})
  })
  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/tests/e2e/hague-harness.html`)
+ await page.getByLabel('草稿填写方式').selectOption('page')
  await page.getByLabel('选择海牙申请总文件夹').setInputFiles(fixture.root)
  await page.getByText('等待 eHague 登录验证',{exact:false}).first().waitFor()
  await page.getByRole('button',{name:'连接并检测登录',exact:true}).click()

@@ -50,6 +50,8 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
    // Persist before sending: after a reload this step must be checked rather than repeated.
    state.status='uncertain';await persist()
    receipt=await host.call(command,state.documentId,state.reference)
+   state.reference=receipt.reference??state.reference
+   state.documentId=receipt.documentId??state.documentId
    if(!receipt.ok)throw new Error(receipt.error||'原站未确认操作结果')
    if(receipt.downloadId!==undefined)state.downloadId=receipt.downloadId
    state.warnings=[...new Set([...(state.warnings??[]),...(receipt.warnings??[])])]

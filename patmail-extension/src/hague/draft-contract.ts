@@ -17,4 +17,4 @@ export type DraftCommand =
   | { op: 'publication'; months: number }
   | { op: 'signature'; reference: string; representative: string }
 export interface DraftReceipt { ok: boolean; error?: string; documentId?: string; reference?: string; page?: 'portfolio'|'application'|'summary'|'other'; applicants?: number; creators?: number; priorities?: number; designs?: number; reproductions?: number; printUrl?: string; downloadId?:number; warnings?: string[]; draftSaved?:boolean }
-export interface DraftCheckpoint { reference?: string; documentId?: string; tabId: number; next: number; total: number; status: 'running'|'stopped'|'uncertain'|'saved'|'failed'; stage: string; error?: string; warnings?:string[]; planKey?:string; downloadId?:number; generatedPriorities?:Priority[] }
+export interface DraftCheckpoint { transport?: 'http'|'page'; reference?: string; documentId?: string; tabId: number; next: number; total: number; status: 'running'|'stopped'|'uncertain'|'saved'|'failed'; stage: string; error?: string; warnings?:string[]; planKey?:string; downloadId?:number; generatedPriorities?:Priority[] }

@@ -19,6 +19,8 @@ import { buildDraftPlan } from '../../hague/draft-plan'
 import { callDraftPage, runDraftPlan } from '../../hague/draft-runner'
 import { runDraftBatch, type DraftBatchProgress } from '../../hague/draft-batch'
 import { openDraftTab } from '../../hague/draft-tabs'
+import { createHttpChain, httpRestoreCommands, renderSavedSummary } from '../../hague/http-client'
+import { downloadDocuments } from '../../utils/download-documents'
 import type { DraftCheckpoint } from '../../hague/draft-contract'
 
 const props = withDefaults(defineProps<{ embedded?: boolean; isActive?: boolean }>(), { isActive: true })
@@ -42,7 +44,9 @@ const stopping = ref(false)
 const elapsed = ref(0)
 let startedAt = Date.now()
 const tick = window.setInterval(() => { if (busy.value) elapsed.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
+const zipProgress = ref<{done:number;total:number;error?:boolean}|null>(null)
 const rainbow = computed(() => {
+  if(zipProgress.value){const p=zipProgress.value,status=busy.value?'run':p.error?'hold':'done';return {...taskCheckSnapshot(p.done,p.total,startedAt,Date.now(),status),visible:true,status,label:'海牙导出',summary:`PDF 打包 ${p.done}/${p.total} 件`,detail:busy.value?'正在生成 PDF 并流式下载 ZIP':p.error?'导出中断，请检查提示':'浏览器已确认下载完成'} as const}
   if (draftRunning.value || draftProgress.value) {
     const d = draftProgress.value
     const b=draftBatch.value,status=draftRunning.value?'run':b.failed||b.skipped||b.stopped?'hold':'done'
@@ -63,6 +67,8 @@ const draftRunning = ref(false)
 const draftProgress = ref<DraftCheckpoint | null>(null)
 const draftBatch = ref<DraftBatchProgress>({done:0,total:0,settled:0,cases:0,succeeded:0,failed:0,skipped:0,active:0,stopped:false})
 const draftConcurrency = ref(1)
+const draftTransport = ref<'http'|'page'>('http')
+const draftExportFormat = ref<'pdf'|'zip'>('pdf')
 const draftErrors = ref<Record<string,string>>({})
 const draftSkipped = ref<Record<string,boolean>>({})
 const draftActive = ref(new Set<string>())
@@ -78,25 +84,39 @@ async function loadDraft(row: Row): Promise<void> {
   const saved: unknown = data[draftKey(row)]
   if (saved && typeof saved === 'object' && 'next' in saved && 'tabId' in saved && 'status' in saved) row.draft = saved as DraftCheckpoint
 }
+async function exportDraftZip():Promise<void>{
+ if(busy.value)return
+ const targets=rows.value.filter(r=>r.draft?.status==='saved' && r.draft.reference)
+ if(!targets.length || !await oa.ensureFresh())return
+ busy.value=true;startedAt=Date.now();zipProgress.value={done:0,total:targets.length};notice.value=''
+ const tabId=oa.selected.value
+ try{let done=0
+  const result=await downloadDocuments('zip',targets.map(row=>({name:`${row.folder.caseVolume}-Summary-WIPO${row.draft!.reference}.pdf`,open:async()=>{const pdf=await renderSavedSummary(tabId,row.folder.caseVolume,row.draft!.reference!);zipProgress.value={done:++done,total:targets.length};return pdf.bytes}})),`Hague-Summaries-${new Date().toISOString().slice(0,10)}.zip`)
+  notice.value=`已导出 ${targets.length} 份 PDF，ZIP 下载已完成。`;await chrome.downloads.show(result.downloadId)
+ }catch(error){zipProgress.value={...zipProgress.value!,error:true};notice.value=error instanceof Error?error.message:'批量导出失败。'}finally{busy.value=false}
+}
 async function createDrafts(targets: Row[], batch=false): Promise<void> {
   if (busy.value || !targets.length) return
   if (!await oa.ensureFresh()) { notice.value = '请先连接并验证 eHague 登录态。'; return }
   const tabId = oa.selected.value
+  zipProgress.value=null
   busy.value = true; draftRunning.value = true; stopping.value = false; controller = new AbortController(); startedAt = Date.now(); elapsed.value = 0
-  draftProgress.value={tabId,next:0,total:0,status:'running',stage:'准备独立工作标签页'}
+  draftProgress.value={tabId,next:0,total:0,status:'running',stage:draftTransport.value==='http'?'准备独立接口链':'准备独立工作标签页'}
   draftErrors.value={}
   draftSkipped.value={}
   try {
     const result=await runDraftBatch(targets,batch?draftConcurrency.value:1,{
-      open:()=>batch?openDraftTab():Promise.resolve(tabId),
-      save:storeDraft,
+      transport:draftTransport.value,
+      open:()=>draftTransport.value==='http'?Promise.resolve(tabId):batch?openDraftTab():Promise.resolve(tabId),
+      save:(row,value)=>storeDraft(row,{...value,transport:draftTransport.value}),
       update:value=>{draftBatch.value=value},
       error:(row,message,kind)=>{draftErrors.value[row.folder.path]=message;draftSkipped.value[row.folder.path]=kind==='skipped';if(kind==='failed'&&/登录|login/i.test(message))controller?.abort()},
       run:async(row,plan,workerTab,update)=>{
         draftActive.value.add(row.folder.path)
+        const http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value):null
         try{return await runDraftPlan(plan,workerTab,{
-          call:(command,documentId,reference)=>callDraftPage(workerTab,command,documentId,reference),
-          save:value=>storeDraft(row,value),
+          call:(command,documentId,reference)=>http?http.call(command):callDraftPage(workerTab,command,documentId,reference),
+          save:value=>storeDraft(row,{...value,transport:draftTransport.value}),
           update:value=>{draftProgress.value={...value,stage:`${row.folder.caseVolume} · ${value.stage}`};update(value)}
         },controller?.signal,row.draft)}finally{draftActive.value.delete(row.folder.path)}
       }
@@ -138,6 +158,7 @@ function requestStop(): void {
 async function process(targets: Row[], refresh = false, parse = false): Promise<void> {
   if (busy.value || !targets.length) return
   draftProgress.value = null
+  zipProgress.value=null
   busy.value = true; stopping.value = false; controller = new AbortController(); batchId = crypto.randomUUID(); startedAt = Date.now(); elapsed.value = 0
   if (refresh) for (const row of targets) row.source = undefined
   try {
@@ -213,11 +234,14 @@ function exportData(): void {
         <button type="button" class="solid" :disabled="busy || !pendingRows.length || !oa.verified.value" @click="process(pendingRows)">{{ progress?.phase === 'stopped' ? '继续处理剩余案件' : '读取知易通并批量仲裁' }}</button>
         <button type="button" class="ghost" v-if="busy && progress" :disabled="stopping" @click="requestStop">{{ stopping ? '正在停止…' : '停止后续处理' }}</button>
         <button type="button" class="ghost" :disabled="busy || !rows.length" @click="exportData">导出核对结果</button>
+        <label v-if="draftTransport === 'http'">导出格式 <select v-model="draftExportFormat" :disabled="busy" aria-label="草稿导出格式"><option value="pdf">单个 PDF</option><option value="zip">流式 ZIP</option></select></label>
+        <label>填写方式 <select v-model="draftTransport" :disabled="busy" aria-label="草稿填写方式"><option value="http">接口链（试运行）</option><option value="page">页面填写</option></select></label>
         <label>草稿并发 <select v-model.number="draftConcurrency" :disabled="busy" aria-label="草稿并发路数"><option v-for="n in 6" :key="n" :value="n">{{ n }} 路{{ n === 1 ? '（串行）' : '（试运行）' }}</option></select></label>
         <button type="button" class="solid" :disabled="busy || !oa.verified.value || !rows.some(r => r.decision && r.draft?.status !== 'saved')" @click="createDrafts(rows.filter(r => r.draft?.status !== 'saved'), true)">批量填写并存草稿</button>
+        <button type="button" class="ghost" :disabled="busy || !oa.verified.value || !rows.some(r => r.draft?.status === 'saved' && r.draft.reference)" @click="exportDraftZip">已存草稿打包 ZIP</button>
         <button type="button" v-if="draftRunning" class="ghost" :disabled="stopping" @click="requestStop">{{ stopping ? '等待本步回执…' : '停止后续写入' }}</button>
       </div>
-      <p class="hint">批量填写可选 1–6 路，每路使用独立标签页，单案步骤依次执行；异常页保留供核对。多路填写仍需真实站点稳定性验证。</p>
+      <p class="hint">{{ draftTransport === 'http' ? '接口模式可选 1–6 条独立链，单案按顺序处理；结果不确定时暂停该案供核对。' : '页面模式每路使用独立标签页，异常页保留供核对。' }} 多路填写仍为试运行。</p>
       <p v-if="busy && progress" class="hint hague-progress-hint">待解析 {{ progress.parsing || 0 }} · 取数 {{ progress.reading || 0 }} · 等待仲裁 {{ progress.queued || 0 }} · 仲裁中案件 {{ progress.arbitrating || 0 }} · 助手批次并发 1</p>
     </section>
     <div v-if="!rows.length && !busy" class="card tone-pink hague-empty">
@@ -262,7 +286,7 @@ function exportData(): void {
             <p class="hint">PDF 自动保存至浏览器下载目录的 PatMail/Hague/我方文号 文件夹。</p>
             <div v-if="active.draft" role="status"><p>WIPO reference：{{ active.draft.reference || '尚未分配' }} · {{ active.draft.next }}/{{ active.draft.total }} 步</p><p>{{ active.draft.stage }}</p><p v-if="active.draft.error" class="errors">{{ active.draft.error }}</p></div>
             <p v-for="warning in active.draft?.warnings" :key="warning" class="hint">{{ warning }}</p>
-            <button v-if="active.draft?.downloadId !== undefined" type="button" class="ghost" @click="showDraftPdf(active)">打开 PDF 所在位置</button>
+            <button v-if="active.draft?.downloadId !== undefined" type="button" class="ghost" @click="showDraftPdf(active)">打开导出文件所在位置</button>
             <button type="button" class="solid" :disabled="busy || !oa.verified.value || !!draftIssue(active) || active.draft?.status === 'saved' || active.draft?.status === 'uncertain'" @click="createDrafts([active])">{{ active.draft?.status === 'saved' ? '草稿已保存' : active.draft ? '继续当前草稿' : '填写并保存本案草稿' }}</button>
             <p v-if="active.decision.priorities.some(p => p.generated)" class="hint">本案包含自动生成的优先权草稿占位号，保存后仍须人工审核替换。</p>
             <template v-if="active.draft?.status === 'uncertain' && !busy"><p class="hint">请先在原站核对当前步骤是否已保存，再选择对应操作。</p><button type="button" class="ghost" @click="acknowledgeDraft(active, true)">本步已完成，继续下一步</button><button type="button" class="ghost" @click="acknowledgeDraft(active, false)">本步未执行，允许重试</button></template>

@@ -58,3 +58,8 @@ it('reuses a resumed tab for a fresh case only after the resumed draft is saved'
  const result=await runDraftBatch([resumed,row(2)],1,{plan,open:async()=>{throw new Error('should reuse saved tab')},run:async(_r,_p,tab)=>{tabs.push(tab);return checkpoint(tab)},save:async(r,c)=>{r.draft=c}})
  expect(result.succeeded).toBe(2);expect(result.failed).toBe(0);expect(tabs).toEqual([9,9])
 })
+it('allows independent HTTP chains to share a validated transport tab',async()=>{
+ let active=0,max=0
+ const result=await runDraftBatch([row(1),row(2),row(3)],3,{transport:'http',plan,open:async()=>449092488,run:async(_r,_p,tab)=>{active++;max=Math.max(max,active);await new Promise(r=>setTimeout(r,2));active--;return checkpoint(tab)},save:async()=>{}})
+ expect(result.failed).toBe(0);expect(result.succeeded).toBe(3);expect(max).toBe(3)
+})

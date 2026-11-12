@@ -8,6 +8,7 @@ export interface DraftBatchProgress {
   active:number; done:number; total:number; stopped:boolean
 }
 interface Host {
+  transport?:'http'|'page'
   plan?(row:HagueRow):DraftPlan
   open():Promise<number>
   run(row:HagueRow,plan:DraftPlan,tabId:number,update:(value:DraftCheckpoint)=>void):Promise<DraftCheckpoint>
@@ -27,9 +28,10 @@ export async function runDraftBatch(rows:readonly HagueRow[],concurrency:number,
   for(const row of rows){
     try{
       if(row.draft?.status==='saved'){state.skipped++;continue}
+      if(row.draft&&row.draft.next>0&&(row.draft.transport??'page')!==(host.transport??'page'))throw new Error('检查点执行模式不同，请使用原模式继续，未重复创建。')
       if((refCounts.get(row.folder.caseVolume.trim().toUpperCase())??0)>1)throw new Error('同文号存在多个材料版本，请选择唯一版本后填写，未并发创建重复草稿。')
       if(row.draft?.status==='uncertain')throw new Error('草稿步骤结果待核对，请先确认原站是否已执行，未自动重试。')
-      if(row.draft&&(tabCounts.get(row.draft.tabId)??0)>1)throw new Error('多个检查点指向同一标签页，请先核对目标草稿，未交错写入。')
+      if(host.transport!=='http'&&row.draft&&(tabCounts.get(row.draft.tabId)??0)>1)throw new Error('多个检查点指向同一标签页，请先核对目标草稿，未交错写入。')
       const plan=(host.plan??buildDraftPlan)(row),total=draftSteps(plan).length
       jobs.push({row,plan,total});state.total+=total;progress.set(row,Math.min(row.draft?.next??0,total))
     }catch(error){state.skipped++;host.error?.(row,error instanceof Error?error.message:'材料未就绪','skipped')}
@@ -44,8 +46,8 @@ export async function runDraftBatch(rows:readonly HagueRow[],concurrency:number,
       let tabId:number|undefined,owned=false
       try{
         tabId=row.draft?.tabId??reusable??await host.open()
-        if(!Number.isSafeInteger(tabId)||tabId<0||claimed.has(tabId)||!row.draft&&reserved.has(tabId))throw new Error('目标标签页已被其他案件占用，未交错写入。')
-        claimed.add(tabId);owned=true
+        if(!Number.isSafeInteger(tabId)||tabId<0||host.transport!=='http'&&(claimed.has(tabId)||!row.draft&&reserved.has(tabId)))throw new Error('目标标签页已被其他案件占用，未交错写入。')
+        if(host.transport!=='http'){claimed.add(tabId);owned=true}
         if(signal?.aborted){state.stopped=true;break}
         if(row.draft?.status==='running')row.draft={...row.draft,status:'stopped'}
         const result=await host.run(row,plan,tabId,value=>{progress.set(row,Math.max(progress.get(row)??0,Math.min(value.next,total)));emit()})

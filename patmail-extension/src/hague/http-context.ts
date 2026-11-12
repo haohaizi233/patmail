@@ -1,4 +1,6 @@
 import { HAGUE_ORIGIN } from './session-contract'
+import { PermitPool } from '../utils/permit-pool'
+const network=new PermitPool(6)
 
 export interface JsfAction { source:string; form?:string; process?:string; update?:string; event?:string; params?:Record<string,string>; full?:boolean }
 export type HagueFetch=(url:string,init?:RequestInit)=>Promise<Response>
@@ -19,6 +21,18 @@ export class HagueHttpContext {
   private viewState=''
   private tail:Promise<unknown>=Promise.resolve()
   constructor(readonly id:string,private readonly fetcher:HagueFetch=(url,init)=>fetch(url,init)){}
+  private async fetchComplete(url:string,init:RequestInit):Promise<Response>{
+    return network.run(async()=>{
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000)
+      try{
+        const response=await this.fetcher(url,{...init,signal:controller.signal})
+        if(response.url)protectedUrl(response.url,url)
+        const text=await response.text(),buffered=new Response(text,{status:response.status,headers:response.headers})
+        Object.defineProperty(buffered,'url',{value:response.url})
+        return buffered
+      }finally{clearTimeout(timer)}
+    })
+  }
   async settle():Promise<void>{await this.tail;if(this.failure)throw this.failure}
   load(html:string,path:string):void {
     const url=protectedUrl(path,this.url),next=new DOMParser().parseFromString(html,'text/html')
@@ -66,10 +80,15 @@ export class HagueHttpContext {
     const ref=/WIPO reference\s+(\d+)/i.exec(this.document.title+' '+this.document.body.textContent)?.[1]
     if(this.reference&&ref&&this.reference!==ref)throw new Error('响应 WIPO reference 与本链不同，已阻止交叉污染。')
     this.reference=ref??this.reference
+    for(const extension of xml.querySelectorAll('extension')){
+      let args:unknown
+      try{args=JSON.parse(extension.textContent??'')}catch{continue}
+      if(args&&typeof args==='object'&&'validationFailed'in args&&args.validationFailed===true)throw new Error('原站 JSF 校验未通过，未确认保存；请核对本步骤必填字段。')
+    }
   }
   async get(path=this.url):Promise<void> {
     const url=protectedUrl(path,this.url)
-    await this.read(await this.fetcher(url.href,{method:'GET',credentials:'include',cache:'no-store'}))
+    await this.read(await this.fetchComplete(url.href,{method:'GET',credentials:'include',cache:'no-store'}))
     if(!this.document.querySelector('input[name="javax.faces.ViewState"]'))throw new Error('接口未返回有效 JSF ViewState，需重新验证登录。')
   }
   controls(form:HTMLFormElement):URLSearchParams {
@@ -92,16 +111,16 @@ export class HagueHttpContext {
       const body=this.controls(form)
       if(!action.full){
         body.set('javax.faces.partial.ajax','true');body.set('javax.faces.source',action.source)
-        body.set('javax.faces.partial.execute',action.process??action.source)
+        body.set('javax.faces.partial.execute',action.process??'@all')
         if(action.update)body.set('javax.faces.partial.render',action.update)
         if(action.event){body.set('javax.faces.behavior.event',action.event);body.set('javax.faces.partial.event',action.event)}
-        else body.set(action.source,action.source)
+        else if(!upload)body.set(action.source,action.source)
       }else body.set(action.source,action.source)
       for(const [key,value]of Object.entries(action.params??{}))body.set(key,value)
       const url=protectedUrl(form.getAttribute('action')||this.url,this.url)
       let payload:BodyInit=body.toString()
       if(upload){const multipart=new FormData();for(const[k,v]of body)multipart.append(k,v);multipart.append(upload.field,upload.file,upload.file.name);payload=multipart}
-      await this.read(await this.fetcher(url.href,{method:'POST',credentials:'include',headers:{...(upload?{}:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}),...(action.full?{}:{'Faces-Request':'partial/ajax','X-Requested-With':'XMLHttpRequest'})},body:payload}))
+      await this.read(await this.fetchComplete(url.href,{method:'POST',credentials:'include',headers:{...(upload?{}:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}),...(action.full?{}:{'Faces-Request':'partial/ajax','X-Requested-With':'XMLHttpRequest'})},body:payload}))
     }).catch((error:unknown)=>{this.failure=error instanceof Error?error:new Error('接口操作结果待核对');throw this.failure}).finally(()=>{this.pending--})
     this.tail=task.catch(()=>{})
     return task
