@@ -15,6 +15,20 @@ it('parses legacy table delimiters and the document-specific code 12', () => {
   expect(result.products).toEqual([['1', '10', 'Motor vehicle', '8']])
   expect(result.views[1]).toEqual({ number: '1.10', code: '12', label: 'Enlarged' })
 })
+it('accepts unnumbered Legends and Description numbered 9 without swallowing the legend table',()=>{
+ const result=parseLegacyFilingText(text.replace('3. Description','9. Description (if applicable)').replace('4. Legends','Legends (optional)'))
+ expect(result.issues).toEqual([]);expect(result.views).toHaveLength(2)
+ expect(result.description).toBe('Main usage for transportation.')
+ expect(result.description).not.toContain('Legends')
+})
+it('allows an omitted optional Description while retaining all product and legend rows',()=>{
+ const result=parseLegacyFilingText(text.replace('3. Description\rMain usage for transportation.\r','').replace('4. Legends','Legends (optional)'))
+ expect(result.description).toBe('');expect(result.issues).toEqual([]);expect(result.views).toHaveLength(2);expect(result.products).toHaveLength(1)
+})
+it('ignores a Word reference control marker attached to a reproduction number',()=>{
+ const result=parseLegacyFilingText(text.replace('1.10\x0712','1.10\x05\x0712'))
+ expect(result.views).toContainEqual({number:'1.10',code:'12',label:'Enlarged'})
+})
 function compoundDoc(mini = false): Uint8Array {
   const data = new Uint8Array(19 * 512), d = new DataView(data.buffer)
   const u16 = (at: number, n: number) => d.setUint16(at, n, true), u32 = (at: number, n: number) => d.setUint32(at, n, true)

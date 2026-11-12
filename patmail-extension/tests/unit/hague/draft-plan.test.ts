@@ -24,9 +24,20 @@ it('uses the subclass column rather than the adjacent total-reproduction column'
  const r=row();r.filing!.locarno='12';r.filing!.products[0]=['1','3','Bumper for vehicle','16']
  expect(buildDraftPlan(r).designs[0].subclass).toBe('16')
 })
+it('keeps 1.x and 2.x in independent designs with their own product and subclass',()=>{
+ const r=row();r.filing!.products.push(['2','2','Second product','2'])
+ r.folder.images.push(new File(['jpg'],'2.2.jpg'),new File(['jpg'],'2.1.jpg'))
+ r.filing!.views.push({number:'2.1',code:'2',label:'Front'},{number:'2.2',code:'6',label:'Left'})
+ const designs=buildDraftPlan(r).designs
+ expect(designs.map(d=>({number:d.number,subclass:d.subclass,product:d.product,images:d.images.map(i=>i.number)}))).toEqual([{number:'1',subclass:'3',product:'Oral waterjet',images:['1.1','1.2','1.10']},{number:'2',subclass:'2',product:'Second product',images:['2.1','2.2']}])
+})
 it('blocks incomplete creators and view mismatches before a new draft can be created', () => {
   const r=row(); r.decision!.creators[0].givenName=''
   expect(()=>buildDraftPlan(r)).toThrow(/设计人/)
   r.decision!.creators[0].givenName='Lisi';r.filing!.views.pop()
   expect(()=>buildDraftPlan(r)).toThrow(/视图|图纸|图片/)
+})
+it('blocks a legacy slash postcode before any target-site write', () => {
+  const r = row(); r.decision!.applicant.postalCode = '/'
+  expect(() => buildDraftPlan(r)).toThrow(/邮编/)
 })

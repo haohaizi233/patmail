@@ -9,7 +9,7 @@ it('parses filing fields before arbitration and excludes unrelated API metadata'
   Object.assign(data.GetCaseApplicant[0].TableRows[0], { id_number: 'PRIVATE_ID', tel: 'PRIVATE_PHONE', applicant_id: 'DATABASE_ID', country_zh_cn: '中国' })
   data.GetCaseInventor = [{ TableRows: [{ inventor_name_en: 'Flavien DACHET', first_name_cn: 'Flavien', last_name_en: 'DACHET', cn_name: 'staff name', id_number: 'PRIVATE_ID' }] }]
   const parsed = parsedHagueSource(JSON.stringify(data))
-  expect(parsed).toMatchObject({ applicants: [{ name: 'Example Ltd.', city: 'Shenzhen', region: 'Guangdong', country: 'China' }], creators: [{ givenName: 'Flavien', familyName: 'DACHET', addressSource: 'applicants[0]' }], priorities: [{ number: '111', country: 'CN' }] })
+  expect(parsed).toMatchObject({ applicants: [{ name: 'Example Ltd.', city: 'Shenzhen', region: 'Guangdong', country: 'CN' }], creators: [{ givenName: 'Flavien', familyName: 'DACHET', addressSource: 'applicants[0]' }], priorities: [{ number: '111', country: 'CN' }] })
   expect(JSON.stringify(parsed)).not.toMatch(/PRIVATE_|DATABASE_ID|staff name|GetCaseApplicant/)
 })
 it('parses embedded foreign application numbers without losing Mexico, Vietnam or immediate publication', () => {

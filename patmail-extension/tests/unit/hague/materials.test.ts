@@ -47,9 +47,23 @@ describe('Hague materials', () => {
     expect(cases[0].issues).toEqual([])
     expect(cases[1].images).toHaveLength(1)
   })
+  it('keeps same-case FIGS descendants in their parent case instead of creating missing-Word rows',()=>{
+    const cases=discoverCases([file('root/PO2431572HAGUE-New-V2/Filing form.doc'),file('root/PO2431572HAGUE-New-V2/PO2431572HAGUE-FIGS-V2/1.1.jpg'),file('root/PO2431572HAGUE-New-V2/PO2431572HAGUE-FIGS-V2/1.2.jpg')])
+    expect(cases).toHaveLength(1);expect(cases[0].documents).toHaveLength(1);expect(cases[0].images).toHaveLength(2);expect(cases[0].issues).toEqual([])
+  })
+  it('preserves genuinely nested different cases and independent same-reference document sets',()=>{
+    const cases=discoverCases([file('root/PO1HAGUE/form.docx'),file('root/PO1HAGUE/1.1.jpg'),file('root/PO1HAGUE/PO2HAGUE/form.docx'),file('root/PO1HAGUE/PO2HAGUE/1.1.jpg'),file('root/PO1HAGUE/PO1HAGUE-other-version/form.docx'),file('root/PO1HAGUE/PO1HAGUE-other-version/1.1.jpg')])
+    expect(cases).toHaveLength(3);for(const c of cases){expect(c.documents).toHaveLength(1);expect(c.images).toHaveLength(1)}
+  })
   it('reads each No/Code/Legend group without swapping left and top', () => {
     const result = parseFilingXml(xml([['No.', 'Code', 'Legend', 'No.', 'Code', 'Legend'], ['1.3', '3', 'Back', '1.4', '6', 'Left'], ['1.5', '7', '', '1.6', '4', '']]))
     expect(result.views.map(v => [v.number, v.code, v.label])).toEqual([['1.3', '3', 'Back'], ['1.4', '6', 'Left'], ['1.5', '7', 'Right'], ['1.6', '4', 'Top']])
+  })
+  it('locates DOCX sections by heading text rather than fixed section numbers',()=>{
+    const p=(s:string)=>`<w:p><w:r><w:t>${s}</w:t></w:r></w:p>`
+    const result=parseFilingXml(xml([['1.1','2','']]).replace('<w:tbl>',`${p('9. Description (if applicable)')}${p('Exact source description.')}${p('Legends (optional)')}<w:tbl>`))
+    expect(result.description).toBe('Exact source description.')
+    expect(result.description).not.toContain('Legends')
   })
   it('requires custom legend for 00 and flags conflicting labels', () => {
     expect(parseFilingXml(xml([['1.1', '00', '', '1.2', '6', 'Top']])).issues.join()).toMatch(/00/)

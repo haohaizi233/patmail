@@ -14,6 +14,24 @@ it('orders summary and print before saving the draft and never includes payment 
  expect(ops.slice(-4)).toEqual(['summary','print','backToApplication','saveDraft'])
  expect(ops).not.toContain('pay');expect(ops).not.toContain('submit')
 })
+it('skips the optional description form when the material has no Description',()=>{
+ expect(draftSteps({...plan,description:''}).some(s=>s.command.op==='description')).toBe(false)
+})
+it('adds every applicant independently and completes each image group before adding the next design',()=>{
+ const applicant={name:'First Ltd.',address:'No. 1, Nanshan District',city:'Shenzhen',region:'Guangdong',postalCode:'518000',country:'China'}
+ const image=(number:string)=>({number,legend:'Front',file:new File(['jpg'],`${number}.jpg`)})
+ const steps=draftSteps({...plan,applicants:[applicant,{...applicant,name:'Second Ltd.'}],designs:[{number:'1',subclass:'3',product:'First product',images:[image('1.1'),image('1.2')]},{number:'2',subclass:'3',product:'Second product',images:[image('2.1'),image('2.2')]}]})
+ expect(steps.filter(s=>s.command.op==='applicant').map(s=>s.command)).toEqual([{op:'applicant',data:applicant,index:0,email:'hccx2005@126.com'},{op:'applicant',data:{...applicant,name:'Second Ltd.'},index:1,email:'hccx2005@126.com'}])
+ const grouped=steps.filter(s=>['design','upload','legend','closeDesign'].includes(s.command.op)).map(s=>s.command)
+ expect(grouped).toEqual([
+  {op:'design',index:0,subclass:'3',product:'First product'},
+  {op:'upload',name:'1.1.jpg',base64:'',mime:'image/jpeg',count:0},{op:'legend',name:'1.1.jpg',label:'Front'},
+  {op:'upload',name:'1.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'1.2.jpg',label:'Front'},{op:'closeDesign'},
+  {op:'design',index:1,subclass:'3',product:'Second product'},
+  {op:'upload',name:'2.1.jpg',base64:'',mime:'image/jpeg',count:0},{op:'legend',name:'2.1.jpg',label:'Front'},
+  {op:'upload',name:'2.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'2.2.jpg',label:'Front'},{op:'closeDesign'}
+ ])
+})
 it('recovers a completed final save using the exact draft-list receipt without another write',async()=>{
  const total=draftSteps(plan).length
  const call=vi.fn(async()=>({ok:true,page:'portfolio' as const,draftSaved:true,documentId:'list-doc'}))

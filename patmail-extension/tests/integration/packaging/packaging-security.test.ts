@@ -52,11 +52,11 @@ describe('交付包私钥检查', () => {
   it('builds the source package without a private key name', () => {
     const packed = spawnSync('node', ['scripts/pack-source.mjs'], { cwd: root, encoding: 'utf8' })
     expect(packed.status).toBe(0)
-    const listed = spawnSync('tar', ['-tf', 'test-results/patmail-source.zip'], { cwd: root, encoding: 'utf8' })
+    const listed = spawnSync('tar', ['-tf', 'test-results/delivery/patmail-source.zip'], { cwd: root, encoding: 'utf8' })
     const names = listed.stdout.split(/\r?\n/).filter(Boolean)
     expect(classify(names).every(item => item.reason === null)).toBe(true)
     expect(names.some(name => name.toLowerCase().endsWith('.pem'))).toBe(false)
-    const verified = spawnSync(process.execPath, ['scripts/verify-archive.mjs', 'test-results/patmail-source.zip'], { cwd: root, encoding: 'utf8' })
+    const verified = spawnSync(process.execPath, ['scripts/verify-archive.mjs', 'test-results/delivery/patmail-source.zip'], { cwd: root, encoding: 'utf8' })
     expect(verified.status).toBe(0)
   }, 30_000)
 })
