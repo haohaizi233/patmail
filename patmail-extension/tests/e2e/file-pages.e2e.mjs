@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { launchExtensionContext, extensionWorker, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
+import {
+  launchExtensionContext,
+  extensionWorker,
+  waitForContentScript,
+  waitForPageCondition,
+} from './support/browser.mjs'
 import { installEasyMock, easyFixtureUrl } from './support/easy-mock.mjs'
-import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
+import { distDir, reportsDir, resultPath } from './support/paths.mjs'
 
 const context = await launchExtensionContext(distDir)
 const expectedPeak = Number(process.env.PATMAIL_AUDIT_EXPECT_PEAK ?? 6)
@@ -12,14 +17,17 @@ let active = 0
 let peak = 0
 let collecting = false
 try {
-  await installEasyMock(context, { fixtureHtml: `<!doctype html><title>分页验收</title><table id="table_element">
+  await installEasyMock(context, {
+    fixtureHtml: `<!doctype html><title>分页验收</title><table id="table_element">
     <tr><td class="tdtitle">案件类型</td><td><select id="case_type"><option value="">不限</option><option value="31D1A147-2931-43B5-94AE-B72B1525BA8A">专利</option></select></td></tr>
     <tr id="is_file"><td><a class="img_hide">文件条件</a></td></tr>
     <tr name="file" style="display:none"><td class="tdtitle">文件描述</td><td><input id="filetype" tree_id="Treefiletype"></td></tr>
     <tr name="file" style="display:none"><td class="tdtitle">文件来源</td><td><select id="fileclass"><option value="general">所有文件</option></select></td></tr>
     <tr name="file" style="display:none"><td class="tdtitle">附件名称</td><td><input id="file_name"></td></tr>
     <tr name="file" style="display:none"><td class="tdtitle">下载名称</td><td><select id="filetemp"><option value="">请选择</option><option value="11111111-1111-4111-8111-111111111111">测试模板</option></select></td></tr>
-    </table>`, profile: 'extension' })
+    </table>`,
+    profile: 'extension',
+  })
   await context.route('http://183.36.43.66:88/**', async route => {
     const params = new URLSearchParams(route.request().postData() ?? '')
     if (params.get('Call') !== 'GetSearchFiles') return route.fallback()
@@ -34,19 +42,36 @@ try {
     const first = (page - 1) * size
     const rows = Array.from({ length: Math.max(0, Math.min(size, total - first)) }, (_, offset) => {
       const index = first + offset + 1
-      return { file_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
-        file_no: `AUDIT${index}`, file_name: `并发验收-${index}.pdf`, file_desc: '专利证书',
-        case_volume: 'AUDIT-CASE', app_no: 'CN20260001', customer_name: '测试客户' }
+      return {
+        file_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+        file_no: `AUDIT${index}`,
+        file_name: `并发验收-${index}.pdf`,
+        file_desc: '专利证书',
+        case_volume: 'AUDIT-CASE',
+        app_no: 'CN20260001',
+        customer_name: '测试客户',
+      }
     })
-    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: JSON.stringify({
-      ClientInfo: { IsLogin: true, Status: true, Result: true }, TableRowsCount: String(total), TableRows: rows
-    }) })
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain; charset=utf-8',
+      body: JSON.stringify({
+        ClientInfo: { IsLogin: true, Status: true, Result: true },
+        TableRowsCount: String(total),
+        TableRows: rows,
+      }),
+    })
     if (collecting) active -= 1
   })
   // 非业务网络同样拦截，测试从不访问真实服务器。
-  await context.route(/^https?:\/\//, route => new URL(route.request().url()).origin === 'http://183.36.43.66:88'
-    ? route.fallback() : route.fulfill({ status: 404, body: '' }))
-  await context.addCookies([{ name: 'pm_fixture_session', value: 'active', url: easyFixtureUrl, httpOnly: true, sameSite: 'Lax' }])
+  await context.route(/^https?:\/\//, route =>
+    new URL(route.request().url()).origin === 'http://183.36.43.66:88'
+      ? route.fallback()
+      : route.fulfill({ status: 404, body: '' }),
+  )
+  await context.addCookies([
+    { name: 'pm_fixture_session', value: 'active', url: easyFixtureUrl, httpOnly: true, sameSite: 'Lax' },
+  ])
   const worker = await extensionWorker(context)
   const easy = await context.newPage()
   await easy.goto(easyFixtureUrl, { waitUntil: 'domcontentloaded' })
@@ -57,8 +82,11 @@ try {
   const network = []
   cdp.on('Network.requestWillBeSent', event => {
     if (collecting && new URLSearchParams(event.request.postData ?? '').get('Call') === 'GetSearchFiles') {
-      network.push({ requestId: event.requestId, timestamp: event.timestamp,
-        page: Number(new URLSearchParams(event.request.postData).get('pageIndex')) })
+      network.push({
+        requestId: event.requestId,
+        timestamp: event.timestamp,
+        page: Number(new URLSearchParams(event.request.postData).get('pageIndex')),
+      })
     }
   })
   const app = await context.newPage()
@@ -68,9 +96,17 @@ try {
   await app.getByRole('button', { name: '查询文件', exact: true }).click()
   await app.getByText('并发验收-1.pdf', { exact: true }).waitFor()
   await app.getByRole('button', { name: '校对最新字段', exact: true }).click()
-  await app.locator('p.hint').filter({ hasText: /已经和原网站对过|下拉选项已更新|没有拉到最新下拉|新藏起来的|现在能看到的/ }).first().waitFor()
+  await app
+    .locator('p.hint')
+    .filter({ hasText: /已经和原网站对过|下拉选项已更新|没有拉到最新下拉|新藏起来的|现在能看到的/ })
+    .first()
+    .waitFor()
   for (const label of ['文件描述', '文件来源', '附件名称', '设置下载文件名称']) {
-    assert.equal(await app.getByText(label, { exact: true }).first().isVisible(), true, `原站折叠的${label}在查询后仍可用`)
+    assert.equal(
+      await app.getByText(label, { exact: true }).first().isVisible(),
+      true,
+      `原站折叠的${label}在查询后仍可用`,
+    )
   }
   collecting = true
   const began = Date.now()
@@ -82,23 +118,45 @@ try {
   await app.waitForTimeout(2500) // 有意跨过旧版2秒清除时间，验证完成进度保留。
   const progressRetained = await app.getByRole('progressbar').isVisible()
   const scope = JSON.stringify(['http://183.36.43.66:88', '11111111-1111-1111-1111-111111111111', 'workspace-files'])
-  await waitForPageCondition(app, async ({ scope, total }) => {
-    const reply = await chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request: { op: 'get', slot: 'file-query', scope } })
-    return reply.ok && Object.keys(reply.value.payload?.selected ?? {}).length === total
-  }, { scope, total })
+  await waitForPageCondition(
+    app,
+    async ({ scope, total }) => {
+      const reply = await chrome.runtime.sendMessage({
+        type: 'PATMAIL_RECOVERY_RPC',
+        request: { op: 'get', slot: 'file-query', scope },
+      })
+      return reply.ok && Object.keys(reply.value.payload?.selected ?? {}).length === total
+    },
+    { scope, total },
+  )
   await app.reload()
   await app.getByText('已恢复本地查询与选择', { exact: false }).waitFor()
   await app.getByText(/^已选 1597 个文件/).waitFor()
   assert.equal(await app.getByRole('button', { name: '下载已选', exact: true }).isDisabled(), true)
-  const report = { expectedPeak, peak, elapsedMs, selected: selected > 0 ? total : null, selectionRestored: true, completionNotices, progressRetained, starts, network }
-  await mkdir(testResultsDir, { recursive: true })
+  const report = {
+    expectedPeak,
+    peak,
+    elapsedMs,
+    selected: selected > 0 ? total : null,
+    selectionRestored: true,
+    completionNotices,
+    progressRetained,
+    starts,
+    network,
+  }
+  await mkdir(reportsDir, { recursive: true })
   await writeFile(resultPath('file-pages-optimized.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
   assert.equal(selected > 0, true, '全选必须收齐1597个不同文件')
   assert.equal(starts.length, 15, '复用首屏100条，只请求其余15页')
   assert.equal(network.length, 15)
-  assert.equal(starts.every(item => item.size === 100), true)
+  assert.equal(
+    starts.every(item => item.size === 100),
+    true,
+  )
   assert.deepEqual(completionNotices, ['已全选 1597 个文件。'])
   assert.equal(progressRetained, true)
   assert.equal(peak, expectedPeak, '实际内容脚本请求峰值必须与验收目标一致')
-} finally { await context.close() }
+} finally {
+  await context.close()
+}

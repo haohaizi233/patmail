@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { launchExtensionContext, extensionWorker, waitForContentScript, waitForPageCondition } from './support/browser.mjs'
+import {
+  launchExtensionContext,
+  extensionWorker,
+  waitForContentScript,
+  waitForPageCondition,
+} from './support/browser.mjs'
 import { installEasyMock, easyFixtureUrl } from './support/easy-mock.mjs'
-import { distDir, testResultsDir } from './support/paths.mjs'
+import { distDir, reportsDir } from './support/paths.mjs'
 
-const resultDir = join(testResultsDir, 'prewarm-pagination')
+const resultDir = join(reportsDir, 'prewarm-pagination')
 await mkdir(resultDir, { recursive: true })
 
 const total = 120
@@ -40,7 +45,7 @@ const report = {
   naming: {},
   download: {},
   paginationDuringDownload: {},
-  progressSamples: []
+  progressSamples: [],
 }
 
 function jsonBody(data, clientInfo = info) {
@@ -62,7 +67,9 @@ function namingResponse(ids) {
 function holdRoute(route, entries, record, response) {
   let resolveGate
   let released = false
-  const gate = new Promise(resolve => { resolveGate = resolve })
+  const gate = new Promise(resolve => {
+    resolveGate = resolve
+  })
   const held = {
     record,
     async release() {
@@ -76,7 +83,7 @@ function holdRoute(route, entries, record, response) {
       } finally {
         resolveGate()
       }
-    }
+    },
   }
   entries.push(held)
   return gate
@@ -109,7 +116,7 @@ function summarizeNameCalls() {
     state: call.state,
     count: call.fileIds.length,
     firstId: call.fileIds[0] ?? null,
-    lastId: call.fileIds.at(-1) ?? null
+    lastId: call.fileIds.at(-1) ?? null,
   }))
 }
 
@@ -131,25 +138,28 @@ async function writeFailureReport(error) {
     totalGetFileNameRequests: nameCalls.length,
     uniqueFileIds: new Set(nameCalls.flatMap(call => call.fileIds)).size,
     duplicateFileIds: duplicateRequestedIds(),
-    requestGroups: summarizeNameCalls()
+    requestGroups: summarizeNameCalls(),
   }
-  report.download = { clicked: downloadClicked, heldAtDownLoad: downloadCalls.length > 0, downLoadRequests: downloadCalls.length }
+  report.download = {
+    clicked: downloadClicked,
+    heldAtDownLoad: downloadCalls.length > 0,
+    downLoadRequests: downloadCalls.length,
+  }
   await writeFile(join(resultDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
 }
 
 const hardTimeout = setTimeout(() => {
   void (async () => {
-    console.error(`[prewarm-pagination] exceeded 180 seconds at "${currentStage}"; releasing mock requests and closing its isolated browser`)
+    console.error(
+      `[prewarm-pagination] exceeded 180 seconds at "${currentStage}"; releasing mock requests and closing its isolated browser`,
+    )
     await Promise.race([
       Promise.all([releaseAll(heldNameRoutes), releaseAll(heldDownloadRoutes)]),
-      new Promise(resolve => setTimeout(resolve, 5000))
+      new Promise(resolve => setTimeout(resolve, 5000)),
     ])
     await writeFailureReport(new Error(`Hard timeout after 180 seconds at ${currentStage}`)).catch(() => {})
     if (context) {
-      await Promise.race([
-        context.close().catch(() => {}),
-        new Promise(resolve => setTimeout(resolve, 5000))
-      ])
+      await Promise.race([context.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))])
     }
     process.exit(1)
   })()
@@ -160,11 +170,11 @@ try {
   markStage('launch isolated Chromium context')
   context = await launchExtensionContext(distDir, {
     viewport: { width: 1600, height: 1000 },
-    acceptDownloads: true
+    acceptDownloads: true,
   })
   await installEasyMock(context, {
     fixtureHtml: '<!doctype html><title>取名预热分页回归</title>',
-    profile: 'extension'
+    profile: 'extension',
   })
   markStage('install EASY login and source HTTP fixtures')
 
@@ -201,7 +211,7 @@ try {
           case_volume: 'PREWARM-CASE',
           app_no: `CN2026${String(index).padStart(6, '0')}`,
           customer_name: '隔离测试客户',
-          post_date: '2026-11-02'
+          post_date: '2026-11-02',
         }
       })
       await fulfillJson(route, { TableRowsCount: String(total), TableRows: rows })
@@ -213,7 +223,7 @@ try {
         phase: downloadClicked ? 'download' : 'prewarm',
         state: 'received',
         fileIds: ids,
-        at: Date.now()
+        at: Date.now(),
       }
       nameCalls.push(record)
       if (!downloadClicked && nameCalls.length === 1) {
@@ -226,7 +236,7 @@ try {
         await holdRoute(route, heldNameRoutes, record, {
           status: 200,
           contentType: 'text/plain; charset=utf-8',
-          body: jsonBody(namingResponse(ids))
+          body: jsonBody(namingResponse(ids)),
         })
         return
       }
@@ -240,7 +250,7 @@ try {
       await holdRoute(route, heldDownloadRoutes, record, {
         status: 200,
         contentType: 'text/plain; charset=utf-8',
-        body: jsonBody({}, { IsLogin: true, Status: false, Result: false, Message: '回归在打包入口暂停' })
+        body: jsonBody({}, { IsLogin: true, Status: false, Result: false, Message: '回归在打包入口暂停' }),
       })
       return
     }
@@ -250,10 +260,14 @@ try {
     }
     await route.fallback()
   })
-  await context.route(/^https?:\/\//, route => new URL(route.request().url()).origin === easyOrigin
-    ? route.fallback()
-    : route.fulfill({ status: 404, contentType: 'text/plain; charset=utf-8', body: 'isolated E2E fixture only' }))
-  await context.addCookies([{ name: 'pm_fixture_session', value: 'active', url: easyFixtureUrl, httpOnly: true, sameSite: 'Lax' }])
+  await context.route(/^https?:\/\//, route =>
+    new URL(route.request().url()).origin === easyOrigin
+      ? route.fallback()
+      : route.fulfill({ status: 404, contentType: 'text/plain; charset=utf-8', body: 'isolated E2E fixture only' }),
+  )
+  await context.addCookies([
+    { name: 'pm_fixture_session', value: 'active', url: easyFixtureUrl, httpOnly: true, sameSite: 'Lax' },
+  ])
 
   markStage('open isolated EASY fixture and wait for content script')
   const worker = await extensionWorker(context)
@@ -266,7 +280,10 @@ try {
   app = await context.newPage()
   app.setDefaultTimeout(15000)
   app.setDefaultNavigationTimeout(15000)
-  await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`, { waitUntil: 'domcontentloaded', timeout: 15000 })
+  await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  })
 
   const exportRow = app.locator('.download-name-row')
   const template = exportRow.locator('.download-template-select [role="combobox"]')
@@ -279,7 +296,11 @@ try {
   await app.getByRole('button', { name: '查询文件', exact: true }).click()
   await app.getByText('预热文件-1.pdf', { exact: true }).waitFor()
   await app.getByText('第 1 / 2 页', { exact: true }).waitFor()
-  assert.deepEqual(searchCalls.map(call => [call.pageIndex, call.pageSize]), [[1, 100]], '初次查询应只读取第1页的100行')
+  assert.deepEqual(
+    searchCalls.map(call => [call.pageIndex, call.pageSize]),
+    [[1, 100]],
+    '初次查询应只读取第1页的100行',
+  )
 
   markStage('select all files across both source pages')
   await app.getByRole('button', { name: '全选所有', exact: true }).click()
@@ -291,8 +312,12 @@ try {
   }, '全选后的预热请求已部分完成且仍有在途请求')
 
   const previewStatus = app.locator('p[role="status"]').filter({ hasText: /下载名称预览/ })
-  const completedBeforeDownload = new Set(nameCalls.filter(call => call.state === 'fulfilled').flatMap(call => call.fileIds))
-  const pendingBeforeDownload = new Set(nameCalls.filter(call => call.state === 'pending').flatMap(call => call.fileIds))
+  const completedBeforeDownload = new Set(
+    nameCalls.filter(call => call.state === 'fulfilled').flatMap(call => call.fileIds),
+  )
+  const pendingBeforeDownload = new Set(
+    nameCalls.filter(call => call.state === 'pending').flatMap(call => call.fileIds),
+  )
   const requestedBeforeDownload = new Set(nameCalls.flatMap(call => call.fileIds))
   assert.equal(requestedBeforeDownload.size, total, '静默预热必须已覆盖120个不同文件')
   assert.equal(duplicateRequestedIds().length, 0, '预热本身不能重复请求同一个文件名')
@@ -306,7 +331,7 @@ try {
     completedBeforeDownload: completedBeforeDownload.size,
     pendingBeforeDownload: pendingBeforeDownload.size,
     requestedBeforeDownload: requestedBeforeDownload.size,
-    prewarmRequestGroups: summarizeNameCalls()
+    prewarmRequestGroups: summarizeNameCalls(),
   }
 
   markStage(`prewarm partial ${completedBeforeDownload.size}/120; start download with requests in flight`)
@@ -314,10 +339,15 @@ try {
   await app.getByRole('button', { name: '下载已选', exact: true }).click()
   await app.getByRole('button', { name: '导出中…', exact: true }).waitFor({ timeout: 15000 })
   await app.locator('.check-rainbow').waitFor({ state: 'visible', timeout: 15000 })
-  await waitForPageCondition(app, () => {
-    const text = document.querySelector('.check-rainbow')?.getAttribute('aria-valuetext') ?? ''
-    return /取名\s+\d+\/120/.test(text)
-  }, null, { timeout: 15000 })
+  await waitForPageCondition(
+    app,
+    () => {
+      const text = document.querySelector('.check-rainbow')?.getAttribute('aria-valuetext') ?? ''
+      return /取名\s+\d+\/120/.test(text)
+    },
+    null,
+    { timeout: 15000 },
+  )
   const whilePendingText = await app.locator('.check-rainbow').getAttribute('aria-valuetext')
   const whilePending = readNamedCount(whilePendingText)
   assert.ok(whilePending, `下载阶段应沿用预热取名进度：${whilePendingText}`)
@@ -328,11 +358,16 @@ try {
   markStage('release prewarm gates and wait for held DownLoad requests')
   await releaseAll(heldNameRoutes)
   await waitForNodeCondition(() => downloadCalls.length > 0, '下载已推进到 DownLoad HTTP 入口')
-  await waitForPageCondition(app, () => {
-    const text = document.querySelector('.check-rainbow')?.getAttribute('aria-valuetext') ?? ''
-    const match = /取名\s+(\d+)\/120/.exec(text)
-    return Boolean(match && Number(match[1]) === 120)
-  }, null, { timeout: 30000 })
+  await waitForPageCondition(
+    app,
+    () => {
+      const text = document.querySelector('.check-rainbow')?.getAttribute('aria-valuetext') ?? ''
+      const match = /取名\s+(\d+)\/120/.exec(text)
+      return Boolean(match && Number(match[1]) === 120)
+    },
+    null,
+    { timeout: 30000 },
+  )
   const afterNamesText = await app.locator('.check-rainbow').getAttribute('aria-valuetext')
   const afterNames = readNamedCount(afterNamesText)
   assert.ok(afterNames, `完整预热后应保留取名进度：${afterNamesText}`)
@@ -368,13 +403,20 @@ try {
   assert.ok(finalNamed)
   report.progressSamples.push({ phase: 'page-1-during-download', ...finalNamed })
   const progressCounts = report.progressSamples.map(sample => sample.done)
-  assert.deepEqual(progressCounts, [...progressCounts].sort((a, b) => a - b), '预热到下载的取名进度必须单调递增')
+  assert.deepEqual(
+    progressCounts,
+    [...progressCounts].sort((a, b) => a - b),
+    '预热到下载的取名进度必须单调递增',
+  )
 
   const duplicateIds = duplicateRequestedIds()
   assert.deepEqual(duplicateIds, [], '下载启动不能重取已完成或仍在途的 GetFileName 文件')
   assert.equal(new Set(nameCalls.flatMap(call => call.fileIds)).size, total, '取名请求最终应恰好覆盖120个不同文件')
   assert.equal(searchCalls.length, 2, '全选120条只需源站查询第1页和第2页各一次')
-  assert.deepEqual(searchCalls.map(call => call.pageIndex), [1, 2])
+  assert.deepEqual(
+    searchCalls.map(call => call.pageIndex),
+    [1, 2],
+  )
 
   report.searchCalls = searchCalls.map(({ pageIndex, pageSize: size }) => ({ pageIndex, pageSize: size }))
   report.naming = {
@@ -382,7 +424,7 @@ try {
     totalGetFileNameRequests: nameCalls.length,
     uniqueFileIds: new Set(nameCalls.flatMap(call => call.fileIds)).size,
     duplicateFileIds: duplicateIds,
-    requestGroups: summarizeNameCalls()
+    requestGroups: summarizeNameCalls(),
   }
   report.download = { clicked: true, heldAtDownLoad: true, downLoadRequests: downloadCalls.length }
   report.paginationDuringDownload = {
@@ -391,13 +433,15 @@ try {
     getSearchFilesAfter: searchCalls.length,
     queryIndicatorVisible: false,
     page2Rows: 20,
-    page1Rows: 100
+    page1Rows: 100,
   }
   markStage('write pass report and screenshot')
   report.stage = currentStage
   report.passed = true
   await writeFile(join(resultDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-  console.log(`prewarm-pagination passed: 120 files, 2 source pages, ${nameCalls.length} GetFileName calls, no duplicates`)
+  console.log(
+    `prewarm-pagination passed: 120 files, 2 source pages, ${nameCalls.length} GetFileName calls, no duplicates`,
+  )
 } catch (error) {
   await writeFailureReport(error)
   if (app && !app.isClosed()) await app.screenshot({ path: join(resultDir, 'failure.png') }).catch(() => {})

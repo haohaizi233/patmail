@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 import { launchExtensionContext, extensionWorker, waitForContentScript } from './support/browser.mjs'
 import { installEasyMock, easyFixtureUrl, easyOrigin } from './support/easy-mock.mjs'
-import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
+import { distDir, reportsDir, resultPath } from './support/paths.mjs'
 const guid = n => `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, '0')}`
 const user = '11111111-1111-1111-1111-111111111111'
 const [customer, sender, reviewer, signature, type, file, mail, flow, first, next, urgency] = Array.from(
@@ -356,7 +356,7 @@ try {
   assert.equal(stored.customers.find(p => p.id === 'b').fileMailConfig, undefined)
   checks.push('clearing fields persists default inheritance without changing another customer')
   assert.deepEqual(errors, [])
-  await mkdir(testResultsDir, { recursive: true })
+  await mkdir(reportsDir, { recursive: true })
   await app.screenshot({ path: resultPath('file-manage-customer.png'), fullPage: true })
   await writeFile(
     resultPath('file-manage-customer.json'),

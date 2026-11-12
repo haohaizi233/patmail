@@ -2,25 +2,37 @@ import http from 'node:http'
 import assert from 'node:assert/strict'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
-import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
+import { distDir, reportsDir, resultPath } from './support/paths.mjs'
 import { gotoFixturePage } from './support/browser.mjs'
 
 // Every browser request terminates at this local proxy; never forward to EASY.
 // 222.har 的响应结构，使用虚构身份和 GUID，不依赖本地 HAR 或真实会话。
 const session = {
   UserModel: { user_id: '11111111-1111-4111-8111-111111111111', user_name: 'fixture', Name: '测试员' },
-  ClientInfo: { IsLogin: true, Status: true, Result: false }
+  ClientInfo: { IsLogin: true, Status: true, Result: false },
 }
 const packed = {
-  error: true, error_message: '文件不存在或权限不足,您共0个文件下载失败！',
-  ClientInfo: { IsLogin: true, Url: null, Status: true, Message: null, OtherInfo: {}, IsNewWindow: false,
-    WebPath: 'http://183.36.43.66:88', Result: true, ErrorCode: false, Asyn: false },
-  file_guid: '85ebabc1-cf99-490e-b5f7-298a77742012'
+  error: true,
+  error_message: '文件不存在或权限不足,您共0个文件下载失败！',
+  ClientInfo: {
+    IsLogin: true,
+    Url: null,
+    Status: true,
+    Message: null,
+    OtherInfo: {},
+    IsNewWindow: false,
+    WebPath: 'http://183.36.43.66:88',
+    Result: true,
+    ErrorCode: false,
+    Asyn: false,
+  },
+  file_guid: '85ebabc1-cf99-490e-b5f7-298a77742012',
 }
 const calls = []
 const files = Array.from({ length: 241 }, (_, index) => ({
   fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
-  fileNo: `A${index + 1}`, fileName: `original-${index + 1}.pdf`
+  fileNo: `A${index + 1}`,
+  fileName: `original-${index + 1}.pdf`,
 }))
 const positions = new Map(files.map((file, index) => [file.fileId, index + 1]))
 let activeNames = 0
@@ -45,14 +57,24 @@ const server = http.createServer(async (req, res) => {
     // 浏览器给同源短请求开连接偶有先后，窗口太短会把并发派发误测成串行。
     await new Promise(resolve => setTimeout(resolve, 1500 - positions.get(ids[0])))
     res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-    res.end(JSON.stringify({ ClientInfo: { IsLogin: true, Status: true, Result: false }, file_names: ids.map(id => `file-${positions.get(id)}.pdf`).join(';') }))
+    res.end(
+      JSON.stringify({
+        ClientInfo: { IsLogin: true, Status: true, Result: false },
+        file_names: ids.map(id => `file-${positions.get(id)}.pdf`).join(';'),
+      }),
+    )
     activeNames--
   } else if (call === 'DownLoad') {
     downloadParams = new URLSearchParams(body)
     res.setHeader('Content-Type', 'text/plain; charset=utf-8')
     // 分块发送打包 JSON：块间留时间，验证插件按真实字节流式上报，不等整包才报一次。
     const json = JSON.stringify({ ...packed, pad: 'p'.repeat(6000) })
-    for (const [start, end] of [[0, 800], [800, 2400], [2400, 4800], [4800, Infinity]]) {
+    for (const [start, end] of [
+      [0, 800],
+      [800, 2400],
+      [2400, 4800],
+      [4800, Infinity],
+    ]) {
       res.write(json.slice(start, end))
       if (end !== Infinity) await new Promise(resolve => setTimeout(resolve, 700))
     }
@@ -64,25 +86,35 @@ const server = http.createServer(async (req, res) => {
   } else if (url.pathname === '/fixture') {
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.end('<!doctype html><title>Download diagnostic fixture</title><body>Local fixture</body>')
-  } else { res.writeHead(404); res.end() }
+  } else {
+    res.writeHead(404)
+    res.end()
+  }
 })
 server.on('connect', (_, socket) => socket.destroy())
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 let context
 try {
   context = await chromium.launchPersistentContext('', {
-    channel: 'chromium', headless: true, acceptDownloads: true,
+    channel: 'chromium',
+    headless: true,
+    acceptDownloads: true,
     proxy: { server: `http://127.0.0.1:${server.address().port}`, bypass: '<-loopback>' },
-    args: [`--disable-extensions-except=${distDir}`, `--load-extension=${distDir}`]
+    args: [`--disable-extensions-except=${distDir}`, `--load-extension=${distDir}`],
   })
-  const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
   const errors = []
-  worker.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()) })
+  worker.on('console', msg => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
   const page = await context.newPage()
   page.on('pageerror', e => errors.push(e.message))
   await gotoFixturePage(page, 'http://183.36.43.66:88/fixture')
-  assert.deepEqual(await page.evaluate(() => ({ secure: isSecureContext, uuid: typeof crypto.randomUUID })),
-    { secure: false, uuid: 'undefined' }, '必须在真实 HTTP 非安全上下文复现，不能用 localhost 或 HTTPS 掩盖缺陷')
+  assert.deepEqual(
+    await page.evaluate(() => ({ secure: isSecureContext, uuid: typeof crypto.randomUUID })),
+    { secure: false, uuid: 'undefined' },
+    '必须在真实 HTTP 非安全上下文复现，不能用 localhost 或 HTTPS 掩盖缺陷',
+  )
   const app = await context.newPage()
   await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
   const progressId = '11111111-1111-4111-8111-111111111111'
@@ -90,7 +122,8 @@ try {
     globalThis.__downloadAudit = []
     globalThis.__downloadResult = null
     chrome.runtime.onMessage.addListener(message => {
-      if (message.channel === 'patmail-download-progress' && message.id === id) globalThis.__downloadAudit.push(message.progress)
+      if (message.channel === 'patmail-download-progress' && message.id === id)
+        globalThis.__downloadAudit.push(message.progress)
       if (message.channel === 'patmail-download-result' && message.id === id) globalThis.__downloadResult = message.body
     })
   }, progressId)
@@ -105,13 +138,23 @@ try {
   }
   let timeout
   const accepted = await Promise.race([
-    worker.evaluate(({ id, files, progressId }) => chrome.tabs.sendMessage(id, {
-      type: 'DOWNLOAD_FILES', payload: {
-        items: files,
-        selection: { newFilename: 'file_desc', fileNameType: 'colname' }, stripAppNoDot: true, progressId, detached: true
-      }
-    }), { id: tab.id, files, progressId }),
-    new Promise(resolve => { timeout = setTimeout(() => resolve({ diagnosticTimeout: true }), 40000) })
+    worker.evaluate(
+      ({ id, files, progressId }) =>
+        chrome.tabs.sendMessage(id, {
+          type: 'DOWNLOAD_FILES',
+          payload: {
+            items: files,
+            selection: { newFilename: 'file_desc', fileNameType: 'colname' },
+            stripAppNoDot: true,
+            progressId,
+            detached: true,
+          },
+        }),
+      { id: tab.id, files, progressId },
+    ),
+    new Promise(resolve => {
+      timeout = setTimeout(() => resolve({ diagnosticTimeout: true }), 40000)
+    }),
   ])
   clearTimeout(timeout)
   assert.equal(accepted.type, 'DOWNLOAD_FILES_ACCEPTED', '长任务必须先短暂受理，不能一直占住后台转发')
@@ -119,13 +162,26 @@ try {
   const result = await app.evaluate(() => globalThis.__downloadResult)
   let downloads = []
   for (let attempt = 0; attempt < 50; attempt++) {
-    downloads = await worker.evaluate(() => chrome.downloads.search({}).then(items => items.map(({ id, state, error, bytesReceived, totalBytes, filename }) => ({ id, state, error, bytesReceived, totalBytes, filename }))))
+    downloads = await worker.evaluate(() =>
+      chrome.downloads
+        .search({})
+        .then(items =>
+          items.map(({ id, state, error, bytesReceived, totalBytes, filename }) => ({
+            id,
+            state,
+            error,
+            bytesReceived,
+            totalBytes,
+            filename,
+          })),
+        ),
+    )
     if (downloads.some(item => item.state === 'complete' || item.state === 'interrupted')) break
     await new Promise(resolve => setTimeout(resolve, 200))
   }
   const progress = await app.evaluate(() => globalThis.__downloadAudit)
   const report = { accepted, result, downloads, calls, errors, peakNames, progress }
-  await mkdir(testResultsDir, { recursive: true })
+  await mkdir(reportsDir, { recursive: true })
   await writeFile(resultPath('download-e2e.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
   assert.equal(result.type, 'DOWNLOAD_FILES_RESULT')
@@ -143,15 +199,27 @@ try {
   const naming = progress.filter(item => item.phase === 'naming')
   assert.equal(naming[0].done, 0)
   assert.equal(naming.at(-1).done, 241)
-  assert.equal(naming.every((item, index) => index === 0 || item.done > naming[index - 1].done), true)
+  assert.equal(
+    naming.every((item, index) => index === 0 || item.done > naming[index - 1].done),
+    true,
+  )
   assert(progress.some(item => item.phase === 'packing'))
-  const received = progress.filter(item => item.phase === 'packing' && item.receivedBytes > 0).map(item => item.receivedBytes)
+  const received = progress
+    .filter(item => item.phase === 'packing' && item.receivedBytes > 0)
+    .map(item => item.receivedBytes)
   assert(received.length >= 2 && received.at(-1) > received[0], '真实流式响应字节要逐步上报')
   assert(progress.some(item => item.phase === 'saving'))
   // 浏览器下载阶段的流式输出：至少要报出下载终态，长传输时还有 inProgress 字节进度。
   const transfer = progress.filter(item => item.phase === 'downloading')
-  assert(transfer.some(item => item.state === 'complete'), '下载阶段要流式回报并给出完成终态')
-  assert.equal(transfer.filter(item => item.state === 'complete' || item.state === 'interrupted').length, 1, '终态只能报一次')
+  assert(
+    transfer.some(item => item.state === 'complete'),
+    '下载阶段要流式回报并给出完成终态',
+  )
+  assert.equal(
+    transfer.filter(item => item.state === 'complete' || item.state === 'interrupted').length,
+    1,
+    '终态只能报一次',
+  )
   assert.equal(calls.filter(call => call.path.endsWith('FileHandler.ashx')).length, 1)
   assert.equal(downloads.length, 1)
   assert.equal(downloads[0].state, 'complete')

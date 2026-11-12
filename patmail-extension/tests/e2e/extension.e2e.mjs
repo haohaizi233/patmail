@@ -16,9 +16,12 @@ try {
   await runLargeFormScan(ctx)
 
   assert.deepEqual(errors, [], `browser errors: ${errors.join('\n')}\n404 摘要: ${notFound.join(' | ')}`)
-  await report.writeText('patmail-e2e.txt', `${report.checks} checks passed; browser errors: 0\n${report.notes.join('\n')}\n`)
+  await report.writeText(
+    'patmail-e2e.txt',
+    `${report.checks} checks passed; browser errors: 0\n${report.notes.join('\n')}\n`,
+  )
   report.notes.forEach(line => console.log(line))
-  console.log(`${report.checks} browser checks passed; screenshot: test-results/patmail-panel.png`)
+  console.log(`${report.checks} browser checks passed; screenshot: test-results/reports/patmail-panel.png`)
 } finally {
   await dispose()
 }

@@ -1,43 +1,85 @@
 import http from 'node:http'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { chromium } from 'playwright'
-import { distDir, testResultsDir, resultPath } from './support/paths.mjs'
+import { distDir, tmpPath, resultPath } from './support/paths.mjs'
 import { waitForContentScript, waitForPageCondition } from './support/browser.mjs'
 import { ensureStreamBridge } from './support/stream-bridge.mjs'
 
-const files = Array.from({ length: 6 }, (_, index) => ({ fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, fileNo: `R${index}`, fileName: `old-${index}.pdf` }))
+const files = Array.from({ length: 6 }, (_, index) => ({
+  fileId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+  fileNo: `R${index}`,
+  fileName: `old-${index}.pdf`,
+}))
 const info = { IsLogin: true, Status: true, Result: true }
-const source = index => { const bytes = Buffer.alloc(512 * 1024, index); bytes.write('%PDF durable fixture'); return bytes }
-let names = 0, failed = false, releaseFailure
-const failureGate = new Promise(resolve => { releaseFailure = resolve })
-const fetches = [], ranges = []
+const source = index => {
+  const bytes = Buffer.alloc(512 * 1024, index)
+  bytes.write('%PDF durable fixture')
+  return bytes
+}
+let names = 0,
+  failed = false,
+  releaseFailure
+const failureGate = new Promise(resolve => {
+  releaseFailure = resolve
+})
+const fetches = [],
+  ranges = []
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://183.36.43.66:88')
-  let body = ''; for await (const chunk of req) body += chunk
-  const params = new URLSearchParams(body), call = params.get('Call')
-  const json = data => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ClientInfo: info, ...data })) }
-  if (call === 'GetUserModel') return json({ UserModel: { user_id: '11111111-1111-4111-8111-111111111111', user_name: 'fixture', Name: 'Fixture' } })
-  if (call === 'GetFileName') { names++; return json({ file_names: params.get('file_ids').split(';').map(id => `202610026334.9-${files.findIndex(file => file.fileId === id)}.pdf`).join(';') }) }
-  if (call === 'DownLoad') return json({ file_guid: files.find(file => file.fileNo === params.get('file_no')).fileId, file_size: 512 * 1024 })
+  let body = ''
+  for await (const chunk of req) body += chunk
+  const params = new URLSearchParams(body),
+    call = params.get('Call')
+  const json = data => {
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ ClientInfo: info, ...data }))
+  }
+  if (call === 'GetUserModel')
+    return json({
+      UserModel: { user_id: '11111111-1111-4111-8111-111111111111', user_name: 'fixture', Name: 'Fixture' },
+    })
+  if (call === 'GetFileName') {
+    names++
+    return json({
+      file_names: params
+        .get('file_ids')
+        .split(';')
+        .map(id => `202610026334.9-${files.findIndex(file => file.fileId === id)}.pdf`)
+        .join(';'),
+    })
+  }
+  if (call === 'DownLoad')
+    return json({ file_guid: files.find(file => file.fileNo === params.get('file_no')).fileId, file_size: 512 * 1024 })
   if (url.pathname.endsWith('FileHandler.ashx')) {
     const index = files.findIndex(file => file.fileId === url.searchParams.get('guid'))
     fetches.push(index)
-    const bytes = source(index), range = req.headers.range
+    const bytes = source(index),
+      range = req.headers.range
     const offset = range ? Number(/^bytes=(\d+)-/.exec(range)?.[1]) : 0
     if (range) ranges.push({ index, offset })
-    res.setHeader('Content-Type', 'application/pdf'); res.setHeader('ETag', `"source-${index}-v1"`)
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('ETag', `"source-${index}-v1"`)
     res.setHeader('Content-Length', bytes.length - offset)
-    if (range) { res.statusCode = 206; res.setHeader('Content-Range', `bytes ${offset}-${bytes.length - 1}/${bytes.length}`) }
+    if (range) {
+      res.statusCode = 206
+      res.setHeader('Content-Range', `bytes ${offset}-${bytes.length - 1}/${bytes.length}`)
+    }
     if (index === 1 && !failed) {
-      failed = true; res.write(bytes.subarray(0, 256 * 1024)); await failureGate; res.destroy(); return
+      failed = true
+      res.write(bytes.subarray(0, 256 * 1024))
+      await failureGate
+      res.destroy()
+      return
     }
     return res.end(bytes.subarray(offset))
   }
-  if (url.pathname === '/fixture') { res.setHeader('Content-Type', 'text/html'); return res.end('<!doctype html><title>durable fixture</title>') }
+  if (url.pathname === '/fixture') {
+    res.setHeader('Content-Type', 'text/html')
+    return res.end('<!doctype html><title>durable fixture</title>')
+  }
   json({})
 })
 server.on('connect', (_, socket) => socket.destroy())
@@ -46,42 +88,86 @@ const stopBridge = await ensureStreamBridge()
 let context
 try {
   const netlog = resultPath('durable-download-netlog.json')
-  context = await chromium.launchPersistentContext('', { channel: 'chromium', headless: true, acceptDownloads: true,
+  context = await chromium.launchPersistentContext('', {
+    channel: 'chromium',
+    headless: true,
+    acceptDownloads: true,
     proxy: { server: `http://127.0.0.1:${server.address().port}`, bypass: '127.0.0.1' },
-    args: [`--disable-extensions-except=${distDir}`, `--load-extension=${distDir}`, `--log-net-log=${netlog}`, '--net-log-capture-mode=IncludeSensitive'] })
-  const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
-  const easy = await context.newPage(); await easy.goto('http://183.36.43.66:88/fixture')
-  const app = await context.newPage(); await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
-  const destination = await mkdtemp(join(testResultsDir, 'durable-download-'))
-  await (await context.newCDPSession(app)).send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: destination, eventsEnabled: true })
-  await app.evaluate(() => { window.__results = {}; chrome.runtime.onMessage.addListener(message => { if (message.channel === 'patmail-download-result') window.__results[message.id] = message.body }) })
+    args: [
+      `--disable-extensions-except=${distDir}`,
+      `--load-extension=${distDir}`,
+      `--log-net-log=${netlog}`,
+      '--net-log-capture-mode=IncludeSensitive',
+    ],
+  })
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
+  const easy = await context.newPage()
+  await easy.goto('http://183.36.43.66:88/fixture')
+  const app = await context.newPage()
+  await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
+  const destination = await mkdtemp(tmpPath('durable-download-'))
+  await (
+    await context.newCDPSession(app)
+  ).send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: destination, eventsEnabled: true })
+  await app.evaluate(() => {
+    window.__results = {}
+    chrome.runtime.onMessage.addListener(message => {
+      if (message.channel === 'patmail-download-result') window.__results[message.id] = message.body
+    })
+  })
   let tab
   for (let i = 0; i < 50; i++) {
     tab = (await worker.evaluate(() => chrome.tabs.query({}))).find(item => item.url?.endsWith('/fixture'))
-    try { if ((await worker.evaluate(id => chrome.tabs.sendMessage(id, { type: 'PING' }), tab.id))?.type === 'PONG') break } catch {}
+    try {
+      if ((await worker.evaluate(id => chrome.tabs.sendMessage(id, { type: 'PING' }), tab.id))?.type === 'PONG') break
+    } catch {}
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   const taskId = crypto.randomUUID()
   const waitForConfirmedEasyAccount = async tabId => {
-    await waitForPageCondition(app, async ({ expectedTabId, operatorId }) => {
-      const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
-      const connection = loaded?.payload?.connection
-      return connection?.sessionStatus === 'authenticated' &&
-        connection.operatorId === operatorId &&
-        connection.easyTabId === expectedTabId
-    }, { expectedTabId: tabId, operatorId: '11111111-1111-4111-8111-111111111111' }, { timeout: 60000 })
+    await waitForPageCondition(
+      app,
+      async ({ expectedTabId, operatorId }) => {
+        const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+        const connection = loaded?.payload?.connection
+        return (
+          connection?.sessionStatus === 'authenticated' &&
+          connection.operatorId === operatorId &&
+          connection.easyTabId === expectedTabId
+        )
+      },
+      { expectedTabId: tabId, operatorId: '11111111-1111-4111-8111-111111111111' },
+      { timeout: 60000 },
+    )
   }
-  const start = async progressId => worker.evaluate(({ tabId, files, taskId, progressId }) => chrome.tabs.sendMessage(tabId, {
-    type: 'DOWNLOAD_FILES', payload: { items: files, selection: { newFilename: 'file_name', fileNameType: 'colname' },
-      stripAppNoDot: true, archiveName: '续传验收.zip', stream: true, detached: true, taskId, progressId }
-  }), { tabId: tab.id, files, taskId, progressId })
+  const start = async progressId =>
+    worker.evaluate(
+      ({ tabId, files, taskId, progressId }) =>
+        chrome.tabs.sendMessage(tabId, {
+          type: 'DOWNLOAD_FILES',
+          payload: {
+            items: files,
+            selection: { newFilename: 'file_name', fileNameType: 'colname' },
+            stripAppNoDot: true,
+            archiveName: '续传验收.zip',
+            stream: true,
+            detached: true,
+            taskId,
+            progressId,
+          },
+        }),
+      { tabId: tab.id, files, taskId, progressId },
+    )
   const first = crypto.randomUUID()
   await waitForConfirmedEasyAccount(tab.id)
   assert.equal((await start(first)).type, 'DOWNLOAD_FILES_ACCEPTED')
   let original
   for (let i = 0; i < 500; i++) {
     original = (await worker.evaluate(() => chrome.downloads.search({})))[0]
-    if (original?.bytesReceived >= 512 * 1024) { releaseFailure(); break }
+    if (original?.bytesReceived >= 512 * 1024) {
+      releaseFailure()
+      break
+    }
     const earlyError = await app.evaluate(id => window.__results[id], first)
     if (earlyError) throw new Error(JSON.stringify(earlyError))
     await new Promise(resolve => setTimeout(resolve, 100))
@@ -105,20 +191,39 @@ try {
   assert.equal(downloads[0].state, 'complete')
   assert.equal(names, 1, '已持久化的命名批次不能重跑')
   assert.equal(fetches.filter(index => index === 0).length, 1, '完整缓存的首个附件不能重下')
-  assert(ranges.some(item => item.index === 1 && item.offset > 0), '未完成源附件必须按版本和偏移续取')
-  const validation = 'import zipfile,sys\nwith zipfile.ZipFile(sys.argv[1]) as z:\n assert z.testzip() is None\n assert z.namelist()==[f"2026100263349-{i}.pdf" for i in range(6)]\n assert all(len(z.read(e))==524288 for e in z.namelist())\n print("CRC OK")'
+  assert(
+    ranges.some(item => item.index === 1 && item.offset > 0),
+    '未完成源附件必须按版本和偏移续取',
+  )
+  const validation =
+    'import zipfile,sys\nwith zipfile.ZipFile(sys.argv[1]) as z:\n assert z.testzip() is None\n assert z.namelist()==[f"2026100263349-{i}.pdf" for i in range(6)]\n assert all(len(z.read(e))==524288 for e in z.namelist())\n print("CRC OK")'
   await promisify(execFile)('python', ['-c', validation, downloads[0].filename], { windowsHide: true })
-  await context.close(); context = null
+  await context.close()
+  context = null
   const events = JSON.parse(await readFile(netlog, 'utf8')).events
-  const headers = events.filter(event => String(event.params?.line ?? '').startsWith(`GET /download/${taskId} `))
-    .flatMap(event => event.params?.headers ?? []).filter(value => typeof value === 'string')
+  const headers = events
+    .filter(event => String(event.params?.line ?? '').startsWith(`GET /download/${taskId} `))
+    .flatMap(event => event.params?.headers ?? [])
+    .filter(value => typeof value === 'string')
   const nativeRanges = headers.filter(header => /^range:\s*bytes=[1-9]\d*-/i.test(header))
   assert(nativeRanges.length > 0, '真实浏览器必须发出非零Range请求')
-  const report = { passed: true, sameDownloadId: original.id, originalBytes: original.bytesReceived, names, sourceFetches: fetches, sourceRanges: ranges,
-    nativeRanges, finalBytes: downloads[0].bytesReceived, crc: true }
+  const report = {
+    passed: true,
+    sameDownloadId: original.id,
+    originalBytes: original.bytesReceived,
+    names,
+    sourceFetches: fetches,
+    sourceRanges: ranges,
+    nativeRanges,
+    finalBytes: downloads[0].bytesReceived,
+    crc: true,
+  }
   await writeFile(resultPath('durable-download.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))
 } finally {
-  releaseFailure(); await context?.close()
-  server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); stopBridge()
+  releaseFailure()
+  await context?.close()
+  server.closeAllConnections()
+  await new Promise(resolve => server.close(resolve))
+  stopBridge()
 }
