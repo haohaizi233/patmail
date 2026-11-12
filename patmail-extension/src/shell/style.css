@@ -138,8 +138,10 @@ img { max-width: 100%; }
 .page-copy span { color: #ff6b9d; }
 .page-art { margin-left: auto; width: 280px; height: 92px; object-fit: contain; object-position: right center; background: transparent; }
 .page-art.page-art-lg { width: auto; height: 92px; transform: scale(2.15); transform-origin: right center; }
-.page-head:has(.page-contact) .page-copy { flex: 0 1 auto; min-width: 0; }
-.page-head:has(.page-contact) .page-art { flex: 0 1 200px; width: auto; max-width: 240px; margin-left: 0; }
+.page-head:has(.page-contact) .page-copy,
+.page-head:has(.workflow-head-extra:not(:empty)) .page-copy { flex: 0 1 auto; min-width: 0; }
+.page-head:has(.page-contact) .page-art,
+.page-head:has(.workflow-head-extra:not(:empty)) .page-art { flex: 0 1 200px; width: auto; max-width: 240px; margin-left: 0; }
 .page-contact { flex: 0 0 auto; min-width: max-content; display: flex; align-items: center; justify-content: center; gap: 28px; margin: 0 auto; min-height: 72px; padding: 10px 22px; border: 1px solid #f6e5ee; border-radius: 16px; background: linear-gradient(180deg, #fff, #fff7fb); box-shadow: 0 8px 24px #f6d7e530; font-style: normal; }
 .page-contact p { margin: 0; }
 .page-contact span { display: block; color: #8d97b0; font-size: 11px; font-weight: 700; letter-spacing: .04em; }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useId, watch } from 'vue'
+import { computed, provide, ref, useId, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import DocsMarkdown from './DocsMarkdown.vue'
 
@@ -7,6 +7,8 @@ const props = defineProps<{ title: string; description: string; guide: string; a
 const view = defineModel<'guide' | 'use'>('view', { default: 'guide' })
 const emit = defineEmits<{ back: [] }>()
 const id = useId()
+const headExtraId = `${id}-head-extra`
+provide('workflowHeadExtraId', headExtraId)
 const guideSeen = ref(view.value === 'guide')
 const guideSource = computed(() => props.guide.replace(/^# [^\r\n]+\r?\n/, ''))
 watch(view, value => { if (value === 'guide') guideSeen.value = true })
@@ -26,6 +28,7 @@ function navigateTabs(event: KeyboardEvent): void {
 <template>
   <PageHead :title="title" :desc="description" :art="art">
     <button type="button" class="ghost" @click="emit('back')">回到工作流</button>
+    <div :id="headExtraId" class="workflow-head-extra" />
   </PageHead>
   <div class="tabs workflow-view-tabs" role="tablist" :aria-label="`${title}视图`">
     <button
@@ -61,4 +64,6 @@ function navigateTabs(event: KeyboardEvent): void {
 .workflow-guide, .workflow-use { min-width: 0; }
 .workflow-guide { overflow-x: auto; }
 .workflow-guide :deep(.docs-md) { margin-inline: auto; }
+.workflow-head-extra { margin-left: auto; flex: 0 1 auto; min-width: 0; display: flex; align-items: center; }
+.workflow-head-extra:empty { display: none; }
 </style>
