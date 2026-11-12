@@ -63,7 +63,7 @@ const summary = existsSync(join(reportDir, 'summary.json')) ? readJson(join(repo
 
 // ---- 发布产物 ----
 const archives = ['patmail-source.zip', 'patmail-delivery.zip'].map(name => {
-  const path = join(root, 'test-results', name)
+  const path = join(root, 'test-results', 'delivery', name)
   const present = existsSync(path)
   if (!present) fail(`发布产物缺失：${name}（先执行 pnpm pack:source / pnpm pack:delivery）`)
   return { name, present, bytes: present ? statSync(path).size : 0 }

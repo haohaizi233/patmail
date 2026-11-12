@@ -5,7 +5,21 @@ import { fileURLToPath } from 'node:url'
 import { forbiddenDeliveryNames } from './delivery-guard.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const sourceRoots = ['src/', 'tests/', 'docs/', 'scripts/', 'package.json', 'pnpm-lock.yaml', 'tsconfig.json', 'vite.config.ts', 'vite.content.config.ts', 'manifest.json', 'app.html', 'README.md', '.gitignore']
+const sourceRoots = [
+  'src/',
+  'tests/',
+  'docs/',
+  'scripts/',
+  'package.json',
+  'pnpm-lock.yaml',
+  'tsconfig.json',
+  'vite.config.ts',
+  'vite.content.config.ts',
+  'manifest.json',
+  'app.html',
+  'README.md',
+  '.gitignore',
+]
 
 function normalize(name) {
   return name.replace(/\\/g, '/')
@@ -14,13 +28,17 @@ function normalize(name) {
 function officialKind(name) {
   const normalized = normalize(name)
   if (normalized.startsWith('dist/')) return 'delivery'
-  if (sourceRoots.some(prefix => normalized === prefix.replace(/\/$/, '') || normalized.startsWith(prefix))) return 'source'
+  if (sourceRoots.some(prefix => normalized === prefix.replace(/\/$/, '') || normalized.startsWith(prefix)))
+    return 'source'
   return null
 }
 
 function listArchive(archive) {
   // tar 参数用文件名、cwd 用所在目录：MSYS tar 会把带盘符的绝对路径当成远程主机名。
-  const listed = spawnSync(process.env.TAR || 'tar', ['-tf', basename(archive)], { cwd: dirname(archive), encoding: 'utf8' })
+  const listed = spawnSync(process.env.TAR || 'tar', ['-tf', basename(archive)], {
+    cwd: dirname(archive),
+    encoding: 'utf8',
+  })
   if (listed.status !== 0) {
     console.error('压缩包无法列出内容。')
     process.exit(listed.status ?? 1)
@@ -29,9 +47,10 @@ function listArchive(archive) {
 }
 
 const requested = process.argv.slice(2)
-const targets = requested.length > 0
-  ? requested
-  : [join(root, 'test-results/patmail-source.zip'), join(root, 'test-results/patmail-delivery.zip')]
+const targets =
+  requested.length > 0
+    ? requested
+    : [join(root, 'test-results/delivery/patmail-source.zip'), join(root, 'test-results/delivery/patmail-delivery.zip')]
 
 for (const archive of targets) {
   if (!existsSync(archive)) {
@@ -46,7 +65,9 @@ for (const archive of targets) {
   }
   const outside = names.filter(name => !name.endsWith('/') && !officialKind(name))
   if (outside.length > 0) {
-    console.error(`压缩包有 ${outside.length} 个路径不在 pack:source 或 pack:delivery 白名单中。手工整包不能代替正式交付。`)
+    console.error(
+      `压缩包有 ${outside.length} 个路径不在 pack:source 或 pack:delivery 白名单中。手工整包不能代替正式交付。`,
+    )
     process.exit(1)
   }
   console.log(`archive checked: ${names.length}`)

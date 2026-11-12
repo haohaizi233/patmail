@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url'
 import { forbiddenDeliveryNames } from './delivery-guard.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const outputDir = join(root, 'test-results')
+const outputDir = join(root, 'test-results', 'delivery')
 mkdirSync(outputDir, { recursive: true })
 // tar 参数一律用相对路径（cwd=root）：MSYS tar 会把带盘符的绝对路径当成远程主机名。
-const output = 'test-results/patmail-source.zip'
+const output = 'test-results/delivery/patmail-source.zip'
 const include = [
   'src',
   'tests',
@@ -22,7 +22,7 @@ const include = [
   'manifest.json',
   'app.html',
   'README.md',
-  '.gitignore'
+  '.gitignore',
 ].filter(name => existsSync(join(root, name)))
 
 const present = include.filter(name => existsSync(join(root, name)))
@@ -31,7 +31,10 @@ if (present.some(name => name.toLowerCase().endsWith('.pem'))) {
   process.exit(1)
 }
 
-const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, ...present], { cwd: root, encoding: 'utf8' })
+const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, ...present], {
+  cwd: root,
+  encoding: 'utf8',
+})
 if (packed.status !== 0) {
   console.error(packed.stderr || '源码包没有生成。')
   process.exit(packed.status ?? 1)

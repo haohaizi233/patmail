@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { forbiddenDeliveryName, forbiddenDeliveryNames } from './delivery-guard.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const outputDir = join(root, 'test-results')
+const outputDir = join(root, 'test-results', 'delivery')
 mkdirSync(outputDir, { recursive: true })
 const output = join(outputDir, 'patmail-delivery.zip')
 const dist = join(root, 'dist')
@@ -38,7 +38,10 @@ if (rejected.length > 0) {
   console.error(`构建目录里有 ${rejected.length} 个不能交付的文件名，已停止。`)
   process.exit(1)
 }
-const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, ...candidates], { cwd: root, encoding: 'utf8' })
+const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, ...candidates], {
+  cwd: root,
+  encoding: 'utf8',
+})
 if (packed.status !== 0) {
   console.error(packed.stderr || '交付包没有生成。')
   process.exit(packed.status ?? 1)
