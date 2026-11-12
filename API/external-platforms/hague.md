@@ -211,6 +211,42 @@ fetch('/HagueEFilingWeb/protected/portfolioManager.xhtml', {
 
 ### 批量并发补充（2026-11-12）
 
+### 纯接口链研究补充
+
+后续重做：创建 187942 后立即 Close/Yes 保存，Draft(s) 精确命中，再以列表 Open/Edit 恢复成功；随后纯 multipart 上传 8 图、逐图 Legend 并关闭设计，重新打开该编号的服务端设计表读到 1 项设计、8 图。这些是已验证范围，不等于整案字段完整。
+
+读回另发现产品名称/小类未落入该研究设计：原请求默认 process 错用 source；原站 PrimeFaces 未显式指定 process 时默认处理 `@all`。已改正并加入失败再通过的回归，但该研究设计的字段修正与完整链末端仍待验证。选项区虽存在，也必须在设计变化后调用 refreshOptionsUI 取得最新表单。187919/187920 等旧编号与本次编号不得混作同一检查点。
+
+研究代码：`src/hague/http-context.ts`、`http-driver.ts`，尚未接替正式批量入口。每链独立 detached Document、ViewState、reference、请求队列和失败状态，共享浏览器凭据；响应不更新真实页面，不执行响应任意脚本。
+
+已验证的协议细节：
+
+- partial response 替换 form 后可能不含隐藏 ViewState。必须持有本链最新状态，并为替换后的 form 补回；不能沿用全局其他链的状态。
+- 非 behavior 的 CommandButton 请求还需 source=source 参数；multipart 文件 part 也以 source 命名，但不能再发送同名字符串 part，否则服务端取值会歧义。
+- 上传沿用 form successful controls；partial.execute 为 uploader ID 加配置中的 process；partial.render 来自 uploader update；文件 part 名为 uploader ID（不是 `_input`）。浏览器生成 multipart boundary。完成后仍需调用 `processFile`，传 `dtId=designForm:reproDT` 并验证本组数量。
+- 表单初始懒加载依赖 `refreshDesignationUI`、`refreshDesignUI`、`refreshOptionsUI` remoteCommand；纯请求端必须明确调用，不能假定初始 HTML 已包含所有段落。
+- 拦截 detached radio/checkbox click 时不能 preventDefault，否则浏览器回滚 checked，提交的法人/指定国选择将错误。
+- 恢复必须从 Draft(s) 精确匹配编号并调用该行明确的 Open/Edit 动作。`application.xhtml?appNo=编号` 可能返回 portfolio，HTTP 200 不能作为恢复成功证据。
+
+研究曾取得两个独立编号 187919/187920，并分别填写申请人、代理机构、指定国和首项设计；没有完成上传/保存的端到端验证。后续研究页刷新，内存上下文丢失；重新查询时当前 Draft(s) 无这两个编号，未自动创建替代草稿。不能将之前内存中的成功回执宣称为最终持久化成功。
+
+最近验证：HTTP 上下文/驱动相关 6 项测试通过，覆盖交错隔离、ViewState 补回、失败冻结、radio 选择及 multipart part；完整测试和类型检查受本机内存不足中断，未宣称通过。正式入口继续保留原执行路径，纯接口未标记可用。
+
 调度见 [draft-batch.ts](../../patmail-extension/src/hague/draft-batch.ts)，工作页见 [draft-tabs.ts](../../patmail-extension/src/hague/draft-tabs.ts)。批量模式使用扩展 chrome.tabs.create 打开官方 portfolio 页面，逐页 verify 后才写入；每路成功回到列表后立即复用，异常页面保留，检查点恢复必须使用原标签页。调用参数、ViewState、上传队列、documentId/reference 都不跨标签页共享。相同标签页互斥仍保留。
 
 实际扩展只读实验 6/6 页面成功登录、6/6 加载完成、6 个不同 ViewState（约 18.2 秒）；原生 CDP Target.createTarget 的首轮实验仅 1/6 成功，不能将两种入口等同。该差异原因未确定；正式工作页使用已验证的扩展入口。隔离 UI 验证 7 案/6 路和 112 图，无外站写入。真实六路完整业务及服务器限流尚未压测，界面默认 1 路，其余为试运行，不宣称真实六路写入已通过。
+
+## 当前接口执行入口与全流程验证
+
+最新实现已接入工作流“接口链（试运行）”，此前段落中的“尚未接入”是对应研究阶段的历史状态。`background/hague-http.ts` 提供 PATMAIL_HAGUE_HTTP 内部通道，只接受本扩展 app.html，限定官方路径及表单头，认证由已有标签页的浏览器环境自动携带，不允许调用方传 Cookie 或任意认证头。`hague/http-client.ts` 负责每案独立驱动与新建后保存/重开。网络上限6；全链状态只更新所属实例。
+
+执行顺序与原草稿步骤一致，print 动作改走 `background/hague-offline-pdf.ts`：原站 Summary HTML/样式/图片直接读取，移除活动代码和外链，短暂 about:blank 离线渲染，Page.printToPDF 后下载并清理；打印并发1，不设置下载行为。该步骤是浏览器本地输出 API，并非臆造的 WIPO PDF 下载 HTTP 地址。
+
+真实单案187942全流程已完成并保存/重开：申请人1、设计人1、优先权2、设计1、图8；读回产品与小类正确，Summary包含本案文号，PDF已生成，扩展模块实际下载回执18。真实六链完整业务尚未同时压测。
+
+协议资料：[PrimeFaces AJAX](https://github.com/primefaces/primefaces/blob/master/docs/13_0_0/core/ajaxRendering.md)、[FileUpload](https://github.com/primefaces/primefaces/blob/master/docs/7_0/components/fileupload.md)、[AutoComplete JS API](https://primefaces.github.io/primefaces/jsdocs/classes/src_PrimeFaces.PrimeFaces.widget.AutoComplete-1.html)。版本差异以原站实际加载脚本和请求回执为准；原站 custom autoCompleteHelper 的 inputHidden 同步和 Mojarra onchange 都已现场核对。
+
+
+### 原生导出封装（2026-11-12）
+
+`PATMAIL_HAGUE_HTTP` 的 `print` 支持 `delivery: "artifact"`，返回 `{ok, base64, fileName}`，仅生成离线 PDF，不触发下载；兼容原有默认下载行为。应用通过 `downloadDocuments("pdf" | "zip", sources, fileName)` 交给现有原生流后端保存。应用专用 `PATMAIL_DOCUMENT_EXPORT` 验证扩展 app.html 来源、PDF/ZIP 文件名与清单，使用独立 BrowserStreamDownloads 租约实例，沿用每任务 token、offset、sequence、缓存与完成确认。不会把文档渲染或本地 ZIP 行为误认为 WIPO 提交接口。
