@@ -1,4 +1,4 @@
-import { MessageType, type StreamDownloadCommand } from '../shared/message'
+import { MessageType, type StreamDownloadCommand, type BackgroundResponse } from '../shared/message'
 import type { FileDownloadProgress } from '../shared/download-progress'
 import { sendToBackground } from './runtime'
 import type { DownloadCache, CachedFileInfo } from '../api/stream-cache'
@@ -24,11 +24,23 @@ export async function nativeStreamArchive(
   fileName: string,
   produce: (sink: WritableStream<Uint8Array>, signal: AbortSignal, onWork: (progress: FileDownloadProgress) => void, context: NativeDownloadContext) => Promise<void>,
   report: (progress: FileDownloadProgress) => void,
-  options: { taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; backend?: 'browser'; targetId?: string; onTaskId?: (taskId: string) => void } = {}
+  options: { taskId?: string; manifest?: Record<string, unknown>; newCopy?: true; backend?: 'browser'; targetId?: string; onTaskId?: (taskId: string) => void; request?: (command: StreamDownloadCommand) => Promise<BackgroundResponse>; onDownloadId?: (id: number) => void } = {}
 ): Promise<number> {
   const controller = new AbortController()
   const signal = controller.signal
-  const { backend, onTaskId, ...startOptions } = options
+  const { backend, onTaskId, request: customRequest, onDownloadId, ...startOptions } = options
+  const sendCommand = (payload: StreamDownloadCommand, timeout: number): Promise<BackgroundResponse | null> => {
+    if (!customRequest) return sendToBackground({ type: backend === 'browser' ? MessageType.BrowserStreamDownload : MessageType.StreamDownload, payload }, timeout)
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve({type:MessageType.Error,payload:{message:'扩展后台没有在时限内返回。'}}),timeout)
+      Promise.resolve().then(()=>customRequest(payload)).then(response=>{
+        clearTimeout(timer)
+        // A timed-out or paused start may still allocate a lease; close only its late token.
+        if(payload.action==='start' && signal.aborted && response?.type===MessageType.StreamDownloadResult && response.payload.token)void sendCommand({action:'pause',token:response.payload.token},20000)
+        resolve(response)
+      },error=>{clearTimeout(timer);resolve({type:MessageType.Error,payload:{message:error instanceof Error?error.message:'扩展后台没有答上。'}})})
+    })
+  }
   const browser = backend === 'browser'
   if (options.taskId) {
     activeProducers.get(options.taskId)?.abort(new Error('任务已由新的恢复请求接管。'))
@@ -50,14 +62,13 @@ export async function nativeStreamArchive(
     const cleanup = payload.action === 'pause' || payload.action === 'abort'
     for (let attempt = 0; ; attempt++) {
       if (!cleanup) signal.throwIfAborted()
-      const request = sendToBackground({ type: browser ? MessageType.BrowserStreamDownload : MessageType.StreamDownload, payload },
+      const request = sendCommand(payload,
         payload.action === 'start' ? START_RECEIPT_MS : payload.action === 'write' || payload.action === 'cache' || (browser && payload.action === 'finish') ? 130_000 : 20_000)
-      if (payload.action === 'start') {
+      if (payload.action === 'start' && !customRequest) {
         // 暂停可能先于启动回执到达。只关闭这次启动的令牌，不能按taskId暂停后来接管的恢复任务。
         void request.then(response => {
           if (signal.aborted && response?.type === MessageType.StreamDownloadResult && response.payload.token) {
-            void sendToBackground({ type: browser ? MessageType.BrowserStreamDownload : MessageType.StreamDownload,
-              payload: { action: 'pause', token: response.payload.token } }, 20_000).catch(() => {})
+            void sendCommand({ action: 'pause', token: response.payload.token }, 20_000).catch(() => {})
           }
         }).catch(() => {})
       }
@@ -160,6 +171,7 @@ export async function nativeStreamArchive(
           const result = await untilAbort(command({ action: 'status', token }))
           const info = result.info
           if (!info || !Number.isSafeInteger(info.receivedBytes)) throw new Error('浏览器文件写入状态无效，缓存仍保留。')
+          if (typeof info.downloadId === 'number' && Number.isSafeInteger(info.downloadId)) onDownloadId?.(info.downloadId)
           const receivedBytes = Number(info.receivedBytes)
           report({ phase: 'downloading', done: 0, total: 1, receivedBytes })
           if (info.state === 'complete' && productionDone) return receivedBytes

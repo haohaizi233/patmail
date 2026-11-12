@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { createNativeDownloadTarget, type NativeDownloadItem, type NativeDownloadChange } from '../../../src/background/native-download-target'
 import { BROWSER_FILE_CHANNEL, type BrowserFileRequest } from '../../../src/browser-download/types'
 
-function fixture(options: { attachTimeoutMs?: number } = {}) {
+function fixture(options: { attachTimeoutMs?: number; fileName?: string } = {}) {
   let url = '', response: Response | undefined
   let items: NativeDownloadItem[] = []
   const listeners = new Set<(change: NativeDownloadChange) => void>()
   const cancel = vi.fn(async (id: number) => { const item = items.find(i => i.id === id); if (item) item.state = 'interrupted' })
-  const target = createNativeDownloadTarget({ getURL: p => `chrome-extension://abc/${p}`, resolveFileName: () => '报告.zip',
+  const target = createNativeDownloadTarget({ getURL: p => `chrome-extension://abc/${p}`, resolveFileName: () => options.fileName ?? '报告.zip',
     openNavigation: async value => { url = value }, attachTimeoutMs: options.attachTimeoutMs ?? 1000, pollIntervalMs: 5, finishTimeoutMs: 1000,
     downloads: { search: async () => items, cancel, onChanged: { addListener: cb => { listeners.add(cb) }, removeListener: cb => { listeners.delete(cb) } } } })
   const request = (action: BrowserFileRequest['action'], extra = {}): BrowserFileRequest => ({ channel: BROWSER_FILE_CHANNEL, targetId: 'target', taskId: 'task', owner: 'owner', action, ...extra })
@@ -77,7 +77,7 @@ describe('native stream download target', () => {
   it('reports actual Chrome progress and propagates an interruption before another write', async () => {
     const f = fixture(); const reader = await f.attach()
     f.setItems([{ id: 10, url: f.url, state: 'in_progress', bytesReceived: 123, totalBytes: 1000 }])
-    expect(await f.target.status('target')).toEqual({ state: 'inProgress', receivedBytes: 123, totalBytes: 1000 })
+    expect(await f.target.status('target')).toEqual({ downloadId: 10, state: 'inProgress', receivedBytes: 123, totalBytes: 1000 })
     f.setItems([{ id: 10, url: f.url, state: 'interrupted', bytesReceived: 123 }])
     await expect(f.target.status('target')).rejects.toThrow('缓存已保留')
     await reader.cancel().catch(() => {})
@@ -92,4 +92,12 @@ describe('native stream download target', () => {
     f.target.handleFetch({ request: { url: f.url, method: 'GET', mode: 'navigate' } as Request, respondWith: r => { response = r as Response } })
     expect(await opened).toEqual({ ok: true }); await response!.body!.cancel()
   })
+})
+
+it('serves raw PDF with PDF MIME and suffix through the native stream', async () => {
+ const f=fixture({fileName:'Summary-WIPO123.pdf'});const reader=await f.attach()
+ expect(f.url).toMatch(/\.pdf$/)
+ expect(f.response!.headers.get('content-type')).toBe('application/pdf')
+ expect(f.response!.headers.get('content-disposition')).toContain('filename="PatMail.pdf"')
+ await reader.cancel()
 })

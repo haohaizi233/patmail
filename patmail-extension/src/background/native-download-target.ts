@@ -104,7 +104,8 @@ export function createNativeDownloadTarget(options: NativeDownloadTargetOptions)
       if (!previous.done) { fail(previous, new Error('下载目标已重新打开。')); await cancelNative(previous) }
     }
     const fileName = options.resolveFileName ? await options.resolveFileName(request) : request.fileName ?? 'PatMail.zip'
-    const url = prefix + crypto.randomUUID() + '/' + crypto.randomUUID() + '.zip'
+    const suffix = /\.pdf$/i.test(fileName) ? 'pdf' : 'zip'
+    const url = prefix + crypto.randomUUID() + '/' + crypto.randomUUID() + '.' + suffix
     const s = { request: { ...request }, url, fileName, cursor: 0, attached: deferred<void>(), completed: deferred<void>(),
       closing: false, done: false, claimed: false, listener: (_change: NativeDownloadChange) => {} } as Session
     s.stream = new ReadableStream<Uint8Array>({
@@ -157,14 +158,14 @@ export function createNativeDownloadTarget(options: NativeDownloadTargetOptions)
     pump(s); await ack
   }
   return {
-    async status(targetId: string): Promise<{ state: 'inProgress' | 'complete'; receivedBytes: number; totalBytes?: number } | undefined> {
+    async status(targetId: string): Promise<{ state: 'inProgress' | 'complete'; receivedBytes: number; totalBytes?: number; downloadId?: number } | undefined> {
       const s = sessions.get(targetId)
       if (!s) return undefined
       if (s.error) throw s.error
       const item = (await downloads.search({ url: s.url })).find(item => item.url === s.url)
       if (item) { s.downloadId = item.id; status(s, item) }
       if (s.error) throw s.error
-      return { state: s.done ? 'complete' : 'inProgress', receivedBytes: item?.bytesReceived ?? 0, ...(item?.totalBytes && item.totalBytes > 0 ? { totalBytes: item.totalBytes } : {}) }
+      return { ...(s.downloadId === undefined ? {} : { downloadId: s.downloadId }), state: s.done ? 'complete' : 'inProgress', receivedBytes: item?.bytesReceived ?? 0, ...(item?.totalBytes && item.totalBytes > 0 ? { totalBytes: item.totalBytes } : {}) }
     },
     async host(request: BrowserFileRequest): Promise<BrowserFileReply> {
       try { await operate(request); return { ok: true } }
@@ -180,7 +181,7 @@ export function createNativeDownloadTarget(options: NativeDownloadTargetOptions)
       s.claimed = true; capabilities.delete(s.url); clearTimeout(s.attachTimer)
       const name = s.fileName.replace(/[\r\n\\/\u0000]/g, '_')
       const encoded = encodeURIComponent(name).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase())
-      event.respondWith(new Response(s.stream, { headers: { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="PatMail.zip"; filename*=UTF-8''${encoded}`, 'Cache-Control': 'no-store' } }))
+      event.respondWith(new Response(s.stream, { headers: { 'Content-Type': /\.pdf$/i.test(name) ? 'application/pdf' : 'application/zip', 'Content-Disposition': `attachment; filename="PatMail.${/\.pdf$/i.test(name) ? 'pdf' : 'zip'}"; filename*=UTF-8''${encoded}`, 'Cache-Control': 'no-store' } }))
       watch(s); s.attached.resolve(); return true
     }
   }

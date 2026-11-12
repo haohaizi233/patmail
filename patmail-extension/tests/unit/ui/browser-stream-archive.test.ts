@@ -113,3 +113,15 @@ describe('纯浏览器流任务', () => {
     expect(state.calls).not.toContain('complete')
   })
 })
+
+it('custom transport write has a bounded timeout and never replays an uncertain write',async()=>{
+ vi.useFakeTimers();const calls:string[]=[]
+ const pending=nativeStreamArchive('one.pdf',async sink=>{const w=sink.getWriter();await w.write(new Uint8Array([1]));await w.close()},()=>{},{backend:'browser',request:async p=>{
+  calls.push(p.action)
+  if(p.action==='write')return new Promise(()=>{})
+  return{type:MessageType.StreamDownloadResult,payload:{ok:true,...(p.action==='start'?{token:'b'.repeat(64)}:{}),...(p.action==='status'?{info:{state:'inProgress',receivedBytes:0}}:{})}}
+ }})
+ let error:unknown;void pending.catch(e=>{error=e})
+ await vi.advanceTimersByTimeAsync(131000)
+ expect(String(error)).toMatch(/回执超时/);expect(calls.filter(c=>c==='write')).toHaveLength(1);expect(calls).toContain('pause');expect(calls).not.toContain('complete')
+})
