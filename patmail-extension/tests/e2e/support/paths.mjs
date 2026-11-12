@@ -88,5 +88,6 @@ export const fixturePagePath = path.join(fixturesDir, 'page.html')
 export const docsWorkflowsDir = path.join(projectRoot, 'docs', 'workflows')
 
 export function resultPath(name) {
+  mkdirSync(reportsDir, { recursive: true })
   return path.join(reportsDir, name)
 }
