@@ -13,10 +13,19 @@ export function imageNumber(f: File): string { return f.name.replace(/\.[^.]+$/,
 
 export function discoverCases(files: File[]): CaseFolder[] {
   const groups = new Map<string, CaseFolder>()
+  const documentDirs = new Set(files.filter(f=>/\.docx?$/i.test(f.name)&&!f.name.startsWith('~$')).map(f=>pathOf(f).split('/').slice(0,-1).join('/')))
   for (const f of files) {
+    if(f.name.startsWith('~$')||!(/\.docx?$/i.test(f.name)||/^\d+\.\d+\.(jpg|jpeg|png|tif|tiff)$/i.test(f.name)))continue
     const path = pathOf(f), parts = path.split('/'); parts.pop()
     let index = -1
-    parts.forEach((s, i) => { if (reference(s)) index = i })
+    let ownerReference = ''
+    parts.forEach((s, i) => {
+      const found=reference(s)
+      if(!found)return
+      // A same-reference FIGS directory is an asset container, not a second case.
+      // Keep separate document sets/versions and genuinely different nested cases isolated.
+      if(index<0||found!==ownerReference||documentDirs.has(parts.slice(0,index+1).join('/'))&&documentDirs.has(parts.slice(0,i+1).join('/'))){index=i;ownerReference=found}
+    })
     // A document directory is a fallback boundary for folders without a case reference.
     if (index < 0 && /\.docx?$/i.test(f.name) && !f.name.startsWith('~$')) {
       const dir = parts.join('/')
@@ -33,7 +42,7 @@ export function discoverCases(files: File[]): CaseFolder[] {
     const group = ordered.find(g => !g.path || path.startsWith(`${g.path}/`))
     if (!group) continue
     if (/\.docx?$/i.test(f.name)) group.documents.push(f)
-    if (/^\d+\.\d+\.(jpg|jpeg|png)$/i.test(f.name)) group.images.push(f)
+    if (/^\d+\.\d+\.(jpg|jpeg|png|tif|tiff)$/i.test(f.name)) group.images.push(f)
   }
   for (const g of groups.values()) {
     if (!g.caseVolume) g.issues.push('未识别案号，请填写我方文号')
@@ -60,8 +69,8 @@ export function parseFilingXml(xml: string): Filing {
     const match = /^(\d{1,2})\s+(Perspective|Front|Back|Top|Bottom|Left|Right|Unfolded|Reference|Exploded|Cross[- ]Sectional|Enlarged)\b/i.exec(text(cell))
     if (match) codes[match[1]] = match[2].replace(/cross[- ]sectional/i, 'Cross-Sectional').replace(/^./, s => s.toUpperCase())
   }
-  const start = paragraphs.findIndex(p => /^3\.\s*Description/i.test(p))
-  const end = paragraphs.findIndex((p, i) => i > start && /^4\.\s*Legends/i.test(p))
+  const start = paragraphs.findIndex(p => /^(?:\d+\s*[.)]\s*)?Description(?:\s*\([^)]*\))?\s*[:：]?\s*$/i.test(p))
+  const end = paragraphs.findIndex((p, i) => i > start && /^(?:\d+\s*[.)]\s*)?Legends?(?:\s*\([^)]*\))?\s*[:：]?\s*$/i.test(p))
   if (start >= 0) result.description = paragraphs.slice(start + 1, end < 0 ? undefined : end).filter(Boolean).join('\n')
   for (const table of nodes(doc, 'tbl')) {
     const rows = nodes(table, 'tr').map(r => [...r.children].filter(c => c.localName === 'tc').map(text))
@@ -79,23 +88,24 @@ export function parseFilingXml(xml: string): Filing {
   result.views.sort((a, b) => natural(a.number, b.number))
   if (!result.locarno) result.issues.push('未读取到 Locarno 大类')
   if (!result.products.length) result.issues.push('未读取到产品与小类表格')
-  if (!result.description) result.issues.push('未读取到 Description')
   if (!result.views.length) result.issues.push('未读取到视图编号表')
   return result
 }
 
 export function parseLegacyFilingText(text: string): Filing {
-  const clean = (s: string) => s.replace(/[\r\n]+/g, ' ').split(String.fromCharCode(11)).join(' ').trim()
+  const clean = (s: string) => s.replace(/[\r\n\t]+/g, ' ').split(String.fromCharCode(11)).join(' ').split('').filter(c=>c.charCodeAt(0)>=32).join('').trim()
   const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').split('').filter(c => c.charCodeAt(0) >= 32 || [9, 10, 13].includes(c.charCodeAt(0))).join('')
   const paragraph = (s: string) => `<w:p><w:r><w:t>${escape(s)}</w:t></w:r></w:p>`
   const table = (rows: string[][]) => `<w:tbl>${rows.map(row => `<w:tr>${row.map(c => `<w:tc>${paragraph(c)}</w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>`
-  const productsSection = text.split(/3\.\s*Description/i)[0]
+  const section = (name:string) => new RegExp(`(?:^|[\\r\\n])\\s*(?:\\d+\\s*[.)]\\s*)?${name}(?:\\s*\\([^\\r\\n)]*\\))?[^\\S\\r\\n]*[:：]?(?=[\\r\\n]|$)`,'i').exec(text)
+  const descriptionHeading=section('Description'), legendsHeading=section('Legends?'), claimHeading=section('Claim')
+  const productsSection = text.slice(0,descriptionHeading?.index??legendsHeading?.index??text.length)
   const cells = productsSection.split('\x07').map(clean), products: string[][] = []
   for (let i = 0; i + 3 < cells.length; i++) if (/^\d+$/.test(cells[i]) && /^\d+$/.test(cells[i + 1]) && cells[i + 2] && /^\d+$/.test(cells[i + 3])) { products.push(cells.slice(i, i + 4)); i += 3 }
-  const legends = text.split(/4\.\s*Legends/i)[1]?.split(/5\.\s*Claim/i)[0] ?? ''
+  const legends = legendsHeading?text.slice(legendsHeading.index+legendsHeading[0].length,claimHeading&&claimHeading.index>legendsHeading.index?claimHeading.index:undefined):''
   const legendCells = legends.split('\x07').map(clean), views: string[][] = []
   for (let i = 0; i + 2 < legendCells.length; i++) if (/^\d+\.\d+$/.test(legendCells[i])) { views.push(legendCells.slice(i, i + 3)); i += 2 }
-  const description = text.split(/3\.\s*Description[^\r]*/i)[1]?.split(/4\.\s*Legends/i)[0] ?? ''
+  const description = descriptionHeading?text.slice(descriptionHeading.index+descriptionHeading[0].length,legendsHeading&&legendsHeading.index>descriptionHeading.index?legendsHeading.index:undefined):''
   const locarno = /Locarno Class[^\r]*?:\s*(\d+)/i.exec(text)?.[1] ?? ''
   return parseFilingXml(`<w:document xmlns:w="${NS}"><w:body>${paragraph(`Locarno Class: ${locarno}`)}${table([['No.', 'Total', 'Product(s)', 'Subclass'], ...products])}${paragraph('3. Description')}${description.split('\r').map(paragraph).join('')}${paragraph('4. Legends')}${table([legendCells.filter(c => /^\d{1,2}\s+[A-Za-z]/.test(c))])}${table(views)}</w:body></w:document>`)
 }

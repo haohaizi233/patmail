@@ -1,11 +1,12 @@
 import type { DraftCommand, DraftReceipt } from './draft-contract'
 
 /** Injected in MAIN world. No imports, external closures, arbitrary scripts, fetch or payment controls. */
-export async function executeDraftPage(command: DraftCommand, expectedReference?: string): Promise<DraftReceipt> {
+export async function executeDraftPage(command: DraftCommand, expectedReference?: string, context?:{document:Document;window:unknown;location:Pick<Location,'origin'|'pathname'>;virtual?:boolean;idle?:()=>Promise<void>}): Promise<DraftReceipt> {
+  const document=context?.document??globalThis.document,window=context?.window??globalThis.window,location=context?.location??globalThis.location
   const win = window as unknown as { PrimeFaces?: { ajax: { Queue: { isEmpty(): boolean } }; widgets: Record<string, { cfg: { paginator?: { rowCount: number; rows: number } }; getPaginator?(): { setPage(page: number): void } }> } }
   const sleep = (ms: number) => new Promise<void>(r=>setTimeout(r,ms))
   const until = async (test:()=>boolean, label:string, limit=20000) => { const end=Date.now()+limit; while(!test()) { if(Date.now()>end) throw new Error(`${label}超时；请检查原站，勿重复写入。`); await sleep(100) } }
-  const idle = async () => { await sleep(150); await until(()=>!win.PrimeFaces || win.PrimeFaces.ajax.Queue.isEmpty(),'等待原站响应') }
+  const idle = async () => { if(context?.idle){await context.idle();return}await sleep(150); await until(()=>!win.PrimeFaces || win.PrimeFaces.ajax.Queue.isEmpty(),'等待原站响应') }
   const byId = <T extends HTMLElement>(id:string): T => { const el=document.getElementById(id); if(!el)throw new Error(`原站控件缺失：${id}`);return el as T }
   const btn = (form:string,text:string) => {const matches=[...byId(form).querySelectorAll<HTMLButtonElement>('button')].filter(e=>e.textContent?.trim()===text);if(matches.length!==1)throw new Error(`无法唯一定位 ${form} / ${text}`);return matches[0]}
   const click = async (e:HTMLElement) => { if(e instanceof HTMLButtonElement && e.disabled)throw new Error('原站按钮暂不可用');e.click();await idle() }
@@ -23,7 +24,7 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
   const creatorCount = () => document.querySelectorAll('#CreatorForm button[title="Open/edit"],#CreatorForm button[id$=":editCre"]').length
   const designCount = () => document.querySelectorAll('button[id^="designForm:designsDataTable:"][id$=":addReproduction"]').length
   const reproCount = () => win.PrimeFaces?.widgets.reproDTW?.cfg.paginator?.rowCount ?? document.getElementById('designForm:reproDT_data')?.querySelectorAll('tr[data-ri]').length ?? 0
-  const snapshot = (): DraftReceipt => ({ ok:true,reference:/WIPO reference\s+(\d+)/i.exec(document.title+' '+document.body.innerText)?.[1],page:location.pathname.endsWith('/portfolioManager.xhtml')?'portfolio':location.pathname.endsWith('/application.xhtml')?'application':/summary/i.test(location.pathname)?'summary':'other',applicants:applicantCount(),creators:creatorCount(),priorities:document.querySelectorAll('#PriorityForm button[title="Open/edit"]').length,designs:designCount(),reproductions:reproCount() })
+  const snapshot = (): DraftReceipt => ({ ok:true,reference:/WIPO reference\s+(\d+)/i.exec(document.title+' '+(document.body.innerText??document.body.textContent))?.[1],page:location.pathname.endsWith('/portfolioManager.xhtml')?'portfolio':location.pathname.endsWith('/application.xhtml')?'application':/summary/i.test(location.pathname)?'summary':'other',applicants:applicantCount(),creators:creatorCount(),priorities:document.querySelectorAll('#PriorityForm button[title="Open/edit"]').length,designs:designCount(),reproductions:reproCount() })
   try {
     if(location.origin!=='https://hague.wipo.int' || !location.pathname.startsWith('/HagueEFilingWeb/protected/'))throw new Error('eHague 登录已失效或当前页面不受支持。')
     if(command.op==='inspect' && expectedReference && location.pathname.endsWith('/portfolioManager.xhtml')) {
@@ -50,14 +51,14 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
     if(command.op==='saveDraft') {
       const close=document.getElementById('headerForm:backApp') ?? [...document.querySelectorAll<HTMLElement>('button')].find(e=>e.textContent?.trim()==='Close')
       if(!close)throw new Error('未找到保存草稿的 Close 控件。');await click(close)
-      const dialog=[...document.querySelectorAll<HTMLElement>('.ui-dialog')].find(e=>e.offsetWidth&&e.textContent?.includes('Draft(s)'))
+      const dialog=[...document.querySelectorAll<HTMLElement>('.ui-dialog')].find(e=>(context?.virtual||e.offsetWidth)&&e.textContent?.includes('Draft(s)'))
       if(!dialog)throw new Error('未出现存草稿确认框。')
       const yes=[...dialog.querySelectorAll<HTMLButtonElement>('button')].find(e=>e.textContent?.trim()==='Yes');if(!yes)throw new Error('存草稿确认控件缺失。');yes.click();return snapshot()
     }
     if(!location.pathname.endsWith('/application.xhtml'))throw new Error('请在对应申请草稿编辑器中继续。')
     if(command.op==='applicant' || command.op==='representative') {
       const representative=command.op==='representative'
-      if(!representative && applicantCount()>command.index)throw new Error('目标位置已有申请人，需核对后继续，未重复添加。')
+      if(!representative && applicantCount()!==command.index)throw new Error('申请人记录数量与检查点不符，请先核对前一位申请人的保存回执，未继续添加。')
       if(representative && count('ApplicantForm:representativesViewPanel:'))throw new Error('草稿已有代理机构，未重复添加。')
       await click(byId(representative?'ApplicantForm:repBtn':'ApplicantForm:showApplicantForm'))
       const legal=document.querySelector<HTMLInputElement>('#ApplicantForm input[type=radio][value=true]');if(!legal)throw new Error('缺少法人选项');if(!legal.checked)await click(legal)
@@ -67,6 +68,7 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
       if(!representative){for(const key of ['nationality','domicile','establishment','residence']){set(`ApplicantForm:${key}:input`,'CN');await idle()}set('ApplicantForm:acp:input','CN')}
       await click(byId(representative?'ApplicantForm:saveRepBtn':'ApplicantForm:saveAppBtn'));ensure()
       if(document.getElementById(representative?'ApplicantForm:saveRepBtn':'ApplicantForm:saveAppBtn'))throw new Error('原站尚未确认保存申请人/代理机构。')
+      if(!representative&&applicantCount()!==command.index+1)throw new Error('申请人保存后记录数量不符，请核对原站回执。')
     } else if(command.op==='parties') {
       await click(byId('Designationform:desPanel:changeDesignationsSelection'))
       for(const code of command.codes){const boxes=[...document.querySelectorAll<HTMLInputElement>('#Designationform input[type=checkbox]')];const e=boxes.find(e=>e.getAttribute('onclick')?.includes(`value: '${code}'`));if(!e)throw new Error(`不支持指定缔约方 ${code}`);if(!e.checked)await click(e)}

@@ -1,7 +1,7 @@
 import type { Applicant, Priority } from './arbitration'
 import type { HagueRow } from './workflow'
 import { imageNumber, natural, validateImages, validCaseVolume } from './materials'
-import { parsedHagueSource, sourceRows } from './source'
+import { parsedHagueSource, sourceRows, validSourcePostalCode } from './source'
 
 export interface DraftImage { number: string; legend: string; file: File }
 export interface DraftDesign { number: string; subclass: string; product: string; images: DraftImage[] }
@@ -23,7 +23,8 @@ export function buildDraftPlan(row: HagueRow): DraftPlan {
   if (applicants.length) applicants[0] = { ...decision.applicant }
   else applicants.push({ ...decision.applicant })
   applicants.forEach((a,i) => {
-    for (const key of ['name','address','city','region','postalCode','country'] as const) if (!a[key] || /\p{Script=Han}/u.test(a[key])) throw new Error(`申请人 ${i+1} 的 ${key} 缺少可靠英文值，请先补充。`)
+    if (!validSourcePostalCode(a.postalCode,a.country)) throw new Error(`申请人 ${i+1} 的邮编缺失或无效，请先补充可靠来源。`)
+    for (const key of ['name','address','city','region','postalCode','country'] as const) if ((!a[key]&&!(key==='region'&&a.country==='SG')) || /\p{Script=Han}/u.test(a[key])) throw new Error(`申请人 ${i+1} 的 ${key} 缺少可靠英文值，请先补充。`)
     if (!['CN','China','CN - China'].includes(a.country)) throw new Error(`申请人 ${i+1} 的国籍、住所和 ACP 需人工核对；当前递交配置适用于中国申请人。`)
   })
   const sourceCreators = row.source ? sourceRows(row.source,'GetCaseInventor').length : 0
@@ -33,7 +34,7 @@ export function buildDraftPlan(row: HagueRow): DraftPlan {
     return { givenName:c.givenName, familyName:c.familyName, address:{ ...applicants[0] } }
   })
   if (!decision.parties.length || decision.parties.some(p=>! /^[A-Z]{2}$/.test(p))) throw new Error('指定缔约方缺失或无效。')
-  if (!Number.isInteger(decision.publicationMonths) || decision.publicationMonths < 0 || decision.publicationMonths > 30 || decision.publicationMonths===1) throw new Error('公开月份无效。')
+  if (typeof decision.publicationMonths!=='number' || !Number.isInteger(decision.publicationMonths) || decision.publicationMonths < 0 || decision.publicationMonths > 30 || decision.publicationMonths===1) throw new Error('公开月份尚未确定或无效，请先核对。')
   for (const p of decision.priorities) if (!p.number || !/^\d{4}-\d{2}-\d{2}$/.test(p.date) || !/^[A-Z]{2}$/.test(p.country)) throw new Error('优先权申请号、日期或国家不完整。')
   const designs = filing.products.map(p => {
     const images=row.folder.images.filter(f=>imageNumber(f).split('.')[0]===p[0]).sort((a,b)=>natural(imageNumber(a),imageNumber(b))).map(file=>({number:imageNumber(file),legend:filing.views.find(v=>v.number===imageNumber(file))!.label,file}))
@@ -44,6 +45,6 @@ export function buildDraftPlan(row: HagueRow): DraftPlan {
   }).sort((a,b)=>natural(a.number,b.number))
   if(designs.some((d,i)=>Number(d.number)!==i+1))throw new Error('设计编号须从 1 连续编号，请先核对产品表和图纸归属。')
   if (designs.reduce((n,d)=>n+d.images.length,0)!==row.folder.images.length) throw new Error('部分图纸未匹配到设计编号。')
-  if (!designs.length || !filing.description || !/^\d+$/.test(filing.locarno)) throw new Error('设计、说明或 Locarno 大类缺失。')
+  if (!designs.length || !/^\d+$/.test(filing.locarno)) throw new Error('设计或 Locarno 大类缺失。')
   return {reference:row.folder.caseVolume,applicants,creators,parties:[...new Set(decision.parties)],publicationMonths:decision.publicationMonths,priorities:decision.priorities.map(p=>({...p})),locarno:filing.locarno,description:filing.description,designs}
 }

@@ -4,7 +4,7 @@ import type { Filing } from './materials'
 
 export interface Applicant { name: string; address: string; city: string; region: string; postalCode: string; country: string }
 export interface Priority { number: string; date: string; country: string; das: string; originalNumber?: string; generated?: boolean; requiresReview?: boolean }
-export interface Decision { applicant: Applicant; creators: { givenName: string; familyName: string; address: Applicant }[]; parties: string[]; publicationMonths: number; priorities: Priority[]; warnings: string[]; evidence: string[] }
+export interface Decision { applicant: Applicant; creators: { givenName: string; familyName: string; address: Applicant; sourceName?:string; nameOrigin?:'source'|'ai-transliterated' }[]; parties: string[]; publicationMonths: number|null; priorities: Priority[]; warnings: string[]; evidence: string[] }
 const record = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 const string = (x: unknown): string => typeof x === 'string' ? x.trim() : ''
 export function parseDecision(text: string): Decision {
@@ -18,11 +18,12 @@ export function parseDecision(text: string): Decision {
   const a = record(x.applicant) ? x.applicant : {}
   const applicant: Applicant = { name: string(a.name ?? a.name_en), address: string(a.address ?? a.address_en), city: string(a.city), region: string(a.region ?? a.province), postalCode: string(a.postalCode ?? a.postal_code ?? a.postcode), country: string(a.country ?? a.countryCode) }
   const warnings = Array.isArray(x.warnings) ? x.warnings.filter((w): w is string => typeof w === 'string') : []
-  const creators = Array.isArray(x.creators) ? x.creators.filter(record).map(c => ({ givenName: string(c.givenName ?? c.given_name), familyName: string(c.familyName ?? c.family_name), address: { ...applicant } })) : []
+  const creators = Array.isArray(x.creators) ? x.creators.filter(record).map(c => ({ givenName: string(c.givenName ?? c.given_name), familyName: string(c.familyName ?? c.family_name), sourceName:string(c.sourceName??c.source_name), address: { ...applicant } })) : []
   const parties = Array.isArray(x.parties) ? x.parties.filter((p): p is string => typeof p === 'string' && /^[A-Z]{2}$/.test(p)) : []
   if (!applicant.name && !creators.some(c => c.givenName || c.familyName) && !parties.length) throw new Error('Agent 回复缺少可识别的申请人、设计人和指定缔约方')
-  let publicationMonths = Number(x.publicationMonths ?? x.publication_months)
-  if (!Number.isInteger(publicationMonths) || publicationMonths < 0 || publicationMonths > 30) { publicationMonths = 0; warnings.push('公开时间缺失或无效，需核对案件备注') }
+  const rawMonths=x.publicationMonths ?? x.publication_months
+  let publicationMonths:number|null = rawMonths===null||rawMonths===undefined||rawMonths===''?null:Number(rawMonths)
+  if (publicationMonths===null || !Number.isInteger(publicationMonths) || publicationMonths < 0 || publicationMonths > 30) { publicationMonths = null; warnings.push('公开时间缺失或无效，需核对案件备注') }
   const priorities = Array.isArray(x.priorities) ? x.priorities.filter(record).map(p => ({ number: string(p.number), date: string(p.date), country: string(p.country), das: string(p.das) })) : []
   const evidence = Array.isArray(x.evidence) ? x.evidence.filter((e): e is string => typeof e === 'string') : record(x.evidence) ? Object.entries(x.evidence).flatMap(([k, v]) => typeof v === 'string' ? [`${k}：${v}`] : []) : []
   for (const key of ['name', 'address', 'city', 'region', 'postalCode', 'country'] as const) if (!applicant[key]) warnings.push(`申请人缺少 ${key}`)
@@ -54,8 +55,10 @@ export function formatHagueMaterial(caseVolume: string, filing: Filing, source: 
     rows.forEach((r, i) => {
       lines.push(`第 ${i + 1} 位${title}`, ...fields(r))
       if (key === 'creators') lines.push('  地址：详细地址、城市、省份、邮编和国家均复用第一申请人')
-      if (r.needsEnglishName) lines.push('  待核对：缺少英文姓名来源，需人工补充')
+      if (r.needsEnglishName) lines.push('  AI 任务：按原文中文姓名转写拼音，名首字母大写、姓全大写（张三 → San ZHANG），并返回原文姓名供逐人匹配')
       if (record(r.unresolved)) lines.push(...Object.entries(r.unresolved).map(([k, v]) => `  待核对${labels[k] ?? k}：${String(v)}`))
+      if (Array.isArray(r.reviewNotes)) lines.push(...r.reviewNotes.map(note=>`  来源冲突：${String(note)}`))
+      if (Array.isArray(r.evidence)) lines.push(...r.evidence.map(note=>`  解析依据：${String(note)}`))
     })
   }
   const requirements = record(parsed.requirements) ? parsed.requirements : {}
@@ -63,6 +66,7 @@ export function formatHagueMaterial(caseVolume: string, filing: Filing, source: 
   lines.push(`公开时间：${requirements.publicationMonths === 0 ? '立即公开（0个月）' : typeof requirements.publicationMonths === 'number' ? `${requirements.publicationMonths}个月` : '未识别，需核对'}`)
   if (typeof requirements.sourceText === 'string') lines.push(`待核对备注：${requirements.sourceText}`)
   if (Array.isArray(requirements.unrecognized) && requirements.unrecognized.length) lines.push(`未识别地区：${requirements.unrecognized.join('、')}`)
+  if (Array.isArray(requirements.reviewNotes)) for(const note of requirements.reviewNotes)lines.push(`待核对条件：${String(note)}`)
   if (filing.issues.length) lines.push(`材料问题：${filing.issues.join('；')}`)
   return lines.join('\n')
 }
@@ -91,7 +95,7 @@ async function drain(): Promise<void> {
         const materials = batch.map(p => formatHagueMaterial(p.caseVolume, p.filing, p.source)).join('\n\n—— 下一案件 ——\n\n')
         let lastError: unknown
         for (let attempt = 0; attempt < 2; attempt++) {
-          const reply = await requestAssistantJob(`请核对以下本地预解析结果。已确定字段保持来源值，仅处理缺失、冲突和未识别项；缺少英文姓名来源时提示人工补充，禁止编造。按海牙技能约定返回逐案 JSON。${attempt ? '上一批回复格式有误，请按海牙技能约定输出 JSON，必须逐案返回。' : ''}\n材料：\n${materials}`, `海牙材料仲裁 · 第 ${++batchNumber} 批 · ${batch.length} 案`, controller.signal, () => batch.forEach(p => { if (!p.signal?.aborted) p.onStart?.() }))
+          const reply = await requestAssistantJob(`请核对以下本地预解析结果。已确定字段保持来源值，仅处理缺失、冲突和未识别项；缺少英文姓名时按原中文名由 AI 转写拼音（张三 → San ZHANG），每位返回 sourceName 用于匹配；已有来源英文姓名保持原值。按海牙技能约定返回逐案 JSON。${attempt ? '上一批回复格式有误，请按海牙技能约定输出 JSON，必须逐案返回。' : ''}\n材料：\n${materials}`, `海牙材料仲裁 · 第 ${++batchNumber} 批 · ${batch.length} 案`, controller.signal, () => batch.forEach(p => { if (!p.signal?.aborted) p.onStart?.() }))
           try {
             const body = reply.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
             const parsed: unknown = JSON.parse(body)

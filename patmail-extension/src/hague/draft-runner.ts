@@ -13,7 +13,7 @@ export function draftSteps(plan:DraftPlan):Step[] {
   })
   steps.push({label:`保存设计 ${design.number}`,command:{op:'closeDesign'}})
  })
- steps.push({label:'设计说明',command:{op:'description',text:plan.description}})
+ if(plan.description.trim())steps.push({label:'设计说明',command:{op:'description',text:plan.description}})
  plan.creators.forEach((c,index)=>steps.push({label:`设计人 ${index+1}`,command:{op:'creator',index,...c}}))
  plan.priorities.forEach((data,index)=>steps.push({label:`优先权 ${index+1}${data.generated?'（草稿占位）':''}`,command:{op:'priority',index,data}}))
  steps.push({label:'公开时间',command:{op:'publication',months:plan.publicationMonths}},{label:'签名和我方文号',command:{op:'signature',reference:plan.reference,representative:DRAFT_CONTACTS.representative.name}},{label:'生成 Summary',command:{op:'summary'}},{label:'生成打印文件',command:{op:'print',caseVolume:plan.reference}},{label:'返回草稿编辑器',command:{op:'backToApplication'}},{label:'保存为草稿',command:{op:'saveDraft'}})
