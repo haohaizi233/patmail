@@ -8,7 +8,7 @@ function mountSession(){
  const listeners:{changed?:(tabId:number,info:{status?:string;url?:string})=>void}={}
  vi.stubGlobal('chrome',{tabs:{onUpdated:{addListener:(fn:typeof listeners.changed)=>{listeners.changed=fn},removeListener(){}},onRemoved:{addListener(){},removeListener(){}}}})
  const verify=vi.fn((tabId:number)=>Promise.resolve({tabId,title:'WIPO',documentId:'doc',verifiedAt:Date.now(),expiresAt:Date.now()+300000}))
- const client={listTabs:()=>Promise.resolve([{id:7,title:'WIPO'},{id:8,title:'Other'}]),verify,open:()=>Promise.resolve()}
+ const client={listTabs:()=>Promise.resolve([{id:7,title:'WIPO'},{id:8,title:'Other'}]),verify,isTransientError:(error:unknown)=>error instanceof Error&&error.name==='ProbeUnavailable',open:()=>Promise.resolve()}
  let oa!:ReturnType<typeof useOaSession>
  const app=createApp({setup(){oa=useOaSession(client);return()=>h('div')}}),root=document.createElement('div')
  app.mount(root);unmount=()=>app.unmount()
@@ -63,4 +63,13 @@ it('keeps retrying a previously approved tab after a transient probe failure',as
  await vi.advanceTimersByTimeAsync(60000);expect(oa.verified.value).toBe(false)
  await vi.advanceTimersByTimeAsync(60000);expect(oa.verified.value).toBe(true)
  expect(verify).toHaveBeenCalledTimes(3)
+})
+
+it('preserves unexpired verification during a transient keepalive failure without extending its TTL',async()=>{
+ const {oa,verify}=mountSession();await nextTick();oa.selected.value=7;await oa.verify()
+ verify.mockImplementation(()=>Promise.reject(Object.assign(new Error('probe timeout'),{name:'ProbeUnavailable'})))
+ await vi.advanceTimersByTimeAsync(60000)
+ expect(oa.verified.value).toBe(true)
+ await vi.advanceTimersByTimeAsync(240000)
+ expect(oa.verified.value).toBe(false)
 })

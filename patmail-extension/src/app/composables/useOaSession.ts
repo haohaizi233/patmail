@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 export interface OaSession { tabId: number; title: string; documentId: string; verifiedAt: number; expiresAt: number }
-export interface OaSessionClient { listTabs(): Promise<{ id: number; title: string }[]>; verify(tabId: number): Promise<OaSession>; open(): Promise<void> }
+export interface OaSessionClient { listTabs(): Promise<{ id: number; title: string }[]>; verify(tabId: number): Promise<OaSession>; open(): Promise<void>; isTransientError?(error:unknown):boolean }
 export function useOaSession(client: OaSessionClient) {
   const tabs = ref<{ id: number; title: string }[]>([]), selected = ref(-1), session = ref<OaSession | null>(null)
   const checking = ref(false), listing = ref(false), error = ref(''), now = ref(Date.now())
@@ -26,7 +26,7 @@ export function useOaSession(client: OaSessionClient) {
   async function verify(quiet=false): Promise<boolean> {
     if(inFlight)return inFlight
     if(selected.value<0)return false
-    const version=++generation,tabId=selected.value
+    const version=++generation,tabId=selected.value,previous=session.value
     lastAttemptAt=Date.now()
     checking.value=!quiet
     if(!quiet)session.value=null
@@ -38,7 +38,11 @@ export function useOaSession(client: OaSessionClient) {
         session.value=result;now.value=Date.now();pollingApproved=true
         return verified.value
       }catch(e){
-        if(version===generation){session.value=null;error.value=e instanceof Error?e.message:'平台登录态无法确认。'}
+        if(version===generation){
+          const transient=client.isTransientError?.(e)===true
+          session.value=transient&&previous&&previous.expiresAt>Date.now()?previous:null
+          error.value=(e instanceof Error?e.message:'平台登录态无法确认。')+(session.value?' 保留最近一次仍有效的验证，稍后复核。':'')
+        }
         return false
       }finally{if(version===generation)checking.value=false}
     })()
