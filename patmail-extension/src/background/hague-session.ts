@@ -58,3 +58,23 @@ export function handleHagueSessionMessage(message: unknown, sender: chrome.runti
     executeScript: injection => chrome.scripting.executeScript(injection)
   })(message, sender)
 }
+
+/** One read-only touch per minute while a protected eHague tab is open; never opens or logs in. */
+export function createHagueKeepalive(host:Pick<HagueSessionHost,'queryTabs'|'executeScript'>,clock:()=>number=Date.now){
+  let running=false,lastStarted=Number.NEGATIVE_INFINITY
+  return async():Promise<void>=>{
+    const now=clock()
+    if(running||now-lastStarted<60000)return
+    running=true;lastStarted=now
+    try{
+      const tabs=await host.queryTabs()
+      const tab=tabs.find(t=>Number.isSafeInteger(t.id)&&isHague(t.url)&&new URL(t.url!).pathname.startsWith('/HagueEFilingWeb/protected/'))
+      if(tab)await host.executeScript({target:{tabId:tab.id!,frameIds:[0]},world:'ISOLATED',func:probeHagueLogin})
+    }catch{ /* Closed tabs or an expired login do not trigger navigation or another login attempt. */ }
+    finally{running=false}
+  }
+}
+export const keepHagueSessionAlive=createHagueKeepalive({
+  queryTabs:()=>chrome.tabs.query({url:`${HAGUE_ORIGIN}/*`}),
+  executeScript:injection=>chrome.scripting.executeScript(injection)
+})

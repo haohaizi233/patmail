@@ -1,6 +1,6 @@
 import { DOCUMENT_EXPORT_CHANNEL } from '../shared/document-export'
 import { handleDocumentExport } from './document-export'
-import { handleHagueSessionMessage } from './hague-session'
+import { handleHagueSessionMessage, keepHagueSessionAlive } from './hague-session'
 import { handleHagueDraftMessage } from './hague-draft'
 import { HAGUE_DRAFT_CHANNEL } from '../hague/draft-contract'
 import { HAGUE_HTTP_CHANNEL, handleHagueHttp } from './hague-http'
@@ -381,11 +381,13 @@ function beat(): void {
   void chrome.runtime.getPlatformInfo()
 }
 beat()
+void keepHagueSessionAlive()
 setInterval(beat, HEARTBEAT_MS)
 if (chrome.alarms) {
   chrome.alarms.onAlarm.addListener(alarm => {
     if (alarm.name !== 'patmail-keepalive') return
     beat()
+    void keepHagueSessionAlive()
     if (connection.context.sessionStatus === 'authenticated') void recheckBoundSession(host).finally(() => persistConnection())
     else void warmEasySession()
   })
