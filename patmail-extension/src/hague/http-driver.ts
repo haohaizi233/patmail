@@ -1,28 +1,30 @@
+import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
+import {HagueDiagnosticError} from './diagnostics/errors'
+import {analyzeJavaScript,extractStaticActions,type AstCall,type AstAnalysis} from './diagnostics/ast/analyzer.mjs'
 import { HagueHttpContext, type JsfAction, type HagueFetch } from './http-context'
 import { executeDraftPage } from './draft-page'
 import type { DraftCommand, DraftReceipt,DraftCheckpoint,DraftRecovery } from './draft-contract'
 import { inspectPriorityRecovery } from './draft-recovery'
 
-const quoted=(text:string,key:string)=>new RegExp(`(?:^|[,\\s{])${key}:\\s*['"]([^'"]*)['"]`).exec(text)?.[1]
-/** Static PrimeFaces metadata parser. It never evaluates script text. */
-export function jsfAction(script:string,element:HTMLElement,doc:Document):JsfAction|null {
-  const mojarra=/mojarra\.ab\(this,event,['"]([^'"]+)['"],['"]([^'"]*)['"],['"]([^'"]*)['"]\)/.exec(script)
-  if(mojarra)return{source:element.id,event:mojarra[1],process:mojarra[2],update:mojarra[3]}
-  const ab=/PrimeFaces\.ab\(\{([\s\S]*?)\}\)/.exec(script)?.[1]
-  if(ab){return {source:quoted(ab,'s')??element.id,form:quoted(ab,'f'),process:quoted(ab,'p'),update:quoted(ab,'u'),event:quoted(ab,'e')}}
-  const remote=/\b(selectOffice|processFile)\s*\(/.exec(script)?.[1]
-  if(remote){
-    const scripts=[...doc.querySelectorAll('script')].map(s=>s.textContent).join('\n')
-    const body=new RegExp(`${remote}\\s*=\\s*function\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\}(?:;|$)`,'m').exec(scripts)?.[1]
-      ??new RegExp(`function\\s+${remote}\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\}`).exec(scripts)?.[1]
-    const action=body?jsfAction(body,element,doc):null
-    if(!action)throw new Error(`未识别接口 remoteCommand：${remote}`)
-    const params:Record<string,string>={}
-    for(const m of script.matchAll(/name:\s*['"]([^'"]+)['"],\s*value:\s*['"]([^'"]*)['"]/g))params[m[1]]=m[2]
-    return {...action,params}
+const unsupported=()=>new HagueDiagnosticError({errorCode:'PROTOCOL_UNSUPPORTED',errorStage:'ast',transportStatus:'not_dispatched',sideEffectMayHaveOccurred:false})
+/** AST extraction is read-only. Ambiguous or dynamic handlers never become writes. */
+export function jsfAction(script:string,element:HTMLElement,doc:Document,onAnalysis?:(report:AstAnalysis)=>void):JsfAction|null {
+  const options={elementId:element.id,formId:element.closest('form')?.id}
+  let actions=extractStaticActions(script,options)
+  let report=analyzeJavaScript(script)
+  if(!actions.length&&/\b(?:selectOffice|processFile|refreshOptionsUI|refreshDesignUI|refreshDesignationUI)\s*\(/.test(script)){
+    const definitions=[...doc.scripts].map(s=>s.textContent??'').join('\n')
+    actions=extractStaticActions(script,{...options,definitions})
+    report=analyzeJavaScript(script,{definitions})
   }
-  if(/jsfcljs|mojarra\.jsfcljs/.test(script))return{source:element.id,form:element.closest('form')?.id,full:true}
-  return null
+  try{onAnalysis?.(report)}catch{/* Diagnostic observers cannot affect extraction. */}
+  if(actions.length!==1){
+    if(script.trim()&&!/^(?:return\s+false\s*;?|PF\([^;]*;?)$/.test(script.trim()))throw unsupported()
+    return null
+  }
+  const {_kind,_line,_column,...action}=actions[0]
+  Object.defineProperty(action,'analysis',{enumerable:false,value:{scriptHash:report.scriptHash,fingerprint:report.fingerprint,callType:_kind,line:_line,column:_column,confidence:'static'}})
+  return action
 }
 
 /** Detached DOM is a protocol model only; actual page DOM and PrimeFaces globals stay untouched. */
@@ -30,6 +32,8 @@ export class HagueHttpDriver {
   readonly state:HagueHttpContext
   private running=false
   private commandFailure?:Error
+  // Weak keys keep execution DOM/source lifetime within this chain; unchanged scripts are not re-parsed.
+  private widgetReports=new WeakMap<HTMLScriptElement,{text:string;report:AstAnalysis;emittedTrace?:string}>()
   constructor(id:string,fetcher?:HagueFetch){
     this.state=new HagueHttpContext(id,fetcher)
     const dispatch=(event:Event)=>{
@@ -44,7 +48,7 @@ export class HagueHttpDriver {
           return
         }
         const script=element.getAttribute(event.type==='change'?'onchange':'onclick')??''
-        const action=jsfAction(script,element,this.state.document)
+        const action=jsfAction(script,element,this.state.document,report=>this.reportAnalysis(report))
         if(action){
           // Canceling a radio/checkbox click rolls its preactivated checked state back.
           if(!(element instanceof HTMLInputElement&&/^(radio|checkbox)$/.test(element.type)))event.preventDefault()
@@ -53,11 +57,16 @@ export class HagueHttpDriver {
         else if(event.type==='click'&&element instanceof HTMLButtonElement&&element.type==='submit'&&!/PF\(|return false/.test(script)){
           event.preventDefault();void this.state.post({source:element.id,full:true}).catch(e=>{this.commandFailure=e instanceof Error?e:new Error('接口失败')})
         }
-      }catch(e){this.commandFailure=e instanceof Error?e:new Error('接口配置未识别')}
+      }catch(e){if(e instanceof HagueDiagnosticError&&this.state.trace)e.diagnostic.traceId=this.state.trace.traceId;this.commandFailure=e instanceof Error?e:unsupported()}
     }
     this.state.document.addEventListener('click',dispatch,true)
     this.state.document.addEventListener('change',dispatch,true)
     this.state.document.addEventListener('input',dispatch,true)
+  }
+  private reportAnalysis(report:AstAnalysis):void{
+    if(!isDiagnosticModeEnabled())return
+    const calls=report.calls.length?report.calls.slice(0,60):[undefined]
+    for(const call of calls)emitTrace(this.state.trace,'protocol.analyzed',{protocolFingerprint:report.fingerprint,astCallType:call?.kind==='PrimeFaces.cw'?(call.widgetType==='FileUpload'?'fileUpload':call.widgetType==='DataTable'?'dataTable':'widget'):call?.kind,astConfidence:call?.confidence??'unresolved',sourceComponent:call?.source,form:call?.form,process:call?.process,update:call?.update,parameterNames:call?.parameterNames,sourceLocation:{scriptHash:report.scriptHash,line:call?.location.line,column:call?.location.column},unresolvedReasons:[...report.unresolved,...(call?.unresolvedReasons??[])],evidenceCodes:call?.confidence==='static'?['PROTOCOL_STATIC']:['PROTOCOL_UNRESOLVED']})
   }
   private checkFailure():void{const failure=this.commandFailure??this.state.failure;if(failure)throw failure}
   async initialize():Promise<void>{await this.state.get()}
@@ -113,9 +122,10 @@ export class HagueHttpDriver {
     let row=findRow()
     if(!row){
       const table=this.state.document.querySelector<HTMLElement>('#portfolio .ui-datatable[id]')
-      const config=[...this.state.document.scripts].map(s=>s.textContent??'').find(s=>table&&s.includes(`id:"${table.id}"`)&&s.includes('paginator:'))??''
-      const rows=Number(/\brows:\s*(\d+)/.exec(config)?.[1]),count=Number(/\browCount:\s*(\d+)/.exec(config)?.[1])
-      if(table&&Number.isSafeInteger(rows)&&rows>0&&count<=10000){
+      const config=table?this.widget('DataTable',table.id,true):undefined
+      const rows=config?.paginator?.rows,count=config?.paginator?.rowCount
+      if(table){
+        if(!Number.isSafeInteger(rows)||!rows||rows<0||!Number.isSafeInteger(count)||count===undefined||count<0||count>10000)throw unsupported()
         for(let first=0;first<count&&!row;first+=rows){
           await this.state.post({source:table.id,form:'portfolio',process:table.id,update:table.id,params:{[`${table.id}_pagination`]:'true',[`${table.id}_first`]:String(first),[`${table.id}_rows`]:String(rows),[`${table.id}_skipChildren`]:'true',[`${table.id}_encodeFeature`]:'true'}})
           row=findRow()
@@ -124,15 +134,24 @@ export class HagueHttpDriver {
     }
     return row
   }
+  private widget(type:'DataTable'|'FileUpload',componentId:string,required=false):AstCall|undefined{
+    const reports=[...this.state.document.scripts].map(script=>{const text=script.textContent??'';let cached=this.widgetReports.get(script);if(!cached||cached.text!==text){cached={text,report:analyzeJavaScript(text)};this.widgetReports.set(script,cached)}if(isDiagnosticModeEnabled()&&cached.emittedTrace!==this.state.trace?.traceId){this.reportAnalysis(cached.report);cached.emittedTrace=this.state.trace?.traceId}return cached.report})
+    if(reports.some(r=>r.calls.some(c=>c.kind==='PrimeFaces.cw'&&((c.widgetType===type&&(!c.componentId||c.componentId==='[redacted]'))||(c.componentId===componentId&&c.widgetType!==type)))))throw unsupported()
+    const matches=reports.flatMap(r=>r.calls.filter(c=>c.kind==='PrimeFaces.cw'&&c.widgetType===type&&c.componentId===componentId).map(call=>({call,report:r})))
+    if(matches.length!==1){if(required||matches.length>1)throw unsupported();return undefined}
+    const {call,report}=matches[0]
+    if(report.unresolved.length||call.confidence!=='static'||[call.process,call.update].includes('[redacted]'))throw unsupported()
+    return call
+  }
   private async remote(name:string,params?:Record<string,string>):Promise<void>{
-    const definition=[...this.state.document.querySelectorAll('script')].map(s=>s.textContent??'').find(s=>new RegExp(`${name}\\s*=\\s*function`).test(s))
-    const action=definition?jsfAction(definition,this.state.document.createElement('button'),this.state.document):null
-    if(!action)throw new Error(`原站接口命令未识别：${name}`)
-    await this.state.post({...action,params})
+    const action=jsfAction(`${name}(${JSON.stringify(Object.entries(params??{}).map(([name,value])=>({name,value})))})`,this.state.document.createElement('button'),this.state.document,report=>this.reportAnalysis(report))
+    if(!action)throw unsupported()
+    await this.state.post({...action,params,analysis:action.analysis})
   }
   private reproCount():number{
-    const script=[...this.state.document.querySelectorAll('script')].map(s=>s.textContent).find(s=>s?.includes('"reproDTW"'))??''
-    return Number(/rowCount:\s*(\d+)/.exec(script)?.[1]??this.state.document.getElementById('designForm:reproDT_data')?.querySelectorAll('tr[data-ri]').length??0)
+    const config=this.widget('DataTable','designForm:reproDT')
+    if(config){const count=config.paginator?.rowCount;if(!Number.isSafeInteger(count)||count===undefined||count<0||count>10000)throw unsupported();return count}
+    return this.state.document.getElementById('designForm:reproDT_data')?.querySelectorAll('tr[data-ri]').length??0
   }
   private async upload(command:Extract<DraftCommand,{op:'upload'}>):Promise<void>{
     if(this.reproCount()!==command.count)throw new Error('本接口链图纸计数不符，未重复上传。')
@@ -141,8 +160,8 @@ export class HagueHttpDriver {
     if(bytes.length>2097152)throw new Error('图纸超过 2MB。')
     const input=this.state.document.getElementById('designForm:fileuploader:fileupload_input') as HTMLInputElement|null
     if(!input)throw new Error('本链上传控件缺失。')
-    const source=input.id.replace(/_input$/,''),definition=[...this.state.document.querySelectorAll('script')].map(s=>s.textContent??'').find(s=>s.includes('"FileUpload"'))??''
-    const process=quoted(definition,'process'),update=quoted(definition,'update')
+    const source=input.id.replace(/_input$/,''),config=this.widget('FileUpload',source,true)!
+    const process=config.process,update=config.update
     await this.state.post({source,form:input.closest('form')?.id,process:`${source}${process?' '+process:''}`,update},{field:source,file:new File([bytes],command.name,{type:command.mime})})
     await this.remote('processFile',{dtId:'designForm:reproDT'})
     if(this.reproCount()!==command.count+1)throw new Error('上传后本链图纸数量未确认，结果待核对。')
@@ -170,6 +189,6 @@ export class HagueHttpDriver {
         throw new Error(`接口创建回执未确认编辑器和 WIPO reference（返回 ${snapshot.page}），结果待核对，未自动重建。${messages?`原站提示：${messages}`:'未返回可识别校验提示，请先在原站核对是否已创建。'}`)
       }
       return {...snapshot,documentId:this.state.id,...(result.warnings?{warnings:result.warnings}:{})}
-    }catch(error){this.commandFailure=error instanceof Error?error:new Error('接口链结果待核对');throw this.commandFailure}finally{this.running=false}
+    }catch(error){if(error instanceof HagueDiagnosticError&&this.state.trace)error.diagnostic.traceId=this.state.trace.traceId;this.commandFailure=error instanceof Error?error:new Error('接口链结果待核对');throw this.commandFailure}finally{this.running=false}
   }
 }
