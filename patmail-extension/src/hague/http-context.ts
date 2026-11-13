@@ -36,7 +36,7 @@ export class HagueHttpContext {
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000)
       const requestId='req-'+crypto.randomUUID(),started=performance.now()
       this.requestId=requestId;this.observedStatus=null;this.observedProtocol='not_observed'
-      emitTrace(this.trace,'request.dispatched',{requestId,httpMethod:init.method==='POST'?'POST':'GET',urlPath:url,httpStatus:null,transportStatus:'dispatched',businessStatus:'unknown'})
+      emitTrace(this.trace,'request.dispatched',{requestId,httpMethod:init.method==='POST'?'POST':'GET',urlPath:url,httpStatus:null,transportStatus:'dispatched',businessStatus:'unknown',sideEffectMayHaveOccurred:init.method==='POST'})
       try{
         const response=await this.fetcher(url,{...init,signal:controller.signal},this.trace,requestId)
         this.observedStatus=response.status
