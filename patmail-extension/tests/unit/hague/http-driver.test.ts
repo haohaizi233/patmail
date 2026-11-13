@@ -52,3 +52,9 @@ it('preserves radio preactivation when serializing a detached JSF click',async()
  ;(c.state.document.getElementById('form:legal:0') as HTMLInputElement).click()
  await c.state.settle();expect(legal).toBe('true')
 })
+
+it('includes the returned create-page validation text when no editor is confirmed',async()=>{
+ const d=new HagueHttpDriver('create-error',async()=>new Response('<partial-response><changes><update id="portfolio"><![CDATA[<form id="portfolio"><div class="ui-messages-error">Choose the filing language.</div></form>]]></update></changes></partial-response>'))
+ d.state.load(`<html><body><form id="portfolio"><input type="hidden" name="javax.faces.ViewState" value="A"><button type="button" id="portfolio:create" onclick='PrimeFaces.ab({s:"portfolio:create",p:"portfolio",u:"portfolio"});'>Confirm</button></form></body></html>`,'/HagueEFilingWeb/protected/portfolioManager.xhtml')
+ await expect(d.call({op:'create'})).rejects.toThrow(/Choose the filing language/)
+})

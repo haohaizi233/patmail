@@ -165,7 +165,10 @@ export class HagueHttpDriver {
       this.checkFailure()
       if(!result.ok){this.commandFailure=new Error(result.error);return result}
       const snapshot=await executeDraftPage({op:'inspect'},reference??this.state.reference,context)
-      if(command.op==='create'&&(snapshot.page!=='application'||!snapshot.reference))throw new Error('接口创建回执未确认编辑器和 WIPO reference，结果待核对。')
+      if(command.op==='create'&&(snapshot.page!=='application'||!snapshot.reference)){
+        const messages=[...this.state.document.querySelectorAll('.ui-message-error,.ui-messages-error,.b-input__error,[id$=":error"]')].map(node=>node.textContent?.trim()).filter(Boolean).join('；').slice(0,500)
+        throw new Error(`接口创建回执未确认编辑器和 WIPO reference（返回 ${snapshot.page}），结果待核对，未自动重建。${messages?`原站提示：${messages}`:'未返回可识别校验提示，请先在原站核对是否已创建。'}`)
+      }
       return {...snapshot,documentId:this.state.id,...(result.warnings?{warnings:result.warnings}:{})}
     }catch(error){this.commandFailure=error instanceof Error?error:new Error('接口链结果待核对');throw this.commandFailure}finally{this.running=false}
   }

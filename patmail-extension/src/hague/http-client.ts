@@ -1,3 +1,4 @@
+import { PermitPool } from '../utils/permit-pool'
 import { downloadDocuments } from '../utils/download-documents'
 import type { DocumentExportFormat } from '../utils/document-export'
 import { HagueHttpDriver } from './http-driver'
@@ -33,18 +34,30 @@ export function httpRestoreCommands(plan:DraftPlan,next:number):DraftCommand[]{
  }
  return[]
 }
-export function createHttpChain(tabId:number,id:string,reference?:string,restore:DraftCommand[]=[],exportFormat:DocumentExportFormat='pdf'){
+// Only the allocation and initial-save handshake is serialized; later case work remains concurrent.
+const creationPool=new PermitPool(1)
+export function createHttpChain(tabId:number,id:string,reference?:string,restore:DraftCommand[]=[],exportFormat:DocumentExportFormat='pdf',signal?:AbortSignal){
  const fetcher=hagueHttpFetch(tabId),driver=new HagueHttpDriver(id,fetcher);let ready=false
- return{driver,async recover(command:DraftCommand,checkpoint:DraftCheckpoint):Promise<DraftRecovery>{
+ const recover=async(command:DraftCommand,checkpoint:DraftCheckpoint):Promise<DraftRecovery>=>{
   const result=await driver.recoverStep(command,checkpoint)
   if(result.outcome!=='unknown')ready=true
   return {...result,receipt:result.receipt?{...result.receipt,documentId:id}:undefined}
- },async call(command:DraftCommand):Promise<DraftReceipt>{
+ }
+ const call=async(command:DraftCommand):Promise<DraftReceipt>=>{
   try{
+   // New-case preflight does not mutate a shared server New view outside the allocation slot.
+   // Login has been verified by the workspace; the actual GET and prepare run together with create.
+   if(!ready&&!reference&&(command.op==='inspect'||command.op==='prepare'))return{ok:true,page:'portfolio',documentId:id}
    if(!ready){
     if(reference){await driver.resume(reference);for(const step of restore){const restored=await driver.call(step,reference);if(!restored.ok)throw new Error(restored.error??'检查点页面恢复失败。')}}
-    else await driver.initialize()
+    else if(command.op!=='create')await driver.initialize()
     ready=true
+   }
+   if(command.op==='create'&&!reference){
+    // The queued chain may hold an obsolete New view. Prepare again only after owning the slot.
+    await driver.initialize()
+    const prepared=await driver.call({op:'prepare'})
+    if(!prepared.ok)throw new Error(prepared.error??'创建前未确认新申请表单。')
    }
    if(command.op==='print'){
     const pdf=await renderSummary(driver,fetcher,command.caseVolume)
@@ -61,7 +74,8 @@ export function createHttpChain(tabId:number,id:string,reference?:string,restore
    }
    return result
   }catch(e){return{ok:false,reference:driver.state.reference,documentId:id,error:e instanceof Error?e.message:'接口链失败，结果待核对。'}}
- }}
+ }
+ return{driver,recover,call:(command:DraftCommand)=>command.op==='create'?creationPool.run(()=>call(command),signal):call(command)}
 }
 
 async function renderSummary(driver:HagueHttpDriver,fetcher:HagueFetch,caseVolume:string){

@@ -75,3 +75,11 @@ describe('Hague materials', () => {
     expect(validateImages(parsed, [file('1.10.jpg'), file('1.10.png')]).join()).toContain('重复')
   })
 })
+
+it('reports repeated design numbers and per-design count mismatch before drafting',()=>{
+ const f={locarno:'13',products:[['1','1','Charger','02'],['2','2','Charger','02']],description:'',views:[{number:'1.1',code:'1',label:'Perspective'},{number:'1.2',code:'2',label:'Front'},{number:'2.1',code:'1',label:'Perspective'}],issues:[]}
+ const images=f.views.map(v=>new File(['x'],v.number+'.jpg'))
+ expect(validateImages(f,images).join()).toContain('设计 1 的图纸数量不符：Word 1 / 文件 2')
+ f.products[1][0]='1'
+ expect(validateImages(f,images).join()).toContain('产品表设计编号重复：1')
+})
