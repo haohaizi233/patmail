@@ -23,11 +23,20 @@ it('resolves links relative to the current file without exposing hidden document
 })
 
 it('separates implementation explanations from usage and includes external platform API docs', () => {
-  expect(DOC_GROUPS.find(group => group.name === '工作流')!.entries.map(entry => entry.title)).toEqual(['工作流总览', 'PCT提醒', 'PCT鹏城专案', '文件管理', '递交管理-已完成导出', '季华实验室-文件导入'])
+  expect(DOC_GROUPS.find(group => group.name === '工作流')!.entries.map(entry => entry.title)).toEqual(['工作流总览', 'PCT提醒', 'PCT鹏城专案', '文件管理', '递交管理-已完成导出', '季华实验室-文件导入', '海牙新申请'])
   const usage = leaves(DOC_GROUPS.find(group => group.name === '使用文档')!.entries)
   expect(usage.some(entry => entry.title.includes('下载去重算法'))).toBe(false)
   expect(DOC_GROUPS.find(group => group.name === '原理说明')?.entries.some(entry => entry.title.includes('下载去重算法'))).toBe(true)
   const apis = leaves(DOC_GROUPS.find(group => group.name === '接口文档')!.entries)
   expect(apis.some(entry => entry.title.includes('季华实验室附件'))).toBe(true)
   expect(apis.some(entry => entry.title.includes('季华实验室平台'))).toBe(true)
+})
+it('loads the Hague stage guide from workflows and resolves its catalog and API navigation',async()=>{
+  const guide=DOC_GROUPS.find(group=>group.name==='工作流')!.entries.find(entry=>entry.file==='海牙新申请.md')!
+  const source=await guide.load!()
+  expect(source).toContain('# 海牙新申请工作流')
+  expect((source.match(/^```mermaid$/gm)??[])).toHaveLength(8)
+  expect(source).toContain('6 路并发')
+  expect(resolveDocLink(DOC_GROUPS,guide,'README.md')?.title).toBe('工作流总览')
+  expect(resolveDocLink(DOC_GROUPS,guide,'../../../API/external-platforms/hague.md')?.path).toBe('API/external-platforms/hague.md')
 })

@@ -43,7 +43,7 @@ const workflowFiles = import.meta.glob('../../../docs/workflows/*.md', {
   import: 'default'
 }) as Record<string, () => Promise<string>>
 
-const workflowOrder = ['README.md', 'PCT提醒.md', 'PCT鹏城专案.md', '文件管理.md', '递交管理-已完成导出.md', '季华实验室-文件导入.md']
+const workflowOrder = ['README.md', 'PCT提醒.md', 'PCT鹏城专案.md', '文件管理.md', '递交管理-已完成导出.md', '季华实验室-文件导入.md', '海牙新申请.md']
 const workflowRank = (path: string) => {
   const rank = workflowOrder.indexOf(path.split('/').pop() ?? '')
   return rank < 0 ? workflowOrder.length : rank

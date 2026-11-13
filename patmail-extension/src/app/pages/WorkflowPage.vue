@@ -8,7 +8,7 @@ import { bg } from '../../shell/assets'
 import JihuaUploadPage from './JihuaUploadPage.vue'
 import HaguePage from './HaguePage.vue'
 import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
-import hagueGuide from '../../../docs/hague-workflow.md?raw'
+import hagueGuide from '../../../docs/workflows/海牙新申请.md?raw'
 import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
 import {
   cloneCatalog,
@@ -471,7 +471,7 @@ function chooseProc(param: WorkflowParam, id: string): void {
       </article>
       <article class="sea-card">
         <button type="button" class="sea-open" @click="screen = 'hague'">
-          <b>海牙新申请</b><small>选择总文件夹，批量解析案件材料、读取知易通并统一仲裁。</small><span class="sea-badge">材料准备</span><em>嵌套目录 · 视图核对 · Agent 仲裁</em>
+          <b>海牙新申请</b><small>批量核对材料与信息，默认 6 路填写草稿并导出 Summary。</small><span class="sea-badge">批量草稿</span><em>材料核对 · 6 路并发 · Summary 导出</em>
         </button>
       </article>
       <article class="sea-card jihua-upload-card">
@@ -648,7 +648,7 @@ function chooseProc(param: WorkflowParam, id: string): void {
   <div v-if="screen === 'hague'" class="workflow-hague">
     <WorkflowWorkspace
       v-model:view="hagueView" title="海牙新申请"
-      description="把案件材料放进来，逐案核对图片与信息，再交给助手整理。"
+      description="选择总文件夹核对材料与信息，默认 6 路填写草稿并导出 Summary。"
       :guide="hagueGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
     >
       <HaguePage embedded :is-active="screen === 'hague' && hagueView === 'use'" />
