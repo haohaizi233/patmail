@@ -35,7 +35,7 @@ it('records ViewState change digest and length without storing either state or f
  expect(c.document.querySelector<HTMLInputElement>('[name="javax.faces.ViewState"]')?.value).toBe(next)
  const event=getDiagnosticEvents().find(e=>e.phase==='dom.updated')
  expect(event).toMatchObject({httpStatus:200,viewStateChanged:true,viewStateLength:next.length,domReplaced:true})
- expect(event?.viewStateDigest).toMatch(/^sha256:[a-f0-9]{64}$/)
+ expect(event?.viewStateDigest).toBeUndefined();expect(event?.viewStatePresent).toBe(true);expect(event?.domEvidenceSource).toBe('application_model')
  expect(JSON.stringify(getDiagnosticEvents())).not.toMatch(/SECRET_VIEWSTATE|NEXT_PRIVATE_VIEWSTATE|PRIVATE_PERSON/)
 })
 it('keeps six concurrent traces, request IDs and private ViewStates independent',async()=>{

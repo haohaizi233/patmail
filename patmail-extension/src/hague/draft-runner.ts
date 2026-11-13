@@ -80,6 +80,7 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
   const started=performance.now()
   const step=steps[i];trace=makeTraceContext(state.caseRunId,i,step.command.op,state.transport??'http',tabId);state.lastTraceId=trace.traceId;state.diagnosticError=undefined;emitTrace(trace,'step.started',{businessStatus:'pending',httpStatus:null,evidenceCodes:trace.transportMode==='page'?['PAGE_RECEIPT_ONLY']:[]});state.stage=step.label;state.status='running';state.error=undefined;await persist()
   try {
+   const observedBefore=receipt
    let command=step.command
    if(command.op==='upload'&&step.file){const bytes=new Uint8Array(await step.file.arrayBuffer());let binary='';for(let p=0;p<bytes.length;p+=32768)binary+=String.fromCharCode(...bytes.subarray(p,p+32768));command={...command,base64:btoa(binary)}}
    // Persist before sending: after a reload this step must be checked rather than repeated.
@@ -102,7 +103,13 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
      if(!receipt.ok||!receipt.draftSaved)throw new Error('已返回列表，但本案草稿记录尚未确认，请在 Draft(s) 核对。')
     }
    }
-   state.reference=receipt.reference??state.reference;state.documentId=receipt.documentId;state.next=i+1;state.status='running';emitTrace(trace,'business.validated',{sideEffectMayHaveOccurred:!['prepare','summary','print','backToApplication'].includes(command.op),businessStatus:'confirmed',certainty:'confirmed',evidenceCodes:command.op==='saveDraft'?['DRAFT_LIST_MATCHED']:state.reference?['REFERENCE_MATCHED']:[]});emitTrace(trace,'step.completed',{durationMs:performance.now()-started,businessStatus:'completed',certainty:'confirmed'});await persist()
+   state.reference=receipt.reference??state.reference;state.documentId=receipt.documentId;state.next=i+1;state.status='running';
+   if(trace.transportMode==='page'&&observedBefore.documentId&&observedBefore.documentId===receipt.documentId){
+    const before:Record<string,number>={},after:Record<string,number>={}
+    for(const key of ['applicants','creators','priorities','designs','reproductions'] as const)if(typeof observedBefore[key]==='number'&&typeof receipt[key]==='number'){before[key]=observedBefore[key];after[key]=receipt[key]}
+    if(Object.keys(before).length)emitTrace(trace,'dom.observed',{documentId:receipt.documentId,domEvidenceSource:'page_receipt',domStatus:Object.keys(before).some(key=>before[key]!==after[key])?'observed_changed':'observed_unchanged',domPreviousCounts:before,domCounts:after,evidenceCodes:['BROWSER_DOM_OBSERVED']})
+   }
+   emitTrace(trace,'business.validated',{sideEffectMayHaveOccurred:!['prepare','summary','print','backToApplication'].includes(command.op),businessStatus:'confirmed',certainty:'confirmed',evidenceCodes:command.op==='saveDraft'?['DRAFT_LIST_MATCHED','BUSINESS_RECEIPT_VERIFIED']:['BUSINESS_RECEIPT_VERIFIED',...(state.reference?['REFERENCE_MATCHED']:[])]});emitTrace(trace,'step.completed',{durationMs:performance.now()-started,businessStatus:'completed',certainty:'confirmed'});await persist()
   }catch(error){
    const failure=normalizeDiagnosticError(error,{httpStatus:null,...receipt.diagnosticState,errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace);state.diagnosticError=failure.diagnostic;emitTrace(trace,'step.uncertain',{...failure.diagnostic});state.status='uncertain';state.error=error instanceof Error?error.message:'操作结果不确定';await persist()
    const outcome=await recover(step.command)

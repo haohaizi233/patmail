@@ -1,7 +1,7 @@
 import type {TraceContext,TraceEvent} from './diagnostics/trace'
 import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
 import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
-import {structuralSnapshot,structureDiff,xmlEvidence,viewStateDigest} from './diagnostics/protocol'
+import {structuralSnapshot,structureDiff,xmlEvidence} from './diagnostics/protocol'
 import { HAGUE_ORIGIN } from './session-contract'
 import { PermitPool } from '../utils/permit-pool'
 const network=new PermitPool(6)
@@ -44,6 +44,7 @@ export class HagueHttpContext {
         if(response.url)try{protectedUrl(response.url,url)}catch{throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http',httpStatus:response.status,traceId:this.trace?.traceId})}
         const text=await response.text(),buffered=new Response(text,{status:response.status,headers:response.headers})
         Object.defineProperty(buffered,'url',{value:response.url})
+        emitTrace(this.trace,'request.finished',{requestId,httpStatus:response.status,transportStatus:'completed',businessStatus:'unknown',durationMs:performance.now()-started})
         return buffered
       }catch(error){
         const timeout=controller.signal.aborted,aborted=error instanceof DOMException&&error.name==='AbortError'
@@ -78,7 +79,7 @@ export class HagueHttpContext {
     const before=isDiagnosticModeEnabled()?structuralSnapshot(this.document,this.location.pathname,!!this.reference):undefined,oldViewState=this.viewState
     if(!/<partial-response[\s>]/.test(text)){
       if(/<\?xml|^\s*<partial-response/i.test(text))throw new HagueDiagnosticError({errorCode:'INVALID_XML',errorStage:'protocol',httpStatus:response.status,protocolStatus:'invalid_xml',traceId:this.trace?.traceId})
-      this.observedProtocol='html';this.load(text,response.url||this.url);await this.recordDom(before,oldViewState,response.status,'html');return
+      this.observedProtocol='html';this.load(text,response.url||this.url);this.recordDom(before,oldViewState,response.status,'html');return
     }
     const xml=new DOMParser().parseFromString(text,'application/xml')
     const evidence=xmlEvidence(xml)
@@ -108,7 +109,7 @@ export class HagueHttpContext {
       if(!input){input=this.document.createElement('input');input.type='hidden';input.name='javax.faces.ViewState';form.append(input)}
       input.value=this.viewState
     }
-    await this.recordDom(before,oldViewState,response.status,'valid',{unknownComponentCount:missing,updatedComponents:evidence.updatedComponents})
+    this.recordDom(before,oldViewState,response.status,'valid',{unknownComponentCount:missing,updatedComponents:evidence.updatedComponents})
     if(missing)throw new HagueDiagnosticError({errorCode:'DOM_TARGET_MISSING',errorStage:'protocol',httpStatus:response.status,protocolStatus:'unsupported',traceId:this.trace?.traceId})
     if(evidence.validationFailed)throw new HagueDiagnosticError({errorCode:'JSF_VALIDATION_FAILED',errorStage:'protocol',httpStatus:response.status,protocolStatus:'jsf_validation_failed',businessStatus:'rejected',certainty:'rejected',traceId:this.trace?.traceId})
     // Only statically quoted official navigation is recognized; never eval server scripts.
@@ -125,9 +126,9 @@ export class HagueHttpContext {
       if(args&&typeof args==='object'&&'validationFailed'in args&&args.validationFailed===true)throw new HagueDiagnosticError({errorCode:'JSF_VALIDATION_FAILED',errorStage:'protocol',httpStatus:response.status,protocolStatus:'jsf_validation_failed',businessStatus:'rejected',certainty:'rejected',traceId:this.trace?.traceId})
     }
   }
-  private async recordDom(before:ReturnType<typeof structuralSnapshot>|undefined,oldViewState:string,status:number,protocolStatus:string,extra:Partial<TraceEvent>={}):Promise<void>{
+  private recordDom(before:ReturnType<typeof structuralSnapshot>|undefined,oldViewState:string,status:number,protocolStatus:string,extra:Partial<TraceEvent>={}):void{
     if(!before)return
-    try{const after=structuralSnapshot(this.document,this.location.pathname,!!this.reference);emitTrace(this.trace,'dom.updated',{requestId:this.requestId,httpStatus:status,protocolStatus,businessStatus:'unknown',before,after,diff:structureDiff(before,after),viewStateChanged:oldViewState!==this.viewState,viewStateLength:this.viewState.length,viewStateDigest:await viewStateDigest(this.viewState),domReplaced:true,...extra})}catch{/* Diagnostics are optional. */}
+    try{const after=structuralSnapshot(this.document,this.location.pathname,!!this.reference);emitTrace(this.trace,'dom.updated',{requestId:this.requestId,httpStatus:status,protocolStatus,businessStatus:'unknown',before,after,diff:structureDiff(before,after),viewStateChanged:oldViewState!==this.viewState,viewStateLength:this.viewState.length,viewStatePresent:!!this.viewState,domEvidenceSource:'application_model',domStatus:structureDiff(before,after).length?'model_changed':'model_unchanged',domReplaced:true,...extra})}catch{/* Diagnostics are optional. */}
   }
   async get(path=this.url):Promise<void> {
     const url=protectedUrl(path,this.url)
