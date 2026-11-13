@@ -15,6 +15,7 @@ import { HAGUE_HTTP_CHANNEL,type HttpRequest } from '../background/hague-http'
 const base64=(bytes:Uint8Array)=>{let s='';for(let i=0;i<bytes.length;i+=32768)s+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(s)}
 export function hagueHttpFetch(tabId:number):HagueFetch {
  return async(url,init,trace,requestId)=>{
+  if(init?.signal?.aborted)throw new DOMException('Request aborted','AbortError')
   const request:HttpRequest={url,method:init?.method==='POST'?'POST':'GET',diagnosticsEnabled:isDiagnosticModeEnabled(),...(trace?{trace}:{}),...(requestId?{requestId}:{})}
   if(init?.headers)request.headers=Object.fromEntries(new Headers(init.headers))
   if(init?.body instanceof FormData){
@@ -22,7 +23,17 @@ export function hagueHttpFetch(tabId:number):HagueFetch {
    for(const[k,v]of init.body){if(typeof v==='string')request.params.push([k,v]);else request.file={field:k,name:v.name,mime:v.type,base64:base64(new Uint8Array(await v.arrayBuffer()))}}
   }else if(typeof init?.body==='string'||init?.body instanceof URLSearchParams)request.params=[...new URLSearchParams(init.body)]
   else if(init?.body)throw new Error('接口请求正文格式不支持。')
-  const reply=await chrome.runtime.sendMessage<unknown,{ok:boolean;error?:string;diagnosticError?:DiagnosticErrorData;status:number;url:string;mime:string;base64:string}>({channel:HAGUE_HTTP_CHANNEL,tabId,request}).catch((error:unknown)=>{throw normalizeDiagnosticError(error,{errorCode:'RPC_FAILED',errorStage:'rpc',httpStatus:null,transportStatus:'rpc_error'},trace)})
+  if(init?.signal?.aborted)throw new DOMException('Request aborted','AbortError')
+  const rpc=chrome.runtime.sendMessage<unknown,{ok:boolean;error?:string;diagnosticError?:DiagnosticErrorData;status:number;url:string;mime:string;base64:string}>({channel:HAGUE_HTTP_CHANNEL,tabId,request}).catch((error:unknown)=>{throw normalizeDiagnosticError(error,{errorCode:'RPC_FAILED',errorStage:'rpc',httpStatus:null,transportStatus:'rpc_error'},trace)})
+  // Honor the owning Context timeout even if the extension RPC never settles.
+  // A late server result is not retried or treated as proof that the write did not occur.
+  const signal=init?.signal
+  const reply=signal?await new Promise<Awaited<typeof rpc>>((resolve,reject)=>{
+   const aborted=()=>reject(new DOMException('Request aborted','AbortError'))
+   if(signal.aborted){aborted();return}
+   signal.addEventListener('abort',aborted,{once:true})
+   void rpc.then(value=>{signal.removeEventListener('abort',aborted);resolve(value)},(error:unknown)=>{signal.removeEventListener('abort',aborted);reject(normalizeDiagnosticError(error,{errorCode:'RPC_FAILED',errorStage:'rpc',transportStatus:'rpc_error',httpStatus:null},trace))})
+  }):await rpc
   if(!reply?.ok)throw reply?.diagnosticError?new HagueDiagnosticError({...reply.diagnosticError,traceId:trace?.traceId}):new HagueDiagnosticError({errorCode:'RPC_FAILED',errorStage:'rpc',transportStatus:'rpc_error',httpStatus:null,traceId:trace?.traceId})
   const response=new Response(Uint8Array.from(atob(reply.base64),c=>c.charCodeAt(0)),{status:reply.status,headers:{'content-type':reply.mime}})
   Object.defineProperty(response,'url',{value:reply.url});return response

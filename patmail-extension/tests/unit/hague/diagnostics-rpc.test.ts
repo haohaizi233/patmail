@@ -6,6 +6,19 @@ import {makeTraceContext,setDiagnosticMode,clearDiagnosticEvents,getDiagnosticEv
 const url='https://hague.wipo.int/HagueEFilingWeb/protected/page/application.xhtml'
 const trace=makeTraceContext('case-123',2,'applicant','http',7)
 afterEach(()=>{vi.unstubAllGlobals();setDiagnosticMode(false);clearDiagnosticEvents()})
+it('times out an unresponsive RPC once without waiting forever or repeating the request',async()=>{
+ const sendMessage=vi.fn(()=>new Promise<never>(()=>{}));vi.stubGlobal('chrome',{runtime:{sendMessage}})
+ vi.useFakeTimers()
+ try{
+  const ctx=new HagueHttpContext('rpc-stall',hagueHttpFetch(7));ctx.setTrace(trace)
+  const check=expect(ctx.get(url)).rejects.toMatchObject({diagnostic:{errorCode:'NETWORK_TIMEOUT',transportStatus:'timeout',httpStatus:null}})
+  await vi.advanceTimersByTimeAsync(60001);await check
+  expect(sendMessage).toHaveBeenCalledOnce()
+  const controller=new AbortController();controller.abort()
+  await expect(hagueHttpFetch(7)(url,{signal:controller.signal},trace)).rejects.toMatchObject({name:'AbortError'})
+  expect(sendMessage).toHaveBeenCalledOnce()
+ }finally{vi.useRealTimers()}
+})
 it('reports only safe dispatch metadata to the optional fixed observer; observer failure never retries',async()=>{
  const response=new Response('body',{status:200});Object.defineProperty(response,'url',{value:url})
  const fetcher=vi.fn(()=>Promise.resolve(response)),binding=vi.fn(()=>{throw new Error('observer unavailable')})
