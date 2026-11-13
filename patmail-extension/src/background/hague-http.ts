@@ -28,8 +28,9 @@ export async function handleHagueHttp(message:unknown,sender:chrome.runtime.Mess
   if(!Number.isSafeInteger(m.tabId)||Number(m.tabId)<0||!r||!['GET','POST'].includes(r.method))throw new Error('接口参数无效。')
   const url=new URL(r.url)
   if(url.origin!=='https://hague.wipo.int'||!/^\/HagueEFilingWeb\/(?:protected\/(?:portfolioManager|page\/(?:application|summary))\.xhtml|DesignServlet|javax\.faces\.resource\/|resources\/)/.test(url.pathname))throw new Error('接口地址不在海牙白名单。')
-  if(r.method==='POST'&&!/\/(?:portfolioManager|application)\.xhtml$/.test(url.pathname))throw new Error('该接口不允许写入。')
   if(r.params&&(!Array.isArray(r.params)||r.params.length>600||r.params.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>typeof v!=='string'))))throw new Error('表单参数无效。')
+  const summaryBack=url.pathname==='/HagueEFilingWeb/protected/page/summary.xhtml'&&new URLSearchParams(r.params).get('javax.faces.source')==='headerForm:back'
+  if(r.method==='POST'&&!/\/(?:portfolioManager|application)\.xhtml$/.test(url.pathname)&&!summaryBack)throw new Error('该接口不允许写入。')
   if(JSON.stringify(r).length>4000000||r.file&&(!/^\d+\.\d+\.(?:jpe?g|tiff?)$/i.test(r.file.name)||!['image/jpeg','image/tiff'].includes(r.file.mime)))throw new Error('上传内容无效。')
   for(const key of Object.keys(r.headers??{}))if(!['content-type','faces-request','x-requested-with'].includes(key.toLowerCase()))throw new Error('不允许设置认证或任意请求头。')
   const tabId=Number(m.tabId),tab=await chrome.tabs.get(tabId)

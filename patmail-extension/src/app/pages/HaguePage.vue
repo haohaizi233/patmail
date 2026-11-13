@@ -21,9 +21,17 @@ import { runDraftBatch, type DraftBatchProgress } from '../../hague/draft-batch'
 import { openDraftTab } from '../../hague/draft-tabs'
 import { createHttpChain, httpRestoreCommands, renderSavedSummary } from '../../hague/http-client'
 import { downloadDocuments } from '../../utils/download-documents'
-import type { DraftCheckpoint } from '../../hague/draft-contract'
+import type { DraftCheckpoint,DraftCommand } from '../../hague/draft-contract'
+import { repairRepeatedDesignNumbers,withDraftCorrections } from '../../hague/draft-repairs'
+import { showDraftCompletion,draftReviewNotes } from '../../hague/draft-completion'
 
 const props = withDefaults(defineProps<{ embedded?: boolean; isActive?: boolean }>(), { isActive: true })
+function repairDesignNumbers(row:Row):void {
+  if(busy.value||!row.filing||row.draft)return
+  const repaired=repairRepeatedDesignNumbers(row.filing,row.folder.images)
+  if(!repaired)return
+  row.filing=repaired
+}
 const filePicker = ref<HTMLInputElement | null>(null)
 const oa = useOaSession(hagueSessionClient)
 const headExtraId = inject<string | null>('workflowHeadExtraId', null)
@@ -66,7 +74,7 @@ const active = computed(() => rows.value[selected.value])
 const draftRunning = ref(false)
 const draftProgress = ref<DraftCheckpoint | null>(null)
 const draftBatch = ref<DraftBatchProgress>({done:0,total:0,settled:0,cases:0,succeeded:0,failed:0,skipped:0,active:0,stopped:false})
-const draftConcurrency = ref(1)
+const draftConcurrency = ref(6)
 const draftTransport = ref<'http'|'page'>('http')
 const draftExportFormat = ref<'pdf'|'zip'>('pdf')
 const draftErrors = ref<Record<string,string>>({})
@@ -75,6 +83,7 @@ const draftActive = ref(new Set<string>())
 const draftIssue = (row: Row): string => { try { buildDraftPlan(row); return '' } catch(e) { return e instanceof Error ? e.message : '材料未就绪' } }
 const draftKey = (row: Row) => `hague.draft.v1.${row.folder.caseVolume}`
 async function storeDraft(row: Row, value: DraftCheckpoint): Promise<void> {
+  value=withDraftCorrections(value,row.filing)
   row.draft = { ...value }
   if (typeof chrome !== 'undefined' && chrome.storage?.local) await chrome.storage.local.set({ [draftKey(row)]:value })
 }
@@ -107,27 +116,35 @@ async function createDrafts(targets: Row[], batch=false): Promise<void> {
   try {
     const result=await runDraftBatch(targets,batch?draftConcurrency.value:1,{
       transport:draftTransport.value,
+      recoverUncertain:draftTransport.value==='http',
       open:()=>draftTransport.value==='http'?Promise.resolve(tabId):batch?openDraftTab():Promise.resolve(tabId),
       save:(row,value)=>storeDraft(row,{...value,transport:draftTransport.value}),
       update:value=>{draftBatch.value=value},
       error:(row,message,kind)=>{draftErrors.value[row.folder.path]=message;draftSkipped.value[row.folder.path]=kind==='skipped';if(kind==='failed'&&/登录|login/i.test(message))controller?.abort()},
       run:async(row,plan,workerTab,update)=>{
         draftActive.value.add(row.folder.path)
-        const http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value):null
+        let http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value):null
         try{return await runDraftPlan(plan,workerTab,{
           call:(command,documentId,reference)=>http?http.call(command):callDraftPage(workerTab,command,documentId,reference),
+          ...(http?{recover:async(command:DraftCommand,checkpoint:DraftCheckpoint)=>{
+            const fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value)
+            const result=await fresh.recover(command,checkpoint)
+            if(result.outcome!=='unknown')http=fresh
+            return result
+          }}:{}),
           save:value=>storeDraft(row,{...value,transport:draftTransport.value}),
           update:value=>{draftProgress.value={...value,stage:`${row.folder.caseVolume} · ${value.stage}`};update(value)}
         },controller?.signal,row.draft)}finally{draftActive.value.delete(row.folder.path)}
       }
     },controller.signal)
     notice.value=`草稿批次${result.stopped?'已停止':'已结束'}：成功 ${result.succeeded}，异常 ${result.failed}，跳过 ${result.skipped}。${result.failed||result.skipped?'请在各案查看原因及原站现场。':''}`
+    showDraftCompletion(notice.value,targets.flatMap(row=>draftReviewNotes(row,draftErrors.value[row.folder.path])))
   } catch(e) { notice.value = e instanceof Error ? e.message : '草稿操作已停止，请检查原站。' }
   finally { busy.value = false; draftRunning.value = false; stopping.value = false }
 }
 async function acknowledgeDraft(row: Row, completed: boolean): Promise<void> {
   if (!row.draft || busy.value) return
-  await storeDraft(row, { ...row.draft, next:row.draft.next+(completed?1:0), status:'stopped', error:undefined, stage:'已由用户核对，等待继续' })
+  await storeDraft(row, { ...row.draft, next:row.draft.next+(completed?1:0), status:'stopped', recoveryDecision:undefined,error:undefined, stage:'已由用户核对，等待继续' })
 }
 const bridge = createFullPageBridge()
 let controller: AbortController | undefined
@@ -216,7 +233,7 @@ function exportData(): void {
 
 <template>
   <section class="hague-page">
-    <PageHead v-if="!embedded" title="海牙新申请" desc="把案件材料放进来，逐案核对图片与信息，再交给助手整理。" :art="bg('让重复工作变简单.png')">
+    <PageHead v-if="!embedded" title="海牙新申请" desc="选择总文件夹核对材料与信息，默认 6 路填写草稿并导出 Summary。" :art="bg('让重复工作变简单.png')">
       <div id="hague-standalone-head-extra" class="workflow-head-extra" />
     </PageHead>
     <Teleport v-if="canTeleport && targetSelector" :to="targetSelector">
@@ -235,13 +252,13 @@ function exportData(): void {
         <button type="button" class="ghost" v-if="busy && progress" :disabled="stopping" @click="requestStop">{{ stopping ? '正在停止…' : '停止后续处理' }}</button>
         <button type="button" class="ghost" :disabled="busy || !rows.length" @click="exportData">导出核对结果</button>
         <label v-if="draftTransport === 'http'">导出格式 <select v-model="draftExportFormat" :disabled="busy" aria-label="草稿导出格式"><option value="pdf">单个 PDF</option><option value="zip">流式 ZIP</option></select></label>
-        <label>填写方式 <select v-model="draftTransport" :disabled="busy" aria-label="草稿填写方式"><option value="http">接口链（试运行）</option><option value="page">页面填写</option></select></label>
-        <label>草稿并发 <select v-model.number="draftConcurrency" :disabled="busy" aria-label="草稿并发路数"><option v-for="n in 6" :key="n" :value="n">{{ n }} 路{{ n === 1 ? '（串行）' : '（试运行）' }}</option></select></label>
+        <label>填写方式 <select v-model="draftTransport" :disabled="busy" aria-label="草稿填写方式"><option value="http">接口链</option><option value="page">页面填写</option></select></label>
+        <label>草稿并发 <select v-model.number="draftConcurrency" :disabled="busy" aria-label="草稿并发路数"><option v-for="n in 6" :key="n" :value="n">{{ n }} 路{{ n === 1 ? '（串行）' : '' }}</option></select></label>
         <button type="button" class="solid" :disabled="busy || !oa.verified.value || !rows.some(r => r.decision && r.draft?.status !== 'saved')" @click="createDrafts(rows.filter(r => r.draft?.status !== 'saved'), true)">批量填写并存草稿</button>
         <button type="button" class="ghost" :disabled="busy || !oa.verified.value || !rows.some(r => r.draft?.status === 'saved' && r.draft.reference)" @click="exportDraftZip">已存草稿打包 ZIP</button>
         <button type="button" v-if="draftRunning" class="ghost" :disabled="stopping" @click="requestStop">{{ stopping ? '等待本步回执…' : '停止后续写入' }}</button>
       </div>
-      <p class="hint">{{ draftTransport === 'http' ? '接口模式可选 1–6 条独立链，单案按顺序处理；结果不确定时暂停该案供核对。' : '页面模式每路使用独立标签页，异常页保留供核对。' }} 多路填写仍为试运行。</p>
+      <p class="hint">默认 6 路并发，可按需调整为 1–6 路。{{ draftTransport === 'http' ? '每案按顺序填写；遇到异常先核对回执，无法确认时暂停该案。' : '批量填写时每路使用独立标签页，异常页保留供核对。' }}</p>
       <p v-if="busy && progress" class="hint hague-progress-hint">待解析 {{ progress.parsing || 0 }} · 取数 {{ progress.reading || 0 }} · 等待仲裁 {{ progress.queued || 0 }} · 仲裁中案件 {{ progress.arbitrating || 0 }} · 助手批次并发 1</p>
     </section>
     <div v-if="!rows.length && !busy" class="card tone-pink hague-empty">
@@ -252,6 +269,7 @@ function exportData(): void {
       <article v-if="active" class="card hague-detail">
         <h3>{{ active.folder.caseVolume }}</h3>
         <p v-if="draftErrors[active.folder.path]" class="errors card tone-orange">{{ draftErrors[active.folder.path] }}</p>
+        <button v-if="active.filing && !active.draft && repairRepeatedDesignNumbers(active.filing,active.folder.images)" type="button" class="ghost" :disabled="busy" @click="repairDesignNumbers(active)">按图纸分组修正重复设计编号</button>
         <div class="toolbar hague-reference"><label>我方文号 <input v-model="active.folder.caseVolume" :disabled="busy" @change="changeReference(active)" /></label>
         <span class="hint">默认使用识别文号，有误时直接修改。</span></div>
         <p v-for="note in active.folder.notices" :key="note" class="hint">{{ note }}</p>
@@ -283,11 +301,11 @@ function exportData(): void {
             <h4>eHague 草稿</h4>
             <p class="hint">按递交说明填写并保存草稿，生成 Summary 打印文件，完成后交由人工审核。</p>
             <p v-if="draftIssue(active)" class="hint">{{ draftIssue(active) }}</p>
-            <p class="hint">PDF 自动保存至浏览器下载目录的 PatMail/Hague/我方文号 文件夹。</p>
+            <p class="hint">导出文件保存至浏览器下载目录，可点击“打开导出文件所在位置”查看。</p>
             <div v-if="active.draft" role="status"><p>WIPO reference：{{ active.draft.reference || '尚未分配' }} · {{ active.draft.next }}/{{ active.draft.total }} 步</p><p>{{ active.draft.stage }}</p><p v-if="active.draft.error" class="errors">{{ active.draft.error }}</p></div>
             <p v-for="warning in active.draft?.warnings" :key="warning" class="hint">{{ warning }}</p>
             <button v-if="active.draft?.downloadId !== undefined" type="button" class="ghost" @click="showDraftPdf(active)">打开导出文件所在位置</button>
-            <button type="button" class="solid" :disabled="busy || !oa.verified.value || !!draftIssue(active) || active.draft?.status === 'saved' || active.draft?.status === 'uncertain'" @click="createDrafts([active])">{{ active.draft?.status === 'saved' ? '草稿已保存' : active.draft ? '继续当前草稿' : '填写并保存本案草稿' }}</button>
+            <button type="button" class="solid" :disabled="busy || !oa.verified.value || !!draftIssue(active) || active.draft?.status === 'saved' || (active.draft?.status === 'uncertain' && draftTransport !== 'http')" @click="createDrafts([active])">{{ active.draft?.status === 'saved' ? '草稿已保存' : active.draft?.status === 'uncertain' ? '核对并恢复当前草稿' : active.draft ? '继续当前草稿' : '填写并保存本案草稿' }}</button>
             <p v-if="active.decision.priorities.some(p => p.generated)" class="hint">本案包含自动生成的优先权草稿占位号，保存后仍须人工审核替换。</p>
             <template v-if="active.draft?.status === 'uncertain' && !busy"><p class="hint">请先在原站核对当前步骤是否已保存，再选择对应操作。</p><button type="button" class="ghost" @click="acknowledgeDraft(active, true)">本步已完成，继续下一步</button><button type="button" class="ghost" @click="acknowledgeDraft(active, false)">本步未执行，允许重试</button></template>
           </section>

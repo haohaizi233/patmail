@@ -65,7 +65,14 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
       const a=command.data
       set(representative?'ApplicantForm:name:input':'ApplicantForm:firstname:input',a.name)
       for(const [key,v]of Object.entries({address:a.address,cp:a.postalCode,city:a.city,state:a.region,country:a.country,email:representative?command.data.email:command.email}))set(`ApplicantForm:${key}:input`,v)
-      if(!representative){for(const key of ['nationality','domicile','establishment','residence']){set(`ApplicantForm:${key}:input`,'CN');await idle()}set('ApplicantForm:acp:input','CN')}
+      if(!representative){
+        const country=['SG','Singapore','SG - Singapore'].includes(a.country)?'SG':['CN','China','CN - China'].includes(a.country)?'CN':''
+        if(!country)throw new Error('申请人的资格国家尚未支持，未采用中国默认值。')
+        for(const key of ['nationality','domicile','establishment','residence']){set(`ApplicantForm:${key}:input`,country);await idle()}
+        set('ApplicantForm:acp:input',country)
+        if(country!=='CN')warnings.push(`申请人 ${command.index+1} 的资格国家和 ACP 按本案来源国家 ${country} 填写为草稿候选，请审核国籍、住所、营业所及惯常居所。`)
+        if(!a.postalCode)warnings.push(`申请人 ${command.index+1} 未提供邮编；原站邮编为选填，已留空，请在递交前核对。`)
+      }
       await click(byId(representative?'ApplicantForm:saveRepBtn':'ApplicantForm:saveAppBtn'));ensure()
       if(document.getElementById(representative?'ApplicantForm:saveRepBtn':'ApplicantForm:saveAppBtn'))throw new Error('原站尚未确认保存申请人/代理机构。')
       if(!representative&&applicantCount()!==command.index+1)throw new Error('申请人保存后记录数量不符，请核对原站回执。')
@@ -75,7 +82,7 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
       const checked=[...document.querySelectorAll<HTMLInputElement>('#Designationform input[type=checkbox]:checked')].map(e=>/value:\s*'([A-Z]{2})'/.exec(e.getAttribute('onclick')??'')?.[1]).filter(Boolean)
       if(checked.length!==command.codes.length||checked.some(c=>!command.codes.includes(c!)))throw new Error('原站指定国与本案清单不一致，已停止。')
       await click(btn('Designationform','Ok'));ensure()
-    } else if(command.op==='locarno') {set('locarnoClassForm:locClass:input',command.value);await idle();ensure()}
+    } else if(command.op==='locarno') {set('locarnoClassForm:locClass:input',String(Number(command.value)));await idle();ensure()}
     else if(command.op==='design') {
       if(designCount()!==command.index)throw new Error('设计数量与检查点不一致，未重复创建。')
       await click(btn('designForm','Add design'));set('designForm:selectSubClass:input',command.subclass);await idle();set('designForm:productIndication:inputAutoComplete:input',command.product)
@@ -105,6 +112,7 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
       const a=command.address;for(const [key,v]of Object.entries({name:command.givenName,lastname:command.familyName,address:a.address,cp:a.postalCode,city:a.city,state:a.region,country:a.country}))set(`CreatorForm:${key}:input`,v)
       await click(btn('CreatorForm','Select all'));await click(byId('CreatorForm:buttonSave'));ensure();if(document.getElementById('CreatorForm:name:input'))throw new Error('设计人尚未保存。')
     } else if(command.op==='priority') {
+      if(document.querySelectorAll('#PriorityForm button[title="Open/edit"]').length!==command.index)throw new Error('优先权记录数量与检查点不符，未重复添加。')
       if(!document.getElementById('PriorityForm:nbFiling:input'))await click(byId('PriorityForm:AddPriority'));const country=document.querySelector<HTMLSelectElement>('#PriorityForm select:not([multiple])');if(!country)throw new Error('优先权地区控件缺失');set(country.id,command.data.country);await idle()
       const selectAll=[...byId('PriorityForm').querySelectorAll<HTMLButtonElement>('button')].find(e=>e.textContent?.trim()==='Select all');if(selectAll)await click(selectAll)
       set('PriorityForm:nbFiling:input',command.data.number);const date=document.querySelector<HTMLInputElement>('#PriorityForm input[id$="input_input"]');if(!date)throw new Error('优先权日期控件缺失');set(date.id,command.data.date.split('-').reverse().join('/'))

@@ -1,5 +1,6 @@
 import { DRAFT_CONTACTS, type DraftPlan } from './draft-plan'
-import { HAGUE_DRAFT_CHANNEL, type DraftCheckpoint, type DraftCommand, type DraftReceipt } from './draft-contract'
+import { HAGUE_DRAFT_CHANNEL, type DraftCheckpoint, type DraftCommand, type DraftReceipt,type DraftRecovery } from './draft-contract'
+import { recoverableDraftCommand } from './draft-recovery'
 interface Step { label:string;command:DraftCommand;file?:File }
 export function draftSteps(plan:DraftPlan):Step[] {
  const steps:Step[]=[{label:'设置英文新申请',command:{op:'prepare'}},{label:'创建新草稿',command:{op:'create'}}]
@@ -19,7 +20,7 @@ export function draftSteps(plan:DraftPlan):Step[] {
  steps.push({label:'公开时间',command:{op:'publication',months:plan.publicationMonths}},{label:'签名和我方文号',command:{op:'signature',reference:plan.reference,representative:DRAFT_CONTACTS.representative.name}},{label:'生成 Summary',command:{op:'summary'}},{label:'生成打印文件',command:{op:'print',caseVolume:plan.reference}},{label:'返回草稿编辑器',command:{op:'backToApplication'}},{label:'保存为草稿',command:{op:'saveDraft'}})
  return steps
 }
-interface Host {call(command:DraftCommand,documentId?:string,reference?:string):Promise<DraftReceipt>;save(value:DraftCheckpoint):Promise<void>;update?(value:DraftCheckpoint):void}
+interface Host {call(command:DraftCommand,documentId?:string,reference?:string):Promise<DraftReceipt>;save(value:DraftCheckpoint):Promise<void>;update?(value:DraftCheckpoint):void;recover?(command:DraftCommand,checkpoint:DraftCheckpoint):Promise<DraftRecovery>}
 export function draftPlanKey(plan:DraftPlan):string {
  const body=JSON.stringify({...plan,designs:plan.designs.map(d=>({...d,images:d.images.map(i=>({number:i.number,legend:i.legend,file:{name:i.file.name,size:i.file.size,lastModified:i.file.lastModified}}))}))})
  let hash=2166136261
@@ -29,15 +30,40 @@ export function draftPlanKey(plan:DraftPlan):string {
 export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?:AbortSignal,checkpoint?:DraftCheckpoint):Promise<DraftCheckpoint> {
  if(checkpoint?.generatedPriorities)plan={...plan,priorities:plan.priorities.map(p=>p.generated?checkpoint.generatedPriorities!.find(old=>old.generated&&old.originalNumber===p.originalNumber&&old.date===p.date&&old.country===p.country&&old.das===p.das)??p:p)}
  const steps=draftSteps(plan)
- const state:DraftCheckpoint=checkpoint?{...checkpoint,total:steps.length}:{tabId,next:0,total:steps.length,status:'running',stage:'检查目标页面'}
+ const state:DraftCheckpoint=checkpoint?{...checkpoint,recoveryAttempts:{...checkpoint.recoveryAttempts},total:steps.length}:{tabId,next:0,total:steps.length,status:'running',stage:'检查目标页面'}
  const planKey=draftPlanKey(plan)
+ if(checkpoint&&(checkpoint.status==='uncertain'||checkpoint.recoveryDecision)&&!checkpoint.planKey)throw new Error('旧检查点缺少材料指纹，请先核对原草稿，未自动恢复。')
  if(state.planKey&&state.planKey!==planKey)throw new Error('材料或字段在存档后已变化，请先核对原站草稿，不能按旧检查点继续写入。')
  state.planKey=planKey
  state.generatedPriorities=plan.priorities.filter(p=>p.generated).map(p=>({...p}))
  const persist=async()=>{await host.save({...state});host.update?.({...state})}
- if(state.tabId!==tabId||state.status==='uncertain')throw new Error('操作结果待核对或目标标签页已变化，不能自动重试。请在原站核对后再继续。')
+ const recover=async(command:DraftCommand):Promise<'completed'|'retry'|'unknown'>=>{
+  const key=String(state.next)
+  if(!host.recover||!state.reference||!recoverableDraftCommand(command)||signal?.aborted||(state.recoveryAttempts?.[key]??0)>=1)return'unknown'
+  state.recoveryAttempts={...state.recoveryAttempts,[key]:1};state.stage='读取原站回执，核对是否可恢复';await persist()
+  let result:DraftRecovery
+  try{result=await host.recover(command,{...state})}catch{return'unknown'}
+  if(signal?.aborted||result.outcome==='unknown'||!result.receipt?.ok||result.receipt.reference!==state.reference)return'unknown'
+  if(command.op==='saveDraft'&&(result.outcome!=='completed'||!result.receipt.draftSaved||state.acknowledged?.next!==state.next||state.acknowledged.op!=='saveDraft'||state.acknowledged.page!=='portfolio'))return'unknown'
+  state.documentId=result.receipt.documentId??state.documentId;state.error=undefined
+  state.warnings=[...new Set([...(state.warnings??[]),`步骤“${steps[state.next]?.label}”已自动核对原站回执并${result.outcome==='completed'?'确认完成':'恢复一次'}。`])]
+  if(result.outcome==='completed'){
+   state.next++;state.status='stopped';state.recoveryDecision=undefined
+  }else{
+   state.status='uncertain';state.recoveryDecision={next:state.next,reference:state.reference,outcome:'retry'}
+  }
+  await persist();return result.outcome
+ }
+ if(state.tabId!==tabId)throw new Error('目标标签页已变化，请先核对原草稿。')
+ if(state.recoveryDecision)state.status='uncertain'
+ if(state.status==='uncertain'){
+  const command=steps[state.next]?.command
+  const outcome=command?await recover(command):'unknown'
+  if(outcome==='unknown')throw new Error('操作结果仍待核对，未自动重试。请在原站核对后再继续。')
+ }
  let receipt=await host.call({op:'inspect'},undefined,state.reference)
  if(!receipt.ok)throw new Error(receipt.error||'目标页面无法检查')
+ if(state.reference&&receipt.reference&&receipt.reference!==state.reference)throw new Error('原站回执编号与检查点不同，已停止。')
  if(!checkpoint&&receipt.page!=='portfolio')throw new Error('请先回到 eHague New 页面；现有草稿不会被自动覆盖。')
  state.documentId=receipt.documentId;state.reference=receipt.reference??state.reference
  if(state.next>=steps.length){if(receipt.page!=='portfolio'||!receipt.draftSaved)throw new Error('未在 Draft(s) 列表核对到本案草稿，请先在原站确认保存。');state.status='saved';state.stage='草稿已保存，已核对列表回执';await persist();return state}
@@ -48,11 +74,13 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
    let command=step.command
    if(command.op==='upload'&&step.file){const bytes=new Uint8Array(await step.file.arrayBuffer());let binary='';for(let p=0;p<bytes.length;p+=32768)binary+=String.fromCharCode(...bytes.subarray(p,p+32768));command={...command,base64:btoa(binary)}}
    // Persist before sending: after a reload this step must be checked rather than repeated.
-   state.status='uncertain';await persist()
+   state.status='uncertain';state.acknowledged=undefined;state.recoveryDecision=undefined;await persist()
    receipt=await host.call(command,state.documentId,state.reference)
+   if(state.reference&&receipt.reference&&receipt.reference!==state.reference)throw new Error('原站回执编号与检查点不同，已停止。')
    state.reference=receipt.reference??state.reference
    state.documentId=receipt.documentId??state.documentId
    if(!receipt.ok)throw new Error(receipt.error||'原站未确认操作结果')
+   state.acknowledged={next:i,op:command.op,page:receipt.page};await persist()
    if(receipt.downloadId!==undefined)state.downloadId=receipt.downloadId
    state.warnings=[...new Set([...(state.warnings??[]),...(receipt.warnings??[])])]
    if(['create','summary','backToApplication','saveDraft'].includes(command.op)){
@@ -66,7 +94,13 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
     }
    }
    state.reference=receipt.reference??state.reference;state.documentId=receipt.documentId;state.next=i+1;state.status='running';await persist()
-  }catch(error){state.status='uncertain';state.error=error instanceof Error?error.message:'操作结果不确定';await persist();throw error}
+  }catch(error){
+   state.status='uncertain';state.error=error instanceof Error?error.message:'操作结果不确定';await persist()
+   const outcome=await recover(step.command)
+   if(outcome==='completed')continue
+   if(outcome==='retry'){i--;continue}
+   state.status='uncertain';await persist();throw error
+  }
  }
  state.status='saved';state.stage='草稿已保存，等待人工审核';await persist();return state
 }

@@ -26,6 +26,11 @@ it('automatically reads and arbitrates uploads, displays six parties and separat
   const root = document.createElement('div'), app = createApp({ render: () => h('div', [h('header', { class: 'test-top-actions' }, [h(CheckRainbow)]), h(HaguePage, { embedded: true })]) })
   app.mount(root)
   try {
+    const concurrency=root.querySelector<HTMLSelectElement>('[aria-label="草稿并发路数"]')!
+    expect(concurrency.value).toBe('6')
+    expect([...concurrency.options].map(o=>o.value)).toEqual(['1','2','3','4','5','6'])
+    expect(root.querySelector<HTMLSelectElement>('[aria-label="草稿填写方式"]')?.selectedOptions[0].textContent).toBe('接口链')
+    expect(root.textContent).not.toContain('试运行')
     const files = ['root/PO1HAGUE/form.docx', 'root/PO1HAGUE/1.1.jpg'].map(path => Object.assign(new File([''], path.split('/').pop()!), { webkitRelativePath: path }))
     const input = root.querySelector<HTMLInputElement>('input[type=file]')!
     Object.defineProperty(input, 'files', { value: files })

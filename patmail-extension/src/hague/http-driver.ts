@@ -1,6 +1,7 @@
 import { HagueHttpContext, type JsfAction, type HagueFetch } from './http-context'
 import { executeDraftPage } from './draft-page'
-import type { DraftCommand, DraftReceipt } from './draft-contract'
+import type { DraftCommand, DraftReceipt,DraftCheckpoint,DraftRecovery } from './draft-contract'
+import { inspectPriorityRecovery } from './draft-recovery'
 
 const quoted=(text:string,key:string)=>new RegExp(`(?:^|[,\\s{])${key}:\\s*['"]([^'"]*)['"]`).exec(text)?.[1]
 /** Static PrimeFaces metadata parser. It never evaluates script text. */
@@ -35,9 +36,11 @@ export class HagueHttpDriver {
       const element=event.target instanceof HTMLElement?event.target.closest<HTMLElement>('button,input,select,textarea,a'):null
       if(!element)return
       try{
-        if(event.type==='input'&&element instanceof HTMLInputElement&&element.id.endsWith(':inputAutoComplete:input')){
-          const hidden=this.state.document.getElementById(element.id.replace(/:inputAutoComplete:input$/,':inputHidden')) as HTMLInputElement|null
-          if(hidden)hidden.value=element.value
+        if(event.type==='input'){
+          if(element instanceof HTMLInputElement&&element.id.endsWith(':inputAutoComplete:input')){
+            const hidden=this.state.document.getElementById(element.id.replace(/:inputAutoComplete:input$/,':inputHidden')) as HTMLInputElement|null
+            if(hidden)hidden.value=element.value
+          }
           return
         }
         const script=element.getAttribute(event.type==='change'?'onchange':'onclick')??''
@@ -58,18 +61,68 @@ export class HagueHttpDriver {
   }
   private checkFailure():void{const failure=this.commandFailure??this.state.failure;if(failure)throw failure}
   async initialize():Promise<void>{await this.state.get()}
+  /** Run only on a new chain: navigation and canonical readback precede any retry. */
+  async recoverStep(command:DraftCommand,checkpoint:DraftCheckpoint):Promise<DraftRecovery>{
+    const reference=checkpoint.reference
+    if(!reference||!/^\d+$/.test(reference))return{outcome:'unknown'}
+    try{
+      if(command.op==='saveDraft'){
+        const ack=checkpoint.acknowledged
+        if(ack?.next!==checkpoint.next||ack.op!=='saveDraft'||ack.page!=='portfolio')return{outcome:'unknown'}
+        await this.initialize()
+        const tab=[...this.state.document.querySelectorAll<HTMLButtonElement>('#quickSearchPanel button')].find(e=>/^Draft\(s\)/.test(e.textContent?.trim()??''))
+        if(!tab)return{outcome:'unknown'}
+        tab.click();await this.state.settle()
+        const receipt=await this.call({op:'inspect'},reference)
+        return receipt.ok&&receipt.draftSaved?{outcome:'completed',receipt:{...receipt,reference}}:{outcome:'unknown'}
+      }
+      if(!['priority','parties','locarno'].includes(command.op))return{outcome:'unknown'}
+      await this.resume(reference)
+      if(command.op==='priority'){
+        await this.remote('refreshOptionsUI')
+        return inspectPriorityRecovery(this.state.document,command,reference)
+      }
+      if(command.op==='parties'){
+        await this.remote('refreshDesignationUI')
+        return this.state.document.getElementById('Designationform')?{outcome:'retry',receipt:{ok:true,reference,page:'application'}}:{outcome:'unknown'}
+      }
+      if(command.op==='locarno'){
+        await this.remote('refreshDesignUI')
+        const input=this.state.document.getElementById('locarnoClassForm:locClass:input') as HTMLSelectElement|null
+        if(!input)return{outcome:'unknown'}
+        return{outcome:Number(input.value)===Number(command.value)?'completed':'retry',receipt:{ok:true,reference,page:'application'}}
+      }
+      return{outcome:'unknown'}
+    }catch{return{outcome:'unknown',reason:'原站回执暂无法确认，保留检查点等待核对。'}}
+  }
   async resume(reference:string):Promise<void>{
     if(!/^\d+$/.test(reference))throw new Error('恢复的 WIPO reference 无效。')
     await this.initialize()
     const draftTab=[...this.state.document.querySelectorAll<HTMLButtonElement>('#quickSearchPanel button')].find(e=>/^Draft\(s\)/.test(e.textContent?.trim()??''))
     if(!draftTab)throw new Error('未识别 Draft(s) 接口入口。')
     draftTab.click();await this.state.settle()
-    const row=[...this.state.document.querySelectorAll<HTMLTableRowElement>('#portfolio tbody tr')].find(r=>r.cells[0]?.textContent?.trim()===`WIPO${reference}`)
+    const row=await this.locateDraft(reference)
     if(!row)throw new Error('Draft(s) 未精确找到本案编号，未创建替代草稿。')
     const open=[...row.querySelectorAll<HTMLElement>('button,a')].filter(e=>/^(?:Open|Edit)$|Open\/edit/i.test((e.getAttribute('title')??'')+' '+(e.textContent?.trim()??'')))
     if(open.length!==1)throw new Error('本案打开动作无法唯一识别，未操作其他记录。')
     open[0].click();await this.state.settle()
     if(this.state.reference!==reference||!this.state.location.pathname.endsWith('/application.xhtml'))throw new Error('恢复未确认本案编辑器和编号，未继续写入。')
+  }
+  private async locateDraft(reference:string):Promise<HTMLTableRowElement|undefined>{
+    const findRow=()=>[...this.state.document.querySelectorAll<HTMLTableRowElement>('#portfolio tbody tr')].find(r=>r.cells[0]?.textContent?.trim()===`WIPO${reference}`)
+    let row=findRow()
+    if(!row){
+      const table=this.state.document.querySelector<HTMLElement>('#portfolio .ui-datatable[id]')
+      const config=[...this.state.document.scripts].map(s=>s.textContent??'').find(s=>table&&s.includes(`id:"${table.id}"`)&&s.includes('paginator:'))??''
+      const rows=Number(/\brows:\s*(\d+)/.exec(config)?.[1]),count=Number(/\browCount:\s*(\d+)/.exec(config)?.[1])
+      if(table&&Number.isSafeInteger(rows)&&rows>0&&count<=10000){
+        for(let first=0;first<count&&!row;first+=rows){
+          await this.state.post({source:table.id,form:'portfolio',process:table.id,update:table.id,params:{[`${table.id}_pagination`]:'true',[`${table.id}_first`]:String(first),[`${table.id}_rows`]:String(rows),[`${table.id}_skipChildren`]:'true',[`${table.id}_encodeFeature`]:'true'}})
+          row=findRow()
+        }
+      }
+    }
+    return row
   }
   private async remote(name:string,params?:Record<string,string>):Promise<void>{
     const definition=[...this.state.document.querySelectorAll('script')].map(s=>s.textContent??'').find(s=>new RegExp(`${name}\\s*=\\s*function`).test(s))
@@ -99,6 +152,7 @@ export class HagueHttpDriver {
     if(this.state.failure||this.commandFailure)throw new Error('本接口链结果待核对，禁止重试写入。')
     this.running=true
     try{
+      if(command.op==='inspect'&&reference&&this.state.location.pathname.endsWith('/portfolioManager.xhtml'))await this.locateDraft(reference)
       const required=command.op==='parties'?['Designationform','refreshDesignationUI']:['locarno','design','openDesign','upload','legend','closeDesign'].includes(command.op)?['designForm','refreshDesignUI']:['description','creator','priority','publication','signature'].includes(command.op)?[{description:'DescriptionForm',creator:'CreatorForm',priority:'PriorityForm',publication:'PublicationForm',signature:'signForm'}[command.op as 'description'|'creator'|'priority'|'publication'|'signature'],'refreshOptionsUI']:null
       if(required&&(required[1]==='refreshOptionsUI'||!this.state.document.getElementById(required[0])))await this.remote(required[1])
       const shim={PrimeFaces:{ajax:{Queue:{isEmpty:()=>{this.checkFailure();return this.state.pending===0}}},widgets:{reproDTW:{cfg:{paginator:{rowCount:this.reproCount(),rows:10}}}}}}

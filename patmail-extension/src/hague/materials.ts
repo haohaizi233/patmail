@@ -3,7 +3,7 @@ import { readLegacyDocText } from './legacy-doc'
 
 export const VIEW_CODES: Record<string, string> = { '1': 'Perspective', '2': 'Front', '3': 'Back', '4': 'Top', '5': 'Bottom', '6': 'Left', '7': 'Right', '8': 'Unfolded', '9': 'Exploded', '10': 'Cross-Sectional', '11': 'Enlarged', '00': 'Other type of view' }
 export interface View { number: string; code: string; label: string }
-export interface Filing { locarno: string; products: string[][]; description: string; views: View[]; issues: string[] }
+export interface Filing { locarno: string; products: string[][]; description: string; views: View[]; issues: string[]; draftCorrections?:string[] }
 export interface CaseFolder { path: string; caseVolume: string; documents: File[]; images: File[]; issues: string[]; notices?: string[] }
 export const natural = (a: string, b: string): number => a.localeCompare(b, 'en', { numeric: true })
 export const validCaseVolume = (s: string): boolean => /^P[A-Z0-9-]*HAGUE$/i.test(s.trim()) && s.trim().length <= 80

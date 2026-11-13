@@ -1,0 +1,58 @@
+import { expect,it,vi } from 'vitest'
+import { draftSteps,runDraftPlan,draftPlanKey } from '../../../src/hague/draft-runner'
+import type { DraftPlan } from '../../../src/hague/draft-plan'
+import type { DraftCommand,DraftCheckpoint,DraftReceipt,DraftRecovery } from '../../../src/hague/draft-contract'
+const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'',designs:[]}
+const checkpoint=(next=3):DraftCheckpoint=>({transport:'http',tabId:7,reference:'123',planKey:draftPlanKey(plan),next,total:draftSteps(plan).length,status:'stopped',stage:''})
+const receipt:DraftReceipt={ok:true,reference:'123',page:'application'}
+it('reads back an uncertain boundary and advances without repeating a completed operation',async()=>{
+ const controller=new AbortController(),writes:DraftCommand[]=[]
+ const recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'completed',receipt}))
+ const result=await runDraftPlan(plan,7,{recover,save:async()=>{},call:async c=>{if(c.op==='inspect'){controller.abort();return receipt}writes.push(c);return receipt}},controller.signal,{...checkpoint(),status:'uncertain'})
+ expect(result.next).toBe(4);expect(writes).toHaveLength(0);expect(recover).toHaveBeenCalledOnce()
+})
+it('retries a supported operation once using a verified fresh receipt and persists the budget',async()=>{
+ const controller=new AbortController();let writes=0
+ const recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'retry',receipt}))
+ const result=await runDraftPlan(plan,7,{recover,save:async()=>{},call:async c=>{if(c.op==='inspect')return receipt;writes++;if(writes===1)return{ok:false,error:'transient'};controller.abort();return receipt}},controller.signal,checkpoint())
+ expect(writes).toBe(2);expect(recover).toHaveBeenCalledOnce();expect(result.recoveryAttempts?.['3']).toBe(1);expect(result.next).toBe(4)
+})
+it.each(['wrong-reference','exhausted','unsupported','cancelled'] as const)('never retries when recovery is %s',async kind=>{
+ const controller=new AbortController(),state=checkpoint(kind==='unsupported'?1:3)
+ if(kind==='exhausted')state.recoveryAttempts={'3':1}
+ let writes=0
+ const recover=vi.fn(async():Promise<DraftRecovery>=>{if(kind==='cancelled')controller.abort();return{outcome:'retry',receipt:{...receipt,reference:kind==='wrong-reference'?'999':'123'}}})
+ await expect(runDraftPlan(plan,7,{recover,save:async()=>{},call:async c=>{if(c.op==='inspect')return receipt;writes++;return{ok:false,error:'unconfirmed'}}},controller.signal,state)).rejects.toThrow()
+ expect(writes).toBe(1)
+ if(kind==='unsupported'||kind==='exhausted')expect(recover).not.toHaveBeenCalled()
+})
+it('finishes a save with a persisted successful portfolio acknowledgement and a matching list readback',async()=>{
+ const total=draftSteps(plan).length,state=checkpoint(total-1)
+ const recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'completed',receipt:{ok:true,reference:'123',page:'portfolio',draftSaved:true}}))
+ let saved=0
+ const result=await runDraftPlan(plan,7,{recover,save:async()=>{},call:async c=>{
+  if(c.op==='saveDraft'){saved++;return{ok:true,reference:'123',page:'portfolio'}}
+  return saved?{ok:true,page:'portfolio',draftSaved:false}:receipt
+ }},undefined,state)
+ expect(result.status).toBe('saved');expect(saved).toBe(1);expect(recover).toHaveBeenCalledOnce()
+})
+it('keeps the durable recovery budget on reload and rejects changed plans before readback',async()=>{
+ const recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'retry',receipt}))
+ await expect(runDraftPlan(plan,7,{recover,call:async()=>receipt,save:async()=>{}},undefined,{...checkpoint(),status:'uncertain',recoveryAttempts:{'3':1}})).rejects.toThrow(/核对/)
+ await expect(runDraftPlan(plan,7,{recover,call:async()=>receipt,save:async()=>{}},undefined,{...checkpoint(),status:'uncertain',planKey:'changed'})).rejects.toThrow(/变化/)
+ expect(recover).not.toHaveBeenCalled()
+})
+it('atomically persists completed recovery and the advanced step even if the process stops during save',async()=>{
+ let stored:DraftCheckpoint|undefined
+ await expect(runDraftPlan(plan,7,{call:async()=>receipt,recover:async()=>({outcome:'completed',receipt}),save:async value=>{stored=structuredClone(value);if(value.status==='stopped')throw new Error('power loss')}},undefined,{...checkpoint(),status:'uncertain'})).rejects.toThrow('power loss')
+ expect(stored).toMatchObject({status:'stopped',next:4})
+})
+it('does not resend a retry authorization after a crash or recover an unfingerprinted legacy checkpoint',async()=>{
+ let stored:DraftCheckpoint|undefined
+ await expect(runDraftPlan(plan,7,{call:async c=>c.op==='inspect'?receipt:{ok:false,error:'lost'},recover:async()=>({outcome:'retry',receipt}),save:async value=>{stored=structuredClone(value);if(value.recoveryDecision)throw new Error('power loss')}},undefined,checkpoint())).rejects.toThrow('power loss')
+ expect(stored).toMatchObject({next:3,status:'uncertain',recoveryDecision:{next:3,outcome:'retry'}})
+ const call=vi.fn(async():Promise<DraftReceipt>=>{throw new Error('unexpected read/write')}),recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'retry',receipt}))
+ await expect(runDraftPlan(plan,7,{call,recover,save:async()=>{}},undefined,{...stored!,status:'running'})).rejects.toThrow(/核对/)
+ await expect(runDraftPlan(plan,7,{call,recover,save:async()=>{}},undefined,{...checkpoint(),status:'uncertain',planKey:undefined})).rejects.toThrow(/指纹/)
+ expect(call).not.toHaveBeenCalled();expect(recover).not.toHaveBeenCalled()
+})

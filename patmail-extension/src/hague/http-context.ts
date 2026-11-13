@@ -64,7 +64,10 @@ export class HagueHttpContext {
       }else if(id==='javax.faces.ViewRoot'){this.load(content,this.url)}
       else{
         const existing=this.document.getElementById(id)
-        if(existing)existing.outerHTML=content
+        const tableBody=this.document.getElementById(`${id}_data`)
+        // PrimeFaces DataTable pagination returns rows, not its outer widget.
+        if(tableBody?.tagName==='TBODY'&&/^\s*(?:<tr\b|$)/i.test(content))tableBody.innerHTML=content
+        else if(existing)existing.outerHTML=content
       }
     }
     for(const form of this.document.forms){

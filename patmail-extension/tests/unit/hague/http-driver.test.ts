@@ -1,5 +1,42 @@
 import { expect,it } from 'vitest'
 import { HagueHttpDriver,jsfAction } from '../../../src/hague/http-driver'
+it('does not treat an initial saved draft as final save proof without a matching acknowledgement',async()=>{
+ let reads=0;const d=new HagueHttpDriver('proof',async()=>{reads++;throw new Error('must not request')})
+ const checkpoint={tabId:7,reference:'123',next:10,total:11,status:'uncertain' as const,stage:'保存为草稿'}
+ expect(await d.recoverStep({op:'saveDraft'},checkpoint)).toMatchObject({outcome:'unknown'})
+ expect(await d.recoverStep({op:'saveDraft'},{...checkpoint,acknowledged:{next:9,op:'saveDraft',page:'portfolio'}})).toMatchObject({outcome:'unknown'})
+ expect(await d.recoverStep({op:'create'},checkpoint)).toMatchObject({outcome:'unknown'})
+ expect(reads).toBe(0)
+})
+it('resumes the exact existing reference from a later Drafts table page',async()=>{
+ const page=`<html><body><form id="quickSearchPanel"><input name="javax.faces.ViewState" value="A"><button id="quickSearchPanel:drafts" class="filtered" type="button" onclick='PrimeFaces.ab({s:"quickSearchPanel:drafts"});'>Draft(s)</button></form><form id="portfolio"><div id="portfolio:enCours" class="ui-datatable"><table><tbody id="portfolio:enCours_data"><tr><td>WIPO999</td></tr></tbody></table></div><script>PrimeFaces.cw("DataTable","widget_portfolio_enCours",{id:"portfolio:enCours",paginator:{rows:1,rowCount:2,page:0}})</script></form></body></html>`
+ const requests:string[]=[]
+ const c=new HagueHttpDriver('resume',async(_url,init)=>{
+  if(init?.method==='GET')return new Response(page)
+  const p=new URLSearchParams(typeof init?.body==='string'?init.body:'');requests.push(p.get('javax.faces.source')??'')
+  if(p.get('portfolio:enCours_first')==='1')return new Response(`<partial-response><changes><update id="portfolio:enCours"><![CDATA[<tr><td>WIPO123</td><td><button type="button" id="portfolio:open" title="Open/edit" onclick='PrimeFaces.ab({s:"portfolio:open"});'>Open</button></td></tr>]]></update></changes></partial-response>`)
+  if(p.get('javax.faces.source')==='portfolio:open')return new Response('<partial-response><redirect url="/HagueEFilingWeb/protected/page/application.xhtml"/></partial-response>')
+  return new Response('<partial-response><changes/></partial-response>')
+ })
+ const fetcher=c.state as unknown as {get:(path?:string)=>Promise<void>}
+ const original=fetcher.get.bind(fetcher)
+ fetcher.get=async path=>{if(path?.endsWith('application.xhtml')){c.state.load('<html><head><title>WIPO reference 123</title></head><body></body></html>',path);return}await original(path)}
+ await c.initialize()
+ expect(await c.call({op:'inspect'},'123')).toMatchObject({ok:true,page:'portfolio',draftSaved:true})
+ await c.resume('123')
+ expect(c.state.reference).toBe('123');expect(requests).toContain('portfolio:enCours')
+})
+it('keeps designation selection across a remoteCommand form replacement',async()=>{
+ const codes=['US','EM','GB','JP'],selected=new Set<string>()
+ const form=()=>`<form id="Designationform"><input type="hidden" name="javax.faces.ViewState" value="A"><button id="Designationform:desPanel:changeDesignationsSelection" type="button" onclick='PrimeFaces.ab({s:"Designationform:desPanel:changeDesignationsSelection",u:"Designationform"});'>Change</button>${codes.map(c=>`<input type="checkbox" onclick="selectOffice([{name: 'param', value: '${c}'}]);" ${selected.has(c)?'checked="checked"':''}>`).join('')}<button type="button">Ok</button><script id="Designationform:remote">selectOffice = function() {PrimeFaces.ab({s:"Designationform:remote",f:"Designationform",u:"Designationform",onst:function(cfg){window.tempScrollTop = $(window).scrollTop();},onco:function(xhr,status,args){setTimeout(function() {$(window).scrollTop(tempScrollTop)}, 200);},pa:arguments[0]});}</script></form>`
+ const c=new HagueHttpDriver('designation',async(_url,init)=>{const p=new URLSearchParams(typeof init?.body==='string'?init.body:'');const code=p.get('param');if(code){if(selected.has(code))selected.delete(code);else selected.add(code)}return new Response(`<partial-response><changes><update id="Designationform"><![CDATA[${form()}]]></update></changes></partial-response>`)})
+ c.state.load(`<html><body>${form()}</body></html>`,'/HagueEFilingWeb/protected/page/application.xhtml')
+ const checkbox=c.state.document.querySelector('input[type=checkbox]') as HTMLElement
+ expect(jsfAction(checkbox.getAttribute('onclick')!,checkbox,c.state.document)?.params).toEqual({param:'US'})
+ const receipt=await c.call({op:'parties',codes})
+ expect([...selected]).toEqual(codes)
+ expect(receipt.ok,receipt.error).toBe(true)
+})
 it('maps the native Mojarra subclass callback and mirrors the site autocomplete hidden value',()=>{
  const c=new HagueHttpDriver('fields')
  c.state.load('<html><body><input id="p:inputAutoComplete:input"><input id="p:inputHidden" type="hidden"></body></html>','/HagueEFilingWeb/protected/page/application.xhtml')

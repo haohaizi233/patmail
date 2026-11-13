@@ -1,5 +1,11 @@
 import { expect,it,vi } from 'vitest'
 import { executeDraftPage } from '../../../src/hague/draft-page'
+it('normalizes a zero-padded Locarno class to the original numeric option',async()=>{
+ document.body.innerHTML='<select id="locarnoClassForm:locClass:input"><option value="3">03 - Travel goods</option></select>'
+ const r=await executeDraftPage({op:'locarno',value:'03'},undefined,{document,window:{},location:{origin:'https://hague.wipo.int',pathname:'/HagueEFilingWeb/protected/page/application.xhtml'},idle:async()=>{}})
+ expect(r.ok,r.error).toBe(true)
+ document.body.innerHTML=''
+})
 it.each([[12,'Pub6',''],[0,'Immediat',''],[6,'Ajourn','6 months.']] as const)('selects the prescribed publication control for %i months',async(months,expectedRadio,expectedChosen)=>{
  vi.stubGlobal('location',{origin:'https://hague.wipo.int',pathname:'/HagueEFilingWeb/protected/page/application.xhtml'})
  document.body.innerHTML='<form id="PublicationForm"><button type="button">Edit</button><input type="radio" name="publication" value="Pub6"><input type="radio" name="publication" value="Immediat"><input type="radio" name="publication" value="Ajourn"><select id="PublicationForm:comboAjourn:input"><option value="">Choose</option><option value="6 months.">6 months.</option></select><button type="button" id="PublicationForm:savePublicationBtn">Save</button></form>'
@@ -13,23 +19,24 @@ it('does not add a later applicant if an earlier applicant receipt is missing',a
  const add=vi.fn();document.getElementById('ApplicantForm:showApplicantForm')!.addEventListener('click',add)
  try{const r=await executeDraftPage({op:'applicant',index:1,email:'test@example.com',data:{name:'Second Ltd.',address:'District',city:'Shenzhen',region:'Guangdong',postalCode:'518000',country:'China'}});expect(r.ok).toBe(false);expect(add).not.toHaveBeenCalled()}finally{vi.unstubAllGlobals();document.body.innerHTML=''}
 })
-it('clicks Add Applicant and Save separately for every applicant and retains both records',async()=>{
+it.each(['China','SG'])('clicks Add Applicant and Save separately and uses the correct qualification country for %s',async(country)=>{
  vi.stubGlobal('location',{origin:'https://hague.wipo.int',pathname:'/HagueEFilingWeb/protected/page/application.xhtml'})
  document.body.innerHTML='<form id="ApplicantForm"><button type="button" id="ApplicantForm:showApplicantForm">Add Applicant</button><div id="savedApplicants"></div></form>'
- let added=0;const names:string[]=[]
+ let added=0;const names:string[]=[],qualifications:string[]=[]
  document.getElementById('ApplicantForm:showApplicantForm')!.addEventListener('click',()=>{
   added++
   const fields=['firstname','address','cp','city','state','email'].map(k=>`<input id="ApplicantForm:${k}:input">`).join('')
-  const selects=['country','nationality','domicile','establishment','residence','acp'].map(k=>`<select id="ApplicantForm:${k}:input"><option value="CN">China</option></select>`).join('')
+  const selects=['country','nationality','domicile','establishment','residence','acp'].map(k=>`<select id="ApplicantForm:${k}:input"><option value="CN">China</option><option value="SG">SG - Singapore</option></select>`).join('')
   document.getElementById('ApplicantForm')!.insertAdjacentHTML('beforeend',`<div id="applicantEditor"><input type="radio" value="true" checked>${fields}${selects}<button type="button" id="ApplicantForm:saveAppBtn">Save</button></div>`)
   document.getElementById('ApplicantForm:saveAppBtn')!.addEventListener('click',()=>{
    names.push((document.getElementById('ApplicantForm:firstname:input') as HTMLInputElement).value)
+   qualifications.push(...['nationality','domicile','establishment','residence','acp'].map(k=>(document.getElementById(`ApplicantForm:${k}:input`) as HTMLSelectElement).value))
    document.getElementById('savedApplicants')!.insertAdjacentHTML('beforeend',`<button type="button" id="ApplicantForm:applicantViewPanel:${names.length-1}:editApp">Edit</button>`)
    document.getElementById('applicantEditor')!.remove()
   })
  })
- const applicant={name:'First Ltd.',address:'No. 1, Nanshan District',city:'Shenzhen',region:'Guangdong',postalCode:'518000',country:'China'}
- try{for(const [index,name]of ['First Ltd.','Second Ltd.'].entries()){const r=await executeDraftPage({op:'applicant',index,email:'test@example.com',data:{...applicant,name}});expect(r.ok).toBe(true);expect(r.applicants).toBe(index+1)}expect(added).toBe(2);expect(names).toEqual(['First Ltd.','Second Ltd.'])}finally{vi.unstubAllGlobals();document.body.innerHTML=''}
+ const applicant={name:'First Ltd.',address:'No. 1, Nanshan District',city:'Shenzhen',region:'Guangdong',postalCode:'518000',country}
+ try{for(const [index,name]of ['First Ltd.','Second Ltd.'].entries()){const r=await executeDraftPage({op:'applicant',index,email:'test@example.com',data:{...applicant,name}});expect(r.ok).toBe(true);expect(r.applicants).toBe(index+1)}expect(added).toBe(2);expect(names).toEqual(['First Ltd.','Second Ltd.']);expect(qualifications).toEqual(Array(10).fill(country==='SG'?'SG':'CN'))}finally{vi.unstubAllGlobals();document.body.innerHTML=''}
 })
 it('continues an already-open description editor without opening or duplicating another record',async()=>{
  vi.stubGlobal('location',{origin:'https://hague.wipo.int',pathname:'/HagueEFilingWeb/protected/page/application.xhtml'})

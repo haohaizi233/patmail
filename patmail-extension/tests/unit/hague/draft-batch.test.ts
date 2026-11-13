@@ -7,6 +7,20 @@ import type { DraftPlan } from '../../../src/hague/draft-plan'
 const row=(n:number):HagueRow=>({folder:{caseVolume:`PO${n}HAGUE`,path:`case${n}`,documents:[],images:[],issues:[]},state:'review',confirmed:false,error:''})
 const plan=(r:HagueRow)=>({reference:r.folder.caseVolume,applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'',designs:[]}) as DraftPlan
 const checkpoint=(tabId:number,status:DraftCheckpoint['status']='saved'):DraftCheckpoint=>({tabId,status,next:10,total:10,stage:'test'})
+it('allows opted-in HTTP readback but never page-mode retries for uncertain checkpoints',async()=>{
+ for(const transport of ['http','page'] as const){
+  const r=row(1);r.draft={...checkpoint(9,'uncertain'),reference:'123',next:3,transport}
+  let runs=0
+  const result=await runDraftBatch([r],1,{transport,recoverUncertain:true,plan,open:async()=>9,run:async()=>{runs++;return checkpoint(9)},save:async()=>{}})
+  expect(runs).toBe(transport==='http'?1:0);expect(result.skipped).toBe(transport==='http'?0:1)
+ }
+})
+it('blocks two different cases pointing at the same WIPO reference before any HTTP recovery',async()=>{
+ const rows=[row(1),row(2)];for(const r of rows)r.draft={...checkpoint(9,'uncertain'),transport:'http',reference:'123',next:3}
+ let runs=0
+ const result=await runDraftBatch(rows,6,{transport:'http',recoverUncertain:true,plan,open:async()=>9,run:async()=>{runs++;return checkpoint(9)},save:async()=>{}})
+ expect(runs).toBe(0);expect(result.skipped).toBe(2)
+})
 
 it('fills six independent lanes, replaces a finished job immediately and never shares active tabs',async()=>{
  let opened=0,active=0,max=0;const occupied=new Set<number>(),started:number[]=[];const releases:Array<()=>void>=[]

@@ -9,6 +9,7 @@ export interface DraftBatchProgress {
 }
 interface Host {
   transport?:'http'|'page'
+  recoverUncertain?:boolean
   plan?(row:HagueRow):DraftPlan
   open():Promise<number>
   run(row:HagueRow,plan:DraftPlan,tabId:number,update:(value:DraftCheckpoint)=>void):Promise<DraftCheckpoint>
@@ -21,8 +22,8 @@ export async function runDraftBatch(rows:readonly HagueRow[],concurrency:number,
   const limit=Math.max(1,Math.min(6,Math.floor(concurrency)||1))
   const state:DraftBatchProgress={cases:rows.length,settled:0,succeeded:0,failed:0,skipped:0,active:0,done:0,total:0,stopped:false}
   const progress=new Map<HagueRow,number>(),claimed=new Set<number>()
-  const refCounts=new Map<string,number>(),tabCounts=new Map<number,number>()
-  for(const row of rows){const key=row.folder.caseVolume.trim().toUpperCase();refCounts.set(key,(refCounts.get(key)??0)+1);if(row.draft&&row.draft.status!=='saved')tabCounts.set(row.draft.tabId,(tabCounts.get(row.draft.tabId)??0)+1)}
+  const refCounts=new Map<string,number>(),tabCounts=new Map<number,number>(),wipoCounts=new Map<string,number>()
+  for(const row of rows){const key=row.folder.caseVolume.trim().toUpperCase();refCounts.set(key,(refCounts.get(key)??0)+1);if(row.draft?.reference)wipoCounts.set(row.draft.reference,(wipoCounts.get(row.draft.reference)??0)+1);if(row.draft&&row.draft.status!=='saved')tabCounts.set(row.draft.tabId,(tabCounts.get(row.draft.tabId)??0)+1)}
   const jobs:Array<{row:HagueRow;plan:DraftPlan;total:number}>=[]
   const emit=()=>{state.done=[...progress.values()].reduce((a,b)=>a+b,0);host.update?.({...state})}
   for(const row of rows){
@@ -30,7 +31,8 @@ export async function runDraftBatch(rows:readonly HagueRow[],concurrency:number,
       if(row.draft?.status==='saved'){state.skipped++;continue}
       if(row.draft&&row.draft.next>0&&(row.draft.transport??'page')!==(host.transport??'page'))throw new Error('检查点执行模式不同，请使用原模式继续，未重复创建。')
       if((refCounts.get(row.folder.caseVolume.trim().toUpperCase())??0)>1)throw new Error('同文号存在多个材料版本，请选择唯一版本后填写，未并发创建重复草稿。')
-      if(row.draft?.status==='uncertain')throw new Error('草稿步骤结果待核对，请先确认原站是否已执行，未自动重试。')
+      if(row.draft?.reference&&(wipoCounts.get(row.draft.reference)??0)>1)throw new Error('多个案件指向同一 WIPO reference，请先核对检查点，未并发恢复。')
+      if(row.draft?.status==='uncertain'&&!(host.transport==='http'&&host.recoverUncertain))throw new Error('草稿步骤结果待核对，请先确认原站是否已执行，未自动重试。')
       if(host.transport!=='http'&&row.draft&&(tabCounts.get(row.draft.tabId)??0)>1)throw new Error('多个检查点指向同一标签页，请先核对目标草稿，未交错写入。')
       const plan=(host.plan??buildDraftPlan)(row),total=draftSteps(plan).length
       jobs.push({row,plan,total});state.total+=total;progress.set(row,Math.min(row.draft?.next??0,total))

@@ -23,9 +23,9 @@ export function buildDraftPlan(row: HagueRow): DraftPlan {
   if (applicants.length) applicants[0] = { ...decision.applicant }
   else applicants.push({ ...decision.applicant })
   applicants.forEach((a,i) => {
-    if (!validSourcePostalCode(a.postalCode,a.country)) throw new Error(`申请人 ${i+1} 的邮编缺失或无效，请先补充可靠来源。`)
-    for (const key of ['name','address','city','region','postalCode','country'] as const) if ((!a[key]&&!(key==='region'&&a.country==='SG')) || /\p{Script=Han}/u.test(a[key])) throw new Error(`申请人 ${i+1} 的 ${key} 缺少可靠英文值，请先补充。`)
-    if (!['CN','China','CN - China'].includes(a.country)) throw new Error(`申请人 ${i+1} 的国籍、住所和 ACP 需人工核对；当前递交配置适用于中国申请人。`)
+    if (a.postalCode&&!validSourcePostalCode(a.postalCode,a.country)) throw new Error(`申请人 ${i+1} 的邮编无效，请先补充可靠来源。`)
+    for (const key of ['name','address','city','region','country'] as const) if ((!a[key]&&!(key==='region'&&['SG','Singapore','SG - Singapore'].includes(a.country))) || /\p{Script=Han}/u.test(a[key])) throw new Error(`申请人 ${i+1} 的 ${key} 缺少可靠英文值，请先补充。`)
+    if (!['CN','China','CN - China','SG','Singapore','SG - Singapore'].includes(a.country)) throw new Error(`申请人 ${i+1} 的国籍、住所和 ACP 尚未支持，请先核对原站资格字段。`)
   })
   const sourceCreators = row.source ? sourceRows(row.source,'GetCaseInventor').length : 0
   if (!decision.creators.length || (sourceCreators && decision.creators.length !== sourceCreators)) throw new Error('设计人数量与来源不一致，请补齐全部设计人。')
