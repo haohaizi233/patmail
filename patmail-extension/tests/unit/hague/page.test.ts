@@ -1,13 +1,15 @@
 import { expect, it, vi } from 'vitest'
 import { createApp, h } from 'vue'
+import { repairRepeatedDesignNumbers } from '../../../src/hague/draft-repairs'
 import HaguePage from '../../../src/app/pages/HaguePage.vue'
 import CheckRainbow from '../../../src/app/components/CheckRainbow.vue'
 
-const mocks = vi.hoisted(() => ({ read: vi.fn(), complete: vi.fn() }))
+const mocks = vi.hoisted(() => ({ read: vi.fn(), complete: vi.fn(), repeated: false, approval: undefined as {inputKey:string;note:string}|undefined }))
 const dropped = vi.hoisted(() => ({ read: vi.fn() }))
 vi.mock('../../../src/shell/components/Bunny.vue', () => ({ default: { render: () => null } }))
 vi.mock('../../../src/shell/components/PageHead.vue', () => ({ default: { render: () => null } }))
 vi.mock('../../../src/app/services/full-page-bridge', () => ({ createFullPageBridge: () => ({ request: mocks.read }) }))
+vi.mock('../../../src/app/dialog', async importOriginal => ({...await importOriginal<typeof import('../../../src/app/dialog')>(),confirmDialog:async()=>true}))
 vi.mock('../../../src/hague/dropped-folders', () => ({ readDroppedFolders: dropped.read }))
 vi.mock('../../../src/app/assistant-job', () => ({ requestAssistantJob: mocks.complete }))
 vi.mock('../../../src/hague/session', () => ({ hagueSessionClient: {
@@ -17,15 +19,19 @@ vi.mock('../../../src/hague/session', () => ({ hagueSessionClient: {
 } }))
 vi.mock('../../../src/hague/materials', async importOriginal => ({
   ...await importOriginal<typeof import('../../../src/hague/materials')>(),
-  readFiling: async () => ({ locarno: '28', products: [['1', '1', 'Bottle', '03']], description: 'Description', views: [{ number: '1.1', code: '1', label: 'Perspective' }], issues: [] })
+  readFiling: async () => ({ locarno: '28', products: mocks.repeated ? [['1','1','Bottle','03'],['1','1','Bottle','03']] : [['1', '1', 'Bottle', '03']], description: 'Description', views: mocks.repeated ? [{ number: '1.1', code: '1', label: 'Perspective' },{ number: '2.1', code: '1', label: 'Perspective' }] : [{ number: '1.1', code: '1', label: 'Perspective' }], issues: [] })
 }))
 
-it('automatically reads and arbitrates uploads, displays six parties and separates reused address fields', async () => {
+it.each([false,true])('reads and arbitrates materials with a restored approved correction: %s', async restored => {
+  mocks.repeated=restored
+  mocks.read.mockClear();mocks.complete.mockClear()
+  if(restored)vi.stubGlobal('chrome',{storage:{local:{get:async (key:string)=>({[key]:{status:'saved',next:20,total:20,tabId:1,reference:'123',stage:'历史保存回执',warnings:['原 Word 产品表设计编号全部为 1；经用户确认，草稿按产品表行顺序及图纸分组修正为 1–2，请核对。'],designNumberCorrection:mocks.approval}})}}})
   vi.stubGlobal('URL', class extends URL { static createObjectURL() { return 'blob:test' } static revokeObjectURL() {} })
   const source = JSON.stringify({ GetCaseInfo: [{ CaseInfo: [{ remark: '海牙进入美国、欧盟、英国、日本、加拿大、韩国；公开情况：6个月；尚未公开。' }] }], GetCaseApplicant: [{ TableRows: [{ applicant_name_en: 'Example Ltd.', contact_address_en: 'Room 201, Qianhai Shenzhen-Hong Kong Cooperation Zone, Shenzhen, Guangdong 518000, China', city: '深圳市', province: '广东省', postcode: '518000' }] }], GetCasePriority: [{ TableRows: [{ priority_no: '111', priority_date: '2026-11-11', priority_country_id: 'CN', access_code: '111' }] }] })
   mocks.read.mockResolvedValue({ type: 'READ_HAGUE_CASE_RESULT', payload: { text: source } })
   mocks.complete.mockResolvedValue(JSON.stringify({ results: [{ caseVolume: 'PO1HAGUE', decision: { applicant: { name: 'Example', address: '中文误填', city: '深圳', region: '前海深港合作区', postalCode: '518000', country: 'CN' }, creators: [{ givenName: 'Lisi', familyName: 'CHEN' }], parties: ['EM'], publicationMonths: 6, priorities: [], warnings: [], evidence: ['test'] } }] }))
   const root = document.createElement('div'), app = createApp({ render: () => h('div', [h('header', { class: 'test-top-actions' }, [h(CheckRainbow)]), h(HaguePage, { embedded: true })]) })
+  app.directive('hint',{})
   app.mount(root)
   try {
     const concurrency=root.querySelector<HTMLButtonElement>('[aria-label="草稿并发路数"]')!
@@ -50,16 +56,18 @@ it('automatically reads and arbitrates uploads, displays six parties and separat
     zone.dispatchEvent(dragEvent('drop'))
     await vi.waitFor(() => expect(root.textContent).toContain('请拖入总文件夹'))
     expect(zone.classList.contains('is-dragging')).toBe(false)
-    const files = ['root/PO1HAGUE/form.docx', 'root/PO1HAGUE/1.1.jpg'].map(path => Object.assign(new File([''], path.split('/').pop()!), { webkitRelativePath: path }))
+    const files = ['root/PO1HAGUE/form.docx', 'root/PO1HAGUE/1.1.jpg', ...(restored?['root/PO1HAGUE/2.1.jpg']:[])].map(path => Object.assign(new File([''], path.split('/').pop()!), { webkitRelativePath: path }))
+    if(restored)mocks.approval=repairRepeatedDesignNumbers({locarno:'28',products:[['1','1','Bottle','03'],['1','1','Bottle','03']],description:'Description',views:[{number:'1.1',code:'1',label:'Perspective'},{number:'2.1',code:'1',label:'Perspective'}],issues:[]},files.filter(f=>f.name.endsWith('.jpg')))?.designNumberCorrection
     const input = root.querySelector<HTMLInputElement>('input[type=file]')!
     Object.defineProperty(input, 'files', { value: files })
     input.dispatchEvent(new Event('change'))
-    await vi.waitFor(() => expect(root.textContent).toContain('等待 eHague 登录验证'))
+    await vi.waitFor(() => expect(root.textContent).toContain(restored?'材料已就绪，请先连接并验证 eHague 登录态':'等待 eHague 登录验证'))
     expect(mocks.read).not.toHaveBeenCalled(); expect(mocks.complete).not.toHaveBeenCalled()
     const connect = [...root.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === '连接并检测登录')!
     connect.click()
     await vi.waitFor(() => expect(root.textContent).toContain('US、EM、GB、JP、CA、KR'))
     expect(mocks.read).toHaveBeenCalledTimes(1); expect(mocks.complete).toHaveBeenCalledTimes(1)
+    if(restored){expect(root.textContent).toContain('修正为 1–2');expect(root.textContent).not.toContain('产品表设计编号重复')}
     const detail = root.querySelector('.hague-creator-address dd')?.textContent
     expect(detail).toBe('Room 201, Qianhai Shenzhen-Hong Kong Cooperation Zone')
     expect(root.querySelector('.hague-creator-address')?.textContent).toContain('Shenzhen / Guangdong')
