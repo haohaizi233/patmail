@@ -11,11 +11,14 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   emptyText?: string
   valueLabel?: string
+  /** 触发器（role=combobox）的可访问名；外层 label 文案与它不同时用它精确定位。 */
+  ariaLabel?: string
 }>(), {
   disabled: false,
   placeholder: '请选择',
   emptyText: '',
-  valueLabel: ''
+  valueLabel: '',
+  ariaLabel: undefined
 })
 
 const emit = defineEmits<{
@@ -92,7 +95,8 @@ function updatePosition(): void {
     { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
     { width: window.innerWidth, height: window.innerHeight },
     240,
-    menuWidthForLabels(labels)
+    menuWidthForLabels(labels),
+    searchable.value ? 160 : 0
   )
   const next = menuBoxStyle(placed)
   if (Object.keys(next).some(key => next[key] !== menuStyle.value[key])) menuStyle.value = next
@@ -231,6 +235,7 @@ onBeforeUnmount(() => {
       class="theme-select-trigger"
       :class="{ 'is-open': opened }"
       role="combobox"
+      :aria-label="ariaLabel"
       :aria-expanded="opened"
       aria-haspopup="listbox"
       :aria-controls="listId"

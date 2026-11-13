@@ -389,7 +389,7 @@ img { max-width: 100%; }
 .date-pair .w-date-picker { flex: 1 1 0; min-width: 0; }
 .form-actions { display: flex; justify-content: flex-end; align-items: flex-end; gap: 8px; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-.toolbar span { margin-left: auto; color: var(--sub); font-size: 13px; }
+.toolbar > span:not(.theme-select) { margin-left: auto; color: var(--sub); font-size: 13px; }
 .limit-bar > span,
 .limit-bar .pagination span,
 .toolbar .sheet-count { margin-left: 0; }
