@@ -33,3 +33,8 @@ Limitations: this is bounded discovery, not a full interprocedural JavaScript se
 ## Verification
 
 Tests were written first and observed failing before implementation. New fixtures exercise constants, aliases/wrappers, remote params/privacy, source/node bounds, dynamic code/decoding, all JSF families, conditional/multiple-action rejection, decoded-write rejection, mutable state, object mutations, alias shadowing and widget pagination. Existing http-driver regressions continue to cover exact-reference resume, designation refresh, autocomplete, radio activation and create validation.
+
+
+## 研究模式位置索引
+
+新Research Mode复用本分析器，不重写执行提取。增加仅用于诊断的callee/member-property精确语法位置锚点，并应用scriptParsed的inline偏移；实际Chrome/Edge来源匹配已在隔离Fixture验证。匹配不使用整行猜测，动态/多候选仍保持unmatched/ambiguous。详情见 [全链路研究诊断](hague-full-chain-diagnostics.md)。

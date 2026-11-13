@@ -86,3 +86,8 @@ HTTP 200 仅证明收到响应；JSF validationFailed 可以同时意味着业�
 另支持单个 JSON Fixture：`{"version":1,"kind":"html|xml|javascript|receipt","content":"人工构造片段"}`（kind取其中一个值）。每片段最多262144字符，HTML/XML仅构造脱离页面的文档，JS仅AST静态分析，回执只提取安全类别。Fixture事件标记`source=fixture`，不会冒充CDP观测；`ok=true`也不能证明生产业务成功。禁止将含真实个人材料的原始片段交付或纳入仓库。
 
 HTTP自动跟随重定向时仅能确认最终状态（例如登录HTML200），中间302须由CDP网络证据补充，不补造跳转状态。JSF insert/delete 当前采用明确unsupported并停链，未实现其DOM修改。当前模式直接使用已通过Fixture验证的AST提取，没有新旧解析器shadow双跑，也没有历史协议数据库；历史比较可对两份脱敏指纹显式调用`diffFingerprints`。
+
+
+## Research Mode增量契约
+
+详见 [全链路研究诊断](hague-full-chain-diagnostics.md)。新增独立AST源码边、六层证据、标准JSF请求投影和安全正文解析；probable不能借用业务回执。ViewState持久摘要已停止输出，只保留存在性/长度/可证明变化。缺失时间不补造；旧离线记录需具有实际timestamp。应用模型DOM明确标为application_model，真实观测须来源和同文档字段证据。

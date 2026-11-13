@@ -93,3 +93,8 @@ node scripts/hague-diagnostics-export.mjs ../log/cdp/<日志文件>.jsonl ./test
 若应用事件尚未到达守护进程、执行上下文创建事件缺失、目标刷新/断线或请求绕过该固定入口，归因保持unmatched；不会为消除缺失而重发请求。上下文销毁、清除、detach及断线会清除对应归因状态。此桥为应用→Observer证据桥，CDP→UI实时桥仅向已选定PatMail应用页面发送经过过滤的固定事件；离线导出仍可进入面板。
 
 实时回流新增固定 `patmail-hague-cdp-trace` 事件。仅向现有选定、已知扩展ID的 `/app.html` 页面发送；绝不向WIPO目标运行表达式。命令独立校验为固定Runtime.evaluate事件分发器，数据先经共享Schema过滤，最多128条排队、每批16条/64KB、最多6个应用目标，每250ms发送；失败丢弃且不重发业务请求。深度策略仍拒绝任意Runtime.evaluate。连接断开或服务停止清空队列；UI诊断关闭时忽略事件；事件不回流应用Trace，避免回声循环。实时浏览器验证未进行。
+
+
+## 2026-11-14 Research Mode
+
+新增显式 `research-enable --target TARGET_ID`、`research-status`、`research-disable` 和 `basic` 命令（入口仍为 `node scripts/cdp-observer.mjs`）。普通start/build不启用研究。正文仅在受控研究准入下短暂读取解析，原始正文不入日志；全局普通方法允许表仍不提供任意getResponseBody转发。详情、预算、生命周期和验收见 [全链路研究诊断](hague-full-chain-diagnostics.md)。旧deep命令继续兼容。
