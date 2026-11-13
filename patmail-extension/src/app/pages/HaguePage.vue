@@ -26,7 +26,6 @@ import { repairRepeatedDesignNumbers,restoreApprovedDesignNumbers,withDraftCorre
 import { showDraftCompletion,draftReviewNotes } from '../../hague/draft-completion'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { confirmDialog } from '../dialog'
-import { pickDirectoryFiles,type DirectoryPickerHost } from '../../hague/directory-picker'
 import { readDroppedFolders } from '../../hague/dropped-folders'
 
 let alive = true
@@ -40,7 +39,6 @@ async function repairDesignNumbers(row:Row):Promise<void> {
   if(!row.decision)await process([row])
 }
 const filePicker = ref<HTMLInputElement | null>(null)
-const selectingFolder = ref(false)
 const oa = useOaSession(hagueSessionClient)
 const headExtraId = inject<string | null>('workflowHeadExtraId', null)
 const targetSelector = computed(() => {
@@ -225,15 +223,8 @@ async function confirmImport(files:File[]):Promise<void> {
   const confirmed=await confirmDialog({title:'导入海牙申请材料',message:`已选择 ${files.length} 个文件。确认后读取材料并进行案件解析、取数和仲裁。`,confirmLabel:'导入材料',cancelLabel:'取消'})
   if(confirmed&&canImportFiles())await importFiles(files)
 }
-async function chooseFolder():Promise<void> {
-  if(busy.value||selectingFolder.value)return
-  selectingFolder.value=true
-  try {
-    const files=await pickDirectoryFiles(window as unknown as DirectoryPickerHost,()=>filePicker.value?.click())
-    if(files)await confirmImport(files)
-  }catch(error){notice.value=error instanceof Error?error.message:'目录读取失败，请把文件夹直接拖入页面。'}
-  finally{selectingFolder.value=false}
-}
+// 走浏览器文件选择，不调 showDirectoryPicker：后者会触发无法抑制的“允许此网站查看和复制文件”授权弹窗。
+function chooseFolder(): void { if (canImportFiles()) filePicker.value?.click() }
 async function upload(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const files = [...(input.files ?? [])]; input.value = ''
@@ -354,7 +345,7 @@ function exportData(): void {
       </header>
       <div class="toolbar">
         <input ref="filePicker" aria-label="选择海牙申请总文件夹" type="file" webkitdirectory multiple hidden :disabled="busy" @change="upload" />
-        <button type="button" class="solid" :disabled="busy || selectingFolder" @click="chooseFolder">{{ selectingFolder ? '正在读取目录…' : '选择总文件夹' }}</button>
+        <button type="button" class="solid" :disabled="busy" @click="chooseFolder">选择总文件夹</button>
         <button type="button" class="solid" :disabled="busy || !pendingRows.length || !oa.verified.value" @click="process(pendingRows)">{{ progress?.phase === 'stopped' ? '继续处理剩余案件' : '读取知易通并批量仲裁' }}</button>
         <button type="button" class="ghost" v-if="busy && progress" :disabled="stopping" @click="requestStop">{{ stopping ? '正在停止…' : '停止后续处理' }}</button>
         <button type="button" class="ghost" :disabled="busy || !rows.length" @click="exportData">导出核对结果</button>

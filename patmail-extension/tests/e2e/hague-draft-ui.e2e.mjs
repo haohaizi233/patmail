@@ -80,24 +80,24 @@ try{
  await page.getByRole('option',{name:'6 路',exact:true}).click()
  await transportSelect.click()
  await page.getByRole('option',{name:'页面填写',exact:true}).click()
- let nativeFileChoosers=0
- page.on('filechooser',()=>{nativeFileChoosers++})
- await page.evaluate(({doc,jpeg,rootName})=>{
-  const file=(name,base64)=>({kind:'file',name,getFile:()=>Promise.resolve(new File([Uint8Array.from(atob(base64),c=>c.charCodeAt(0))],name))})
-  const dir=(name,children)=>({kind:'directory',name,async *values(){for(const child of children)yield child}})
-  window.showDirectoryPicker=options=>{window.__pickerOptions=options;return Promise.resolve(dir(rootName,[dir('PO2631874HAGUE',[file('PO2631909HAGUE.docx',doc),...[1,2].flatMap(n=>Array.from({length:8},(_,i)=>file(`${n}.${i+1}.jpg`,jpeg)))])]))}
- },{doc:(await readFile(path.join(fixture.root,'PO2631874HAGUE','PO2631909HAGUE.docx'))).toString('base64'),jpeg,rootName:path.basename(fixture.root)})
- await page.getByRole('button',{name:'选择总文件夹',exact:true}).click()
+ const dispatchImport=async()=>{
+  await page.evaluate(({doc,jpeg,rootName})=>{
+   const file=(rel,base64)=>{const f=new File([Uint8Array.from(atob(base64),c=>c.charCodeAt(0))],rel.split('/').pop());Object.defineProperty(f,'webkitRelativePath',{value:rel,configurable:true});return f}
+   const files=[file(`${rootName}/PO2631874HAGUE/PO2631909HAGUE.docx`,doc),...[1,2].flatMap(n=>Array.from({length:8},(_,i)=>file(`${rootName}/PO2631874HAGUE/${n}.${i+1}.jpg`,jpeg)))]
+   const dt=new DataTransfer();for(const f of files)dt.items.add(f)
+   const input=document.querySelector('[aria-label="选择海牙申请总文件夹"]')
+   input.files=dt.files;input.dispatchEvent(new Event('change'))
+  },{doc:(await readFile(path.join(fixture.root,'PO2631874HAGUE','PO2631909HAGUE.docx'))).toString('base64'),jpeg,rootName:path.basename(fixture.root)})
+ }
+ await dispatchImport()
  const importDialog=page.getByRole('dialog',{name:'导入海牙申请材料',exact:true})
  await importDialog.waitFor()
  assert.match(await importDialog.innerText(),/17 个文件/)
  await page.screenshot({path:resultPath('hague-import-confirm.png')})
  await importDialog.getByRole('button',{name:'取消',exact:true}).click()
  assert.equal(await page.locator('.hague-cases button').count(),0)
- assert.equal(nativeFileChoosers,0,'supported directory API must avoid webkitdirectory upload confirmation')
- await page.getByRole('button',{name:'选择总文件夹',exact:true}).click()
+ await dispatchImport()
  await importDialog.getByRole('button',{name:'导入材料',exact:true}).click()
- assert.deepEqual(await page.evaluate(()=>window.__pickerOptions),{mode:'read',id:'hague-materials'})
  await page.getByText('等待 eHague 登录验证',{exact:false}).first().waitFor()
  await page.getByRole('button',{name:'连接并检测登录',exact:true}).click()
  const create=page.getByRole('button',{name:'填写并保存本案草稿',exact:true})
