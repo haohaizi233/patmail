@@ -965,17 +965,39 @@ it('filters applicant/reference text through actual app snapshot persistence', (
   expect(JSON.stringify(logged)).not.toContain('secret.pdf')
   expect(logged).toEqual([{kind:'app.snapshot',event:{topProgress:{value:1,max:2,text:'error'},progress:[],exportNotice:'running',draftTextSummary:{count:2,categories:['notice','error']},downloadsAvailable:false,downloads:[]}}])
 })
-it('drops a redirected Hague request when it leaves the allowed origin', () => {
+it('keeps the observed Hague redirect status before dropping a request that leaves the allowed origin', () => {
  const Service=required<new(token:string)=>{logger:{log:(kind:string,event:unknown)=>Promise<void>};networkRequests:Map<string,unknown>;handleNetworkRequest:(target:object,session:string,params:object)=>void;handleNetworkResponse:(target:object,session:string,params:object)=>void}>('CdpObserverService')
  const service=new Service('offline-test');const logged:unknown[]=[];service.logger={log:async(kind,event)=>{logged.push({kind,event})}}
  const target={source:'hague',targetId:'12345678',sessionId:'s'}
  service.handleNetworkRequest(target,'s',{requestId:'41.2',request:{url:'https://hague.wipo.int/HagueEFilingWeb/protected/page/application.xhtml',method:'POST'},timestamp:1})
  expect(service.networkRequests.size).toBe(1)
- service.handleNetworkRequest(target,'s',{requestId:'41.2',request:{url:'https://evil.example/private',method:'GET'},redirectResponse:{status:302},timestamp:2})
+ service.handleNetworkRequest(target,'s',{requestId:'41.2',request:{url:'https://evil.example/private',method:'GET'},redirectResponse:{status:302,mimeType:'text/html',headers:{Location:'https://evil.example/private?token=PRIVATE_TOKEN',Cookie:'PRIVATE_COOKIE'}},timestamp:2})
  service.handleNetworkResponse(target,'s',{requestId:'41.2',response:{status:200},timestamp:3})
  expect(service.networkRequests.size).toBe(0)
- expect(logged).toHaveLength(1)
+ expect(logged).toHaveLength(2)
+ expect(logged[1]).toMatchObject({kind:'network.response',event:{source:'hague',requestId:'41.2',status:302,httpStatus:302,httpCategory:'redirect',path:'/HagueEFilingWeb/protected/page/application.xhtml'}})
  expect(JSON.stringify(logged)).not.toContain('evil.example')
+ expect(JSON.stringify(logged)).not.toContain('PRIVATE_')
+})
+
+it('keeps redirect-hop ownership instead of correlating the same CDP request to another case', () => {
+ type Harness={logger:{log:(kind:string,event:unknown)=>Promise<void>};bridge:{clear:()=>void};hagueRequestMetadata:()=>Record<string,unknown>;handleNetworkRequest:(target:object,session:string,params:object)=>void;handleNetworkResponse:(target:object,session:string,params:object)=>void}
+ const Service=required<new(token:string)=>Harness>('CdpObserverService'),service=new Service('offline-redirect')
+ const logged:unknown[]=[];service.logger={log:(kind,event)=>{logged.push({kind,event});return Promise.resolve()}}
+ let correlations=0
+ service.hagueRequestMetadata=()=>{correlations++;return{traceId:correlations===1?'trace-original':'trace-wrong',caseRunId:'case-original',applicationRequestId:'req-original',correlationConfidence:'probable',httpMethod:'POST'}}
+ const target={source:'hague',targetId:'aaaaaaaa',sessionId:'bbbbbbbb'}
+ try{
+  service.handleNetworkRequest(target,'bbbbbbbb',{requestId:'41.3',request:{url:'https://hague.wipo.int/HagueEFilingWeb/protected/page/application.xhtml',method:'POST'},timestamp:1})
+  service.handleNetworkRequest(target,'bbbbbbbb',{requestId:'41.3',request:{url:'https://hague.wipo.int/HagueEFilingWeb/protected/page/summary.xhtml',method:'GET'},redirectResponse:{status:303},timestamp:2})
+  service.handleNetworkResponse(target,'bbbbbbbb',{requestId:'41.3',response:{status:200},timestamp:3})
+  expect(correlations).toBe(1)
+  expect(logged).toHaveLength(4)
+  expect(logged[1]).toMatchObject({kind:'network.response',event:{httpStatus:303,httpMethod:'POST',traceId:'trace-original'}})
+  expect(logged[2]).toMatchObject({kind:'network.request',event:{httpMethod:'GET',traceId:'trace-original'}})
+  expect(logged[3]).toMatchObject({kind:'network.response',event:{httpStatus:200,traceId:'trace-original',caseRunId:'case-original'}})
+  expect(JSON.stringify(logged)).not.toContain('trace-wrong')
+ }finally{service.bridge.clear()}
 })
 
 it('enriches only known application request evidence using observed context and keeps six lanes ambiguous', () => {
@@ -990,7 +1012,7 @@ it('enriches only known application request evidence using observed context and 
  expect(service.hagueTraces).toHaveLength(1)
  expect(service.hagueTraces[0]).toMatchObject({targetId:'aaaaaaaa',sessionId:'bbbbbbbb',frameId:'cccccccc'})
  const params={frameId:'cccccccc',requestId:'41.2',request:{method:'POST',url:'https://hague.wipo.int'+event.urlPath}}
- expect(service.hagueRequestMetadata(target,'bbbbbbbb',params)).toMatchObject({correlationConfidence:'probable',traceId:'trace-one',caseRunId:'case-one',applicationRequestId:'req-one'})
+ expect(service.hagueRequestMetadata(target,'bbbbbbbb',params)).toMatchObject({correlationConfidence:'probable',candidateCount:1});expect(service.hagueRequestMetadata(target,'bbbbbbbb',params).traceId).toBeUndefined()
  for(let i=2;i<=6;i++){const next={...event,traceId:'trace-'+i,caseRunId:'case-'+i,requestId:'req-'+i};binding({source:'app'},next);binding(target,next)}
  expect(service.hagueTraces).toHaveLength(6)
  const ambiguous=service.hagueRequestMetadata(target,'bbbbbbbb',params)

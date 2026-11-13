@@ -1,5 +1,5 @@
 import { sanitizeTraceEvent } from '../src/hague/diagnostics/schema.mjs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 export function safeHagueUrl(value) {
   try {
     const u = new URL(value)
@@ -23,29 +23,18 @@ export function networkMetadata(request, params = {}) {
   return {httpStatus: status, httpCategory: status === null ? 'no_response' : status >= 500 ? 'server_error' : status >= 400 ? 'client_error' : status >= 300 ? 'redirect' : 'response',
     ...(error || params.canceled ? {failureCategory: params.canceled ? 'cancelled' : /TIMED_OUT|TIMEOUT/.test(error) ? 'timeout' : /DISCONNECTED|CONNECTION|NETWORK/.test(error) ? 'network' : 'other'} : {})}
 }
-export function correlateRequest(request, candidates) {
-  const matches = candidates.filter(c => ['targetId','frameId','httpMethod','urlPath'].every(k => request[k] && c[k] === request[k]) && Number.isFinite(c.timestamp) && Math.abs(c.timestamp-request.timestamp) <= 1500)
-  // Direct IDs must be supplied by the application instrumentation, never inferred.
-  const direct = matches.filter(c => request.cdpRequestId && c.cdpRequestId === request.cdpRequestId && c.sessionId === request.sessionId)
-  const exact = direct.length === 1
-  const confidence = exact ? 'exact' : matches.length === 1 ? 'probable' : matches.length > 1 ? 'ambiguous' : 'unmatched'
-  const candidate = exact ? direct[0] : matches.length === 1 ? matches[0] : null
-  const ownership = {}
-  if (candidate) {
-    for (const key of ['traceId','caseRunId','stepIndex','operation','transportMode']) if (candidate[key] !== undefined) ownership[key] = candidate[key]
-    if (candidate.requestId) ownership.applicationRequestId = candidate.requestId
-  }
-  return {correlationConfidence: confidence, candidateCount: matches.length, ...ownership}
-}
+export {correlateRequest} from '../src/hague/diagnostics/correlation/correlator.mjs'
 export class HagueDeepDiagnostics {
-  constructor(send, log) { this.send=send; this.log=log; this.target=null; this.generation=0; this.count=0; this.bytes=0; this.seen=new Set(); this.state='off' }
-  status() { return {enabled:!!this.target, state:this.state, scripts:this.count, bytes:this.bytes} }
+  constructor(send, log, analyzer = null) { this.skipped=0; this.analyzer=analyzer; this.reserved=0; this.send=send; this.log=log; this.target=null; this.generation=0; this.count=0; this.bytes=0; this.seen=new Set(); this.state='off' }
+  status() { return {enabled:!!this.target, state:this.state, scripts:this.count, bytes:this.bytes,skippedAnalyses:this.skipped} }
   command(method, params, sessionId) {
     if (!deepCommandAllowed(method,params)) throw Error('unsafe deep command')
     return this.send(method,params,sessionId)
   }
   async enable(target) {
+    const activation=this.generation+1
     await this.disable()
+    if (activation !== this.generation) return this.status()
     if (!target || !id(target.targetId) || !id(target.sessionId) || !safeHagueUrl(target.url)) throw Error('invalid authorized Hague target')
     this.target={...target}; const generation=this.generation; this.state='enabling'
     try {
@@ -54,38 +43,42 @@ export class HagueDeepDiagnostics {
       await this.command('Debugger.enable',{},target.sessionId)
       if (generation !== this.generation) return this.status()
       this.state='enabled'
-    } catch { await this.disable();this.state='unsupported';this.log('hague.deep.unsupported',{source:'hague'}) }
+    } catch { if (generation === this.generation) { await this.disable();this.state='unsupported';this.log('hague.deep.unsupported',{source:'hague'}) } }
     return this.status()
   }
   async disable() {
-    this.clearAnalysisCache?.(); this.clearAnalysisCache=null
-    const target=this.target;this.target=null;this.generation++;this.seen.clear();this.count=0;this.bytes=0;this.state='off'
+    this.analyzer?.clear(); this.reserved=0; this.clearAnalysisCache?.(); this.clearAnalysisCache=null
+    const target=this.target;this.target=null;this.generation++;this.seen.clear();this.count=0;this.bytes=0;this.skipped=0;this.state='off'
     if (target) await this.command('Debugger.disable',{},target.sessionId).catch(()=>{})
     return this.status()
   }
   async script(target, params) {
-    if (!this.target || target.sessionId !== this.target.sessionId || !safeHagueUrl(target.url) || !safeHagueUrl(params.url) || !id(params.scriptId) || this.seen.has(params.scriptId) || this.count >= 32 || this.bytes >= 2_000_000 || !(params.length >= 0 && params.length <= 128_000)) return
-    this.seen.add(params.scriptId);this.count++; const generation=this.generation
+    if (!this.target || target.sessionId !== this.target.sessionId || target.targetId !== this.target.targetId || !safeHagueUrl(target.url) || !safeHagueUrl(params.url) || !id(params.scriptId) || this.seen.has(params.scriptId)) return
+    if(this.count >= 32 || this.bytes + this.reserved + 128*1024 > 2*1024*1024 || !(params.length >= 0 && params.length <= 128*1024)){
+      this.skipped++;this.log('hague.script.analysis',sanitizeTraceEvent({version:1,eventId:randomUUID(),source:'cdp',phase:'analysis.skipped',timestamp:new Date().toISOString(),analysisKind:'ast',skipReason:'source_limit',targetId:target.targetId,sessionId:target.sessionId,stats:{skippedAnalyses:this.skipped},businessStatus:'unknown',certainty:'unknown'}));return
+    }
+    this.seen.add(params.scriptId);this.count++; this.reserved+=128*1024; const generation=this.generation
     try {
       let {scriptSource:source}=await this.command('Debugger.getScriptSource',{scriptId:params.scriptId},target.sessionId)
-      if (generation !== this.generation || typeof source !== 'string' || source.length>128_000) return
-      this.bytes+=source.length
+      if (generation !== this.generation || typeof source !== 'string') return
+      if(Buffer.byteLength(source)>128*1024){source=null;this.skipped++;this.log('hague.script.analysis',sanitizeTraceEvent({version:1,eventId:randomUUID(),source:'cdp',phase:'analysis.skipped',timestamp:new Date().toISOString(),analysisKind:'ast',skipReason:'source_limit',stats:{skippedAnalyses:this.skipped}}));return}
+      this.bytes+=Buffer.byteLength(source)
       const {analyzeJavaScript,clearAstCache}=await import('../src/hague/diagnostics/ast/analyzer.mjs')
       if (generation !== this.generation) return
       this.clearAnalysisCache=clearAstCache
-      const result=analyzeJavaScript(source);const hash=createHash('sha256').update(source).digest('hex');source=null
+      const result=this.analyzer ? await this.analyzer.analyze('ast',source,{sessionId:target.sessionId,targetId:target.targetId,scriptId:params.scriptId,startLine:params.startLine??0,startColumn:params.startColumn??0,urlPath:safeHagueUrl(params.url).path,generation}) : analyzeJavaScript(source);const hash=createHash('sha256').update(source).digest('hex');source=null
       if (generation !== this.generation) return
       // Never persist arbitrary AST strings or static parameter values.
       this.log('hague.script.analysis',{source:'hague',scriptHash:hash,callCount:Array.isArray(result.calls)?result.calls.length:0,unresolvedCount:Array.isArray(result.unresolved)?result.unresolved.length:0,origin:'https://hague.wipo.int',path:safeHagueUrl(params.url).path,evidence:'static_analysis'})
       for (const call of (Array.isArray(result.calls)?result.calls:[]).slice(0,200)) {
-        const trace = sanitizeTraceEvent({version:1,source:'cdp',phase:'protocol.analyzed',timestamp:new Date().toISOString(),operation:'protocol',
+        const trace = sanitizeTraceEvent({version:1,eventId:randomUUID(),source:'cdp',phase:'protocol.analyzed',timestamp:new Date().toISOString(),operation:'protocol',
           sourceComponent:call.source,form:call.form,process:call.process,update:call.update,event:call.event,parameterNames:call.parameterNames,
-          astCallType:call.kind,astConfidence:call.confidence==='static'?'static':'unresolved',sourceLocation:{scriptHash:hash,urlPath:safeHagueUrl(params.url).path,line:call.location?.line,column:call.location?.column},
+          astCallType:call.kind,astConfidence:call.confidence==='static'?'static':'unresolved',sourceLocation:{scriptId:params.scriptId,scriptHash:hash,urlPath:safeHagueUrl(params.url).path,line:Number.isInteger(call.location?.line)?call.location.line+(params.startLine??0):undefined,column:Number.isInteger(call.location?.column)?call.location.column+(call.location?.line===1?(params.startColumn??0):0):undefined},
           correlationConfidence:'unmatched',protocolStatus:'not_observed',businessStatus:'unknown',certainty:'unknown',evidenceCodes:['PROTOCOL_STATIC']})
         if(trace) this.log('hague.script.analysis',trace)
       }
 
-    } catch { this.log('hague.script.unavailable',{source:'hague'}) }
+    } catch { this.log('hague.script.unavailable',{source:'hague'}) } finally { if(generation===this.generation)this.reserved-=128*1024 }
   }
 }
 export function safeHagueSnapshotText(value) {

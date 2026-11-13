@@ -1,3 +1,6 @@
+import {ResearchOutputBudget,safeAnalysisOutput} from './hague-research-output.mjs'
+import { HagueResearchDiagnostics } from './hague-research.mjs'
+import { AnalysisWorker } from './hague-research-broker.mjs'
 import { CdpUiBridge } from './hague-diagnostics-bridge.mjs'
 import { observerEventsToTraces } from '../src/hague/diagnostics/observer-adapter.mjs'
 import { HagueDeepDiagnostics, safeHagueUrl, networkMetadata, correlateRequest, safeHagueSnapshotText, safeDraftTextSummary } from './hague-diagnostics.mjs'
@@ -1593,10 +1596,15 @@ export class CdpObserverService {
     this.endpoint = options.endpoint ?? null
     this.endpointLocked = Boolean(options.endpoint)
     this.logger = new JsonlLogger(this.paths.dataDir)
-    this.deep = new HagueDeepDiagnostics((method, params, session) => this.sendCdp(method, params, session), (kind, fields) => { void this.logger.log(kind, fields); this.bridge?.enqueue(fields) })
+    this.outputBudget = new ResearchOutputBudget()
+    this.analysisWorker = new AnalysisWorker()
+    this.deep = new HagueDeepDiagnostics((method, params, session) => this.sendCdp(method, params, session), (kind, fields) => this.recordResearchOutput(kind,fields), this.analysisWorker)
+    this.research = new HagueResearchDiagnostics(this.deep, (method,params,session)=>this.sendCdp(method,params,session), (kind,fields)=>this.recordResearchOutput(kind,fields), {worker:this.analysisWorker})
     this.hagueTraces = []
     this.hagueContexts = new Map()
     this.knownAppTraces = new Map()
+    this.research.observerStateProvider=()=>this.connectionStatus
+    this.research.outputStatusProvider=()=>({dropped:this.outputBudget.dropped,pending:this.outputBudget.pending,peak:this.outputBudget.peakPending})
     this.bridge = new CdpUiBridge(command => this.sendCdp(command.method, command.params, command.sessionId), () => [...this.sessions.values()].filter(target => target.source === 'app' && target.type === 'page' && this.knownExtensionIds.has(extensionIdFromUrl(target.url))))
     this.controlServer = null
     this.ws = null
@@ -1688,15 +1696,16 @@ export class CdpObserverService {
       return
     }
     if (path === '/hague-diagnostics') {
-      if (request.method === 'GET') { sendJson(response, 200, this.deep.status()); return }
+      if (request.method === 'GET') { sendJson(response, 200, this.research.status()); return }
       if (request.method !== 'POST') { sendJson(response, 405, {error:'method'}); return }
       const body = await this.readControlBody(request, response)
       if (!body) return
       try {
-        if (body.action === 'disable') { sendJson(response, 200, await this.deep.disable()); return }
+        if(body.mode!==undefined&&!['deep','research','basic'].includes(body.mode))throw Error('mode')
+        if (body.action === 'disable') { sendJson(response, 200, await this.research.disable()); return }
         const target = [...this.sessions.values()].find(t => t.targetId === body.targetId && t.source === 'hague')
-        if (body.action !== 'enable' || !target) throw Error('target')
-        sendJson(response, 200, await this.deep.enable(target))
+        if (body.action !== 'enable' || !target || body.mode==='basic') throw Error('target')
+        sendJson(response, 200, await this.research.enable(target, body.mode === 'research' ? 'research' : 'deep'))
       } catch { sendJson(response, 400, {error:'invalid_authorized_target'}) }
       return
     }
@@ -1752,7 +1761,7 @@ export class CdpObserverService {
       endpointHost: this.endpoint ? safeHost(this.endpoint) : null,
       targets: this.sessions.size,
       logWriteFailures: this.logger.failureCount,
-      hagueDeep: this.deep.status(),
+      hagueDeep: this.research.status(),
       hagueCdpUiBridge: this.bridge.state,
     }
   }
@@ -1878,7 +1887,7 @@ export class CdpObserverService {
     }
     this.pendingCommands.clear()
     this.selectedTargets.clear()
-    void this.deep.disable()
+    void this.research.disable()
     this.bridge.clear()
     this.hagueContexts.clear()
     this.hagueTraces = []
@@ -1923,7 +1932,7 @@ export class CdpObserverService {
         break
       case 'Runtime.executionContextsCleared':
         this.clearHagueSessionEvidence(sessionId)
-        if (this.deep.target?.sessionId === sessionId) void this.deep.disable()
+        if (this.deep.target?.sessionId === sessionId) void this.research.disable()
         void this.logger.log('runtime.contexts_cleared', {source:target.source})
         break
       case 'Runtime.bindingCalled':
@@ -1959,7 +1968,7 @@ export class CdpObserverService {
   handleTargetEvent(method, params) {
     if (method === 'Target.targetCreated' || method === 'Target.targetInfoChanged') {
       const targetInfo = params.targetInfo
-      if (this.deep.target?.targetId === targetInfo?.targetId && this.deep.target.url !== targetInfo.url) void this.deep.disable()
+      if (this.deep.target?.targetId === targetInfo?.targetId && this.deep.target.url !== targetInfo.url) void this.research.disable()
       if (targetInfo) {
         const appId = isPatMailAppTarget(targetInfo, this.knownExtensionIds) ? extensionIdFromUrl(targetInfo.url) : ''
         if (appId) this.knownExtensionIds.add(appId)
@@ -1971,7 +1980,7 @@ export class CdpObserverService {
       const selected = this.selectedTargets.get(params.targetId)
       this.selectedTargets.delete(params.targetId)
       if (selected) {
-        if (this.deep.target?.sessionId === selected.sessionId) void this.deep.disable()
+        if (this.deep.target?.sessionId === selected.sessionId) void this.research.disable()
         this.clearHagueSessionEvidence(selected.sessionId)
         this.sessions.delete(selected.sessionId)
         this.lastSnapshotByTarget.delete(params.targetId)
@@ -1983,7 +1992,7 @@ export class CdpObserverService {
     if (method === 'Target.detachedFromTarget') {
       const target = this.sessions.get(params.sessionId)
       if (target) {
-        if (this.deep.target?.sessionId === params.sessionId) void this.deep.disable()
+        if (this.deep.target?.sessionId === params.sessionId) void this.research.disable()
         this.clearHagueSessionEvidence(params.sessionId)
         this.sessions.delete(params.sessionId)
         this.selectedTargets.delete(target.targetId)
@@ -2023,7 +2032,11 @@ export class CdpObserverService {
       }, CDP_COMMAND_TIMEOUT_MS)
       this.pendingCommands.set(id, { method, resolve: resolveCommand, reject: rejectCommand, timer })
       try {
-        this.safeTransport(command)
+        if(method === 'Network.getResponseBody') {
+          if(!this.research.bodyCommandAllowed(params,sessionId))throw Error('Blocked body command')
+          if(!this.ws || this.ws.readyState!==WebSocket.OPEN)throw Error('CDP socket is not open')
+          this.ws.send(JSON.stringify(command))
+        } else this.safeTransport(command)
       } catch (error) {
         clearTimeout(timer)
         this.pendingCommands.delete(id)
@@ -2055,7 +2068,7 @@ export class CdpObserverService {
         const info = infoById.get(targetId)
         if (!nextSelection || !info) {
           this.selectedTargets.delete(targetId)
-          if (this.deep.target?.sessionId === current.sessionId) void this.deep.disable()
+          if (this.deep.target?.sessionId === current.sessionId) void this.research.disable()
           this.clearHagueSessionEvidence(current.sessionId)
         this.sessions.delete(current.sessionId)
           this.configuredSessions.delete(current.sessionId)
@@ -2270,6 +2283,10 @@ export class CdpObserverService {
     })
   }
 
+  recordResearchOutput(kind, fields) {
+    try{const safe=safeAnalysisOutput(fields);if(safe&&this.outputBudget.submit(kind,safe,(k,event)=>this.logger.log(k,event)))this.bridge?.enqueue(safe)}catch{this.outputBudget.dropped++}
+  }
+
   logNetwork(kind, event) {
     void this.logger.log(kind, event)
     for (const trace of observerEventsToTraces([{ts:nowIso(),kind,...event}])) this.bridge.enqueue(trace)
@@ -2295,9 +2312,21 @@ export class CdpObserverService {
   }
 
   handleNetworkRequest(target, sessionId, params) {
+    this.research.request(target,sessionId,params)
     const previous = this.networkRequests.get(`${sessionId}:${params.requestId}`)
     const redirects = [...(previous?.redirects ?? [])]
     if (previous && params.redirectResponse) redirects.push({origin:previous.origin,path:previous.path,httpStatus:networkMetadata({status:params.redirectResponse.status}).httpStatus})
+    // Chrome reports redirect responses here, not in responseReceived. Preserve
+    // the allowed hop before discarding an out-of-scope destination; never copy
+    // its Location, headers or destination URL into the diagnostic record.
+    if (previous?.source === 'hague' && Number.isInteger(params.redirectResponse?.status) && params.redirectResponse.status >= 300 && params.redirectResponse.status < 400) {
+      this.logNetwork('network.response', {
+        ...this.retainedHagueMetadata(previous),
+        ...safeNetworkResponseEvent(previous, {response:params.redirectResponse,timestamp:params.timestamp}),
+        ...networkMetadata({status:params.redirectResponse.status}),
+        redirects:redirects.slice(-8),
+      })
+    }
     const postData = target.source === 'jihua' || target.source === 'hague' ? '' : params.request?.postData
     const url = safeNetworkUrl(params.request?.url, postData, target.source)
     if (!url.origin || url.origin === 'null') {
@@ -2307,12 +2336,16 @@ export class CdpObserverService {
     const key = `${sessionId}:${params.requestId}`
     const started = finiteNumber(params.timestamp) ? params.timestamp : 0
     const requestId = safeIdentifier(String(params.requestId ?? ''), 120)
+    const metadata = previous?.source === 'hague' && params.redirectResponse
+      ? {...this.retainedHagueMetadata(previous),httpMethod:['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS'].includes(params.request?.method)?params.request.method:'OTHER'}
+      : this.hagueRequestMetadata(target, sessionId, params)
     if (this.networkRequests.size >= 2048) this.networkRequests.delete(this.networkRequests.keys().next().value)
-    this.networkRequests.set(key, { source: target.source, requestId, ...url, started, status:null, redirects:redirects.slice(-8), ...this.hagueRequestMetadata(target, sessionId, params) })
-    this.logNetwork('network.request', { source: target.source, ...this.hagueRequestMetadata(target, sessionId, params), redirects:redirects.slice(-8), httpStatus:null, ...(requestId ? { requestId } : {}), origin: url.origin, path: url.path, ...(url.call ? { call: url.call } : {}) })
+    this.networkRequests.set(key, { source: target.source, requestId, ...url, started, status:null, redirects:redirects.slice(-8), ...metadata })
+    this.logNetwork('network.request', { source: target.source, ...metadata, redirects:redirects.slice(-8), httpStatus:null, ...(requestId ? { requestId } : {}), origin: url.origin, path: url.path, ...(url.call ? { call: url.call } : {}) })
   }
 
   handleNetworkResponse(target, sessionId, params) {
+    this.research.response(sessionId,params)
     const request = this.networkRequests.get(`${sessionId}:${params.requestId}`)
     if (!request) return
     const event = {...this.retainedHagueMetadata(request), ...safeNetworkResponseEvent(request, params), ...networkMetadata({status:params.response?.status}), redirects:request.redirects}
@@ -2322,6 +2355,7 @@ export class CdpObserverService {
   }
 
   handleNetworkFinished(target, sessionId, params) {
+    void this.research.finished(sessionId,params)
     const key = `${sessionId}:${params.requestId}`
     const request = this.networkRequests.get(key)
     if (!request) return
@@ -2342,6 +2376,7 @@ export class CdpObserverService {
   }
 
   handleNetworkFailure(target, sessionId, params) {
+    this.research.forget(sessionId,params)
     const key = `${sessionId}:${params.requestId}`
     const request = this.networkRequests.get(key)
     if (!request) return
@@ -2361,6 +2396,7 @@ export class CdpObserverService {
   }
 
   async pollAppSnapshots() {
+    this.research.emit('research.status',{researchState:this.research.status().state,stats:this.research.status().stats})
     if (this.stopRequested || !this.ws || this.ws.readyState !== WebSocket.OPEN) return
     for (const [sessionId, target] of this.sessions) {
       if (target.source !== 'app' || target.type !== 'page' || this.snapshotBusyTargets.has(target.targetId)) continue
@@ -2391,7 +2427,7 @@ export class CdpObserverService {
   async stop(reason) {
     if (this.stopRequested) return
     this.stopRequested = true
-    await this.deep.disable()
+    await this.research.disable()
     this.bridge.clear()
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     if (this.snapshotTimer) clearInterval(this.snapshotTimer)
@@ -2423,7 +2459,7 @@ export async function runObserverDaemon(token, options = {}) {
 export async function configureHagueDiagnostics(action, targetId, options = {}) {
   const paths = createObserverPaths(options.root ?? WORKSPACE_ROOT)
   const state = await readJson(paths.lockPath)
-  const response = await controlRequest(state, '/hague-diagnostics', action === 'status' ? 'GET' : 'POST', action === 'status' ? undefined : {action,targetId}, 30_000)
+  const response = await controlRequest(state, '/hague-diagnostics', action === 'status' ? 'GET' : 'POST', action === 'status' ? undefined : {action,targetId,mode:options.mode}, 30_000)
   if (!response) throw new Error('Observer unavailable; start the existing service first')
   if (response.status !== 200) throw new Error('Hague diagnostics control rejected')
   return response.body

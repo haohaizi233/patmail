@@ -36,6 +36,9 @@ async function runCli() {
   }
 
   const { command, options } = parseArgs(process.argv.slice(2))
+  if (command === 'basic' || ['research-enable','research-disable','research-status'].includes(command)) {
+    printResult(await configureHagueDiagnostics(command === 'basic' ? 'disable' : command.slice(9), options.targetId, {mode:'research'})); return
+  }
   if (['deep-enable','deep-disable','deep-status'].includes(command)) {
     printResult(await configureHagueDiagnostics(command.slice(5), options.targetId))
     return

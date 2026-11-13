@@ -3,7 +3,9 @@ export function deepCommandAllowed(method:string,params?:Record<string,unknown>)
 export function networkMetadata(request:Record<string,unknown>,params?:Record<string,unknown>):Record<string,unknown>
 export function correlateRequest(request:Record<string,unknown>,candidates:Record<string,unknown>[]):{correlationConfidence:string;candidateCount:number;traceId?:unknown}
 export class HagueDeepDiagnostics {
- constructor(send:(method:string,params:Record<string,unknown>,sessionId?:string)=>Promise<unknown>,log:(kind:string,fields:Record<string,unknown>)=>void)
+ constructor(send:(method:string,params:Record<string,unknown>,sessionId?:string)=>Promise<unknown>,log:(kind:string,fields:Record<string,unknown>)=>void,analyzer?:{analyze:(kind:string,value:string,options?:Record<string,unknown>)=>Promise<any>;clear:()=>void})
+ skipped:number
+ state:string
  target: {targetId:string;sessionId:string;url:string}|null
  status():{enabled:boolean;state:string;scripts:number;bytes:number}
  enable(target:{targetId:string;sessionId:string;url:string}):Promise<ReturnType<HagueDeepDiagnostics['status']>>
