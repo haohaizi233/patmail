@@ -27,6 +27,8 @@ import { showDraftCompletion,draftReviewNotes } from '../../hague/draft-completi
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { confirmDialog } from '../dialog'
 import { readDroppedFolders } from '../../hague/dropped-folders'
+import HagueDiagnostics from '../components/HagueDiagnostics.vue'
+import type { TraceContext } from '../../hague/diagnostics/trace'
 
 let alive = true
 const props = withDefaults(defineProps<{ embedded?: boolean; isActive?: boolean }>(), { isActive: true })
@@ -55,6 +57,7 @@ type Row = HagueRow
 const progress = ref<BatchProgress | null>(null)
 const importing = ref({ done: 0, total: 0 })
 const stopping = ref(false)
+const stopReason = ref('')
 const elapsed = ref(0)
 let startedAt = Date.now()
 const tick = window.setInterval(() => { if (busy.value) elapsed.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
@@ -128,7 +131,7 @@ async function exportDraftZip():Promise<void>{
 }
 async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<void> {
   if (busy.value || !targets.length) return
-  busy.value = true; stopping.value = false; const operation = new AbortController(); controller = operation; batchId = ''
+  busy.value = true; stopping.value = false; stopReason.value=''; const operation = new AbortController(); controller = operation; batchId = ''
   try {
     const saved = targets.filter(row => row.draft && (asNew || row.draft.status === 'saved'))
     if (saved.length && !await confirmDialog({
@@ -167,7 +170,7 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
       open:()=>draftTransport.value==='http'?Promise.resolve(tabId):batch?openDraftTab():Promise.resolve(tabId),
       save:(row,value)=>storeDraft(row,checkpointFor(row,value)),
       update:value=>{draftBatch.value=value},
-      error:(row,message,kind)=>{draftErrors.value[row.folder.path]=message;draftSkipped.value[row.folder.path]=kind==='skipped';if(kind==='failed'&&/登录|login/i.test(message))controller?.abort()},
+      error:(row,message,kind)=>{draftErrors.value[row.folder.path]=message;draftSkipped.value[row.folder.path]=kind==='skipped';if(kind==='failed'&&/登录|login/i.test(message))stopWithReason(`原站业务请求未通过登录校验：${message}`)},
       run:async(row,plan,workerTab,update)=>{
         const previous = previousCheckpoints.get(row)
         if (previous && typeof chrome !== 'undefined' && chrome.storage?.local) {
@@ -176,10 +179,11 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
         draftActive.value.add(row.folder.path)
         let http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value,operation.signal):null
         try{return await runDraftPlan(plan,workerTab,{
-          call:(command,documentId,reference)=>http?http.call(command):callDraftPage(workerTab,command,documentId,reference),
-          ...(http?{recover:async(command:DraftCommand,checkpoint:DraftCheckpoint)=>{
+          transport:draftTransport.value,
+          call:(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext)=>http?http.call(command,trace):callDraftPage(workerTab,command,documentId,reference,trace),
+          ...(http?{recover:async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext)=>{
             const fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
-            const result=await fresh.recover(command,checkpoint)
+            const result=await fresh.recover(command,checkpoint,trace)
             if(result.outcome!=='unknown')http=fresh
             return result
           }}:{}),
@@ -188,7 +192,7 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
         },controller?.signal,row.draft)}finally{draftActive.value.delete(row.folder.path)}
       }
     },controller.signal)
-    notice.value=`草稿批次${result.stopped?'已停止':'已结束'}：成功 ${result.succeeded}，异常 ${result.failed}，跳过 ${result.skipped}。${result.failed||result.skipped?'请在各案查看原因及原站现场。':''}`
+    notice.value=`草稿批次${result.stopped?'已停止':'已结束'}：成功 ${result.succeeded}，异常 ${result.failed}，跳过 ${result.skipped}。${result.stopped?`停止原因：${stopReason.value||'当前草稿未执行完成，检查点已保留。'}`:''}${result.failed||result.skipped?'请在各案查看原因及原站现场。':''}`
     void showDraftCompletion(notice.value,jobs.flatMap(row=>draftReviewNotes(row,draftErrors.value[row.folder.path])))
   } catch(e) { notice.value = e instanceof Error ? e.message : '草稿操作已停止，请检查原站。' }
   finally { busy.value = false; draftRunning.value = false; stopping.value = false }
@@ -207,7 +211,7 @@ watch(() => active.value?.folder.path, () => { previewIndex.value = null })
 watch(() => props.isActive, value => { if (!value) previewIndex.value = null })
 function preview(file: File): string { if (!urls.has(file)) urls.set(file, URL.createObjectURL(file)); return urls.get(file)! }
 function cleanup(): void { previewIndex.value = null; urls.forEach(url => URL.revokeObjectURL(url)); urls.clear() }
-onBeforeUnmount(() => { alive = false; if (busy.value) requestStop(); window.clearInterval(tick); cleanup() })
+onBeforeUnmount(() => { alive = false; if (busy.value) stopWithReason('工作台已卸载，停止后续处理。'); window.clearInterval(tick); cleanup() })
 function issues(row: Row): string[] { return [...row.folder.issues, ...(row.filing?.issues ?? []), ...(row.filing ? validateImages(row.filing, row.folder.images) : [])] }
 async function importFiles(files: File[]): Promise<void> {
   if (!files.length || busy.value) return
@@ -265,7 +269,9 @@ async function onDrop(event: DragEvent): Promise<void> {
     notice.value = error instanceof Error ? error.message : '读取拖入的文件夹失败，请改用「选择总文件夹」。'
   }
 }
-function requestStop(): void {
+function requestStop(): void {stopWithReason('用户停止后续处理。')}
+function stopWithReason(reason:string):void {
+  if(!stopReason.value)stopReason.value=reason
   stopping.value = true; controller?.abort()
   if (batchId && !draftRunning.value) void bridge.request({ type: MessageType.CancelHagueRead, payload: { batchId } })
 }
@@ -273,7 +279,7 @@ async function process(targets: Row[], refresh = false, parse = false): Promise<
   if (busy.value || !targets.length) return
   draftProgress.value = null
   zipProgress.value=null
-  busy.value = true; stopping.value = false; controller = new AbortController(); batchId = crypto.randomUUID(); startedAt = Date.now(); elapsed.value = 0
+  busy.value = true; stopping.value = false; stopReason.value=''; controller = new AbortController(); batchId = crypto.randomUUID(); startedAt = Date.now(); elapsed.value = 0
   if (refresh) for (const row of targets) row.source = undefined
   try {
     if (oa.verified.value) await oa.ensureFresh()
@@ -302,7 +308,7 @@ async function verifyOa(): Promise<void> {
   if (await oa.verify() && !busy.value && pendingRows.value.length) await process(pendingRows.value)
 }
 watch([oa.verified, oa.checking], ([ready, checking]) => {
-  if (!ready && !checking && busy.value && (draftRunning.value || rows.value.some(r => ['reading', 'queued', 'arbitrating'].includes(r.state)))) requestStop()
+  if (!ready && !checking && busy.value && (draftRunning.value || rows.value.some(r => ['reading', 'queued', 'arbitrating'].includes(r.state)))) stopWithReason(`会话验证中断：${oa.message.value}`)
 })
 function changeReference(row: Row): void {
   row.folder.caseVolume = row.folder.caseVolume.trim().toUpperCase()
@@ -415,6 +421,7 @@ function exportData(): void {
         <details v-if="active.source"><summary>知易通原始字段</summary><pre class="formula">{{ active.source }}</pre></details>
       </article>
     </SplitScrollPane>
+    <HagueDiagnostics />
     <ImagePreview v-model:index="previewIndex" :items="gallery" />
   </section>
 </template>

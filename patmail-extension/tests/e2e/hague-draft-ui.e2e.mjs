@@ -34,7 +34,7 @@ try{
    if(message.channel==='patmail-call')message=message.message
    if(message.channel==='PATMAIL_HAGUE_SESSION'){
     if(message.action==='listTabs')callback({ok:true,tabs:[{id:7,title:'WIPO fixture'}]})
-    else setTimeout(()=>callback(window.__verifyFailure?{ok:false,error:'eHague 登录已失效，请重新登录。'}:{ok:true,session:{tabId:message.tabId??7,title:'WIPO fixture',documentId:'doc',verifiedAt:Date.now()-16000,expiresAt:Date.now()+284000}}),window.__verifyDelay??0)
+    else setTimeout(()=>callback(window.__verifyUnavailable?{ok:false,error:'登录探测网络暂不可用',code:'unavailable'}:window.__verifyFailure?{ok:false,error:'eHague 登录已失效，请重新登录。',code:'unauthenticated'}:{ok:true,session:{tabId:message.tabId??7,title:'WIPO fixture',documentId:'doc',verifiedAt:Date.now()-16000,expiresAt:Date.now()+284000}}),window.__verifyDelay??0)
    }else if(message.type==='WORKSPACE'){
     const input=JSON.parse(source);if(window.__unsupportedApplicant)input.GetCaseApplicant[0].TableRows[0].applicant_type='自然人'
     callback({type:'WORKSPACE_RESULT',payload:{ok:true,message:'fixture',connection:{easyOrigin:'http://183.36.43.66:88',easyTabId:1,operatorId:'test',lastOperatorId:'test',sessionStatus:'authenticated',lastCheckedAt:'',displayName:'test',message:'',connectionVersion:1},tabs:[],customers:[],templates:[],rules:null,tasks:[],appTab:null,forwarded:{type:'READ_HAGUE_CASE_RESULT',payload:{text:JSON.stringify(input)}}}})
@@ -46,7 +46,7 @@ try{
     if(command.op==='summary')destinations.set(message.tabId,'summary')
     if(command.op==='saveDraft')destinations.set(message.tabId,'portfolio')
     const destination=destinations.get(message.tabId)??'portfolio'
-    setTimeout(()=>callback({ok:true,page:destination,documentId:'doc',draftSaved:destination==='portfolio'&&!!message.reference,...(destination==='portfolio'?{}:{reference:references.get(message.tabId)}),...(command.op==='print'?{downloadId:42}:{})}),10)
+    setTimeout(()=>callback({ok:true,page:destination,documentId:'doc',draftSaved:destination==='portfolio'&&!!message.reference,...(destination==='portfolio'?{}:{reference:references.get(message.tabId)}),...(command.op==='print'?{downloadId:42}:{})}),window.__commandDelay??10)
    }
   }},storage:{local:{get:async key=>({[key]:storage[key]}),set:async value=>Object.assign(storage,value)}},downloads:{show(){}},tabs:{create:()=>{const id=nextTab++;destinations.set(id,'portfolio');return Promise.resolve({id})},get:id=>Promise.resolve({id,status:'complete',url:'https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml'}),onUpdated:{addListener(){},removeListener(){}},onRemoved:{addListener(){},removeListener(){}}}})
   window.addEventListener('patmail-agent-workflow',event=>{const job=event.detail;job.accepted=true;const refs=[...job.message.matchAll(/^案件文号：(.+)$/gm)].map(m=>m[1]);job.resolve(JSON.stringify({results:refs.map(caseVolume=>({caseVolume,decision:{applicant,creators:[{sourceName:'张三',givenName:'san',familyName:'zhang'}],parties:['EM','JP'],publicationMonths:6,priorities:[],warnings:[],evidence:['fixture']}}))}))})
@@ -213,6 +213,25 @@ try{
  assert.equal(await page.evaluate(()=>window.__draftStorage[window.__unknownKey].status),'saved')
  assert.match(await page.getByRole('dialog',{name:'草稿处理完成',exact:true}).innerText(),/旧操作结果尚未确认/)
  await page.getByRole('button',{name:'我知道了',exact:true}).click()
+ // A failed auxiliary login probe must not abort a running draft while its prior proof is valid.
+ await page.evaluate(()=>{window.__commandDelay=100})
+ const beforeTransient=await page.evaluate(()=>window.__draftCommands.length)
+ await page.getByRole('button',{name:'再次创建本案草稿',exact:true}).click();await confirmRecreate()
+ await page.waitForFunction(n=>window.__draftCommands.slice(n).some(c=>c.op==='applicant'),beforeTransient)
+ await page.evaluate(()=>{window.__verifyUnavailable=true;window.__verifyDelay=800})
+ await page.getByRole('button',{name:'连接并检测登录',exact:true}).click()
+ await page.locator('.hague-status').filter({hasText:'草稿批次已结束：成功 1，异常 0，跳过 0。'}).waitFor({timeout:30000})
+ assert.equal(await page.locator('.oa-session-card .theme-select-badge').innerText(),'已验证')
+ await page.getByRole('button',{name:'我知道了',exact:true}).click()
+ await page.evaluate(()=>{window.__verifyUnavailable=false;window.__verifyDelay=0})
+ const beforeManualStop=await page.evaluate(()=>window.__draftCommands.length)
+ await page.getByRole('button',{name:'再次创建本案草稿',exact:true}).click();await confirmRecreate()
+ await page.waitForFunction(n=>window.__draftCommands.slice(n).some(c=>c.op==='applicant'),beforeManualStop)
+ await page.getByRole('button',{name:'停止后续写入',exact:true}).click()
+ await page.locator('.hague-status').filter({hasText:'停止原因：用户停止后续处理。'}).waitFor({timeout:10000})
+ assert.match(await page.getByRole('dialog',{name:'草稿处理完成',exact:true}).innerText(),/停止原因：用户停止后续处理/)
+ await page.getByRole('button',{name:'我知道了',exact:true}).click()
+ await page.evaluate(()=>{window.__commandDelay=10})
  await page.evaluate(()=>{for(const key of Object.keys(window.__draftStorage))delete window.__draftStorage[key];window.__unsupportedApplicant=true})
  await page.getByLabel('选择海牙申请总文件夹').setInputFiles(fixture.root)
  await page.getByRole('dialog',{name:'导入海牙申请材料',exact:true}).getByRole('button',{name:'导入材料',exact:true}).click()
