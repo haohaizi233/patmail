@@ -32,9 +32,34 @@
 
 独立评审发现并修复了未调用函数、return后不可达语句、调用早于函数赋值、重复函数声明的执行提取风险；生成器和async包装也拒绝。静态AST元数据不能证明实际运行。移除了会造成浏览器`process is not defined`的Babel类型运行时依赖。深度命令不包含断点激活修改。
 
+## 本次源码与覆盖清单
+
+|范围|主要文件及变化|
+|---|---|
+|Trace与状态|新增`src/hague/diagnostics/{trace,store,errors,protocol,reports}.ts`、`schema.mjs`及声明；允许列表、层级状态、容量/时间限制和结构证据|
+|AST|新增`src/hague/diagnostics/ast/analyzer.mjs`及声明；修改`http-driver.ts`的jsfAction、RemoteCommand、上传及表格配置读取；每链WeakMap缓存避免反复解析未变化的脚本|
+|应用调用链|修改`draft-runner.ts`、`draft-contract.ts`、`http-context.ts`、`http-client.ts`及`background/hague-http.ts`、`background/hague-draft.ts`；可选Trace元数据及结构化异常保持旧调用兼容|
+|Observer|修改既有`scripts/cdp-observer{,-core}.mjs`；新增`hague-diagnostics.mjs`、`hague-diagnostics-bridge.mjs`及声明、`hague-diagnostics-export.mjs`；没有第二个守护进程|
+|指纹与离线|新增`diagnostics/{fingerprint,replay,fixtures}.ts`和`observer-adapter.mjs`及声明；HTML使用inert template内容，防止资源请求；不运行输入JS|
+|前端|新增`src/app/components/HagueDiagnostics.vue`；修改`HaguePage.vue`传递Trace和展示面板，保留原业务入口|
+|依赖|`package.json`、`pnpm-lock.yaml`加入Babel parser 7；没有Babel types运行时依赖|
+|测试|新增8个`tests/unit/hague/diagnostics-*.test.ts`、2个Observer/桥测试；扩展HTTP、Runner及既有Observer回归；新增诊断UI/真实隔离CDP E2E，旧导入E2E适配封装确认框|
+
+已有会话保活、历史草稿恢复等未提交改动保留；并未将其算作本次新增诊断实现。
+
+应用审计D表共7类盲区，其中6类增加了可测试的结构化证据渠道（RPC、JSF、DOM、实例/请求关联、动态协议拒绝、故障汇总）；第7类“真实生产页面版本”仍待经授权的现场采样。这是证据渠道覆盖数，**不是生产异常修复率或所有样本适配率**。
+
+HTTP实际值按100～599保留，无响应为null；测试矩阵覆盖302、400/401/403/404、429、500/502/503/504/524，另测200成功/校验失败、登录HTML200、Abort、超时及RPC失败。额外发现并修复RPC不响应时外层60秒Abort无法终止等待的问题：等待响应现在遵从所属Context的signal；超时保持uncertain，不代表撤销已送到服务器的请求，迟到回执不触发重发。
+
+JSF覆盖完整HTML、partial XML、redirect、多个update、ViewState、ViewRoot和DataTable行更新，分别识别parsererror/error/validationFailed/空响应/MIME错误/缺失目标。insert/delete明确unsupported停链。AST支持PrimeFaces.ab、mojarra.ab、jsf.ajax.request、mojarra.jsfcljs、可证明的RemoteCommand/包装与别名、Widget/FileUpload/DataTable；这是人工Fixture支持清单，不能写成实站均已观测。
+
+应用内case/step/request Trace精确关联；CDP网络按自身requestId和session/target/frame归并。跨系统唯一间接候选仅probable，六路同URL冲突ambiguous，先后顺序不满足或缺证据unmatched；这些请求仍不能可靠归属具体案件。旧调用方error字符串继续兼容；前置材料/检查点校验没有发出请求时，不补造网络事件。
+
+CDP能够记录安全路径、方法、真实状态、资源/MIME类别、耗时、字节数、重定向及失败类别，深度模式另加脚本摘要/AST位置。隔离Chrome已实际验证Debugger非暂停保护、scriptParsed/getScriptSource、静态提取、隐私和disable清理；所读为人工脚本，未读取真实WIPO源码。对应命令：`HAGUE_TEST_CHROME=... node tests/e2e/hague-diagnostics-cdp.e2e.mjs`。
+
 ## 性能实测
 
-本机Node v26.13.0 / win32，2026-11-13T13:16:45.303Z，合成10000事件：关闭采集0.303ms，开启采集101.978ms，增加约10.17µs/事件；AST单段首次3.91ms，缓存1000次4.30ms。原始结果为 `test-results/hague-diagnostics-perf.json`；复现命令 `pnpm exec vitest run tests/unit/hague/diagnostics-performance.test.ts`，每次机器负载不同，数值会变化。
+本机Node v26.13.0 / win32，2026-11-13T13:50:11.052Z，合成10000事件：关闭采集0.648ms，开启采集252.358ms，增加约25.17µs/事件；AST单段首次7.50ms，缓存1000次9.67ms。原始结果为 `test-results/hague-diagnostics-perf.json`；复现命令 `pnpm exec vitest run tests/unit/hague/diagnostics-performance.test.ts`，每次机器负载不同，数值会变化。
 
 Observer独立合成测量记录在 `test-results/hague-observer-perf.json`。以上是采集器与AST的局部测量，**不是实际WIPO业务总耗时或Vue完整渲染开销**。初始预算为应用事件5000条/4MB/24小时，AST源码大小/节点/深度/时间及解码层数有界、按需解析与缓存；源码解析器同步调用无法在中途抢占，仍有最大输入限制。生产六路长批次的端到端开销尚未测量。
 
@@ -66,7 +91,7 @@ node tests/e2e/hague-draft-ui.e2e.mjs
 
 ## 最终检查结果（2026-11-13）
 
-- 全量 `pnpm test`：257文件、1702测试通过，退出码0。
+- 全量 `pnpm test`：257文件、1704测试通过，退出码0。
 - 新增诊断核心、HTTP/RPC、Runner、AST、桥接脚本及相关测试的定向ESLint：退出码0。全仓库`pnpm lint`存量基线门禁通过，仍有既有Lint债务。
 - 隔离Chrome诊断面板（包含固定CDP事件接收）、导出/回放/隐私、1440/860视口通过；外网请求0。草稿UI既有Page路径回归也通过；材料导入/预览/独立滚动Fixture通过。旧导入E2E补充点击已封装的材料确认弹窗，避免停在确认处误判超时。
 - 独立代码审查通过；曾发现的AST控制流/绑定问题已有反例测试，固定CDP→UI桥完成独立安全审查。
