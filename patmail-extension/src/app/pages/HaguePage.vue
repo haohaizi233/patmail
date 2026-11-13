@@ -24,6 +24,8 @@ import { downloadDocuments } from '../../utils/download-documents'
 import type { DraftCheckpoint,DraftCommand } from '../../hague/draft-contract'
 import { repairRepeatedDesignNumbers,withDraftCorrections } from '../../hague/draft-repairs'
 import { showDraftCompletion,draftReviewNotes } from '../../hague/draft-completion'
+import ThemeSelect from '../../shell/components/ThemeSelect.vue'
+import { readDroppedFolders } from '../../hague/dropped-folders'
 
 const props = withDefaults(defineProps<{ embedded?: boolean; isActive?: boolean }>(), { isActive: true })
 function repairDesignNumbers(row:Row):void {
@@ -77,6 +79,9 @@ const draftBatch = ref<DraftBatchProgress>({done:0,total:0,settled:0,cases:0,suc
 const draftConcurrency = ref(6)
 const draftTransport = ref<'http'|'page'>('http')
 const draftExportFormat = ref<'pdf'|'zip'>('pdf')
+const draftExportOptions: { value: 'pdf'|'zip'; label: string }[] = [{ value: 'pdf', label: '单个 PDF' }, { value: 'zip', label: '流式 ZIP' }]
+const draftTransportOptions: { value: 'http'|'page'; label: string }[] = [{ value: 'http', label: '接口链' }, { value: 'page', label: '页面填写' }]
+const draftConcurrencyOptions = [1, 2, 3, 4, 5, 6].map(n => ({ value: n, label: `${n} 路${n === 1 ? '（串行）' : ''}` }))
 const draftErrors = ref<Record<string,string>>({})
 const draftSkipped = ref<Record<string,boolean>>({})
 const draftActive = ref(new Set<string>())
@@ -158,15 +163,53 @@ function preview(file: File): string { if (!urls.has(file)) urls.set(file, URL.c
 function cleanup(): void { previewIndex.value = null; urls.forEach(url => URL.revokeObjectURL(url)); urls.clear() }
 onBeforeUnmount(() => { if (busy.value) requestStop(); window.clearInterval(tick); cleanup() })
 function issues(row: Row): string[] { return [...row.folder.issues, ...(row.filing?.issues ?? []), ...(row.filing ? validateImages(row.filing, row.folder.images) : [])] }
-async function upload(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement
-  const files = [...(input.files ?? [])]; input.value = ''
+async function importFiles(files: File[]): Promise<void> {
   if (!files.length || busy.value) return
   cleanup(); selected.value = 0; notice.value = ''; progress.value = null
   rows.value = discoverCases(files).map(folder => ({ folder, state: 'parsing', error: '', confirmed: false }))
   await Promise.all(rows.value.map(loadDraft))
   if (!rows.value.length) { notice.value = '没有发现案件文件夹，请选择包含定稿 Word 和编号图片的目录。'; return }
   await process(rows.value, false, true)
+}
+async function upload(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const files = [...(input.files ?? [])]; input.value = ''
+  await importFiles(files)
+}
+// 整页都是放置区：拖到空白处也不会让浏览器直接打开文件夹。
+const dragging = ref(false)
+function isFileDrag(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+}
+function onDragEnter(event: DragEvent): void {
+  if (busy.value || !isFileDrag(event)) return
+  dragging.value = true
+}
+function onDragOver(event: DragEvent): void {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = busy.value ? 'none' : 'copy'
+  if (!busy.value) dragging.value = true
+}
+function onDragLeave(event: DragEvent): void {
+  const zone = event.currentTarget as HTMLElement | null
+  const next = event.relatedTarget as Node | null
+  if (zone && next && zone.contains(next)) return
+  dragging.value = false
+}
+async function onDrop(event: DragEvent): Promise<void> {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  dragging.value = false
+  if (busy.value || !event.dataTransfer) return
+  try {
+    // readDroppedFolders 内部先同步取完 DataTransfer.items，必须在 drop 处理器里直接调用。
+    const files = await readDroppedFolders(event.dataTransfer)
+    if (!files.length) { notice.value = '请拖入总文件夹（里面可以嵌套多个案件文件夹）。'; return }
+    await importFiles(files)
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : '读取拖入的文件夹失败，请改用「选择总文件夹」。'
+  }
 }
 function requestStop(): void {
   stopping.value = true; controller?.abort()
@@ -232,7 +275,7 @@ function exportData(): void {
 </script>
 
 <template>
-  <section class="hague-page">
+  <section class="hague-page" :class="{ 'is-dragging': dragging }" @dragenter="onDragEnter" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
     <PageHead v-if="!embedded" title="海牙新申请" desc="选择总文件夹核对材料与信息，默认 6 路填写草稿并导出 Summary。" :art="bg('让重复工作变简单.png')">
       <div id="hague-standalone-head-extra" class="workflow-head-extra" />
     </PageHead>
@@ -251,9 +294,9 @@ function exportData(): void {
         <button type="button" class="solid" :disabled="busy || !pendingRows.length || !oa.verified.value" @click="process(pendingRows)">{{ progress?.phase === 'stopped' ? '继续处理剩余案件' : '读取知易通并批量仲裁' }}</button>
         <button type="button" class="ghost" v-if="busy && progress" :disabled="stopping" @click="requestStop">{{ stopping ? '正在停止…' : '停止后续处理' }}</button>
         <button type="button" class="ghost" :disabled="busy || !rows.length" @click="exportData">导出核对结果</button>
-        <label v-if="draftTransport === 'http'">导出格式 <select v-model="draftExportFormat" :disabled="busy" aria-label="草稿导出格式"><option value="pdf">单个 PDF</option><option value="zip">流式 ZIP</option></select></label>
-        <label>填写方式 <select v-model="draftTransport" :disabled="busy" aria-label="草稿填写方式"><option value="http">接口链</option><option value="page">页面填写</option></select></label>
-        <label>草稿并发 <select v-model.number="draftConcurrency" :disabled="busy" aria-label="草稿并发路数"><option v-for="n in 6" :key="n" :value="n">{{ n }} 路{{ n === 1 ? '（串行）' : '' }}</option></select></label>
+        <label v-if="draftTransport === 'http'">导出格式 <ThemeSelect v-model="draftExportFormat" :options="draftExportOptions" :disabled="busy" aria-label="草稿导出格式" /></label>
+        <label>填写方式 <ThemeSelect v-model="draftTransport" :options="draftTransportOptions" :disabled="busy" aria-label="草稿填写方式" /></label>
+        <label>草稿并发 <ThemeSelect v-model="draftConcurrency" :options="draftConcurrencyOptions" :disabled="busy" aria-label="草稿并发路数" /></label>
         <button type="button" class="solid" :disabled="busy || !oa.verified.value || !rows.some(r => r.decision && r.draft?.status !== 'saved')" @click="createDrafts(rows.filter(r => r.draft?.status !== 'saved'), true)">批量填写并存草稿</button>
         <button type="button" class="ghost" :disabled="busy || !oa.verified.value || !rows.some(r => r.draft?.status === 'saved' && r.draft.reference)" @click="exportDraftZip">已存草稿打包 ZIP</button>
         <button type="button" v-if="draftRunning" class="ghost" :disabled="stopping" @click="requestStop">{{ stopping ? '等待本步回执…' : '停止后续写入' }}</button>
@@ -261,8 +304,9 @@ function exportData(): void {
       <p class="hint">默认 6 路并发，可按需调整为 1–6 路。{{ draftTransport === 'http' ? '每案按顺序填写；遇到异常先核对回执，无法确认时暂停该案。' : '批量填写时每路使用独立标签页，异常页保留供核对。' }}</p>
       <p v-if="busy && progress" class="hint hague-progress-hint">待解析 {{ progress.parsing || 0 }} · 取数 {{ progress.reading || 0 }} · 等待仲裁 {{ progress.queued || 0 }} · 仲裁中案件 {{ progress.arbitrating || 0 }} · 助手批次并发 1</p>
     </section>
-    <div v-if="!rows.length && !busy" class="card tone-pink hague-empty">
-      <Bunny /><div><h2>先把案件材料放进来吧</h2><p class="hint">一个总文件夹就好，里面可以嵌套多个案件文件夹。</p><p class="hint">每案准备一份定稿 Word，以及 1.1、1.2 这样的编号图片。</p></div>
+    <div v-if="!rows.length && !busy" class="card tone-pink hague-empty" role="region" aria-label="案件材料拖放区">
+      <Bunny /><div><h2>先把案件材料放进来吧</h2><p class="hint">一个总文件夹就好，里面可以嵌套多个案件文件夹。</p><p class="hint">每案准备一份定稿 Word，以及 1.1、1.2 这样的编号图片。</p>
+        <p class="hint hague-drop-hint">{{ dragging ? '松手即可导入这个文件夹' : '也可以把总文件夹直接拖到这里' }}</p></div>
     </div>
     <SplitScrollPane v-if="rows.length" class="hague-workbench" sidebar-label="案件列表滚动区域" detail-label="案件详情滚动区域" :detail-key="active?.folder.path">
       <template #sidebar><nav class="card hague-cases" aria-label="案件列表"><button v-for="(row, i) in rows" :key="row.folder.path" class="ghost hague-case" :class="{ current: selected === i }" :aria-pressed="selected === i" @click="selected = i"><b>{{ row.folder.caseVolume || '未识别案号' }}</b><small>{{ row.folder.path }}</small><span>{{ rowStatus(row) }} · {{ issues(row).length }} 项材料问题</span></button></nav></template>
@@ -321,11 +365,18 @@ function exportData(): void {
 .hague-prepare { min-width: 0; margin-bottom: 14px; }
 .hague-prepare .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .hague-prepare .card-head h2 { margin: 0; font-size: 15px; }
+/* 工具栏里的三个下拉：全局 label > .theme-select 会拉满宽度，这里收回成内容宽度并压到与按钮同高。 */
+.hague-prepare .toolbar > label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.hague-prepare .toolbar > label > .theme-select { width: auto; }
+.hague-prepare .toolbar :deep(.theme-select-trigger) { min-width: 116px; height: 32px; font-size: 13px; }
 .hague-prepare .hague-status { margin: 0; font-size: 12px; color: var(--sub); text-align: right; }
 .hague-progress-hint { margin: 8px 0 0; font-size: 12px; color: var(--sub); }
 .hague-empty { display: flex; align-items: center; justify-content: center; gap: 20px; padding: 32px 20px; }
 .hague-empty :deep(.bunny) { flex: none; width: 86px; height: 86px; object-fit: contain; }
 .hague-empty h2 { margin: 0 0 12px; font-size: 16px; }
+.hague-drop-hint { margin: 10px 0 0; font-weight: 700; color: var(--pink, #c45b86); }
+.hague-page.is-dragging .hague-empty { outline: 2px dashed var(--pink, #ff4f93); outline-offset: -8px; }
+.hague-page.is-dragging .hague-prepare { outline: 2px dashed var(--pink, #ff4f93); outline-offset: -6px; }
 
 .hague-cases { display: grid; gap: 8px; padding: 10px; }
 .hague-case { display: grid; gap: 7px; height: auto; padding: 12px; text-align: left; white-space: normal; overflow-wrap: anywhere; }

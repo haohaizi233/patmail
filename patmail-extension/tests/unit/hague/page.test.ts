@@ -4,9 +4,11 @@ import HaguePage from '../../../src/app/pages/HaguePage.vue'
 import CheckRainbow from '../../../src/app/components/CheckRainbow.vue'
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), complete: vi.fn() }))
+const dropped = vi.hoisted(() => ({ read: vi.fn() }))
 vi.mock('../../../src/shell/components/Bunny.vue', () => ({ default: { render: () => null } }))
 vi.mock('../../../src/shell/components/PageHead.vue', () => ({ default: { render: () => null } }))
 vi.mock('../../../src/app/services/full-page-bridge', () => ({ createFullPageBridge: () => ({ request: mocks.read }) }))
+vi.mock('../../../src/hague/dropped-folders', () => ({ readDroppedFolders: dropped.read }))
 vi.mock('../../../src/app/assistant-job', () => ({ requestAssistantJob: mocks.complete }))
 vi.mock('../../../src/hague/session', () => ({ hagueSessionClient: {
   listTabs: async () => [{ id: 1, title: 'WIPO' }],
@@ -26,11 +28,28 @@ it('automatically reads and arbitrates uploads, displays six parties and separat
   const root = document.createElement('div'), app = createApp({ render: () => h('div', [h('header', { class: 'test-top-actions' }, [h(CheckRainbow)]), h(HaguePage, { embedded: true })]) })
   app.mount(root)
   try {
-    const concurrency=root.querySelector<HTMLSelectElement>('[aria-label="草稿并发路数"]')!
-    expect(concurrency.value).toBe('6')
-    expect([...concurrency.options].map(o=>o.value)).toEqual(['1','2','3','4','5','6'])
-    expect(root.querySelector<HTMLSelectElement>('[aria-label="草稿填写方式"]')?.selectedOptions[0].textContent).toBe('接口链')
+    const concurrency=root.querySelector<HTMLButtonElement>('[aria-label="草稿并发路数"]')!
+    expect(concurrency.textContent?.trim()).toBe('6 路')
+    concurrency.click()
+    await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"]')].map(o => o.textContent?.trim())).toEqual(['1 路（串行）', '2 路', '3 路', '4 路', '5 路', '6 路']))
+    concurrency.click()
+    expect(root.querySelector<HTMLButtonElement>('[aria-label="草稿填写方式"]')?.textContent?.trim()).toBe('接口链')
     expect(root.textContent).not.toContain('试运行')
+    // 拖放区：高亮反馈、空文件夹提示，以及 drop 后把状态复位。
+    const zone = root.querySelector<HTMLElement>('.hague-page')!
+    const dragEvent = (type: string): Event => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'], items: [], dropEffect: 'none' } })
+      return event
+    }
+    zone.dispatchEvent(dragEvent('dragenter'))
+    zone.dispatchEvent(dragEvent('dragover'))
+    await vi.waitFor(() => expect(zone.classList.contains('is-dragging')).toBe(true))
+    expect(root.textContent).toContain('松手即可导入这个文件夹')
+    dropped.read.mockResolvedValue([])
+    zone.dispatchEvent(dragEvent('drop'))
+    await vi.waitFor(() => expect(root.textContent).toContain('请拖入总文件夹'))
+    expect(zone.classList.contains('is-dragging')).toBe(false)
     const files = ['root/PO1HAGUE/form.docx', 'root/PO1HAGUE/1.1.jpg'].map(path => Object.assign(new File([''], path.split('/').pop()!), { webkitRelativePath: path }))
     const input = root.querySelector<HTMLInputElement>('input[type=file]')!
     Object.defineProperty(input, 'files', { value: files })
