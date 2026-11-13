@@ -5,7 +5,7 @@ const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['E
 it('stops on an uncertain write, preserving the WIPO reference and never retrying or printing',async()=>{
  const call=vi.fn(async(c:{op:string})=>{if(c.op==='inspect')return {ok:true,page:'application' as const,reference:'123',documentId:'doc'};throw new Error('network lost')})
  const save=vi.fn(async(_value:unknown)=>{})
- await expect(runDraftPlan(plan,7,{call,save},undefined,{tabId:7,reference:'123',documentId:'doc',next:2,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toThrow('network lost')
+ await expect(runDraftPlan(plan,7,{call,save},undefined,{tabId:7,reference:'123',documentId:'doc',next:2,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toMatchObject({diagnostic:{errorCode:'BUSINESS_UNCONFIRMED',httpStatus:null}})
  expect(call.mock.calls.filter(([c])=>c.op!=='inspect')).toHaveLength(1)
  expect(save.mock.calls.at(-1)?.[0]).toMatchObject({reference:'123',next:2,status:'uncertain'})
 })
@@ -40,6 +40,6 @@ it('recovers a completed final save using the exact draft-list receipt without a
 })
 it('resumes a confirmed running boundary at its recorded next step without skipping it',async()=>{
  const call=vi.fn(async(c:{op:string})=>{if(c.op==='inspect')return {ok:true,page:'application' as const,reference:'123',documentId:'doc'};throw new Error('stop at first write')})
- await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'running',stage:'创建新草稿'})).rejects.toThrow('stop at first write')
+ await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'running',stage:'创建新草稿'})).rejects.toMatchObject({diagnostic:{errorCode:'BUSINESS_UNCONFIRMED',httpStatus:null}})
  expect(call.mock.calls[1]?.[0].op).toBe(draftSteps(plan)[2].command.op)
 })

@@ -1,3 +1,6 @@
+import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
+import type {TraceContext,DiagnosticErrorData} from './diagnostics/trace'
+import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
 import { PermitPool } from '../utils/permit-pool'
 import { downloadDocuments } from '../utils/download-documents'
 import type { DocumentExportFormat } from '../utils/document-export'
@@ -11,16 +14,16 @@ import { HAGUE_HTTP_CHANNEL,type HttpRequest } from '../background/hague-http'
 
 const base64=(bytes:Uint8Array)=>{let s='';for(let i=0;i<bytes.length;i+=32768)s+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(s)}
 export function hagueHttpFetch(tabId:number):HagueFetch {
- return async(url,init)=>{
-  const request:HttpRequest={url,method:init?.method==='POST'?'POST':'GET'}
+ return async(url,init,trace,requestId)=>{
+  const request:HttpRequest={url,method:init?.method==='POST'?'POST':'GET',diagnosticsEnabled:isDiagnosticModeEnabled(),...(trace?{trace}:{}),...(requestId?{requestId}:{})}
   if(init?.headers)request.headers=Object.fromEntries(new Headers(init.headers))
   if(init?.body instanceof FormData){
    request.params=[]
    for(const[k,v]of init.body){if(typeof v==='string')request.params.push([k,v]);else request.file={field:k,name:v.name,mime:v.type,base64:base64(new Uint8Array(await v.arrayBuffer()))}}
   }else if(typeof init?.body==='string'||init?.body instanceof URLSearchParams)request.params=[...new URLSearchParams(init.body)]
   else if(init?.body)throw new Error('接口请求正文格式不支持。')
-  const reply=await chrome.runtime.sendMessage<unknown,{ok:boolean;error?:string;status:number;url:string;mime:string;base64:string}>({channel:HAGUE_HTTP_CHANNEL,tabId,request})
-  if(!reply?.ok)throw new Error(reply?.error??'接口未返回，结果待核对。')
+  const reply=await chrome.runtime.sendMessage<unknown,{ok:boolean;error?:string;diagnosticError?:DiagnosticErrorData;status:number;url:string;mime:string;base64:string}>({channel:HAGUE_HTTP_CHANNEL,tabId,request}).catch((error:unknown)=>{throw normalizeDiagnosticError(error,{errorCode:'RPC_FAILED',errorStage:'rpc',httpStatus:null,transportStatus:'rpc_error'},trace)})
+  if(!reply?.ok)throw reply?.diagnosticError?new HagueDiagnosticError({...reply.diagnosticError,traceId:trace?.traceId}):new HagueDiagnosticError({errorCode:'RPC_FAILED',errorStage:'rpc',transportStatus:'rpc_error',httpStatus:null,traceId:trace?.traceId})
   const response=new Response(Uint8Array.from(atob(reply.base64),c=>c.charCodeAt(0)),{status:reply.status,headers:{'content-type':reply.mime}})
   Object.defineProperty(response,'url',{value:reply.url});return response
  }
@@ -38,12 +41,14 @@ export function httpRestoreCommands(plan:DraftPlan,next:number):DraftCommand[]{
 const creationPool=new PermitPool(1)
 export function createHttpChain(tabId:number,id:string,reference?:string,restore:DraftCommand[]=[],exportFormat:DocumentExportFormat='pdf',signal?:AbortSignal){
  const fetcher=hagueHttpFetch(tabId),driver=new HagueHttpDriver(id,fetcher);let ready=false
- const recover=async(command:DraftCommand,checkpoint:DraftCheckpoint):Promise<DraftRecovery>=>{
+ const recover=async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>=>{
+  driver.state.setTrace(trace)
   const result=await driver.recoverStep(command,checkpoint)
   if(result.outcome!=='unknown')ready=true
   return {...result,receipt:result.receipt?{...result.receipt,documentId:id}:undefined}
  }
- const call=async(command:DraftCommand):Promise<DraftReceipt>=>{
+ const call=async(command:DraftCommand,trace?:TraceContext):Promise<DraftReceipt>=>{
+  driver.state.setTrace(trace)
   try{
    // New-case preflight does not mutate a shared server New view outside the allocation slot.
    // Login has been verified by the workspace; the actual GET and prepare run together with create.
@@ -61,7 +66,7 @@ export function createHttpChain(tabId:number,id:string,reference?:string,restore
    }
    if(command.op==='print'){
     const pdf=await renderSummary(driver,fetcher,command.caseVolume)
-    const exported=await downloadDocuments(exportFormat,[{name:pdf.name,open:async()=>pdf.bytes}],pdf.name.replace(/\.pdf$/i,'.'+exportFormat))
+    const exported=await downloadDocuments(exportFormat,[{name:pdf.name,open:()=>Promise.resolve(pdf.bytes)}],pdf.name.replace(/\.pdf$/i,'.'+exportFormat))
     return{ok:true,page:'summary',reference:driver.state.reference,documentId:id,downloadId:exported.downloadId}
    }
    const result=await driver.call(command,driver.state.reference??reference)
@@ -72,13 +77,22 @@ export function createHttpChain(tabId:number,id:string,reference?:string,restore
     await driver.resume(driver.state.reference!)
     return await driver.call({op:'inspect'},driver.state.reference)
    }
-   return result
-  }catch(e){return{ok:false,reference:driver.state.reference,documentId:id,error:e instanceof Error?e.message:'接口链失败，结果待核对。'}}
+   return !result.ok&&!result.diagnosticError?{...result,diagnosticError:normalizeDiagnosticError(new Error(),{...driver.state.diagnosticState(),errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace).diagnostic}:result
+  }catch(e){const failure=normalizeDiagnosticError(e,{...driver.state.diagnosticState(),errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace);return{ok:false,reference:driver.state.reference,documentId:id,error:e instanceof Error?e.message:failure.message,diagnosticError:failure.diagnostic}}
  }
- return{driver,recover,call:(command:DraftCommand)=>command.op==='create'?creationPool.run(()=>call(command),signal):call(command)}
+ return{driver,recover,call:(command:DraftCommand,trace?:TraceContext)=>(command.op==='create'?creationPool.run(()=>call(command,trace),signal):call(command,trace)).then(result=>({...result,diagnosticState:driver.state.diagnosticState()}))}
 }
 
-async function renderSummary(driver:HagueHttpDriver,fetcher:HagueFetch,caseVolume:string){
+async function renderSummary(driver:HagueHttpDriver,transport:HagueFetch,caseVolume:string){
+    const fetcher:HagueFetch=async(url,init)=>{
+     const trace=driver.state.trace,requestId='req-'+crypto.randomUUID(),started=performance.now()
+     emitTrace(trace,'request.prepared',{requestId,httpMethod:'GET',urlPath:url})
+     emitTrace(trace,'request.dispatched',{requestId,httpMethod:'GET',urlPath:url,httpStatus:null,transportStatus:'dispatched',businessStatus:'unknown'})
+     const response=await transport(url,init,trace,requestId)
+     emitTrace(trace,'http.response',{requestId,httpMethod:'GET',urlPath:url,httpStatus:response.status,transportStatus:'completed',businessStatus:'unknown',durationMs:performance.now()-started})
+     if(!response.ok)throw new HagueDiagnosticError({errorCode:`HTTP_${response.status}`,errorStage:'http',httpStatus:response.status,traceId:trace?.traceId})
+     return response
+    }
     if(!driver.state.reference||!driver.state.location.pathname.endsWith('/summary.xhtml'))throw new Error('未确认本链 Summary 页面。')
     const doc=new DOMParser().parseFromString(driver.state.document.documentElement.outerHTML,'text/html')
     for(const node of doc.querySelectorAll('script,iframe,object,embed,base'))node.remove()

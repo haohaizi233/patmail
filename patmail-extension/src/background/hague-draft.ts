@@ -1,3 +1,5 @@
+import {normalizeDiagnosticError} from '../hague/diagnostics/errors'
+import type {TraceContext} from '../hague/diagnostics/trace'
 import { HAGUE_DRAFT_CHANNEL, type DraftCommand, type DraftReceipt } from '../hague/draft-contract'
 import { executeDraftPage } from '../hague/draft-page'
 import { printHagueSummary } from './hague-pdf'
@@ -48,7 +50,7 @@ export function createHagueDraftHandler(host:Host) {
    const result=await host.run(tabId,documentId,message.command,typeof message.reference==='string'?message.reference:undefined)
    if(!record(result.result)||typeof result.result.ok!=='boolean')throw new Error('原站没有返回操作回执；请检查草稿，勿重试当前写入。')
    return {...result.result,documentId:result.documentId??documentId} as DraftReceipt
-  } catch(error){return {ok:false,error:error instanceof Error?error.message:'草稿操作结果不确定，请检查原站。'}}
+  } catch(error){const trace=record(message)&&record(message.trace)?message.trace as unknown as TraceContext:undefined;return {ok:false,error:error instanceof Error?error.message:'草稿操作结果不确定，请检查原站。',diagnosticError:normalizeDiagnosticError(error,{errorCode:'RPC_FAILED',errorStage:'rpc',transportStatus:'rpc_error',httpStatus:null},trace).diagnostic}}
   finally{if(locked&&tabId!==undefined)active.delete(tabId)}
  }
 }

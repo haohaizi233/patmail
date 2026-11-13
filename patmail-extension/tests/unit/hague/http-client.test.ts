@@ -3,12 +3,12 @@ const calls=vi.hoisted(()=>[] as string[])
 const control=vi.hoisted(()=>({resume:null as Promise<void>|null, requireFresh:false, latestPrepared:''}))
 vi.mock('../../../src/hague/http-driver',()=>({HagueHttpDriver:class{
  constructor(private id:string){}
- state={reference:undefined as string|undefined,location:{pathname:'/portfolioManager.xhtml'}}
+ state={document:new DOMParser().parseFromString('<html><head><link rel="stylesheet" href="https://hague.wipo.int/HagueEFilingWeb/javax.faces.resource/main.css"></head><body></body></html>','text/html'),url:'https://hague.wipo.int/HagueEFilingWeb/protected/page/summary.xhtml',setTrace:vi.fn(),diagnosticState:()=>({httpStatus:200,protocolStatus:'valid'}),reference:undefined as string|undefined,location:{pathname:'/portfolioManager.xhtml'}}
  initialize(){calls.push('initialize');return Promise.resolve()}
  async resume(ref:string){calls.push(`resume:${ref}`);this.state.reference=ref;this.state.location.pathname='/application.xhtml';await control.resume}
  call(command:{op:string}){calls.push(command.op);if(command.op==='prepare')control.latestPrepared=this.id;if(command.op==='create'&&control.requireFresh&&control.latestPrepared!==this.id)throw new Error('stale prepared view');if(command.op==='create'){this.state.reference='123';this.state.location.pathname='/application.xhtml'}if(command.op==='saveDraft')this.state.location.pathname='/portfolioManager.xhtml';if(command.op==='summary')this.state.location.pathname='/summary.xhtml';return Promise.resolve({ok:true,reference:this.state.reference,page:this.state.location.pathname.includes('summary')?'summary':this.state.location.pathname.includes('portfolio')?'portfolio':'application',draftSaved:command.op==='saveDraft'})}
 }}))
-import {createHttpChain} from '../../../src/hague/http-client'
+import {createHttpChain,renderSavedSummary} from '../../../src/hague/http-client'
 beforeEach(()=>{calls.length=0;control.resume=null;control.requireFresh=false;control.latestPrepared=''})
 it('saves and reopens a newly allocated draft before accepting creation as complete',async()=>{
  const chain=createHttpChain(7,'a')
@@ -65,4 +65,13 @@ it('defers all new-form navigation and preparation until the creation slot is ow
  expect(calls).toEqual([])
  expect(await chain.call({op:'create'})).toMatchObject({ok:true})
  expect(calls).toEqual(['initialize','prepare','create','saveDraft','resume:123','inspect'])
+})
+
+it('preserves Summary stylesheet HTTP failures and does not print an error page',async()=>{
+ const sendMessage=vi.fn(()=>Promise.resolve({ok:true,status:503,url:'https://hague.wipo.int/HagueEFilingWeb/javax.faces.resource/main.css',mime:'text/plain',base64:btoa('unavailable')}))
+ vi.stubGlobal('chrome',{runtime:{sendMessage}})
+ try{
+  await expect(renderSavedSummary(7,'PO1HAGUE','123')).rejects.toMatchObject({diagnostic:{errorCode:'HTTP_503',httpStatus:503}})
+  expect(sendMessage).toHaveBeenCalledOnce()
+ }finally{vi.unstubAllGlobals()}
 })

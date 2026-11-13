@@ -48,7 +48,7 @@ it('reinjects the owning ViewState after JSF replaces a form without its hidden 
 it('poisons a chain after an uncertain request, rejects foreign navigation and forbids a changed WIPO reference',async()=>{
  let calls=0;const a=new HagueHttpContext('a',async()=>{calls++;throw new Error('network lost')})
  a.load(html('A','111'),'/HagueEFilingWeb/protected/page/application.xhtml')
- await expect(a.post({source:'form:save'})).rejects.toThrow('network lost')
+ await expect(a.post({source:'form:save'})).rejects.toMatchObject({diagnostic:{errorCode:'NETWORK_FAILED',httpStatus:null}})
  await expect(a.post({source:'form:save'})).rejects.toThrow(/待核对/);expect(calls).toBe(1)
  expect(()=>a.load(html('B','222'),'/HagueEFilingWeb/protected/page/application.xhtml')).toThrow(/reference/)
  const b=new HagueHttpContext('b',async()=>response(''))
