@@ -14,8 +14,8 @@ runs:
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
       with:
         node-version: 22
-        cache: pnpm
-        cache-dependency-path: patmail-extension/pnpm-lock.yaml
+      # self-hosted runner 上 pnpm store 的 tar 缓存恢复曾写出损坏内容
+      # （bsdtar 报错延迟退出 → node_modules 缺包），改为每 job 全新安装。
     - name: 安装依赖（禁止改写锁文件）
       shell: bash
       working-directory: patmail-extension
