@@ -108,10 +108,17 @@ export async function runWorkspaceFlow(ctx) {
     await app.getByText('通知书-1.pdf').waitFor()
     await app.getByRole('button', { name: '系统设置' }).click()
     const writeSwitch = app.getByRole('checkbox', { name: '写开关' })
+    // 设置页 mount 后才异步读取写开关：hydrate 完成前 checkbox 是 disabled 且呈现关闭态。
+    // 前端打包时序变化（例如 mermaid 12 让首屏更慢）会让断言读到这个中间态，先等就绪。
+    await waitForPageCondition(app, () => {
+      const label = [...document.querySelectorAll('label')].find(item => item.textContent?.includes('写开关'))
+      const box = label?.querySelector('input[type="checkbox"]')
+      return Boolean(box && !box.disabled)
+    })
     assert.equal(await writeSwitch.isChecked(), true)
     await writeSwitch.uncheck()
-    assert.equal(await writeSwitch.isChecked(), false)
     await app.getByText('已关闭。不会写回查询模板，也不会创建邮件、保存草稿或提交流程。', { exact: true }).waitFor()
+    assert.equal(await writeSwitch.isChecked(), false)
     await easyPage.close()
     workspace = app
   })
