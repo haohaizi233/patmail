@@ -51,7 +51,19 @@ describe('safe diagnostic reports and offline replay', () => {
 
 
 
-it('resolves transient unknown states only with a later proven terminal event on the same trace',()=>{
- expect(buildDiagnosticReport([event({phase:'request.dispatched',businessStatus:'unknown'}),event({phase:'step.completed',businessStatus:'completed'})]).summary.hasUncertainty).toBe(false)
+it('resolves transient unknown states only with a later authoritative receipt on the same trace',()=>{
+ expect(buildDiagnosticReport([event({phase:'request.dispatched',businessStatus:'unknown'}),event({phase:'step.completed',businessStatus:'completed'})]).summary.hasUncertainty).toBe(true)
+ expect(buildDiagnosticReport([event({phase:'request.dispatched',businessStatus:'unknown'}),event({phase:'business.validated',businessStatus:'confirmed',evidenceCodes:['BUSINESS_RECEIPT_VERIFIED']})]).summary.hasUncertainty).toBe(false)
  expect(buildDiagnosticReport([event({phase:'step.uncertain',businessStatus:'unknown'}),event({phase:'step.completed',traceId:'trace-other',businessStatus:'completed'})]).summary.hasUncertainty).toBe(true)
+})
+
+it('exports independent layers and deterministic explanations without elevating legacy success',()=>{
+ const legacy=event({phase:'step.completed',businessStatus:'completed'})
+ expect(buildDiagnosticReport([legacy]).summary.confirmedSuccess).toBe(false)
+ const verified=event({phase:'business.validated',businessStatus:'confirmed',evidenceCodes:['BUSINESS_RECEIPT_VERIFIED']})
+ expect(buildDiagnosticReport([verified]).summary.confirmedSuccess).toBe(true)
+ const json=JSON.parse(exportDiagnostics([legacy],'json')) as ReturnType<typeof buildDiagnosticReport>
+ expect(json.evidence[0].layers.BUSINESS).toBe('unconfirmed')
+ expect(exportDiagnostics([legacy],'markdown')).toContain('权威业务回执证据缺失')
+ expect((JSON.parse(exportDiagnostics([legacy],'jsonl')) as {phase:string}).phase).toBe('step.completed')
 })

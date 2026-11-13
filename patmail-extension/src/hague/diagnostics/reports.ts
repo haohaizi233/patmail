@@ -1,5 +1,16 @@
 import { sanitizeTraceEvent } from './schema.mjs'
 import type { TraceEvent } from './trace'
+import { analyzeEvidence } from './evidence/evidence-model.mjs'
+
+export function groupDiagnosticRequests(events: readonly TraceEvent[]) {
+  const groups = new Map<string, {id:string;events:TraceEvent[]}>()
+  for (const event of events) {
+    const id = JSON.stringify([event.sessionId, event.targetId, event.frameId, event.traceId, event.caseRunId, event.stepIndex, event.requestId ?? event.applicationRequestId, event.cdpRequestId])
+    const group = groups.get(id) ?? { id, events: [] }
+    group.events.push(event); groups.set(id, group)
+  }
+  return [...groups.values()]
+}
 
 export function safeDiagnosticEvents(input: readonly unknown[]): TraceEvent[] {
   return input.slice(0, 5000).flatMap(raw => {
@@ -11,30 +22,40 @@ export function safeDiagnosticEvents(input: readonly unknown[]): TraceEvent[] {
 export function buildDiagnosticReport(input: readonly unknown[]) {
   const events = safeDiagnosticEvents(input)
   const cases = [...new Set(events.flatMap(e => e.caseRunId ? [e.caseRunId] : []))]
-  const alias = (event: TraceEvent) => event.caseRunId ? `案件 ${cases.indexOf(event.caseRunId) + 1}` : '未归属'
+  const aliases = new Map(cases.map((id,index)=>[id,`案件 ${index+1}`]))
+  const alias = (event: TraceEvent) => event.caseRunId ? aliases.get(event.caseRunId)! : '未归属'
+  const grouped = new Map<string,Map<string,{stepIndex:number|undefined;events:TraceEvent[]}>>()
+  for (const event of events) if(event.caseRunId) {
+    const steps=grouped.get(event.caseRunId)??new Map<string,{stepIndex:number|undefined;events:TraceEvent[]}>()
+    const key=JSON.stringify([event.traceId,event.stepIndex])
+    const step=steps.get(key)??{stepIndex:event.stepIndex,events:[]}
+    step.events.push(event);steps.set(key,step);grouped.set(event.caseRunId,steps)
+  }
+  const evidence = groupDiagnosticRequests(events).map(group=>({id:group.id,...analyzeEvidence(group.events)}))
+  const authoritative = (event:TraceEvent)=>event.source==='application' && event.phase==='business.validated' && ['confirmed','completed'].includes(event.businessStatus??'') && event.evidenceCodes?.some(code=>['BUSINESS_RECEIPT_VERIFIED','DRAFT_LIST_MATCHED'].includes(code))
   const failure = events.find(e => e.businessStatus === 'rejected' || (e.httpStatus != null && e.httpStatus >= 400) || ['network_error', 'rpc_error', 'timeout', 'aborted'].includes(e.transportStatus ?? '') || ['invalid_xml', 'invalid_mime', 'empty', 'jsf_error', 'jsf_validation_failed', 'unsupported'].includes(e.protocolStatus ?? ''))
   const uncertain = events.filter(e => e.certainty === 'unknown' || ['unknown', 'unconfirmed'].includes(e.businessStatus ?? '') || e.phase === 'step.uncertain')
   const terminal = new Map<string,number>()
-  events.forEach((event,index)=>{if(event.traceId&&(event.phase==='step.completed'||event.recoveryDecision==='completed'))terminal.set(event.traceId,index)})
+  const stepIdentity=(event:TraceEvent)=>JSON.stringify([event.caseRunId,event.traceId,event.stepIndex])
+  events.forEach((event,index)=>{if(event.traceId&&authoritative(event))terminal.set(stepIdentity(event),index)})
   return {
     version: 1 as const,
     events,
+    evidence,
     summary: {
       eventCount: events.length, caseCount: cases.length,
       firstProvenFailure: failure ?? null,
       firstUncertainEvent: uncertain[0] ?? null,
-      hasUncertainty: events.some((event,index) => (event.certainty === 'unknown' || ['unknown','unconfirmed'].includes(event.businessStatus ?? '') || event.phase === 'step.uncertain') && (!event.traceId || (terminal.get(event.traceId) ?? -1) <= index)),
-      confirmedSuccess: events.some(e => e.businessStatus === 'confirmed' || e.businessStatus === 'completed'),
+      hasUncertainty: events.some((event,index) => (event.certainty === 'unknown' || ['unknown','unconfirmed'].includes(event.businessStatus ?? '') || event.phase === 'step.uncertain') && (!event.traceId || (terminal.get(stepIdentity(event)) ?? -1) <= index)),
+      confirmedSuccess: events.some(authoritative),
       cdpMissing: !events.some(e => e.source === 'cdp'),
       sideEffectMayHaveOccurred: events.some(e => e.sideEffectMayHaveOccurred === true),
       recoveryDecision: [...events].reverse().find(e => e.recoveryDecision)?.recoveryDecision ?? 'unknown',
-      missingEvidence: [!events.some(e => e.source === 'cdp') ? 'CDP 数据缺失' : '', !events.some(e => e.phase === 'business.validated') ? '业务回执证据缺失' : ''].filter(Boolean),
+      missingEvidence: [!events.some(e => e.source === 'cdp') ? 'CDP 数据缺失' : '', !events.some(authoritative) ? '权威业务回执证据缺失' : ''].filter(Boolean),
     },
     timeline: events.map(event => ({ alias: alias(event), event })),
-    tree: cases.map(caseRunId => ({ alias: `案件 ${cases.indexOf(caseRunId) + 1}`, caseRunId,
-      steps: [...new Set(events.filter(e => e.caseRunId === caseRunId).map(e => e.stepIndex))].map(stepIndex => ({ stepIndex,
-        events: events.filter(e => e.caseRunId === caseRunId && e.stepIndex === stepIndex),
-      })),
+    tree: [...grouped].map(([caseRunId,steps]) => ({ alias: aliases.get(caseRunId)!, caseRunId,
+      steps: [...steps.values()].map(step=>({...step,requests:groupDiagnosticRequests(step.events),evidence:analyzeEvidence(step.events,{traceId:step.events[0]?.traceId,caseRunId,stepIndex:step.stepIndex})})),
     })),
   }
 }
@@ -48,6 +69,7 @@ export function exportDiagnostics(input: readonly unknown[], format: 'json' | 'j
     `首个已证明失败：${report.summary.firstProvenFailure?.phase ?? '未采集到'}`, `存在不确定结果：${report.summary.hasUncertainty}`,
     `恢复决定：${report.summary.recoveryDecision}`, '', '| 案件 | 阶段 | HTTP | 协议 | 业务 | 关联置信度 |', '| --- | --- | --- | --- | --- | --- |',
     ...report.timeline.map(({ alias, event: e }) => `| ${alias} | ${e.phase} | ${e.httpStatus ?? '未知'} | ${e.protocolStatus ?? '未知'} | ${e.businessStatus ?? '未知'} | ${e.correlationConfidence ?? (e.source === 'application' ? 'application-trace' : 'unmatched')} |`),
+    '', '## 分层证据与缺失证据', ...report.evidence.map(item=>item.explanation),
   ].join('\n')
 }
 

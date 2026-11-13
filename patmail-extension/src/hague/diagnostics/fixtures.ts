@@ -1,6 +1,7 @@
 import {analyzeJavaScript} from './ast/analyzer.mjs'
 import {sanitizeTraceEvent} from './schema.mjs'
-import {structuralSnapshot,xmlEvidence} from './protocol'
+import {parseJsfPartialResponse} from './protocol/jsf-partial-response.mjs'
+import {structuralSnapshot} from './protocol'
 import type {TraceEvent} from './trace'
 
 /** Offline analysis only: detached documents and static AST. No executor or network imports. */
@@ -13,8 +14,8 @@ export function analyzeOfflineFixture(input:{version:1;kind:'html'|'xml'|'javasc
   const template=document.createElement('template');template.innerHTML=input.content
   records=[{...base,phase:'dom.updated',after:structuralSnapshot(template.content,'',false),businessStatus:'unknown'}]
  }else if(input.kind==='xml'){
-  const xml=new DOMParser().parseFromString(input.content,'application/xml'),e=xmlEvidence(xml)
-  records=[{...base,phase:'jsf.parsed',...e,protocolStatus:e.parserError?'invalid_xml':e.jsfError?'jsf_error':e.validationFailed?'jsf_validation_failed':'valid',businessStatus:'unknown'}]
+  const e=parseJsfPartialResponse(input.content,{mime:'text/xml'})
+  records=[{...base,phase:'jsf.parsed',...e,domStatus:'expected_only',domEvidenceSource:'expected_protocol',businessStatus:'unknown'}]
  }else if(input.kind==='javascript'){
   const result=analyzeJavaScript(input.content)
   records=result.calls.map(call=>({...base,phase:'protocol.analyzed',astCallType:call.kind,sourceComponent:call.source,form:call.form,process:call.process,update:call.update,event:call.event,parameterNames:call.parameterNames,astConfidence:call.confidence,protocolFingerprint:result.fingerprint,sourceLocation:{scriptHash:result.scriptHash,line:call.location.line,column:call.location.column},evidenceCodes:['PROTOCOL_STATIC']}))
