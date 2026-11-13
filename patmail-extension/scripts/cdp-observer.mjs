@@ -1,5 +1,6 @@
 import {
   getObserverStatus,
+  configureHagueDiagnostics,
   runObserverDaemon,
   startObserver,
   stopObserver,
@@ -9,6 +10,7 @@ function parseArgs(args) {
   const [command, ...rest] = args
   const options = {}
   for (let index = 0; index < rest.length; index += 1) {
+    if (rest[index] === '--target') { options.targetId = rest[++index]; continue }
     if (rest[index] === '--endpoint') {
       const endpoint = rest[index + 1]
       if (!endpoint || endpoint.startsWith('--')) throw new Error('--endpoint requires a URL')
@@ -34,6 +36,10 @@ async function runCli() {
   }
 
   const { command, options } = parseArgs(process.argv.slice(2))
+  if (['deep-enable','deep-disable','deep-status'].includes(command)) {
+    printResult(await configureHagueDiagnostics(command.slice(5), options.targetId))
+    return
+  }
   if (command === 'start') {
     printResult(await startObserver(options))
     return
