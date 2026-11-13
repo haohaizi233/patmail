@@ -31,7 +31,7 @@ defaults:
 jobs:
   static:
     name: Static Checks
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
@@ -49,7 +49,7 @@ jobs:
 
   unit-integration:
     name: Unit & Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
@@ -68,7 +68,7 @@ jobs:
 
   regression:
     name: Regression Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
@@ -87,7 +87,7 @@ jobs:
 
   security:
     name: Security (Secrets / Licenses)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
@@ -106,7 +106,7 @@ jobs:
   build:
     name: Build & Artifact Verification
     needs: [static, unit-integration, regression]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
@@ -133,17 +133,21 @@ jobs:
   e2e-smoke:
     name: E2E Smoke
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
+    env:
+      # Windows 下 paths.mjs 顶层 cpSync 解压副本会使 node 0xC0000409 崩溃，
+      # 用 dist 绝对路径绕过隔离复制（本地已验证）。
+      PATMAIL_TEST_DIST: ${{ github.workspace }}/patmail-extension/dist
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: 缓存 Playwright 浏览器
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/ms-playwright
+          path: ~/AppData/Local/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
-      - name: 安装 Chromium（锁定 playwright 版本对应浏览器）
-        run: npx playwright install --with-deps chromium
+      - name: 安装 Chromium（Windows 无系统依赖步骤）
+        run: npx playwright install chromium
       - name: 下载构建产物
         id: dist-artifact
         continue-on-error: true
@@ -173,7 +177,7 @@ jobs:
     name: CI Gate
     needs: [static, unit-integration, regression, security, build, e2e-smoke]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
