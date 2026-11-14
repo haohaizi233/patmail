@@ -123,6 +123,9 @@ jobs:
       - uses: ./.github/actions/setup-patmail
       - name: 构建 + Manifest 校验 + 产物校验
         run: node scripts/ci-check.mjs --steps build,manifest,dist
+      - name: 本地缓存构建产物（self-hosted 极速复用）
+        if: success()
+        run: node -e "const fs=require('fs'),path=require('path');const cacheDir=path.join(process.env.RUNNER_WORKSPACE||'..','_dist_cache');fs.mkdirSync(cacheDir,{recursive:true});fs.cpSync('dist',path.join(cacheDir,'dist'),{recursive:true,force:true});console.log('Dist cached to',path.join(cacheDir,'dist'))"
       - name: 上传构建产物
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -154,11 +157,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
-      - name: 缓存 Playwright 浏览器
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/AppData/Local/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
       - name: 安装 Chromium（Windows 无系统依赖步骤）
         run: npx playwright install chromium
       - name: 下载构建产物
@@ -168,9 +166,12 @@ jobs:
         with:
           name: extension-dist
           path: patmail-extension/dist
+      - name: 从本地缓存恢复构建产物
+        if: steps.dist-artifact.outcome != 'success'
+        run: node -e "const fs=require('fs'),path=require('path');const cacheDir=path.join(process.env.RUNNER_WORKSPACE||'..','_dist_cache','dist');if(fs.existsSync(cacheDir)){fs.mkdirSync('dist',{recursive:true});fs.cpSync(cacheDir,'dist',{recursive:true,force:true});console.log('Dist restored from cache')}else{console.log('No cache found at',cacheDir)}"
       - name: 构建产物缺失时本地构建兜底（artifact 上传失败不再连坐）
         if: steps.dist-artifact.outcome != 'success'
-        run: node scripts/ci-check.mjs --steps build
+        run: node -e "const fs=require('fs'),cp=require('child_process');if(!fs.existsSync('dist/manifest.json')){console.log('Building dist fallback...');cp.execSync('node scripts/ci-check.mjs --steps build',{stdio:'inherit'})}else{console.log('dist/manifest.json already exists, skipping build')}"
       - name: E2E Smoke（扩展启动 / EASY 绑定 / 文件查询 / 期限查询）
         run: node scripts/run-e2e.mjs smoke
       - name: 上传 E2E 报告与失败证据
