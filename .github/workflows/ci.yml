@@ -7,7 +7,6 @@
 # 权限最小化：只读 contents；不接触任何 Secret；并发取消只作用于同分支/同 PR。
 name: CI
 
-# PR 事件下 checkout 固定到 head SHA：self-hosted runner 从本地仓库镜像取代码，拿不到 GitHub 生成的 merge commit。
 env:
   SME_SNAPSHOT_STUB: "1"
 
@@ -32,11 +31,9 @@ defaults:
 jobs:
   static:
     name: Static Checks
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: Typecheck / Lint / Format
         run: node scripts/ci-check.mjs --steps typecheck,lint,format
@@ -48,15 +45,13 @@ jobs:
           name: report-static
           path: |
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   unit-integration:
     name: Unit & Integration Tests
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 单元 + 集成测试（JUnit 产物）
         run: node scripts/ci-check.mjs --steps unit,integration
@@ -69,15 +64,13 @@ jobs:
           path: |
             patmail-extension/test-results/ci
             patmail-extension/test-results/junit
-          retention-days: 14
+          retention-days: 3
 
   regression:
     name: Regression Tests
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 历史业务契约回归（JUnit 产物）
         run: node scripts/ci-check.mjs --steps regression
@@ -90,15 +83,13 @@ jobs:
           path: |
             patmail-extension/test-results/ci
             patmail-extension/test-results/junit
-          retention-days: 14
+          retention-days: 3
 
   security:
     name: Security (Secrets / Licenses)
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 密钥扫描（工作树）+ 许可策略
         run: node scripts/ci-check.mjs --steps secrets,licenses
@@ -110,22 +101,17 @@ jobs:
           name: report-security
           path: |
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   build:
     name: Build & Artifact Verification
     needs: [static, unit-integration, regression]
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 构建 + Manifest 校验 + 产物校验
         run: node scripts/ci-check.mjs --steps build,manifest,dist
-      - name: 本地缓存构建产物（self-hosted 极速复用）
-        if: success()
-        run: node -e "const fs=require('fs'),path=require('path');const cacheDir=path.join(process.env.RUNNER_WORKSPACE||'..','_dist_cache');fs.mkdirSync(cacheDir,{recursive:true});fs.cpSync('dist',path.join(cacheDir,'dist'),{recursive:true,force:true});console.log('Dist cached to',path.join(cacheDir,'dist'))"
       - name: 上传构建产物
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -142,23 +128,22 @@ jobs:
           name: report-build
           path: |
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   e2e-smoke:
     name: E2E Smoke
     needs: [build]
-    runs-on: [self-hosted, Windows, X64]
-    env:
-      # Windows 下 paths.mjs 顶层 cpSync 解压副本会使 node 0xC0000409 崩溃，
-      # 用 dist 绝对路径绕过隔离复制（本地已验证）。
-      PATMAIL_TEST_DIST: ${{ github.workspace }}/patmail-extension/dist
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
-      - name: 安装 Chromium（Windows 无系统依赖步骤）
-        run: npx playwright install chromium
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
+      - name: 安装 Chromium（锁定 playwright 版本对应浏览器）
+        run: npx playwright install --with-deps chromium
       - name: 下载构建产物
         id: dist-artifact
         continue-on-error: true
@@ -166,12 +151,9 @@ jobs:
         with:
           name: extension-dist
           path: patmail-extension/dist
-      - name: 从本地缓存恢复构建产物
-        if: steps.dist-artifact.outcome != 'success'
-        run: node -e "const fs=require('fs'),path=require('path');const cacheDir=path.join(process.env.RUNNER_WORKSPACE||'..','_dist_cache','dist');if(fs.existsSync(cacheDir)){fs.mkdirSync('dist',{recursive:true});fs.cpSync(cacheDir,'dist',{recursive:true,force:true});console.log('Dist restored from cache')}else{console.log('No cache found at',cacheDir)}"
       - name: 构建产物缺失时本地构建兜底（artifact 上传失败不再连坐）
         if: steps.dist-artifact.outcome != 'success'
-        run: node -e "const fs=require('fs'),cp=require('child_process');if(!fs.existsSync('dist/manifest.json')){console.log('Building dist fallback...');cp.execSync('node scripts/ci-check.mjs --steps build',{stdio:'inherit'})}else{console.log('dist/manifest.json already exists, skipping build')}"
+        run: node scripts/ci-check.mjs --steps build
       - name: E2E Smoke（扩展启动 / EASY 绑定 / 文件查询 / 期限查询）
         run: node scripts/run-e2e.mjs smoke
       - name: 上传 E2E 报告与失败证据
@@ -185,17 +167,15 @@ jobs:
             patmail-extension/test-results/*.png
             patmail-extension/test-results/*.txt
             patmail-extension/test-results/*.json
-          retention-days: 14
+          retention-days: 3
 
   ci-gate:
     name: CI Gate
     needs: [static, unit-integration, regression, security, build, e2e-smoke]
     if: always()
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -225,4 +205,4 @@ jobs:
           path: |
             patmail-extension/test-results/ci/summary.json
             patmail-extension/test-results/ci/summary.md
-          retention-days: 30
+          retention-days: 7

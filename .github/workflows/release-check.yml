@@ -26,11 +26,7 @@ defaults:
 jobs:
   release-check:
     name: Release Check
-    runs-on: [self-hosted, Windows, X64]
-    env:
-      # Windows 下 paths.mjs 顶层 cpSync 解压副本会使 node 0xC0000409 崩溃，
-      # 用 dist 绝对路径绕过隔离复制（本地已验证）。
-      PATMAIL_TEST_DIST: ${{ github.workspace }}/patmail-extension/dist
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,19 +43,19 @@ jobs:
       - name: 缓存 Playwright 浏览器
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/AppData/Local/ms-playwright
+          path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('patmail-extension/pnpm-lock.yaml') }}
-      - name: 安装 Chromium（Windows 无系统依赖步骤）
-        run: npx playwright install chromium
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
       - name: E2E Smoke
         run: node scripts/run-e2e.mjs smoke
-      - name: 打包源码与交付件（系统 tar 即 bsdtar，生成 zip）
+      - name: 打包源码与交付件（bsdtar 生成 zip）
         run: |
-          export PATH="/c/Windows/System32:$PATH" # 确保 tar 解析到系统 bsdtar 而非 Git Bash 的 GNU tar
-          tar --version | head -1
-          TAR=tar pnpm pack:source
-          TAR=tar pnpm pack:delivery
-          TAR=tar pnpm verify:archive
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libarchive-tools
+          TAR=bsdtar pnpm pack:source
+          TAR=bsdtar pnpm pack:delivery
+          TAR=bsdtar pnpm verify:archive
       - name: 发布前校验（版本 / 摘要 / SHA-256 / 产物名称）
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
@@ -75,4 +71,4 @@ jobs:
             patmail-extension/test-results/patmail-delivery.zip
             patmail-extension/test-results/ci
             patmail-extension/test-results/coverage
-          retention-days: 30
+          retention-days: 7

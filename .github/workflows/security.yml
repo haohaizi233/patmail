@@ -1,13 +1,12 @@
 # Scheduled Security：定期依赖审计、凭据风险检查与历史扫描。
-# main 推送与 PR 都会跑历史扫描与 pnpm audit；ci.yml 的 security job 另有更快的 PR 工作树门禁。
-# PR 事件下 checkout 固定到 head SHA：self-hosted runner 从本地仓库镜像取代码，拿不到 GitHub 生成的 merge commit。
+# PR 的快速安全门禁在 ci.yml 的 security job（工作树扫描 + 许可）；
+# 这里跑更重的历史扫描与 pnpm audit，避免历史风险卡死每个 PR。
 name: Security
 
 on:
   schedule:
     - cron: "23 3 * * 1"
   workflow_dispatch:
-  pull_request:
   push:
     branches: [main]
 
@@ -26,11 +25,10 @@ defaults:
 jobs:
   secret-scan:
     name: Secret Scan（工作树 + Git 历史）
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0 # 历史扫描需要完整提交历史
       - uses: ./.github/actions/setup-patmail
       - name: 工作树扫描
@@ -44,15 +42,13 @@ jobs:
         with:
           name: report-secret-scan
           path: patmail-extension/test-results/ci
-          retention-days: 30
+          retention-days: 7
 
   dependency-audit:
     name: Dependency Audit
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: pnpm audit（prod 依赖，high 及以上失败）
         run: pnpm audit:deps
@@ -67,4 +63,4 @@ jobs:
         with:
           name: report-dependency-audit
           path: patmail-extension/test-results/ci
-          retention-days: 30
+          retention-days: 7
