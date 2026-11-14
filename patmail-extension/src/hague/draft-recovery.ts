@@ -1,7 +1,7 @@
 import type { DraftCommand,DraftRecovery } from './draft-contract'
 
 export function recoverableDraftCommand(command:DraftCommand):boolean {
-  return ['parties','locarno','priority','saveDraft'].includes(command.op)
+  return ['create','applicant','parties','locarno','priority','saveDraft'].includes(command.op)
 }
 
 /** Read canonical display records, never infer success from an open editor's values. */

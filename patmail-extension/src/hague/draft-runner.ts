@@ -45,13 +45,15 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
  const persist=async()=>{await host.save({...state});host.update?.({...state});emitTrace(trace,'checkpoint.persisted',{businessStatus:state.status==='saved'?'confirmed':state.status==='uncertain'?'unknown':'pending',evidenceCodes:state.status==='uncertain'?['CHECKPOINT_BEFORE_SEND']:[]})}
  const recover=async(command:DraftCommand):Promise<'completed'|'retry'|'unknown'>=>{
   const key=String(state.next)
-  if(!host.recover||!state.reference||!recoverableDraftCommand(command)||signal?.aborted||(state.recoveryAttempts?.[key]??0)>=1)return'unknown'
+  if(!host.recover||!state.reference||!recoverableDraftCommand(command)||signal?.aborted||(!['create','applicant'].includes(command.op)&&(state.recoveryAttempts?.[key]??0)>=1))return'unknown'
   state.recoveryAttempts={...state.recoveryAttempts,[key]:1};state.stage='读取原站回执，核对是否可恢复';await persist()
   emitTrace(trace,'recovery.started',{businessStatus:'unknown'})
   let result:DraftRecovery
   try{result=await host.recover(command,{...state},trace)}catch{return'unknown'}
   emitTrace(trace,'recovery.decision',{recoveryDecision:result.outcome,businessStatus:result.outcome==='completed'?'confirmed':'unknown'})
   if(signal?.aborted||result.outcome==='unknown'||!result.receipt?.ok||result.receipt.reference!==state.reference)return'unknown'
+  if(command.op==='create'&&(result.outcome!=='completed'||result.receipt.page!=='application'))return'unknown'
+  if(command.op==='applicant'&&(result.outcome!=='completed'||result.receipt.page!=='application'||result.receipt.applicants!==command.index+1))return'unknown'
   if(command.op==='saveDraft'&&(result.outcome!=='completed'||!result.receipt.draftSaved||state.acknowledged?.next!==state.next||state.acknowledged.op!=='saveDraft'||state.acknowledged.page!=='portfolio'))return'unknown'
   state.documentId=result.receipt.documentId??state.documentId;state.error=undefined
   state.warnings=[...new Set([...(state.warnings??[]),`步骤“${steps[state.next]?.label}”已自动核对原站回执并${result.outcome==='completed'?'确认完成':'恢复一次'}。`])]

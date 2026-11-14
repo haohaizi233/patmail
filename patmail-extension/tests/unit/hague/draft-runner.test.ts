@@ -1,5 +1,5 @@
 import { expect,it,vi } from 'vitest'
-import { draftSteps,runDraftPlan } from '../../../src/hague/draft-runner'
+import { draftSteps,runDraftPlan,draftPlanKey } from '../../../src/hague/draft-runner'
 import type { DraftPlan } from '../../../src/hague/draft-plan'
 const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'text',designs:[]}
 it('stops on an uncertain write, preserving the WIPO reference and never retrying or printing',async()=>{
@@ -42,4 +42,23 @@ it('resumes a confirmed running boundary at its recorded next step without skipp
  const call=vi.fn(async(c:{op:string})=>{if(c.op==='inspect')return {ok:true,page:'application' as const,reference:'123',documentId:'doc'};throw new Error('stop at first write')})
  await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'running',stage:'创建新草稿'})).rejects.toMatchObject({diagnostic:{errorCode:'BUSINESS_UNCONFIRMED',httpStatus:null}})
  expect(call.mock.calls[1]?.[0].op).toBe(draftSteps(plan)[2].command.op)
+})
+
+it.each([0,1])('advances a verified existing allocation after %i prior read attempts without another create',async priorAttempts=>{
+ const controller=new AbortController()
+ const recover=vi.fn(async()=>({outcome:'completed' as const,receipt:{ok:true,reference:'123',page:'application' as const,documentId:'existing'}}))
+ const call=vi.fn(async(_command:{op:string})=>({ok:true,reference:'123',page:'application' as const,documentId:'existing'}))
+ const result=await runDraftPlan(plan,7,{call,recover,save:async state=>{if(state.next===2)controller.abort()}},controller.signal,{tabId:7,reference:'123',next:1,total:draftSteps(plan).length,status:'uncertain',stage:'创建新草稿',planKey:draftPlanKey(plan),recoveryAttempts:{'1':priorAttempts}})
+ expect(recover).toHaveBeenCalledOnce();expect(call.mock.calls.every(([command])=>command.op==='inspect')).toBe(true)
+ expect(result).toMatchObject({reference:'123',next:2,status:'stopped'})
+})
+
+it.each(['completed','retry','missing-count'] as const)('accepts only verified readback of an existing applicant: %s',async kind=>{
+ const a={name:'Example Ltd.',address:'One Road',city:'City',region:'Region',postalCode:'12345',country:'China'}
+ const applicantPlan={...plan,applicants:[a]};const controller=new AbortController()
+ const call=vi.fn(async(_command:{op:string})=>({ok:true,reference:'123',page:'application' as const,applicants:1}))
+ const recover=vi.fn(async()=>({outcome:kind==='retry'?'retry' as const:'completed' as const,receipt:{ok:true,reference:'123',page:'application' as const,...(kind==='missing-count'?{}:{applicants:1})}}))
+ const job=runDraftPlan(applicantPlan,7,{call,recover,save:async state=>{if(state.next===3)controller.abort()}},controller.signal,{tabId:7,reference:'123',next:2,total:draftSteps(applicantPlan).length,status:'uncertain',stage:'申请人1',planKey:draftPlanKey(applicantPlan),recoveryAttempts:{'2':1}})
+ if(kind==='completed')expect(await job).toMatchObject({next:3,status:'stopped'});else await expect(job).rejects.toThrow(/核对/)
+ expect(call.mock.calls.every(([c])=>c.op==='inspect')).toBe(true);expect(recover).toHaveBeenCalledOnce()
 })

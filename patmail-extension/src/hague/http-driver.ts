@@ -1,6 +1,6 @@
 import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
 import {HagueDiagnosticError} from './diagnostics/errors'
-import {analyzeJavaScript,extractStaticActions,isStaticUiHandler,type AstCall,type AstAnalysis} from './diagnostics/ast/analyzer.mjs'
+import {analyzeJavaScript,extractStaticActions,isStaticUiHandler,selectRemoteDefinition,type AstCall,type AstAnalysis} from './diagnostics/ast/analyzer.mjs'
 import { HagueHttpContext, type JsfAction, type HagueFetch } from './http-context'
 import { executeDraftPage } from './draft-page'
 import type { DraftCommand, DraftReceipt,DraftCheckpoint,DraftRecovery } from './draft-contract'
@@ -12,10 +12,10 @@ export function jsfAction(script:string,element:HTMLElement,doc:Document,onAnaly
   const options={elementId:element.id,formId:element.closest('form')?.id}
   let actions=extractStaticActions(script,options)
   let report=analyzeJavaScript(script)
-  if(!actions.length&&/\b(?:selectOffice|processFile|refreshOptionsUI|refreshDesignUI|refreshDesignationUI)\s*\(/.test(script)){
-    const definitions=[...doc.scripts].map(s=>s.textContent??'').join('\n')
-    actions=extractStaticActions(script,{...options,definitions})
-    report=analyzeJavaScript(script,{definitions})
+  const remote=/\b(selectOffice|processFile|refreshOptionsUI|refreshDesignUI|refreshDesignationUI)\s*\(/.exec(script)?.[1]
+  if(!actions.length&&remote){
+    const definitions=selectRemoteDefinition([...doc.scripts].map(s=>s.textContent??''),remote)
+    if(definitions!==undefined){actions=extractStaticActions(script,{...options,definitions});report=analyzeJavaScript(script,{definitions})}
   }
   try{onAnalysis?.(report)}catch{/* Diagnostic observers cannot affect extraction. */}
   if(actions.length!==1){
@@ -75,6 +75,43 @@ export class HagueHttpDriver {
     const reference=checkpoint.reference
     if(!reference||!/^\d+$/.test(reference))return{outcome:'unknown'}
     try{
+      if(command.op==='create'){
+        // Only recover the allocation boundary. Never allocate a replacement or save unknown fields.
+        if(checkpoint.next!==1||checkpoint.status!=='uncertain'||!checkpoint.planKey)return{outcome:'unknown'}
+        await this.resume(reference)
+        const receipt=await this.call({op:'inspect'},reference)
+        return receipt.ok&&receipt.reference===reference&&receipt.page==='application'?{outcome:'completed',receipt}:{outcome:'unknown'}
+      }
+      if(command.op==='applicant'){
+        if(checkpoint.status!=='uncertain'||!checkpoint.planKey||!Number.isSafeInteger(command.index)||command.index<0||checkpoint.next!==command.index+2)return{outcome:'unknown'}
+        const a=command.data,country=['SG','Singapore','SG - Singapore'].includes(a.country)?'SG':['CN','China','CN - China'].includes(a.country)?'CN':''
+        if(!country)return{outcome:'unknown'}
+        await this.resume(reference)
+        const records=()=>this.state.document.querySelectorAll('button[id^="ApplicantForm:applicantViewPanel:"][id$=":editApp"]').length
+        const edit=this.state.document.getElementById(`ApplicantForm:applicantViewPanel:${command.index}:editApp`)
+        if(records()!==command.index+1||!edit)return{outcome:'unknown'}
+        edit.click();await this.state.settle();this.checkFailure()
+        const expected={firstname:a.name,address:a.address,cp:a.postalCode,city:a.city,state:a.region,country:a.country,email:command.email,nationality:country,domicile:country,establishment:country,residence:country,acp:country}
+        const normal=(value?:string)=>(value??'').trim().replace(/\s+/g,' ')
+        const matches=!!this.state.document.getElementById('ApplicantForm:saveAppBtn')&&this.state.document.querySelector<HTMLInputElement>('#ApplicantForm input[type=radio][value=true]')?.checked===true&&Object.entries(expected).every(([key,value])=>{
+          const field=this.state.document.getElementById(`ApplicantForm:${key}:input`) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null
+          if(!field||typeof field.value!=='string')return false
+          const fv=normal(field.value),ev=normal(value)
+          if(key==='country'){
+            return fv===ev||fv.startsWith(`${country} - `)||fv.endsWith(` - ${country}`)||[country,a.country].some(c=>c&&fv.toLowerCase()===c.toLowerCase())
+          }
+          if(['nationality','domicile','establishment','residence','acp'].includes(key)){
+            return fv===ev||fv.startsWith(`${country} - `)||fv.endsWith(` - ${country}`)||fv.toLowerCase()===country.toLowerCase()
+          }
+          return fv===ev
+        })
+        const cancel=this.state.document.getElementById('ApplicantForm:cancelApp')
+        if(!cancel)return{outcome:'unknown'}
+        cancel.click();await this.state.settle();this.checkFailure()
+        if(!matches||this.state.document.getElementById('ApplicantForm:saveAppBtn')||records()!==command.index+1)return{outcome:'unknown'}
+        const receipt=await this.call({op:'inspect'},reference)
+        return receipt.ok&&receipt.reference===reference&&receipt.page==='application'&&receipt.applicants===command.index+1?{outcome:'completed',receipt}:{outcome:'unknown'}
+      }
       if(command.op==='saveDraft'){
         const ack=checkpoint.acknowledged
         if(ack?.next!==checkpoint.next||ack.op!=='saveDraft'||ack.page!=='portfolio')return{outcome:'unknown'}
