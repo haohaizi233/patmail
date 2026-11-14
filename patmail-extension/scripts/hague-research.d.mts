@@ -1,5 +1,5 @@
 export class HagueResearchDiagnostics {
- constructor(deep:any,send:(method:string,params:any,sessionId:string)=>Promise<any>,log:(kind:string,event:any)=>void,options?:{worker?:any;now?:()=>number})
+ constructor(deep:any,send:(method:string,params:any,sessionId:string)=>Promise<any>,log:(kind:string,event:any)=>void,options?:{worker?:any;now?:()=>number;baseline?:any})
  observerStateProvider?:()=>string
  send:any
  queue:any[]
@@ -7,6 +7,8 @@ export class HagueResearchDiagnostics {
  requests:Map<string,any>
  counts:Record<string,number>
  busy:number
+ bytes:number
+ baseline?:any
  status():any
  enable(target:any,mode?:string):Promise<any>
  disable():Promise<any>

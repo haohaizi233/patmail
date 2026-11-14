@@ -56,13 +56,33 @@ it('rejects MIME substrings and reports timeout as unavailable without JSF failu
  research.request(target,'session',request);research.response('session',{requestId:'r',response:{status:200,mimeType:'text/xml; charset=utf-8'}});await research.finished('session',{requestId:'r'})
  expect(events.some(e=>e.phase==='analysis.skipped'&&e.skipReason==='time_limit')).toBe(true);expect(events.at(-1).bodyStatus).toBe('body_unavailable');expect(events.some(e=>e.phase==='jsf.parsed')).toBe(false);expect(events.some(e=>e.bodyStatus==='body_parse_failed'||e.jsfError)).toBe(false)
 })
-import {createJsfProtocolAnalyzer} from '../../../src/hague/diagnostics/protocol/jsf-partial-response.mjs'
-it('does not compare ViewState between six unverified application chains in one frame',async()=>{
- const {research,events}=setup();const parser=createJsfProtocolAnalyzer();const r:any=research
- r.worker.analyze=async(kind:string,body:any,options:any)=>kind==='xml'?parser.analyze(body,options):{astCorrelationConfidence:'unmatched'}
+import {createViewStateStateMachine} from '../../../src/hague/diagnostics/protocol/jsf-state-machine.mjs'
+it('tracks ViewState causal transitions across sequential requests in the same document scope',async()=>{
+ const {research,events}=setup();const sm=createViewStateStateMachine();const r:any=research
+ r.worker.signal=(action:string,payload:any)=>{
+  if(action==='begin_request')sm.beginRequest(payload.scope,payload.requestId)
+  if(action==='forget_request')sm.forgetRequest(payload.scope,payload.requestId)
+  if(action==='clear')sm.clear()
+ }
+ r.worker.analyze=async(kind:string,body:any,options:any)=>{
+  if(kind==='lookup')return {astCorrelationConfidence:'unmatched'}
+  const match=body.match(/<update id="javax\.faces\.ViewState">[\s\S]*?<!\[CDATA\[([\s\S]*?)\]\]>[\s\S]*?<\/update>/)
+  const raw=match?match[1]:undefined
+  const transitionRes=await sm.recordResponseViewState(options.scope,options.requestId,raw)
+  return {
+   bodyStatus:'body_available',
+   viewStatePresent:!!raw,
+   viewStateChanged:transitionRes.transition==='STATE_CHANGED',
+   viewStateTransition:transitionRes.transition,
+   viewStateStatus:transitionRes.status
+  }
+ }
  await research.enable(target);r.send=async(_method:string,p:any)=>({body:`<partial-response><changes><update id="javax.faces.ViewState"><![CDATA[private-token-${p.requestId}]]></update></changes></partial-response>`,base64Encoded:false})
  const done=[];for(let i=0;i<6;i++){const requestId=`chain${i}`;research.request(target,'session',{...request,requestId});research.response('session',{requestId,response:{status:200,mimeType:'text/xml'}});done.push(research.finished('session',{requestId}))}
- await Promise.all(done);const parsed=events.filter(e=>e.phase==='jsf.parsed');expect(parsed).toHaveLength(6);expect(parsed.every(e=>e.viewStatePresent===true)).toBe(true);expect(parsed.every(e=>e.viewStateChanged===undefined)).toBe(true);expect(JSON.stringify(events)).not.toContain('private-token')
+ await Promise.all(done);const parsed=events.filter(e=>e.phase==='jsf.parsed');expect(parsed).toHaveLength(6);expect(parsed.every(e=>e.viewStatePresent===true)).toBe(true)
+ expect(parsed[0].viewStateTransition).toBe('INITIAL_OBSERVED');expect(parsed[0].viewStateChanged).toBe(false)
+ for(let i=1;i<6;i++){expect(parsed[i].viewStateTransition).toBe('STATE_CHANGED');expect(parsed[i].viewStateChanged).toBe(true)}
+ expect(JSON.stringify(events)).not.toContain('private-token')
 })
 it('counts all selected-target observations and resets session stats on enable',async()=>{
  const {research,events}=setup();const r:any=research;r.observerStateProvider=()=> 'connected';await research.enable(target)
