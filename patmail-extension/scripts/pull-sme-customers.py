@@ -57,17 +57,21 @@ def main() -> int:
     if not password:
         print("缺 DB_PWD 环境变量（数据库 sa 密码）。不在脚本里存密码。")
         return 1
-    conn = pymssql.connect(
-        server=SERVER,
-        port=PORT,
-        user=USER,
-        password=password,
-        database=DATABASE,
-        timeout=30,
-        login_timeout=15,
-        tds_version="7.0",
-        charset="utf8",
-    )
+    try:
+        conn = pymssql.connect(
+            server=SERVER,
+            port=PORT,
+            user=USER,
+            password=password,
+            database=DATABASE,
+            timeout=30,
+            login_timeout=15,
+            tds_version="7.0",
+            charset="utf8",
+        )
+    except Exception as error:
+        print(f"连接中小客户备份数据库 ({SERVER}:{PORT}) 失败（网络超时或未在指定内网环境）：{error}")
+        return 1
     try:
         cur = conn.cursor()
         cur.execute(
