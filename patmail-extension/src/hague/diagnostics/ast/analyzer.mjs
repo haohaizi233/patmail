@@ -43,10 +43,20 @@ function run(source,options={},execution=false){
    if(execution&&['FunctionExpression','ArrowFunctionExpression','ObjectMethod','ClassMethod','ClassPrivateMethod'].includes(n.type))return
    if(execution&&active&&['ClassDeclaration','ClassExpression','ThrowStatement','LabeledStatement','ForInStatement','ForOfStatement','WithStatement','BreakStatement','ContinueStatement','AwaitExpression','YieldExpression','UpdateExpression','IfStatement','ConditionalExpression','LogicalExpression','ForStatement','WhileStatement','DoWhileStatement','SwitchStatement','TryStatement'].includes(n.type)){unresolved.add('conditional_control');return}
    if(n.type==='FunctionDeclaration'){functions.set(n.id.name,n);if(!execution&&!invoke)inspectFunction(n,n.id.name,d);return}
-   if(n.type==='VariableDeclaration'&&n.kind!=='const'){if(execution)unresolved.add('mutable_binding');for(const dec of n.declarations){if(dec.id.type==='Identifier')env.set(dec.id.name,UNKNOWN);if(!execution)visit(dec.init,d+1,fn,active)}return}
+   if(n.type==='VariableDeclaration'&&n.kind!=='const'){if(execution)unresolved.add('mutable_binding');for(const dec of n.declarations){if(dec.id.type==='Identifier')env.set(dec.id.name,UNKNOWN);else if(dec.id.type==='ObjectPattern'){for(const p of dec.id.properties)if(p.value?.type==='Identifier')env.set(p.value.name,UNKNOWN)}if(!execution)visit(dec.init,d+1,fn,active)}return}
    if(n.type==='VariableDeclarator'&&n.id.type==='Identifier'){
     if(['FunctionExpression','ArrowFunctionExpression'].includes(n.init?.type)){functions.set(n.id.name,n.init);if(!execution&&!invoke)inspectFunction(n.init,n.id.name,d);return}
     env.set(n.id.name,value(n.init,env));const alias=path(n.init);if(alias)aliases.set(n.id.name,aliases.get(alias)??alias)
+   }
+   if(n.type==='VariableDeclarator'&&n.id.type==='ObjectPattern'){
+    const initVal=value(n.init,env)
+    for(const p of n.id.properties){
+     if(p.type==='ObjectProperty'&&p.key?.name&&p.value?.type==='Identifier'){
+      const k=p.key.name,vName=p.value.name
+      if(initVal!==UNKNOWN&&initVal!==null&&typeof initVal==='object'&&Object.hasOwn(initVal,k))env.set(vName,initVal[k])
+      else env.set(vName,UNKNOWN)
+     }
+    }
    }
    if(n.type==='AssignmentExpression'&&n.left.type!=='Identifier'){if(execution)unresolved.add('mutation');const root=path(n.left).split('.')[0];env.set(root,UNKNOWN);return}
    if(n.type==='AssignmentExpression'&&n.left.type==='Identifier'){
@@ -56,6 +66,18 @@ function run(source,options={},execution=false){
    }
    if(n.type==='CallExpression'||n.type==='NewExpression'){
     const raw=path(n.callee),name=aliases.get(raw)??(env.has(raw.split('.')[0])?'':raw),args=n.arguments
+    // Verified eHague save confirmation: a loading-only callback followed by one AJAX callback.
+    // bcn stops on false; never flatten arbitrary callback arrays or ignore cancellation guards.
+    if(execution&&active&&name==='PrimeFaces.bcn'){
+     const callbacks=args[2]?.type==='ArrayExpression'?args[2].elements:null
+     const validFunction=f=>f?.type==='FunctionExpression'&&!f.async&&!f.generator&&f.params.length===1&&f.params[0].type==='Identifier'&&f.params[0].name==='event'
+     const prefix=callbacks?.[0]?.body?.body,load=prefix?.[0]?.expression,last=callbacks?.[1]?.body?.body,request=last?.[0]?.expression
+     const valid=raw==='PrimeFaces.bcn'&&args.length===3&&args[0].type==='ThisExpression'&&args[1].type==='Identifier'&&args[1].name==='event'&&callbacks?.length===2&&callbacks.every(validFunction)
+      &&prefix.length===1&&prefix[0].type==='ExpressionStatement'&&load?.type==='CallExpression'&&path(load.callee)==='showBlockUIOnSend'&&load.arguments.length===1&&load.arguments[0].type==='StringLiteral'&&load.arguments[0].value===''&&!env.has('showBlockUIOnSend')&&!functions.has('showBlockUIOnSend')&&!aliases.has('showBlockUIOnSend')
+      &&last.length===2&&last[0].type==='ExpressionStatement'&&request?.type==='CallExpression'&&path(request.callee)==='PrimeFaces.ab'&&last[1].type==='ReturnStatement'&&last[1].argument?.type==='BooleanLiteral'&&last[1].argument.value===false
+     if(!valid){unresolved.add('unsupported_callback_chain');return}
+     visit(callbacks[1].body,d+1,fn,active);return
+    }
     // Detached protocol execution never runs UI helpers. Ignore only literal PF widget visibility calls.
     // Keep unknown methods, arguments, computed access and shadowed helpers fail-closed.
     const ui=n.callee,widget=ui.type==='MemberExpression'&&!ui.computed?ui.object:null
@@ -91,7 +113,7 @@ function run(source,options={},execution=false){
    const bindings=new Set(),pending=[ast]
    while(pending.length){const node=pending.pop();guard(0)
     const binding=node.type==='FunctionDeclaration'?node.id:node.type==='VariableDeclarator'?node.id:node.type==='AssignmentExpression'?node.left:null
-    if(binding?.type==='Identifier'&&binding.name==='PF'){unresolved.add('shadowed_ui_helper');return}
+    if(binding?.type==='Identifier'&&['PF','showBlockUIOnSend'].includes(binding.name)){unresolved.add('shadowed_ui_helper');return}
     if(binding?.type==='Identifier'){if(bindings.has(binding.name)){unresolved.add('duplicate_binding');return}bindings.add(binding.name)}
     for(const key of Object.keys(node)){if(['loc','extra','leadingComments','trailingComments','innerComments'].includes(key))continue;const child=node[key];for(const c of Array.isArray(child)?child:[child])if(c?.type)pending.push(c)}
    }
@@ -114,6 +136,27 @@ export function analyzeJavaScript(source,options={}){
 }
 export function extractStaticActions(source,options={}){const r=run(source,options,true);return r.unresolved.length?[]:r.actions.filter(a=>a._active).map(({_active,...a})=>a)}
 
+export function extractJsfCallIR(source,options={}){
+ const res=analyzeJavaScript(source,options)
+ return (res.calls||[]).map(c=>{
+  const processList=typeof c.process==='string'&&c.process?c.process.split(/\s+/).filter(Boolean):[]
+  const updateList=typeof c.update==='string'&&c.update?c.update.split(/\s+/).filter(Boolean):[]
+  const staticConfidence=c.confidence==='static'?'static':c.confidence==='unresolved'?'unresolved':'partial'
+  return {
+   callType:c.kind||'unknown',
+   sourceLocation:c.location||{},
+   sourceComponent:c.source,
+   form:c.form,
+   process:processList,
+   update:updateList,
+   event:c.event,
+   parameterNames:c.parameterNames||[],
+   staticConfidence,
+   unresolvedReasons:c.unresolvedReasons||[]
+  }
+ })
+}
+
 export function clearAstCache(){cache.clear()}
 
 /** Only literal PrimeFaces widget visibility and return false; never execute handler code. */
@@ -129,4 +172,43 @@ export function isStaticUiHandler(source){
    return call.arguments.length===0&&['show','hide'].includes(member.property?.name)&&widget?.type==='CallExpression'&&widget.callee.type==='Identifier'&&widget.callee.name==='PF'&&widget.arguments.length===1&&widget.arguments[0].type==='StringLiteral'&&/^[A-Za-z_$][A-Za-z0-9_$]{0,119}$/.test(widget.arguments[0].value)
   })
  }catch{return false}
+}
+
+/** Resolve one explicit remote binding; unrelated initializers are never executed or interpreted. */
+export function selectRemoteDefinition(sources,name){
+ if(!['selectOffice','processFile','refreshOptionsUI','refreshDesignUI','refreshDesignationUI'].includes(name)||!Array.isArray(sources)||sources.length>256)return undefined
+ let selected,invalid=false,nodes=0,total=0;const started=Date.now()
+ const targets=(n,depth=0)=>{
+  if(!n)return false
+  if(depth>limits.maxDepth){invalid=true;return true}
+  if(n.type==='Identifier')return n.name===name
+  if(n.type==='MemberExpression')return n.property?.name===name||n.property?.value===name
+  if(n.type==='ObjectPattern')return n.properties.some(p=>targets(p.type==='RestElement'?p.argument:p.value,depth+1))
+  if(n.type==='ArrayPattern')return n.elements.some(e=>targets(e,depth+1))
+  if(n.type==='AssignmentPattern')return targets(n.left,depth+1)
+  if(n.type==='RestElement')return targets(n.argument,depth+1)
+  return false
+ }
+ for(const source of sources){
+  if(typeof source!=='string')return undefined
+  total+=source.length;if(total>2097152)return undefined
+  if(!source.includes(name))continue
+  if(source.length>limits.maxSourceBytes)return undefined
+  let ast;try{ast=parse(source,{sourceType:'unambiguous',allowReturnOutsideFunction:true})}catch{return undefined}
+  const top=new Set(ast.program.body)
+  const record=n=>{if(selected!==undefined)invalid=true;else selected=source.slice(n.start,n.end)+';'}
+  const visit=(n,parent,depth=0)=>{
+   if(!n?.type||invalid)return
+   if(++nodes>limits.maxNodes||depth>limits.maxDepth||Date.now()-started>limits.maxTimeMs){invalid=true;return}
+   if(n.type==='FunctionDeclaration'&&n.id?.name===name){if(top.has(n)&&!n.async&&!n.generator)record(n);else invalid=true}
+   if(n.type==='VariableDeclarator'&&targets(n.id))invalid=true
+   if(n.type==='AssignmentExpression'&&targets(n.left)){
+    if(n.operator==='='&&n.left.type==='Identifier'&&parent?.type==='ExpressionStatement'&&top.has(parent)&&n.right.type==='FunctionExpression'&&!n.right.async&&!n.right.generator)record(parent)
+    else invalid=true
+   }
+   if((n.type==='UpdateExpression'||n.type==='UnaryExpression'&&n.operator==='delete')&&targets(n.argument))invalid=true
+   for(const key of Object.keys(n).filter(k=>!['loc','start','end','extra','leadingComments','innerComments','trailingComments'].includes(k))){const v=n[key];for(const child of Array.isArray(v)?v:[v])if(child?.type)visit(child,n,depth+1)}
+  };visit(ast,null)
+ }
+ return invalid?undefined:selected
 }
