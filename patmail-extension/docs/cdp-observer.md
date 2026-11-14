@@ -58,9 +58,9 @@ pnpm cdp:stop
 
 原来一轮 495 个候选附件的日志显示：取名 495/495、入包 493、跳过 2，浏览器下载完成；这轮没有再次触发“后台回执尚未确认”。恢复后的压缩包包含 493 个附件和 1 份下载失败清单。
 
-## 海牙深度诊断（默认关闭）
+## 海牙深度诊断（随CDP自动开启研究模式）
 
-复用现有原生 WebSocket 守护进程。先查看 `log/cdp/status.json` 和最近 JSONL；不要为了检查状态重新连接浏览器。修改脚本后下次使用前按原流程停止再启动。启动服务本身不会开启深度模式。
+复用现有原生 WebSocket 守护进程。先查看 `log/cdp/status.json` 和最近 JSONL；不要为了检查状态重新连接浏览器。修改脚本后下次使用前按原流程停止再启动。服务启动并附着海牙页面后自动开启research；尚未连接或没有海牙页面时等待，不制造业务请求。
 
 在 `patmail-extension` 目录运行：
 
@@ -70,9 +70,9 @@ node scripts/cdp-observer.mjs deep-enable --target <已授权海牙标签页的C
 node scripts/cdp-observer.mjs deep-disable
 ```
 
-明确开启仅针对已附着的 `https://hague.wipo.int` 页面；targetId 由用户已有 CDP 页面清单确认，不自动选择页面。控制接口沿用本机随机端口与认证令牌；令牌禁止粘贴到日志或报告。授权只驻留内存，不跨重启/断线/页面导航保留。浏览器提示连接授权时需用户允许，不能绕过。
+自动研究仅针对已附着的 `https://hague.wipo.int` 页面；按初始化就绪顺序启用一个目标，已有目标时保持稳定，多个就绪候选按targetId排序。手动deep/research-enable可用targetId指定目标并接管自动选择。控制接口沿用本机随机端口与认证令牌；令牌禁止粘贴到日志或报告。采集资源和请求租约只驻留内存，断线/导航会销毁；自动模式随后为新Session/页面重新建立采集。手动basic、deep-disable或research-disable关闭自动研究，在本次守护进程运行期间保持关闭；重新启动CDP服务恢复默认自动开启。浏览器提示连接授权时需用户允许，不能绕过。
 
-Debugger 先设置 `skipAllPauses=true` 再 enable；禁止设置、删除或修改断点及断点激活状态；方法不支持时降级关闭。禁用调用 Debugger.disable 并清空脚本状态，原基础观察会话继续使用。仅读取当前目标同源脚本，每会话最多32个，每个128,000字符，总计2,000,000字符，分析后仅输出哈希/静态调用计数/未解析数。不会读取正文、请求头或Cookie，不设置下载行为，不影响独立的离线PDF调试会话。
+Debugger 先设置 `skipAllPauses=true` 再 enable；禁止设置、删除或修改断点及断点激活状态；方法不支持时降级关闭。禁用调用 Debugger.disable 并清空脚本状态，原基础观察会话继续使用。仅读取当前目标同源脚本，每会话最多32个，每个128,000字符，总计2,000,000字符，分析后仅输出哈希/静态调用计数/未解析数。deep模式不读取响应正文；research会按准入预算临时读取JSF响应并解析，原文不入日志。请求头及Cookie不落盘，不设置下载行为，不影响独立的离线PDF调试会话。
 
 应用 Trace 通过固定 CustomEvent/binding 入口传给日志并再次按共享Schema过滤。CDP到面板使用固定安全事件实时桥接，发送成功时状态为 `hagueCdpUiBridge=available`，未连接或失败时为 `unavailable`；面板仍可显示应用Trace，离线导入报告可分析CDP证据。无直接证明的请求不能声称精确归因。
 
@@ -97,4 +97,6 @@ node scripts/hague-diagnostics-export.mjs ../log/cdp/<日志文件>.jsonl ./test
 
 ## 2026-11-14 Research Mode
 
-新增显式 `research-enable --target TARGET_ID`、`research-status`、`research-disable` 和 `basic` 命令（入口仍为 `node scripts/cdp-observer.mjs`）。普通start/build不启用研究。正文仅在受控研究准入下短暂读取解析，原始正文不入日志；全局普通方法允许表仍不提供任意getResponseBody转发。详情、预算、生命周期和验收见 [全链路研究诊断](hague-full-chain-diagnostics.md)。旧deep命令继续兼容。
+新增显式 `research-enable --target TARGET_ID`、`research-status`、`research-disable` 和 `basic` 命令（入口仍为 `node scripts/cdp-observer.mjs`）。按用户2026-11-14的新要求，普通start/build随CDP默认启用自动研究，附着到海牙页面后开始采集。正文仅在受控研究准入下短暂读取解析，原始正文不入日志；全局普通方法允许表仍不提供任意getResponseBody转发。详情、预算、生命周期和验收见 [全链路研究诊断](hague-full-chain-diagnostics.md)。旧deep命令继续兼容。
+
+自动研究每个Session/URL只尝试启用一次，不因轮询不断重置预算；导航/重连后以新生命周期重新尝试。失败只影响诊断，不触发业务操作。保留单目标架构，未同时读取所有海牙标签页；页面离开白名单时停止采集。

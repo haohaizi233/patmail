@@ -1,6 +1,8 @@
 # Hague CDP + AST + JSF Research Mode：技术与验收报告
 
-本报告对应2026-11-14的增量研究模式。旧诊断模块与业务执行引擎保留，本次没有新增申请、上传、提交或业务重试入口。所有正式控制仍由既有127.0.0.1鉴权服务承担。
+本报告对应2026-11-14的增量研究模式。
+
+**后续默认值变更（用户指令）：** research现随CDP服务自动开启，连接并初始化海牙页面后采集；导航/重连重建资源。手动关闭在本次服务运行期间有效，重启服务恢复默认。以下验收记录中“未开启真实研究”“默认basic”等为变更前的历史测量状态，不能作为当前启动行为。旧诊断模块与业务执行引擎保留，本次没有新增申请、上传、提交或业务重试入口。所有正式控制仍由既有127.0.0.1鉴权服务承担。
 
 ## A. Git、审计与实施范围
 
@@ -99,7 +101,7 @@ sequenceDiagram
 |deep|明确Target后自动读取符合范围的脚本并使用Worker复用AST；不读取响应正文|
 |research|deep加受控JSF请求元数据、正文、XML、源码关联及六层证据|
 
-构建、普通start、扩展加载、重新连接都不会隐式开启research。多个Target时必须指定一个；不是随机挑选。授权只覆盖当前Session/Target。disable、导航、execution context销毁、detach、disconnect、stop撤销高强度权限；重连后回basic，需要重新显式启用。并行enable/deep/disable采用入口意图票据，旧请求不能覆盖新授权意图。底层deep还在首次await之前捕获activation generation，防止关闭后延迟开启Debugger；真实类竞态回归覆盖该边界。
+根据后续用户指令，构建/普通start启动CDP后默认启用自动research。仅在已初始化且匹配白名单的海牙页面中选择一个，按就绪顺序启动，多个就绪候选按targetId稳定排序，当前目标保持不变。租约只覆盖当前Session/Target；导航、detach、disconnect、stop销毁旧资源，自动模式随后在新生命周期重建。手动disable/basic暂停自动开启直到CDP服务重启；手动enable指定的Target接管自动选择。并行enable/deep/disable采用入口意图票据，旧请求不能覆盖新授权意图。底层deep还在首次await之前捕获activation generation，防止关闭后延迟开启Debugger；真实类竞态回归覆盖该边界。
 
 ```powershell
 pnpm cdp:start
@@ -178,7 +180,7 @@ Schema仍为v1，采用增量字段：eventId、mode/researchState/observerState
 |分析输出|最多1000分析事件/分钟、128待写、每条32KiB；状态快照可绕过分析速率，但仍受待写和体积限制|
 |UI|5000事件/4MB/24小时；超过容量只淘汰诊断数据并计数|
 
-旧basic日志不受新增分析输出预算限流。磁盘失败、队列/源/正文/时间超限都只丢弃诊断数据，不重试业务或伪造业务失败。默认build/start没有正文/脚本采集授权。
+旧basic日志不受新增分析输出预算限流。磁盘失败、队列/源/正文/时间超限都只丢弃诊断数据，不重试业务或伪造业务失败。默认build/start随CDP自动研究的授权来自用户本次明确指令，仍受既有Origin/Session/Target、读取租约和安全预算约束。
 
 ## G. 验证、性能与验收结论
 
@@ -208,7 +210,7 @@ node scripts/measure-hague-research.mjs
 3. 不通过XML预期更新验证真实DOM。HTTP模式的模型DOM不会冒充原站；Page的实际数值观测也只覆盖已观察字段，不证明整个DOM未变化。
 4. 没有可靠共享视图作用域时，原生跨请求ViewState变化未知；不通过时间或同一frame猜测六路Token关系。
 5. Body可能因缓存、导航、权限、预算或协议不可读取；这不是服务器业务失败。超限后记录可能不完整，丢弃数和缺失证据必须一起阅读。
-6. 数据来自已有授权浏览器/正常业务，不会因缺证据自动点击、提交、重试或触发Hague函数。实站采样须显式指定Target并授权启用，关闭后不自动恢复。
+6. 数据来自已有授权浏览器/正常业务，不会因缺证据自动点击、提交、重试或触发Hague函数。按后续用户指令实站采样随CDP自动选定一个海牙Target开启；手动关闭后本次服务不自动恢复，重启恢复默认。
 
 
 ## 排查与12项实现回答
@@ -317,3 +319,12 @@ Base `7dbca12412485ac6fdea2cdffa6fd2358f49c0e7`；分支`codex/hague-research-mo
 ```text
 patmail-extension/docs/hague-full-chain-diagnostics.md
 ```
+
+
+## 自动研究默认值变更（2026-11-14）
+
+入口为`scripts/cdp-observer-core.mjs:CdpObserverService.ensureAutomaticResearch`。initializeSession成功后及Target重扫时检查；仅选择ready、hague、page、官方Origin、当前Session/URL未尝试过的目标。一个Session/URL最多一次启用，避免每轮扫描重置源码/正文预算。context清除和重连先撤销旧权限、清空私有资源，再重新启用；手动控制先取消自动策略，旧异步enable不能覆盖手动disable。没有新增Origin、权限或业务调用。
+
+新增回归覆盖：非海牙页面不启用、海牙初始化后启动真实research controller、第二页面不抢占、重连恢复、导航重建、鉴权CLI关闭后后续页面不重开。之前的安全预算与只读边界保持适用。
+
+本次默认值变更验证：`pnpm exec vitest run --maxWorkers=2`完整1780/1780通过，失败0、跳过0；`pnpm typecheck`、变更文件ESLint和`pnpm build`均exit 0，补丁检查通过。已按AGENTS要求停止并重启守护进程，新PID 35128；本次检查仍为waiting/0 Targets，尚未实际自动采集，连接成功且海牙页面初始化后会自动research。最终测试记录为忽略目录`test-results/hague-auto-research-tests.{json,log}`。

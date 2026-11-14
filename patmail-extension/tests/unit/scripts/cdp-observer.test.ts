@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { runInNewContext } from 'node:vm'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
 const corePath = resolve(process.cwd(), 'scripts/cdp-observer-core.mjs')
 const loadedObserver: unknown = existsSync(corePath) ? await import(pathToFileURL(corePath).href) : {}
@@ -1018,4 +1019,76 @@ it('enriches only known application request evidence using observed context and 
  const ambiguous=service.hagueRequestMetadata(target,'bbbbbbbb',params)
  expect(ambiguous.correlationConfidence).toBe('ambiguous');expect(ambiguous.traceId).toBeUndefined();expect(ambiguous.caseRunId).toBeUndefined();expect(ambiguous.applicationRequestId).toBeUndefined()
  service.clearHagueSessionEvidence('bbbbbbbb');expect(service.hagueContexts.size).toBe(0);expect(service.hagueTraces).toHaveLength(0)
+})
+
+
+type AutoResearchHarness = {
+ initializeSession:(target:Record<string,string>)=>Promise<void>
+ ensureAutomaticResearch:()=>Promise<void>
+ clearCdpState:()=>void
+ handleCdpMessage:(message:object)=>void
+ handleControl:(request:IncomingMessage,response:ServerResponse)=>Promise<void>
+ autoResearchEnabled:boolean
+ logger:{log:()=>Promise<void>}
+ sendCdp:(method:string,params:unknown,session?:string)=>Promise<object>
+ research:{status:()=>{mode:string};disable:()=>Promise<unknown>}
+ deep:{target:{targetId:string}|null}
+ bridge:{clear:()=>void}
+}
+function automaticResearchFixture() {
+ const Service=required<new(token:string)=>AutoResearchHarness>('CdpObserverService')
+ const service=new Service('offline-auto-research');const commands:{method:string;session?:string}[]=[]
+ service.logger={log:async()=>{}}
+ service.sendCdp=async(method,_params,session)=>{commands.push({method,session});return {}}
+ const target={source:'hague',type:'page',targetId:'hague-one',sessionId:'session-one',url:'https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml'}
+ return {service,commands,target}
+}
+it('starts real research when CDP initializes a Hague session and keeps an existing target stable',async()=>{
+ const {service,commands,target}=automaticResearchFixture()
+ try {
+  await service.initializeSession({source:'easy',type:'page',targetId:'easy-one',sessionId:'easy-session',url:'https://example.invalid/'})
+  expect(commands.some(c=>c.method==='Debugger.enable')).toBe(false)
+  await service.initializeSession(target)
+  expect(service.research.status().mode).toBe('research')
+  expect(commands.filter(c=>c.method==='Debugger.enable')).toEqual([{method:'Debugger.enable',session:'session-one'}])
+  await service.initializeSession({...target,targetId:'hague-two',sessionId:'session-two'})
+  expect(service.deep.target?.targetId).toBe('hague-one')
+  expect(commands.filter(c=>c.method==='Debugger.enable')).toHaveLength(1)
+ } finally {await service.research.disable();service.bridge.clear()}
+})
+it('resumes automatic research after a CDP reconnect but respects manual disabling for this service run',async()=>{
+ const {service,target}=automaticResearchFixture()
+ try {
+  await service.initializeSession(target);service.clearCdpState()
+  await service.initializeSession({...target,sessionId:'reconnected'})
+  expect(service.research.status().mode).toBe('research')
+  service.autoResearchEnabled=false;await service.research.disable()
+  await service.initializeSession({...target,targetId:'hague-new',sessionId:'new-session'})
+  await service.ensureAutomaticResearch()
+  expect(service.research.status().mode).toBe('basic');expect(service.deep.target).toBeNull()
+ } finally {await service.research.disable();service.bridge.clear()}
+})
+
+it('rebuilds research after navigation without enabling a second concurrent target',async()=>{
+ const {service,commands,target}=automaticResearchFixture()
+ try {
+  await service.initializeSession(target)
+  service.handleCdpMessage({method:'Runtime.executionContextsCleared',sessionId:'session-one',params:{}})
+  await vi.waitFor(()=>expect(commands.filter(c=>c.method==='Debugger.enable')).toHaveLength(2))
+  await vi.waitFor(()=>expect(service.research.status().mode).toBe('research'))
+  expect(service.deep.target?.targetId).toBe('hague-one')
+ } finally {await service.research.disable();service.bridge.clear()}
+})
+it('honors authenticated CLI disabling across later Hague session initialization',async()=>{
+ const {service,target}=automaticResearchFixture()
+ const server=createServer((req,res)=>{void service.handleControl(req,res)})
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
+ try {
+  await service.initializeSession(target)
+  const address=server.address();if(!address || typeof address==='string')throw Error('missing address')
+  const response=await fetch(`http://127.0.0.1:${address.port}/hague-diagnostics`,{method:'POST',headers:{Authorization:'Bearer offline-auto-research','Content-Type':'application/json'},body:JSON.stringify({action:'disable'})})
+  expect(response.status).toBe(200)
+  await service.initializeSession({...target,targetId:'later',sessionId:'later-session'})
+  expect(service.autoResearchEnabled).toBe(false);expect(service.research.status().mode).toBe('basic')
+ } finally {await service.research.disable();service.bridge.clear();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}
 })

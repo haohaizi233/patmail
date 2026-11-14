@@ -1600,6 +1600,10 @@ export class CdpObserverService {
     this.analysisWorker = new AnalysisWorker()
     this.deep = new HagueDeepDiagnostics((method, params, session) => this.sendCdp(method, params, session), (kind, fields) => this.recordResearchOutput(kind,fields), this.analysisWorker)
     this.research = new HagueResearchDiagnostics(this.deep, (method,params,session)=>this.sendCdp(method,params,session), (kind,fields)=>this.recordResearchOutput(kind,fields), {worker:this.analysisWorker})
+    this.autoResearchEnabled = true
+    this.autoResearchPending = null
+    this.autoResearchAttempts = new Map()
+    this.researchReadySessions = new Set()
     this.hagueTraces = []
     this.hagueContexts = new Map()
     this.knownAppTraces = new Map()
@@ -1702,9 +1706,10 @@ export class CdpObserverService {
       if (!body) return
       try {
         if(body.mode!==undefined&&!['deep','research','basic'].includes(body.mode))throw Error('mode')
-        if (body.action === 'disable') { sendJson(response, 200, await this.research.disable()); return }
+        if (body.action === 'disable') { this.autoResearchEnabled=false; sendJson(response, 200, await this.research.disable()); return }
         const target = [...this.sessions.values()].find(t => t.targetId === body.targetId && t.source === 'hague')
         if (body.action !== 'enable' || !target || body.mode==='basic') throw Error('target')
+        this.autoResearchEnabled=false
         sendJson(response, 200, await this.research.enable(target, body.mode === 'research' ? 'research' : 'deep'))
       } catch { sendJson(response, 400, {error:'invalid_authorized_target'}) }
       return
@@ -1887,6 +1892,8 @@ export class CdpObserverService {
     }
     this.pendingCommands.clear()
     this.selectedTargets.clear()
+    this.autoResearchAttempts.clear()
+    this.researchReadySessions.clear()
     void this.research.disable()
     this.bridge.clear()
     this.hagueContexts.clear()
@@ -1932,7 +1939,8 @@ export class CdpObserverService {
         break
       case 'Runtime.executionContextsCleared':
         this.clearHagueSessionEvidence(sessionId)
-        if (this.deep.target?.sessionId === sessionId) void this.research.disable()
+        this.autoResearchAttempts.delete(sessionId)
+        if (this.deep.target?.sessionId === sessionId) void this.research.disable().then(()=>this.ensureAutomaticResearch())
         void this.logger.log('runtime.contexts_cleared', {source:target.source})
         break
       case 'Runtime.bindingCalled':
@@ -1946,6 +1954,7 @@ export class CdpObserverService {
         break
       case 'Runtime.executionContextCreated':
         this.handleHagueContext(target, params)
+        if (target.source === 'hague') void this.ensureAutomaticResearch()
         if (target.source === 'app') void this.installRuntimeObserver(sessionId)
         break
       case 'Network.requestWillBeSent':
@@ -1986,6 +1995,7 @@ export class CdpObserverService {
         this.lastSnapshotByTarget.delete(params.targetId)
         this.lastJihuaTaskSnapshotByTarget.delete(params.targetId)
         this.logger.log('target.detached', { source: selected.source, reason: 'destroyed' })
+        this.scheduleReconcile()
       }
       return
     }
@@ -2000,6 +2010,7 @@ export class CdpObserverService {
         this.lastSnapshotByTarget.delete(target.targetId)
         this.lastJihuaTaskSnapshotByTarget.delete(target.targetId)
         this.logger.log('target.detached', { source: target.source, reason: 'detached' })
+        this.scheduleReconcile()
       }
       return
     }
@@ -2093,6 +2104,7 @@ export class CdpObserverService {
         const info = infoById.get(target.targetId)
         void this.attachTarget({ ...info, ...target })
       }
+      await this.ensureAutomaticResearch()
     } catch {
       await this.logger.log('cdp.target_scan_error', { reason: 'target_scan_failed' })
     }
@@ -2125,12 +2137,31 @@ export class CdpObserverService {
       await this.sendCdp('Network.enable', {}, sessionId)
       if (target.source === 'app') await this.installRuntimeObserver(sessionId)
       await this.logger.log('target.attached', { source: target.source, type: safeIdentifier(target.type, 40) ?? 'unknown' })
+      this.researchReadySessions.add(sessionId)
+      await this.ensureAutomaticResearch()
     } catch {
       this.clearHagueSessionEvidence(sessionId)
         this.sessions.delete(sessionId)
       this.configuredSessions.delete(sessionId)
       this.selectedTargets.delete(target.targetId)
       await this.logger.log('target.initialize_error', { source: target.source })
+    }
+  }
+
+  async ensureAutomaticResearch() {
+    if (!this.autoResearchEnabled || this.stopRequested || this.deep.target) return
+    if (this.autoResearchPending) return this.autoResearchPending
+    for (const session of this.autoResearchAttempts.keys()) if (!this.sessions.has(session)) this.autoResearchAttempts.delete(session)
+    for (const session of this.researchReadySessions) if (!this.sessions.has(session)) this.researchReadySessions.delete(session)
+    const target = [...this.sessions.values()].filter(t=>t.source==='hague' && t.type==='page' && this.researchReadySessions.has(t.sessionId) && safeHagueUrl(t.url) && this.autoResearchAttempts.get(t.sessionId)!==t.url).sort((a,b)=>a.targetId.localeCompare(b.targetId))[0]
+    if (!target) return
+    this.autoResearchAttempts.set(target.sessionId,target.url)
+    const pending = this.research.enable(target,'research')
+    this.autoResearchPending = pending
+    try { await pending } catch { /* Diagnostic activation must not interrupt session initialization. */ }
+    finally {
+      if (this.autoResearchPending === pending) this.autoResearchPending=null
+      if (this.autoResearchEnabled && !this.deep.target) this.scheduleReconcile()
     }
   }
 
