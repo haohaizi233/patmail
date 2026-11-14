@@ -328,3 +328,32 @@ patmail-extension/docs/hague-full-chain-diagnostics.md
 新增回归覆盖：非海牙页面不启用、海牙初始化后启动真实research controller、第二页面不抢占、重连恢复、导航重建、鉴权CLI关闭后后续页面不重开。之前的安全预算与只读边界保持适用。
 
 本次默认值变更验证：`pnpm exec vitest run --maxWorkers=2`完整1780/1780通过，失败0、跳过0；`pnpm typecheck`、变更文件ESLint和`pnpm build`均exit 0，补丁检查通过。已按AGENTS要求停止并重启守护进程，新PID 35128；本次检查仍为waiting/0 Targets，尚未实际自动采集，连接成功且海牙页面初始化后会自动research。最终测试记录为忽略目录`test-results/hague-auto-research-tests.{json,log}`。
+
+
+## 2026-11-14 15:55批次现场异常复核
+
+本地07时UTC观察日志确认7次portfolio确认按钮POST（source=portfolio:j_idt345:confirmBtn，form/process/update=portfolio），响应均HTTP200且独立SAX解析为JSF redirect；jsfError=false、validationFailed=false。之后有application.xhtml GET。该证据不证明创建/保存成功，也不能证明应用拿到了编辑器或WIPO reference。
+
+7个AST网络边均unmatched，原因为source_location_missing；8脚本分析、4静态调用、4次source_limit跳过。应用Trace默认关闭造成caseRunId/stepIndex/拒绝原因缺失，无法将这些网络请求精确归属到各案件或证明原站新增记录。用户回报还包含AST协议拒绝及历史uncertain检查点，不能将全部提示合并成HTTP失败。
+
+补丁：store.ts默认开启应用内部脱敏Trace，手动关闭保留。新增diagnostics-default.test.ts先验证旧代码不记录步骤而失败，再验证默认记录和关闭有效。不放宽AST执行器、不重试创建、不清除检查点。该补丁仅修复证据采集缺口，不代表本批业务异常已修复。更新构建需重新加载扩展/页面后生效；重新加载前应保留材料及检查点，核对原站是否已新增草稿。
+
+用户进一步核对原站Draft(s)：没有新增草稿；该人工核对与创建未确认一致，但不补造请求到案件的精确关联。修复采集默认值后完整1781/1781测试通过（0失败/跳过），类型检查、变更文件ESLint和构建通过。第一轮全测发现旧“默认关闭”断言与新默认值冲突，已改为显式关闭后仍验证不采集；保留全部隐私断言，另有新默认采集测试。未自动重跑业务或清除检查点。
+
+
+## 现场结论更正与保存确认处理器兼容修复
+
+用户补充：刚才这一轮实际创建过草稿，提供WIPO188121和PROTOCOL_UNSUPPORTED。此前“原站没有新增”的人工反馈已被更正，不能继续作为本轮未创建的结论。已存在的编号应保留，不自动另建、删除或清检查点。
+
+复现的代码缺陷：jsfAction原先只用正则豁免纯PF调用；`PF('saveDialog').show();return false;`会被拒绝。执行AST也会把`PrimeFaces.ab(...);PF('saveDialog').hide();return false;`视为未知调用而拒绝。合成保存链复现同一错误码。补丁以Babel语法树识别全局PF、字面widget名称、零参数show/hide方法；只在脱离真实DOM的协议模型里忽略显示/隐藏操作，不执行脚本、不发送附加请求。未知方法、动态widget、参数、computed访问、new调用、PF重定义和多网络动作仍拒绝。独立isStaticUiHandler仅接受UI表达式、空语句及return false，取代宽泛正则兜底。
+
+实际入口：ast/analyzer.mjs:isStaticUiHandler及run执行路径，http-driver.ts:jsfAction。测试包含创建后Close→Yes→单个POST→列表精确编号保存回执的离线链路，及恶意/动态后缀拒绝。此兼容性缺陷已在本机复现并修复，但没有取得WIPO188121按钮原始处理器，不能宣称它是该案已证实的唯一根因；真实恢复尚未验证。
+
+UI：协议诊断从案件区底部移到材料工具栏之前，开关名称为“应用内诊断采集”，说明与默认开启保持一致。页面测试使用文件夹输入的明确aria标签，避免把诊断回放文件输入误当成材料上传。既有材料、草稿和业务按钮未移除。
+
+
+诊断默认开启后还触发了隔离8件批处理UI的45秒等待超时。已保留失败输出，未放宽业务断言或超时：折叠面板改为仅计数、展开后才生成完整报告；通知采用已脱敏事件的只读快照，组件不再逐事件重复sanitize整批历史。最终同一hague-draft-ui.e2e.mjs在原断言和45秒批处理等待下通过，hague-diagnostics-ui.e2e.mjs也通过。此前“热更新干扰”不能独自解释超时；实际还需上述诊断开销优化。折叠/展开、隐私、默认采集及显式关闭回归保留。
+
+监听器已重启加载共享AST代码，并再次验证connected/research enabled；扩展dist已构建，但已有页面仍需加载新版本才能使用新协议处理器和顶部诊断入口。本次没有操作WIPO188121，没有重建或删除真实草稿，真实业务修复效果仍待现场验证。
+
+最终源码验证：1783/1783测试通过，失败0、跳过0（hague-dialog-final-tests.json）；类型检查、变更文件ESLint、构建及补丁检查通过；诊断面板和草稿UI隔离E2E通过。上述通过不替代WIPO188121实站恢复确认。
