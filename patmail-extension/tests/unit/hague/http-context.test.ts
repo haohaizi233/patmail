@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest'
+import {clearDiagnosticEvents,setDiagnosticMode,makeTraceContext,getDiagnosticEvents} from '../../../src/hague/diagnostics/store'
 import { HagueHttpContext } from '../../../src/hague/http-context'
 
 const html=(state:string,reference:string)=>`<html><head><title>WIPO reference ${reference}</title></head><body><form id="form" action="/HagueEFilingWeb/protected/page/application.xhtml"><input name="form" value="form" type="hidden"><input name="javax.faces.ViewState" value="${state}" type="hidden"><input id="form:name" name="form:name"><button type="button" id="form:save">Save</button></form></body></html>`
@@ -76,4 +77,25 @@ it('uses PrimeFaces default @all processing for an action without an explicit pr
  })
  c.load(html('A','111'),'/HagueEFilingWeb/protected/page/application.xhtml')
  await c.post({source:'form:save'})
+})
+
+it('accepts a saved applicant while an inactive designation output panel is absent',async()=>{
+ setDiagnosticMode(true);clearDiagnosticEvents()
+ const c=new HagueHttpContext('inactive-output',async()=>response(`<partial-response><changes><update id="ApplicantForm"><![CDATA[<form id="ApplicantForm"><input name="javax.faces.ViewState" value="A"><button id="ApplicantForm:applicantViewPanel:0:editApp">Edit</button></form>]]></update><update id="Designationform:j_idt779"><![CDATA[<div id="Designationform:j_idt779" class="ui-outputpanel ui-widget"><span>Review designation information.</span></div>]]></update><update id="javax.faces.ViewState"><![CDATA[B]]></update></changes></partial-response>`))
+ c.load('<form id="ApplicantForm"><input name="javax.faces.ViewState" value="A"><button id="ApplicantForm:saveAppBtn">Save</button></form>','/HagueEFilingWeb/protected/page/application.xhtml')
+ c.setTrace(makeTraceContext('case-inactive-output',2,'applicant','http'))
+ await expect(c.post({source:'ApplicantForm:saveAppBtn'})).resolves.toBeUndefined()
+ expect(c.document.querySelectorAll('button[id$=":editApp"]')).toHaveLength(1)
+ expect(c.document.getElementById('Designationform')).toBeNull()
+ expect(c.document.getElementById('Designationform:j_idt779')).toBeNull()
+ expect(c.document.querySelector<HTMLInputElement>('[name="javax.faces.ViewState"]')?.value).toBe('B')
+ expect(getDiagnosticEvents().find(e=>e.phase==='dom.updated')).toMatchObject({inactiveUpdateCount:1,unknownComponentCount:0,domEvidenceSource:'application_model'})
+ clearDiagnosticEvents();setDiagnosticMode(false)
+})
+it.each(['active','interactive','mismatched-root','designation-present','unknown-section','event-handler','script'] as const)('still rejects a missing %s component',async kind=>{
+ const id=kind==='active'?'ApplicantForm:missing':kind==='unknown-section'?'OtherForm:panel':'Designationform:panel'
+ const inner=kind==='interactive'?'<input name="required">':kind==='event-handler'?'<span onclick="unknown()">Information</span>':kind==='script'?'<script>unknown()</script>':'<span>Information</span>'
+ const c=new HagueHttpContext('missing-output',async()=>response(`<partial-response><changes><update id="${id}"><![CDATA[<div id="${kind==='mismatched-root'?'wrong':id}" class="ui-outputpanel">${inner}</div>]]></update></changes></partial-response>`))
+ c.load(`<form id="ApplicantForm"><input name="javax.faces.ViewState" value="A"><button id="ApplicantForm:saveAppBtn">Save</button></form>${kind==='designation-present'?'<form id="Designationform"></form>':''}`,'/HagueEFilingWeb/protected/page/application.xhtml')
+ await expect(c.post({source:'ApplicantForm:saveAppBtn'})).rejects.toMatchObject({diagnostic:{errorCode:'DOM_TARGET_MISSING'}})
 })
