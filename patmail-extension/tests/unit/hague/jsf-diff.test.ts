@@ -95,4 +95,39 @@ describe('JSF Protocol Fingerprint & Drift Detection', () => {
     expect(typeof sFp).toBe('string')
     expect(sFp.length).toBeGreaterThan(10)
   })
+
+  it('reports baseline_missing rather than false no_drift when baseline is absent', () => {
+    const observed = {
+      scenarioId: 'save_applicant',
+      urlPath: '/HagueEFilingWeb/protected/page/application.xhtml',
+      facesNamespace: 'javax',
+      observedActions: ['update'],
+    }
+
+    const drift = detectProtocolDrift(null, observed)
+    expect(drift.hasDrift).toBe(false)
+    expect(drift.driftStatus).toBe('baseline_missing')
+    expect(drift.confidence).toBe('unresolved')
+    expect(drift.unresolvedReasons).toContain('baseline_missing')
+  })
+
+  it('preserves sequential order of partial response actions in protocol fingerprint', () => {
+    const req1 = {
+      httpMethod: 'POST',
+      urlPath: '/HagueEFilingWeb/protected/page/application.xhtml',
+      facesNamespace: 'javax',
+      actions: ['update', 'eval', 'delete']
+    }
+    const req2 = {
+      httpMethod: 'POST',
+      urlPath: '/HagueEFilingWeb/protected/page/application.xhtml',
+      facesNamespace: 'javax',
+      actions: ['delete', 'eval', 'update']
+    }
+
+    const fp1 = computeProtocolFingerprint(req1)
+    const fp2 = computeProtocolFingerprint(req2)
+    // Different action order yields different protocol fingerprints
+    expect(fp1).not.toBe(fp2)
+  })
 })

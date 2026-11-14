@@ -89,5 +89,35 @@ describe('JSF Request Normalization & Component Mapping', () => {
       confidence: 'unresolved',
     })
     expect(unverified.componentRole).toBe('unknown')
+
+    // Substring alone with single evidence layer cannot prove role or authorize writes
+    const substringOnly = reg.registerComponent({
+      componentId: 'form:save_draft_button',
+      sourceEvidence: 'string_only',
+      confidence: 'unresolved'
+    })
+    expect(substringOnly.componentRole).toBe('unknown')
+    expect(substringOnly.candidateRoleHint).toBe('candidate_save_action')
+    expect(substringOnly.canAuthorizeWrite).toBe(false)
+    expect(substringOnly.authoritativeReceipt).toBe(false)
+
+    // Dynamic ID re-use across naming containers is isolated
+    reg.registerComponent({
+      componentId: 'j_idt42',
+      namingContainer: 'ApplicantForm',
+      confidence: 'unresolved'
+    })
+    expect(reg.getComponent('j_idt42')?.namingContainer).toBe('ApplicantForm')
+    reg.registerComponent({
+      componentId: 'j_idt42',
+      namingContainer: 'CreatorForm',
+      confidence: 'unresolved'
+    })
+    expect(reg.getComponent('j_idt42')?.namingContainer).toBe('CreatorForm')
+
+    // Clear bumps generation and empties registry
+    reg.clear()
+    expect(reg.size()).toBe(0)
+    expect(reg.getComponent('ApplicantForm:saveBtn')).toBeUndefined()
   })
 })

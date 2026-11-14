@@ -38,6 +38,11 @@ export function buildDiagnosticReport(input: readonly unknown[]) {
   const terminal = new Map<string,number>()
   const stepIdentity=(event:TraceEvent)=>JSON.stringify([event.caseRunId,event.traceId,event.stepIndex])
   events.forEach((event,index)=>{if(event.traceId&&authoritative(event))terminal.set(stepIdentity(event),index)})
+  const fingerprints = [...new Set(events.flatMap(e => e.protocolFingerprint ? [e.protocolFingerprint] : []))]
+  const driftEvent = events.find(e => e.driftStatus)
+  const driftStatus = (driftEvent?.driftStatus as string) ?? (fingerprints.length ? 'no_drift' : 'baseline_missing')
+  const baselineVersion = events.find(e => e.baselineVersion)?.baselineVersion
+
   return {
     version: 1 as const,
     events,
@@ -52,6 +57,9 @@ export function buildDiagnosticReport(input: readonly unknown[]) {
       sideEffectMayHaveOccurred: events.some(e => e.sideEffectMayHaveOccurred === true),
       recoveryDecision: [...events].reverse().find(e => e.recoveryDecision)?.recoveryDecision ?? 'unknown',
       missingEvidence: [!events.some(e => e.source === 'cdp') ? 'CDP 数据缺失' : '', !events.some(authoritative) ? '权威业务回执证据缺失' : ''].filter(Boolean),
+      protocolFingerprints: fingerprints,
+      driftStatus,
+      baselineVersion: baselineVersion ?? null
     },
     timeline: events.map(event => ({ alias: alias(event), event })),
     tree: [...grouped].map(([caseRunId,steps]) => ({ alias: aliases.get(caseRunId)!, caseRunId,
@@ -67,6 +75,7 @@ export function exportDiagnostics(input: readonly unknown[], format: 'json' | 'j
   return ['# Hague 诊断报告', '', '证据来源：应用内事件 / CDP 事件（各事件 source 字段）；静态分析不是运行结果。',
     `查看来源：${provenance === 'offline-replay' ? '离线回放（不执行业务）' : '观测记录'}`, `事件：${report.summary.eventCount}；案件：${report.summary.caseCount}`, `CDP：${report.summary.cdpMissing ? '数据缺失' : '有观测记录'}`,
     `首个已证明失败：${report.summary.firstProvenFailure?.phase ?? '未采集到'}`, `存在不确定结果：${report.summary.hasUncertainty}`,
+    `协议指纹：${report.summary.protocolFingerprints.join(', ') || '未采集'}；漂移状态：${report.summary.driftStatus}`,
     `恢复决定：${report.summary.recoveryDecision}`, '', '| 案件 | 阶段 | HTTP | 协议 | 业务 | 关联置信度 |', '| --- | --- | --- | --- | --- | --- |',
     ...report.timeline.map(({ alias, event: e }) => `| ${alias} | ${e.phase} | ${e.httpStatus ?? '未知'} | ${e.protocolStatus ?? '未知'} | ${e.businessStatus ?? '未知'} | ${e.correlationConfidence ?? (e.source === 'application' ? 'application-trace' : 'unmatched')} |`),
     '', '## 分层证据与缺失证据', ...report.evidence.map(item=>item.explanation),

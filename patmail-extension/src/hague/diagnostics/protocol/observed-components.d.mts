@@ -4,7 +4,10 @@ export interface ObservedComponent {
   formId?: string
   widgetType?: string
   componentRole: string
+  candidateRoleHint?: string
   sourceEvidence: string
+  canAuthorizeWrite: boolean
+  authoritativeReceipt: boolean
   generation: number
   confidence: 'exact' | 'probable' | 'unresolved'
 }
@@ -16,6 +19,9 @@ export interface ObservedComponentInput {
   widgetType?: string
   componentRole?: string
   sourceEvidence?: string
+  domEvidence?: string
+  astEvidence?: string
+  requestEvidence?: string
   confidence?: 'exact' | 'probable' | 'unresolved'
 }
 

@@ -16,9 +16,14 @@ export function computeProtocolFingerprint(req = {}) {
   const proc = req.process ? String(req.process).split(/\s+/).sort().join(' ') : ''
   const upd = req.update ? String(req.update).split(/\s+/).sort().join(' ') : ''
   const evt = req.event || ''
-  const actions = Array.isArray(req.actionTypes) ? [...req.actionTypes].sort().join(',') : ''
+  // JSF Partial Response actions maintain sequential semantic order; do not sort!
+  const actionList = Array.isArray(req.actions)
+    ? req.actions.map(a => (typeof a === 'string' ? a : a.action)).join(',')
+    : Array.isArray(req.actionTypes)
+      ? req.actionTypes.join(',')
+      : ''
 
-  const canonical = [method, path, ns, src, proc, upd, evt, actions].join('|')
+  const canonical = [method, path, ns, src, proc, upd, evt, actionList].join('|')
   return `proto:${fnv1a(canonical)}`
 }
 
@@ -33,18 +38,34 @@ export function computeScenarioFingerprint(steps = []) {
 }
 
 export function detectProtocolDrift(baseline, observed) {
-  const changes = []
-  let severity = 'low'
-
-  if (!baseline || !observed) {
+  if (!baseline) {
     return {
       hasDrift: false,
+      driftStatus: 'baseline_missing',
       severity: 'low',
+      baselineVersion: undefined,
+      protocolFingerprint: observed ? computeProtocolFingerprint(observed) : undefined,
+      changes: [],
+      confidence: 'unresolved',
+      unresolvedReasons: ['baseline_missing']
+    }
+  }
+
+  if (!observed) {
+    return {
+      hasDrift: false,
+      driftStatus: 'unresolved',
+      severity: 'low',
+      baselineVersion: baseline.version || '1.0.0',
+      protocolFingerprint: undefined,
       changes: [],
       confidence: 'unresolved',
       unresolvedReasons: ['insufficient_data']
     }
   }
+
+  const changes = []
+  let severity = 'low'
 
   // 1. Faces namespace change
   if (baseline.facesNamespace && observed.facesNamespace && baseline.facesNamespace !== observed.facesNamespace) {
@@ -122,7 +143,10 @@ export function detectProtocolDrift(baseline, observed) {
   const hasDrift = changes.length > 0
   return {
     hasDrift,
+    driftStatus: hasDrift ? 'drift_detected' : 'no_drift',
     severity: hasDrift ? severity : 'low',
+    baselineVersion: baseline.version || '1.0.0',
+    protocolFingerprint: computeProtocolFingerprint(observed),
     changes,
     confidence: 'exact',
     unresolvedReasons: []
