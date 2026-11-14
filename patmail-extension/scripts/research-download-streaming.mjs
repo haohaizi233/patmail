@@ -145,7 +145,7 @@ try {
         const stop = setTimeout(() => controller.abort(), 240000)
         const heartbeat = setInterval(
           () =>
-            void window.__reportStreamingResearch({
+            void globalThis.window.__reportStreamingResearch({
               stage: 'packing-wait',
               count,
               elapsedMs: Math.round(performance.now() - started),
@@ -189,7 +189,7 @@ try {
               metrics.firstGuidMs = elapsedMs
             const item = { elapsedMs, bytes: chunk.value.byteLength, totalBytes: metrics.bytes }
             metrics.chunks.push(item)
-            void window.__reportStreamingResearch({ stage: 'packing-chunk', count, ...item })
+            void globalThis.window.__reportStreamingResearch({ stage: 'packing-chunk', count, ...item })
             if (metrics.bytes > 2 * 1024 * 1024) throw new Error('Unexpected large preparation response')
           }
           text += decoder.decode()
@@ -348,7 +348,7 @@ try {
         summary.extensionStreaming = await app.evaluate(
           async ({ guid, origin }) => {
             const capabilities = {
-              secureContext: isSecureContext,
+              secureContext: globalThis.isSecureContext,
               filePicker: typeof showSaveFilePicker === 'function',
               readableStream: typeof ReadableStream === 'function',
             }
@@ -551,7 +551,7 @@ try {
                   for (;;) {
                     const chunk = await validationReader.read()
                     if (chunk.done) break
-                    await window.__writeZipForValidation([...chunk.value])
+                    await globalThis.window.__writeZipForValidation([...chunk.value])
                   }
                   return {
                     passed:

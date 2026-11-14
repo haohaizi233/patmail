@@ -411,14 +411,6 @@ function treeChoices(key: string): { value: string; label: string; parent?: stri
   const options = choices(key)
   return hasOptionTree(options) ? options : []
 }
-function optionsFor(key: string): { value: string; label: string; parent?: string }[] {
-  return [{ value: '', label: '不限' }, ...choices(key)]
-}
-function optionLabel(key: string, value: string): string {
-  const option = choices(key).find(item => item.value === value)
-  return option?.label ?? ''
-}
-
 function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
   // 账号有账本就整个界面走静默校对：拉取期间所有字段照常可选，拉不到也用账本兜底，不进 loading/失败态。
   if (ledgerPresent.value) return choices(key).length ? 'ready' : 'empty'
@@ -916,8 +908,6 @@ onBeforeUnmount(() => {
           <label v-else-if="cell.kind === 'named'" class="query-cell">
             <span>{{ cell.label }}</span>
             <TreeOptionSelect v-if="cell.key !== 'business_coop' || choices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true, true)" @update:model-value="setNamed(cell.key, String($event))" />
-            <!-- eslint-disable-next-line vue/no-dupe-v-else-if -- 存量豁免：保留分支顺序与上下文可读性 -->
-            <ThemeSelect v-else-if="choices(cell.key).length || cell.key !== 'business_coop'" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
             <input v-else :value="valueOf(cell.key)" type="text" placeholder="签约单位下拉未读到，可直接填值" @input="onText(cell.key, $event)" />
           </label>
           <label v-else-if="cell.kind === 'select'" class="query-cell">

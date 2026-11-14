@@ -52,7 +52,7 @@ try {
   await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
   await app.waitForFunction(
     async () => {
-      const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+      const loaded = await globalThis.chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
       const connection = loaded.payload?.connection
       return Boolean(connection?.operatorId && connection.easyTabId != null)
     },
@@ -60,10 +60,10 @@ try {
     { timeout: 45000, polling: 500 },
   )
   const saved = await app.evaluate(async fields => {
-    const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+    const loaded = await globalThis.chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
     const c = loaded.payload.connection
     const now = new Date().toISOString()
-    const result = await chrome.runtime.sendMessage({
+    const result = await globalThis.chrome.runtime.sendMessage({
       type: 'WORKSPACE',
       payload: {
         action: 'saveQueryTemplate',
@@ -86,7 +86,7 @@ try {
         },
       },
     })
-    return { version: chrome.runtime.getManifest().version, saved: result.payload?.ok }
+    return { version: globalThis.chrome.runtime.getManifest().version, saved: result.payload?.ok }
   }, fields)
   report.version = saved.version
   assert.equal(saved.saved, true)

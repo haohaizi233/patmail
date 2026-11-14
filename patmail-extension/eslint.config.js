@@ -46,9 +46,9 @@ export default tseslint.config(
   },
 
   // ---- 浏览器上下文代码（page.evaluate / worker.evaluate 回调运行在页面或扩展环境） ----
-  // 现场审计与研究脚本同样把回调注入页面，只补环境全局，不关闭任何规则。
+  // Node 现场脚本在注入回调内显式使用 globalThis，不扩大宿主环境。
   {
-    files: ['tests/**/*.mjs', 'scripts/live-*.mjs', 'scripts/research-*.mjs'],
+    files: ['tests/**/*.mjs'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser, chrome: 'readonly' },
     },
