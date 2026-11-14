@@ -344,6 +344,7 @@ function exportData(): void {
       <OaSessionCard platform="WIPO eHague" :tabs="oa.tabs.value" :selected="oa.selected.value" :state="oa.state.value" :message="oa.message.value" :checking="oa.checking.value" :listing="oa.listing.value" @update:selected="oa.selected.value = $event" @verify="verifyOa" @refresh="oa.refresh" @open="oa.open" />
     </Teleport>
     <OaSessionCard v-else-if="!canTeleport" platform="WIPO eHague" :tabs="oa.tabs.value" :selected="oa.selected.value" :state="oa.state.value" :message="oa.message.value" :checking="oa.checking.value" :listing="oa.listing.value" @update:selected="oa.selected.value = $event" @verify="verifyOa" @refresh="oa.refresh" @open="oa.open" />
+    <HagueDiagnostics />
     <section class="card hague-prepare">
       <header class="card-head">
         <h2>批量材料准备</h2>
@@ -421,7 +422,6 @@ function exportData(): void {
         <details v-if="active.source"><summary>知易通原始字段</summary><pre class="formula">{{ active.source }}</pre></details>
       </article>
     </SplitScrollPane>
-    <HagueDiagnostics />
     <ImagePreview v-model:index="previewIndex" :items="gallery" />
   </section>
 </template>

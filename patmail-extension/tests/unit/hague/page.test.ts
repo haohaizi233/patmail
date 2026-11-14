@@ -58,7 +58,7 @@ it.each([false,true])('reads and arbitrates materials with a restored approved c
     expect(zone.classList.contains('is-dragging')).toBe(false)
     const files = ['root/PO1HAGUE/form.docx', 'root/PO1HAGUE/1.1.jpg', ...(restored?['root/PO1HAGUE/2.1.jpg']:[])].map(path => Object.assign(new File([''], path.split('/').pop()!), { webkitRelativePath: path }))
     if(restored)mocks.approval=repairRepeatedDesignNumbers({locarno:'28',products:[['1','1','Bottle','03'],['1','1','Bottle','03']],description:'Description',views:[{number:'1.1',code:'1',label:'Perspective'},{number:'2.1',code:'1',label:'Perspective'}],issues:[]},files.filter(f=>f.name.endsWith('.jpg')))?.designNumberCorrection
-    const input = root.querySelector<HTMLInputElement>('input[type=file]')!
+    const input = root.querySelector<HTMLInputElement>('input[aria-label="选择海牙申请总文件夹"]')!
     Object.defineProperty(input, 'files', { value: files })
     input.dispatchEvent(new Event('change'))
     await vi.waitFor(() => expect(root.textContent).toContain(restored?'材料已就绪，请先连接并验证 eHague 登录态':'等待 eHague 登录验证'))

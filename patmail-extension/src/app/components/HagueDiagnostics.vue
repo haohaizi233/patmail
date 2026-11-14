@@ -8,6 +8,7 @@ import type { TraceEvent } from '../../hague/diagnostics/trace'
 import { analyzeEvidence } from '../../hague/diagnostics/evidence/evidence-model.mjs'
 
 void restoreDiagnosticEvents()
+const panelOpen = ref(false)
 const enabled = ref(isDiagnosticModeEnabled())
 const events = ref(getDiagnosticEvents())
 const researchStatus = ref(getResearchStatus())
@@ -42,7 +43,7 @@ const fingerprintChange = computed(() => {
   if (!first || !last) return null
   return diffFingerprints(fingerprintProtocol({ forms: first.forms, components: first.components }), fingerprintProtocol({ forms: last.forms, components: last.components }))
 })
-const stop = subscribeDiagnostics(() => { events.value = getDiagnosticEvents(); enabled.value = isDiagnosticModeEnabled(); researchStatus.value = getResearchStatus(); collectorStats.value = getCollectorStats() })
+const stop = subscribeDiagnostics(next => { events.value = [...next]; enabled.value = isDiagnosticModeEnabled(); researchStatus.value = getResearchStatus(); collectorStats.value = getCollectorStats() })
 onBeforeUnmount(stop)
 function toggle(event: Event) { enabled.value = (event.target as HTMLInputElement).checked; setDiagnosticMode(enabled.value) }
 function download(format: 'json' | 'jsonl' | 'markdown') {
@@ -62,11 +63,11 @@ async function importReplay(event: Event) {
 </script>
 
 <template>
-  <details class="hague-diagnostics">
-    <summary>协议诊断 · {{ report.summary.eventCount }} 个事件</summary>
-    <div class="diagnostic-content">
+  <details class="hague-diagnostics" @toggle.self="panelOpen = ($event.target as HTMLDetailsElement).open">
+    <summary>协议诊断 · {{ (replay ?? events).length }} 个事件</summary>
+    <div v-if="panelOpen" class="diagnostic-content">
       <label><input type="checkbox" :checked="enabled" @change="toggle"> 应用内诊断采集</label>
-      <p>默认关闭。此开关不会开启 CDP 深度脚本读取；深度采集须独立明确授权。事件仅保留结构信息。</p>
+      <p>应用内脱敏诊断默认开启，可手动关闭。此开关不会开启 CDP 深度脚本读取；研究模式随已授权 CDP 服务开启。事件仅保留结构信息。</p>
       <p role="status">{{ replay ? '离线回放 · 仅重建分析状态，不执行业务请求' : '当前应用观测记录' }} · {{ report.summary.cdpMissing ? 'CDP 数据缺失' : '存在 CDP 观测记录' }}</p>
       <p data-testid="research-status">最近服务状态：模式 {{ researchStatus?.mode ?? '未采集' }} · 研究 {{ researchStatus?.researchState ?? '未采集' }} · 连接 {{ researchStatus?.observerState ?? '未采集' }} · {{ researchStatus?.timestamp ?? '未采集' }}</p>
       <p>Target：{{ researchStatus?.targetId ?? '未指定研究目标' }} · AST：{{ featureState.ast }} · JSF Parser：{{ featureState.jsf }} · Correlation：{{ featureState.correlation }}</p>
