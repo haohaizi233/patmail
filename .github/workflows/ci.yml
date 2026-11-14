@@ -7,6 +7,7 @@
 # 权限最小化：只读 contents；不接触任何 Secret；并发取消只作用于同分支/同 PR。
 name: CI
 
+# PR 事件下 checkout 固定到 head SHA：self-hosted runner 从本地仓库镜像取代码，拿不到 GitHub 生成的 merge commit。
 env:
   SME_SNAPSHOT_STUB: "1"
 
@@ -34,6 +35,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: Typecheck / Lint / Format
         run: node scripts/ci-check.mjs --steps typecheck,lint,format
@@ -52,6 +55,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 单元 + 集成测试（JUnit 产物）
         run: node scripts/ci-check.mjs --steps unit,integration
@@ -71,6 +76,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 历史业务契约回归（JUnit 产物）
         run: node scripts/ci-check.mjs --steps regression
@@ -90,6 +97,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 密钥扫描（工作树）+ 许可策略
         run: node scripts/ci-check.mjs --steps secrets,licenses
@@ -109,6 +118,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 构建 + Manifest 校验 + 产物校验
         run: node scripts/ci-check.mjs --steps build,manifest,dist
@@ -140,6 +151,8 @@ jobs:
       PATMAIL_TEST_DIST: ${{ github.workspace }}/patmail-extension/dist
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 缓存 Playwright 浏览器
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -180,6 +193,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
