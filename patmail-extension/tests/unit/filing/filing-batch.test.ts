@@ -15,7 +15,9 @@ function filingPage(page: number): Response {
 /** 每个请求按 pageIndex 挂起，等测试来放行；被 abort 的记进 aborted。 */
 function pagingFetcher(state: { aborted: string[]; pending: Map<string, (response: Response) => void> }): typeof fetch {
   return async (url, init) => {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     if (String(url).endsWith('Login.ashx')) return new Response(JSON.stringify(authenticated))
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     const page = new URLSearchParams(String(init?.body)).get('pageIndex') ?? '?'
     return new Promise<Response>((resolve, reject) => {
       state.pending.set(page, resolve)

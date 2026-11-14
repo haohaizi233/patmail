@@ -128,7 +128,7 @@ describe('文件选择', () => {
     expect(selected.f1).toBeUndefined()
     selected = selectPage(selected, [second], false)
     expect(selected.f2).toBeUndefined()
-    selected = bindCustomer({ f3: selected.f3! }, ['f3'], 'profile-a')
+    selected = bindCustomer({ f3: selected.f3 }, ['f3'], 'profile-a')
     expect(selected.f3?.customerProfileId).toBe('profile-a')
     expect(selected.f3?.customerBinding).toBeUndefined()
     selected = applyConfirmedBind(selected, 'profile-a', '客户A', ['客户A'])
@@ -182,10 +182,10 @@ describe('发文分组', () => {
 
 describe('发文类型映射和草稿', () => {
   it('matches exact ids, blocks missing or disabled mappings, and keeps the guid', () => {
-    const group = planMailGroups([file('1', 'a', '专利证书', { fileDescriptionId: guid('10000000') })], [policy('a')]).groups[0]!
+    const group = planMailGroups([file('1', 'a', '专利证书', { fileDescriptionId: guid('10000000') })], [policy('a')]).groups[0]
     expect(matchMailType(group, [mapping('专利证书')])).toBeNull()
     expect(matchMailType(group, [{ ...mapping('其他'), fileDescriptionId: guid('10000000') }])?.mailTypeId).toBe(mailType)
-    const textGroup = planMailGroups([file('1', 'a', '专利证书')], [policy('a')]).groups[0]!
+    const textGroup = planMailGroups([file('1', 'a', '专利证书')], [policy('a')]).groups[0]
     expect(matchMailType(textGroup, [mapping('专利证书', false)])).toBeNull()
     expect(matchMailType(textGroup, [mapping('专利证书', true, '证书通知')])).toBeNull()
     const bundle = rules({
@@ -202,12 +202,12 @@ describe('发文类型映射和草稿', () => {
     expect(drafts[0]?.mailTypeId).toBe(mailType)
     expect(drafts[0]?.to).toEqual(['a@example.com'])
     expect(drafts[0]?.subject).toBe('关于2个文件1、文件2的通知')
-    expect(injectCount(drafts[0]!.subject, 2, '关于')).toBe(drafts[0]?.subject)
+    expect(injectCount(drafts[0].subject, 2, '关于')).toBe(drafts[0]?.subject)
     expect(drafts[0]?.body).toContain('{不存在}')
     expect(drafts[0]?.body).toContain('此致')
     expect(drafts[0]?.status).toBe('blocked')
     expect(drafts[0]?.issues.some(issue => issue.code === 'INVALID_EMAIL')).toBe(true)
-    const warned = planDrafts(snapshot, { ...bundle, recipients: [{ ...bundle.recipients[0]!, to: ['a@example.com'] }] }, [profile('a', '客户A')], user)
+    const warned = planDrafts(snapshot, { ...bundle, recipients: [{ ...bundle.recipients[0], to: ['a@example.com'] }] }, [profile('a', '客户A')], user)
     expect(warned[0]?.status).toBe('warning')
     const otherSignature = planDrafts(snapshot, bundle, [profile('a', '客户A')], other)
     expect(otherSignature[0]?.signature).toBe('')
@@ -220,7 +220,7 @@ describe('发文类型映射和草稿', () => {
 
   it('builds subject and body without executing template text', () => {
     expect(uniqueAddresses([' A@B.com ', 'a@b.com', 'nope'])).toEqual({ addresses: ['a@b.com'], invalid: ['nope'] })
-    const group = planMailGroups([file('1', 'a', '专利证书')], [policy('a')]).groups[0]!
+    const group = planMailGroups([file('1', 'a', '专利证书')], [policy('a')]).groups[0]
     const subject = buildSubject({ template: '{文件名称}<script>', countInjection: false, anchor: '关于', missingAnchor: 'keep', version: 1 }, group, '客户A')
     expect(subject.text).toBe('文件1<script>')
     expect(subject.unresolved).toEqual([])
@@ -269,8 +269,10 @@ describe('发文配置存储', () => {
 describe('发文类型字典', () => {
   it('keeps real ids and does not invent one for a bad payload', async () => {
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       expect(call).toBe('LoadMailType')
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const page = new URLSearchParams(String(init?.body)).get('log_pagename')
       expect(page).toBe('FileSearchMail.aspx')
       return new Response(JSON.stringify({

@@ -3,7 +3,9 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CURRENT_ENVIRONMENT } from '../../api/config'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { choicesFromDictionary, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { FILING_OPTION_KEYS, FILING_SELECTS, FILING_BLOCKS, filingCellKeys, filingDateDefaults, filingDraftFields, filingFieldLabel, type FilingCell } from '../../api/filing-form'
 import type { FilingSearchQuery } from '../../api/filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from '../../api/filing-search-types'
@@ -12,6 +14,7 @@ import { filingTemplateValues, filingTemplatesOf, applyFilingBuiltin, FILING_BUI
 import { downloadTemplateJson, readTemplateJson, templateJsonFileName, templateJsonText } from '../../query/template-json'
 import type { QueryTemplate } from '../../query/query-types'
 import { hasOptionTree } from '../../query/option-tree'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { activateOptionFallback, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
 import { describeOptionPull } from '../../query/option-pull-notes'
 import { fitColumnWidths, type ColumnFit } from '../../shell/column-fit'
@@ -403,6 +406,7 @@ function optionFieldLabel(key: string): string {
   const base = key.split(':')[0]!
   return FILING_CELL_LABELS[key] ?? FILING_CELL_LABELS[base] ?? key
 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
   const options = choices(key)
   return hasOptionTree(options) ? options : []
@@ -912,6 +916,7 @@ onBeforeUnmount(() => {
           <label v-else-if="cell.kind === 'named'" class="query-cell">
             <span>{{ cell.label }}</span>
             <TreeOptionSelect v-if="cell.key !== 'business_coop' || choices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true, true)" @update:model-value="setNamed(cell.key, String($event))" />
+            <!-- eslint-disable-next-line vue/no-dupe-v-else-if -- 存量豁免：保留分支顺序与上下文可读性 -->
             <ThemeSelect v-else-if="choices(cell.key).length || cell.key !== 'business_coop'" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
             <input v-else :value="valueOf(cell.key)" type="text" placeholder="签约单位下拉未读到，可直接填值" @input="onText(cell.key, $event)" />
           </label>

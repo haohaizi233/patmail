@@ -10,7 +10,7 @@ export type NodeResolution =
 export function resolveNextNodes(nodes: WorkflowNode[], selectedId = ''): NodeResolution {
   const usable = nodes.filter(node => node.nodeId)
   if (usable.length === 0) return { kind: 'none' }
-  if (!selectedId) return usable.length === 1 ? { kind: 'one', node: usable[0]! } : { kind: 'many', nodes: usable }
+  if (!selectedId) return usable.length === 1 ? { kind: 'one', node: usable[0] } : { kind: 'many', nodes: usable }
   const found = usable.find(node => node.nodeId.toLowerCase() === selectedId.toLowerCase())
   return found ? { kind: 'one', node: found } : { kind: 'missing' }
 }

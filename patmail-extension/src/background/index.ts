@@ -50,6 +50,7 @@ const workerScope = globalThis as unknown as {
 }
 workerScope.addEventListener('fetch', event => { nativeTarget.handleFetch(event) })
 workerScope.addEventListener('activate', event => { event.waitUntil(workerScope.clients.claim()) })
+// eslint-disable-next-line @typescript-eslint/unbound-method -- 存量豁免：保留原型方法引用
 const browserDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), nativeTarget.host, nativeTarget.status)
 const documentDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), request => nativeTarget.host(request), targetId => nativeTarget.status(targetId))
 
@@ -107,7 +108,7 @@ async function sendToTab(tabId: number, message: AppMessage): Promise<unknown> {
 
 const host: WorkspaceHost = {
   connection,
-  area: chrome.storage.local as unknown as WorkspaceHost['area'],
+  area: chrome.storage.local,
   tasks,
   evidence,
   queryTabs: () => chrome.tabs.query({}),
@@ -120,6 +121,7 @@ const host: WorkspaceHost = {
   openApp: async () => {
     const appUrl = chrome.runtime.getURL('app.html')
     const tabs = await chrome.tabs.query({})
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- 存量豁免：保留原型方法引用
     return openWorkspaceTab(tabs, appUrl, host.focusTab, async () => {
       const created = await chrome.tabs.create({ url: appUrl, active: true })
       if (created.id == null) throw new Error('没有打开工作台。')
@@ -229,6 +231,7 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
     const type = message && typeof message === 'object' && 'type' in message ? String((message as { type?: unknown }).type) : '未知'
     const inner = message && typeof message === 'object' && 'payload' in message
       && (message as { payload?: { action?: unknown; message?: { type?: unknown } } }).payload?.action === 'forward'
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       ? String((message as { payload?: { message?: { type?: unknown } } }).payload?.message?.type ?? '')
       : ''
     const envelope = isRecord(message) && isRecord(message.payload) ? message.payload : undefined

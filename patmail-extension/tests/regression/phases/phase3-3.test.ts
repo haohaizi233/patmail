@@ -114,7 +114,7 @@ describe('Phase 3.3 可信任务、模板摘要与账号事务', () => {
       items: stored.items.map(item => ({ ...item, easyMailId: '', workflowExecutionId: '' }))
     }
     const rejected = await handleAuthorityMessage(
-      { type: MessageType.SaveTask, payload: { task: incoming as unknown as Record<string, unknown> } },
+      { type: MessageType.SaveTask, payload: { task: incoming } },
       { ledger: new ExecutionLedger(memoryTransactionStore(), 'owner'), tasks: runtime.tasks, evidence: runtime.evidence }
     )
     if (rejected?.type !== MessageType.TaskResult) throw new Error('save')

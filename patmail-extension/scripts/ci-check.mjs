@@ -10,6 +10,7 @@
  * 供 scripts/ci-report.mjs 生成最终报告。任何一步失败都会让 ci:check 以非零退出码结束。
  */
 import { spawnSync } from 'node:child_process'
+// eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

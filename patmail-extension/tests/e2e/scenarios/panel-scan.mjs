@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 export async function runPanelScan(ctx) {
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const { report, context, worker, extensionId, page, panel, host, url, easyUrl, apiCalls, visible, tabFor, showPanel } = ctx
   const check = (name, action) => report.check(name, action)
   const note = (line) => report.note(line)

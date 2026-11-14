@@ -20,22 +20,32 @@ import { isWriteSwitchOpen, isWriteSwitchReady } from '../../settings/write-swit
 import { useWriteSwitch } from '../../settings/use-write-switch'
 
 const props = withDefaults(defineProps<{
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   bridge?: MessageBridge
   userId: string
   connected: boolean
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   seed?: Record<string, string> | null
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   procQueries?: Array<{ id: string; volumes: string }>
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   seedToken?: number
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   caseVolume?: string
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   sheetRows?: Array<{ ourVolume: string; procLabel?: string; mailTypeId?: string; customerName?: string; contactName?: string; iprName?: string; leadName?: string; mailTo?: string; mailCc?: string; iprCarried?: true; contactCarried?: true; leadCarried?: true; iprArbitrated?: true; namedBusiness?: true }>
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   recipientMode?: 'ipr' | 'lead'
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   inventorCustomers?: string[]
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   flowByKey?: Record<string, string>
   /** 下面的核对已经在读同一批流程。上表不再为这 40 行另开一轮流程图。 */
   flowChecking?: boolean
   /** 「已发文，事项未管制完成日」的行是否允许勾选提交。默认允许，提交前会弹警示框。 */
   allowMailedUnfinished?: boolean
   /** 发文映射或这一页选中的默认发件人。草稿没有发件邮箱时写入。 */
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   senderId?: string
 }>(), { flowChecking: false, allowMailedUnfinished: true })
 

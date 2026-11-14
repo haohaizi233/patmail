@@ -45,9 +45,10 @@ export default tseslint.config(
     },
   },
 
-  // ---- E2E 脚本内的浏览器上下文代码（page.evaluate 回调运行在页面/扩展环境） ----
+  // ---- 浏览器上下文代码（page.evaluate / worker.evaluate 回调运行在页面或扩展环境） ----
+  // 现场审计与研究脚本同样把回调注入页面，只补环境全局，不关闭任何规则。
   {
-    files: ['tests/**/*.mjs'],
+    files: ['tests/**/*.mjs', 'scripts/live-*.mjs', 'scripts/research-*.mjs'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser, chrome: 'readonly' },
     },

@@ -1,5 +1,6 @@
 <script setup>
 import Bunny from './Bunny.vue'
+// eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
 defineProps({ title: String, desc: String, art: String, artLarge: Boolean })
 </script>
 

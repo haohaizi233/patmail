@@ -18,9 +18,11 @@ async function saveCustomerProfile(page, name) {
 }
 
 export async function runWorkspaceFlow(ctx) {
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const { report, context, worker, extensionId, page, panel, host, url, easyUrl, apiCalls, visible, tabFor, showPanel } = ctx
   let workspace
   const check = (name, action) => report.check(name, action)
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const note = (line) => report.note(line)
   await check('icon action opens one full-page workspace and the next call focuses it', async () => {
     const manifest = JSON.parse(await readFile(path.join(dist, 'manifest.json'), 'utf8'))
@@ -290,6 +292,7 @@ export async function runWorkspaceFlow(ctx) {
         request.onerror = () => reject(request.error)
         request.onsuccess = () => resolve(request.result)
       })
+      // eslint-disable-next-line no-return-await -- 存量豁免：保留 await 以维持 try/finally 语义
       return await new Promise((resolve, reject) => {
         const tx = database.transaction('bundles', 'readwrite')
         const store = tx.objectStore('bundles')

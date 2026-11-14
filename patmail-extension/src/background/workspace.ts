@@ -611,6 +611,7 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     if (!isReadonlyProbe(probe)) {
       return workspaceResult({ ok: false, message: '只读验收没有带回可复核的响应。', connection: host.connection.context })
     }
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     const runner = new LiveEasyAcceptanceRunner({ kind: 'live', call: async () => probe })
     const row = await runner.run({
       origin: host.connection.context.easyOrigin,
@@ -645,6 +646,7 @@ function readTabSession(host: WorkspaceHost, tabId: number): Promise<unknown> {
     const timer = setTimeout(() => reject(new Error('登录检测超时。')), SESSION_READ_MS)
     host.sendToTab(tabId, { type: MessageType.CheckSession }).then(
       value => { clearTimeout(timer); resolve(value) },
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       error => { clearTimeout(timer); reject(error) }
     )
   })

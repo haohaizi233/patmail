@@ -11,7 +11,7 @@ it('does not cache failed sources as empty, then caches a verified empty respons
   let fail = true
   const post = vi.fn(async (operation: string) => {
     if (operation === 'applyTags' && fail) return { ok: false, error: { code: 'NETWORK_ERROR', message: 'offline' } }
-    return { ok: true, data: { ClientInfo: { IsLogin: true, Status: true }, ...Object.fromEntries(keys[operation]!.map(key => [key, null])) } }
+    return { ok: true, data: { ClientInfo: { IsLogin: true, Status: true }, ...Object.fromEntries(keys[operation].map(key => [key, null])) } }
   })
   const service = new DictionaryService({ post } as unknown as EasyTransport)
   const failed = await service.loadPicker('same-account', false)

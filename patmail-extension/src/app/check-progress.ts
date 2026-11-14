@@ -13,7 +13,7 @@ export const taskCheckProgress = reactive({
   total: 0,
   percent: 0,
   eta: '',
-  status: 'idle' as TaskCheckStatus,
+  status: 'idle',
   /** 有多种计量单位的任务自行提供标题，避免把文件数误标成下载进度。 */
   summary: '',
   detail: '',

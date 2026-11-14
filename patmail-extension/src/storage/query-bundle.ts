@@ -82,11 +82,13 @@ export class MemoryBundleRepository implements QueryBundleRepository {
     this.raw = initial
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   async load(): Promise<{ bundle: QueryBundle; warning?: string; writable: boolean }> {
     const read = readBundle(this.raw)
     return { ...read, bundle: structuredClone(read.bundle) }
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   async save(bundle: QueryBundle): Promise<void> {
     const current = readBundle(this.raw)
     if (!current.writable) throw new Error(current.warning ?? '本地配置只读，未覆盖原数据。')

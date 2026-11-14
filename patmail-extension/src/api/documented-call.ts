@@ -1,5 +1,6 @@
 import { isLiveWriteCall } from '../automation/live-readonly-policy'
 
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- 存量豁免：保留显式断言以固定跨模块契约
 const readmeFiles = import.meta.glob('../../../API/README.md', {
   query: '?raw',
   import: 'default',
@@ -178,6 +179,7 @@ export function applyEasyRefs(fields: Record<string, string>, earlier: readonly 
   return { ok: true, fields: next }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
 export function payloadFromSummary(text: string): unknown | null {
   const marker = '已用当前登录会话调用，没有改数据。\n'
   if (!text.startsWith(marker)) return null

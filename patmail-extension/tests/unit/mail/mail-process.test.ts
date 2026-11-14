@@ -102,11 +102,11 @@ describe('待办流程列表', () => {
     expect(mail.ok && proposal.ok && filing.ok).toBe(true)
     if (!mail.ok || !proposal.ok || !filing.ok) return
     expect(mail.data.items[0]?.open?.id).toBe(mailId)
-    expect(processFormPath(mail.data.items[0]!.open!, null)).toBe(`Forms/mail/mail.aspx?objid=${mailId}`)
-    expect(processFormPath(proposal.data.items[0]!.open!, null)).toBe(`Forms/Patent/ApplyPatent.aspx?objid=${applyId}&type_id=${caseType}`)
-    expect(processFormPath(filing.data.items[0]!.open!, false)).toBe(`Forms/Filing/Filing.aspx?objid=${filingId}`)
-    expect(processFormPath(filing.data.items[0]!.open!, true)).toBe(`Forms/NewFiling/Filing.aspx?objid=${filingId}`)
-    expect(processFormPath(filing.data.items[0]!.open!, null)).toBeNull()
+    expect(processFormPath(mail.data.items[0].open!, null)).toBe(`Forms/mail/mail.aspx?objid=${mailId}`)
+    expect(processFormPath(proposal.data.items[0].open!, null)).toBe(`Forms/Patent/ApplyPatent.aspx?objid=${applyId}&type_id=${caseType}`)
+    expect(processFormPath(filing.data.items[0].open!, false)).toBe(`Forms/Filing/Filing.aspx?objid=${filingId}`)
+    expect(processFormPath(filing.data.items[0].open!, true)).toBe(`Forms/NewFiling/Filing.aspx?objid=${filingId}`)
+    expect(processFormPath(filing.data.items[0].open!, null)).toBeNull()
   })
 })
 

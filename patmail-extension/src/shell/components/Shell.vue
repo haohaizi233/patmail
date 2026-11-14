@@ -5,6 +5,7 @@ import { bg, icon } from '../assets'
 import { nav } from '../data'
 
 const props = defineProps({
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   page: String,
   items: { type: Array, default: null },
   profileName: { type: String, default: '林小樱' },

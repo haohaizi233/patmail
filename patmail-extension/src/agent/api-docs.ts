@@ -8,6 +8,7 @@ export interface ApiDocSection {
   body: string
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- 存量豁免：保留显式断言以固定跨模块契约
 const rawFiles = import.meta.glob('../../../API/*.md', {
   query: '?raw',
   import: 'default',

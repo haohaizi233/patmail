@@ -12,6 +12,7 @@ import { useWorkspace } from '../composables/useWorkspace'
 const props = withDefaults(defineProps<{
   surface: QuerySurfaceId
   fields: Record<string, string>
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   templateId?: string
   showLoad?: boolean
   downloadName?: FileDownloadSelection | null

@@ -38,6 +38,7 @@ interface Session {
 
 /** A navigation, unlike downloads.download(extensionURL), passes through the MV3 fetch handler. */
 export function createNativeDownloadTarget(options: NativeDownloadTargetOptions) {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- 存量豁免：保留原型方法引用
   const getURL = options.getURL ?? (path => chrome.runtime.getURL(path))
   const downloads = options.downloads ?? chrome.downloads
   const prefix = getURL('_patmail_native_download/')
@@ -164,6 +165,7 @@ export function createNativeDownloadTarget(options: NativeDownloadTargetOptions)
       if (s.error) throw s.error
       const item = (await downloads.search({ url: s.url })).find(item => item.url === s.url)
       if (item) { s.downloadId = item.id; status(s, item) }
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- 存量豁免：保留原始 throw 值
       if (s.error) throw s.error
       return { ...(s.downloadId === undefined ? {} : { downloadId: s.downloadId }), state: s.done ? 'complete' : 'inProgress', receivedBytes: item?.bytesReceived ?? 0, ...(item?.totalBytes && item.totalBytes > 0 ? { totalBytes: item.totalBytes } : {}) }
     },
@@ -179,6 +181,7 @@ export function createNativeDownloadTarget(options: NativeDownloadTargetOptions)
         event.respondWith(new Response('Download not found', { status: 404 })); return true
       }
       s.claimed = true; capabilities.delete(s.url); clearTimeout(s.attachTimer)
+      // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
       const name = s.fileName.replace(/[\r\n\\/\u0000]/g, '_')
       const encoded = encodeURIComponent(name).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase())
       event.respondWith(new Response(s.stream, { headers: { 'Content-Type': /\.pdf$/i.test(name) ? 'application/pdf' : 'application/zip', 'Content-Disposition': `attachment; filename="PatMail.${/\.pdf$/i.test(name) ? 'pdf' : 'zip'}"; filename*=UTF-8''${encoded}`, 'Cache-Control': 'no-store' } }))

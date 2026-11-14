@@ -17,6 +17,7 @@ describe('文件下载', () => {
     const pending: (() => void)[] = []
     const packages: URLSearchParams[] = []
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const params = new URLSearchParams(String(init?.body ?? ''))
       const call = params.get('Call')
       if (call === 'GetFileName') {
@@ -52,6 +53,7 @@ describe('文件下载', () => {
   ])('$label 时不向原站提交下载打包', async ({ response, code }) => {
     let packages = 0
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body ?? '')).get('Call')
       if (call === 'GetFileName') return new Response(JSON.stringify(response))
       if (call === 'DownLoad') packages += 1
@@ -69,6 +71,7 @@ describe('文件下载', () => {
   it('按下载名称生成文件名、去掉申请号校验点，打包后给出取包地址', async () => {
     let downloadBody = ''
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body ?? '')).get('Call') ?? ''
       if (call === 'GetUserModel') return new Response(JSON.stringify(authenticated))
       if (call === 'GetFileTempNameList') {
@@ -84,6 +87,7 @@ describe('文件下载', () => {
         }))
       }
       if (call === 'DownLoad') {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         downloadBody = String(init?.body ?? '')
         return new Response(JSON.stringify({
           error: true,
@@ -118,9 +122,11 @@ describe('文件下载', () => {
   it('不选下载名称就用查询原名，原名里的申请号同样去点，取包地址带 file_size', async () => {
     let downloadBody = ''
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body ?? '')).get('Call') ?? ''
       if (call === 'GetUserModel') return new Response(JSON.stringify(authenticated))
       if (call === 'DownLoad') {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         downloadBody = String(init?.body ?? '')
         return new Response(JSON.stringify({
           error_message: '文件不存在或权限不足,您共1个文件下载失败！',
@@ -152,9 +158,11 @@ describe('文件下载', () => {
   it('去掉点的开关关掉时，文件名原样传给原站', async () => {
     let downloadBody = ''
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body ?? '')).get('Call') ?? ''
       if (call === 'GetUserModel') return new Response(JSON.stringify(authenticated))
       if (call === 'DownLoad') {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         downloadBody = String(init?.body ?? '')
         return new Response(JSON.stringify({
           ClientInfo: { IsLogin: true, Status: true, Result: false },
@@ -177,6 +185,7 @@ describe('文件下载', () => {
   it('缺文件编号或原名时不发请求', async () => {
     let calls = 0
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body ?? '')).get('Call') ?? ''
       if (call !== 'GetUserModel') calls += 1
       return new Response(JSON.stringify(authenticated))

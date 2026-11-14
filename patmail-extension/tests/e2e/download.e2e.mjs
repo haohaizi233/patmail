@@ -133,6 +133,7 @@ try {
     try {
       const result = await worker.evaluate(id => chrome.tabs.sendMessage(id, { type: 'PING' }), tab.id)
       if (result?.type === 'PONG') break
+    // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
     } catch {}
     await new Promise(resolve => setTimeout(resolve, 200))
   }

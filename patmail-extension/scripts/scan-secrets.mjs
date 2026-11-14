@@ -151,6 +151,7 @@ function scanName(name) {
 }
 
 // ---- 工作树扫描（Git 口径：已跟踪 + 未忽略的未跟踪文件；本地被 .gitignore 排除的文件不入库，自然不在扫描面）----
+// eslint-disable-next-line require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
 async function scanTree() {
   const listed = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     cwd: repoRoot,
@@ -180,6 +181,7 @@ async function scanTree() {
 
 // ---- Git 历史扫描（一次进程，流式解析补丁）----
 async function scanHistory() {
+  // eslint-disable-next-line no-return-await -- 存量豁免：保留 await 以维持 try/finally 语义
   return await new Promise((resolve, reject) => {
     const child = spawn('git', ['log', '--all', '-p', '--no-color', '--no-renames'], { cwd: repoRoot })
     const lines = createInterface({ input: child.stdout })

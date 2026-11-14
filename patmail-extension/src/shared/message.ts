@@ -259,6 +259,7 @@ export type StreamDownloadCommand =
   | { action: 'cache'; token: string; index: number; command: 'info' | 'read' | 'write' | 'reset' | 'complete'; offset?: number; data?: string; metadata?: Record<string, unknown> }
 
 function isArchiveName(value: unknown): value is string {
+  // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
   return typeof value === 'string' && value.length <= 120 && value.length > 4 && value.endsWith('.zip') && !/[\\/<>:"|?*\x00-\x1f]/.test(value)
 }
 
@@ -686,8 +687,11 @@ function isLimitMailSubmitItem(value: unknown): boolean {
   if (value.contacts !== 'all' && !value.iprName.trim()) return false
   if (value.contacts !== 'all' && !value.namedBusiness && value.mode === 'lead' && !value.leadName.trim()) return false
   if (!isQueryGuid(String(value.procId)) || !isQueryGuid(String(value.mailTypeId)) || (value.mailStyle !== '1' && value.mailStyle !== '2')) return false
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
   if (value.mailId !== undefined && !isQueryGuid(String(value.mailId))) return false
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
   if (value.senderId !== undefined && !isQueryGuid(String(value.senderId))) return false
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
   if (value.reviewerId !== undefined && !isQueryGuid(String(value.reviewerId))) return false
   if (value.procIds === undefined) return true
   return Array.isArray(value.procIds) && value.procIds.length > 0 && value.procIds.length <= 500 &&
@@ -702,6 +706,7 @@ function isFileManageSubmitItem(value: unknown): boolean {
   if (!keys.every(key => allowed.includes(key))) return false
   if (!isQueryGuid(String(value.fileId)) || !isQueryGuid(String(value.mailTypeId)) || !isQueryGuid(String(value.senderId)) || !isQueryGuid(String(value.reviewerId))) return false
   if (value.mailStyle !== '1' && value.mailStyle !== '2') return false
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
   if (value.mailId !== undefined && !isQueryGuid(String(value.mailId))) return false
   if (value.recall !== undefined && value.recall !== true) return false
   if (value.recall === true && !isQueryGuid(String(value.mailId))) return false

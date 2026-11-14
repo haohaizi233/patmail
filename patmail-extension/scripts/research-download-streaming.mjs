@@ -14,6 +14,7 @@ const report = { offline: [], source: [], live: [], checkedAt: new Date().toISOS
 if (process.env.PATMAIL_AUDIT_APPEND_REPORT === '1') {
   try {
     report.live.push(...JSON.parse(await readFile(resultPath('download-streaming-research.json'), 'utf8')).live)
+  // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
   } catch {}
 }
 const harFolder = new URL('../../HAR/', import.meta.url)
@@ -40,6 +41,7 @@ for (const path of inputs) {
     let json
     try {
       json = JSON.parse(entry.response.content?.text ?? '')
+    // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
     } catch {}
     const finding = {
       source: String(path).split(/[\\/]/).at(-1),
@@ -358,6 +360,7 @@ try {
                 credentials: 'include',
               }).then(response => response.json())
               login = data.ClientInfo?.IsLogin === true
+            // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
             } catch {}
             const response = await fetch(`${origin}/AjaxServers/FileHandler.ashx?guid=${encodeURIComponent(guid)}`, {
               credentials: 'include',

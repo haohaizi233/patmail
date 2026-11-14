@@ -25,6 +25,7 @@ const origin = 'http://183.36.43.66:88'
 const userA = 'aaaaaaaa-1111-4111-8111-111111111111'
 const userB = 'bbbbbbbb-1111-4111-8111-111111111111'
 const scopeA = { easyOrigin: origin, operatorId: userA, easyTabId: 3, connectionVersion: 1 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 const scopeB = { ...scopeA, operatorId: userB }
 const caseType = 'cccccccc-1111-4111-8111-111111111111'
 const descriptionId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'

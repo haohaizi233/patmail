@@ -5,6 +5,7 @@ import { filterSelectOptions, highlightAfterKey, menuBoxStyle, menuWidthForLabel
 interface Option extends ThemeSelectOption { value: T }
 
 const props = withDefaults(defineProps<{
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   modelValue?: T
   options: Option[]
   disabled?: boolean

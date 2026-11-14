@@ -23,7 +23,7 @@
 | 门禁 | 入口 | 结果 | 证据 |
 | --- | --- | --- | --- |
 | Typecheck | `pnpm typecheck` | PASS（26.5s，exit=0） | `test-results/ci/steps/typecheck.json` |
-| Lint 棘轮 | `pnpm lint` | PASS（exit=0；存量 635 errors / 25 warnings，较基线 681→635 收紧） | `ci/eslint-baseline.json`、`test-results/ci/steps/lint.json` |
+| Lint 棘轮 | `pnpm lint` | PASS（exit=0；存量 635 errors / 25 warnings，较基线 681→635 收紧；2026-10-29 历史快照，2026-11-14 已清零，见 `docs/ci/quality-gates.md`） | `ci/eslint-baseline.json`、`test-results/ci/steps/lint.json` |
 | Format | `pnpm format:check` | PASS（exit=0） | `test-results/ci/steps/format.json` |
 | Unit | `pnpm test:unit` | PASS（806 用例） | `test-results/ci/steps/unit.json` |
 | Integration | `pnpm test:integration` | PASS（63 用例） | `test-results/ci/steps/integration.json` |
@@ -84,6 +84,7 @@
 ESLint 存量 635 errors / 25 warnings 采用**基线棘轮**治理（`ci/eslint-baseline.json`）：只降不升，
 新代码不得增加存量问题（反向验收 #2 验证拦截有效）。历史密钥/私钥发现按指纹登记 `ci/secret-allowlist.json`
 （expires 强制复查），整改计划见 `docs/ci/security-policy.md`。
+本节为 2026-10-29 验收时点快照；ESLint 棘轮已于 2026-11-14 清零并转为硬门禁，见 `docs/ci/quality-gates.md`。
 
 ## 5. 证据索引
 
@@ -120,7 +121,7 @@ ESLint 存量 635 errors / 25 warnings 采用**基线棘轮**治理（`ci/eslint
 
 1. `scenarios/workspace.mjs` 红：历史 UI 契约漂移（§4.1），整改计划见 `docs/ci/e2e-matrix.md` §4；
 2. `native-pipeline-fault` 恢复续传阶段确定性红（§4.2），整改计划见 `docs/ci/e2e-matrix.md` §5；
-3. ESLint 存量 635 errors / 25 warnings：基线棘轮只降不升，新代码不得新增存量问题；
+3. ESLint 存量 635 errors / 25 warnings：基线棘轮只降不升，新代码不得新增存量问题（2026-10-29 时点；2026-11-14 已清零为 0/0 硬门禁，见 `docs/ci/quality-gates.md`）；
 4. 历史密钥/私钥发现按指纹登记 `ci/secret-allowlist.json`（含 `expires` 强制复查）；
 5. 业务 Origin 仍为 HTTP（如 `http://43.138.138.200:8588/*`），未在无迁移方案下强切 HTTPS，需独立迁移工作项；
 6. 历史 `dist.pem` 签名私钥风险：仅形成风险处理建议——不轮换、不改变扩展 ID、CI 不使用该密钥；

@@ -28,6 +28,7 @@ describe('EASY 受限传输', () => {
   it('posts form-urlencoded on the trusted same origin with browser-managed credentials', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = []
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       calls.push({ url: String(url), init: init ?? {} })
       return jsonResponse({ ClientInfo: { IsLogin: true, Status: true } })
     }
@@ -40,6 +41,7 @@ describe('EASY 受限传输', () => {
       method: 'POST', credentials: 'include', redirect: 'follow',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' }
     })
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     expect(new URLSearchParams(String(calls[0].init.body)).get('log_pagename')).toBe('')
   })
 

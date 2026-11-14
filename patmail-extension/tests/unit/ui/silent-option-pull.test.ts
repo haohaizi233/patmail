@@ -38,7 +38,7 @@ for (const surface of ['文件', '期限', '递交'] as const) {
         const kind = message.payload.kind
         if (kind === 'picker') {
           if (mode === 'pending') await gate
-          if (mode === 'invalid') return { type: MessageType.DictionaryResult, payload: { ok: false, error: { code: 'INVALID_RESPONSE', message: '失败' } } } as ContentResponse
+          if (mode === 'invalid') return { type: MessageType.DictionaryResult, payload: { ok: false, error: { code: 'INVALID_RESPONSE', message: '失败' } } }
           const rows = [{ id: NEW, name: '新选项', pid: '' }]
           return { type: MessageType.DictionaryResult, payload: { ok: true, data: { kind, ...buildPickerCatalog({ applyTags: { ApplyTags: rows }, user: { TreeUser: rows } }) } } }
         }
@@ -51,6 +51,7 @@ for (const surface of ['文件', '期限', '递交'] as const) {
     }
     const component = surface === '文件' ? QueryTemplateSection : surface === '期限' ? LimitQuerySection : FilingSearchQuery
     const host = document.body.appendChild(document.createElement('div'))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 存量豁免：外部输入边界保留 any
     app = createApp({ render: () => h(component as any, {
       bridge: { request }, userId, canSearch: true, mode: 'history', pageSize: 20,
       onSearch: () => {}, onSearched: () => {}

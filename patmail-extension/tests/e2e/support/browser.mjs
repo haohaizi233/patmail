@@ -2,6 +2,7 @@ import { chromium } from 'playwright'
 
 /** 带扩展的持久化上下文；viewport 不传时保持 Playwright 默认（1280×720）。 */
 export async function launchExtensionContext(dist, { viewport, acceptDownloads, userDataDir = '' } = {}) {
+  // eslint-disable-next-line no-return-await -- 存量豁免：保留 await 以维持 try/finally 语义
   return await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
     headless: true,
@@ -44,6 +45,7 @@ async function refreshedServiceWorker(context, stale, { timeoutMs = 15000 } = {}
     if (fresh) return fresh
     await new Promise((resolve) => setTimeout(resolve, 100))
   } while (Date.now() < deadline)
+  // eslint-disable-next-line no-return-await -- 存量豁免：保留 await 以维持 try/finally 语义
   return context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', { timeout: timeoutMs })
 }
 

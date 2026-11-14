@@ -28,15 +28,15 @@ export function sha256Hex(text: string): string {
   for (let offset = 0; offset < withPad.length; offset += 64) {
     for (let index = 0; index < 16; index += 1) words[index] = view.getUint32(offset + index * 4, false)
     for (let index = 16; index < 64; index += 1) {
-      const s0 = rotr(words[index - 15]!, 7) ^ rotr(words[index - 15]!, 18) ^ (words[index - 15]! >>> 3)
-      const s1 = rotr(words[index - 2]!, 17) ^ rotr(words[index - 2]!, 19) ^ (words[index - 2]! >>> 10)
-      words[index] = (words[index - 16]! + s0 + words[index - 7]! + s1) >>> 0
+      const s0 = rotr(words[index - 15], 7) ^ rotr(words[index - 15], 18) ^ (words[index - 15] >>> 3)
+      const s1 = rotr(words[index - 2], 17) ^ rotr(words[index - 2], 19) ^ (words[index - 2] >>> 10)
+      words[index] = (words[index - 16] + s0 + words[index - 7] + s1) >>> 0
     }
     let a = a0, b = b0, c = c0, d = d0, e = e0, f = f0, g = g0, h = h0
     for (let index = 0; index < 64; index += 1) {
       const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
       const choice = (e & f) ^ (~e & g)
-      const temp1 = (h + s1 + choice + K[index]! + words[index]!) >>> 0
+      const temp1 = (h + s1 + choice + K[index] + words[index]) >>> 0
       const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
       const majority = (a & b) ^ (a & c) ^ (b & c)
       const temp2 = (s0 + majority) >>> 0

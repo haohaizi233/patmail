@@ -9,6 +9,7 @@ describe('大批下载的等待预算', () => {
     vi.useFakeTimers()
     const progress: FileDownloadProgress[] = []
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'DownLoad') await new Promise(resolve => setTimeout(resolve, 360_000))
       return new Response(JSON.stringify({ ClientInfo: { IsLogin: true, Status: true },

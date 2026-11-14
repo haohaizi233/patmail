@@ -30,7 +30,9 @@ it('claims a tab before the first asynchronous check and retains ownership after
  h.getTab.mockImplementation(async()=>{await new Promise<void>(r=>{release=r});return{url:'https://hague.wipo.int/HagueEFilingWeb/protected/page/application.xhtml'}})
  const handle=createHagueDraftHandler(h),message={channel,tabId:7,command:{op:'inspect'}}
  const first=handle(message,sender)
+ // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
  expect(await handle(message,sender)).toMatchObject({ok:false,error:expect.stringContaining('未结束')})
+ // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
  expect(await handle(message,sender)).toMatchObject({ok:false,error:expect.stringContaining('未结束')})
  release();expect(await first).toMatchObject({ok:true});expect(h.run).toHaveBeenCalledTimes(1)
 },1000)

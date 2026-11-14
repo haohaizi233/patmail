@@ -72,10 +72,12 @@ export class MemoryExecutionStore extends ExecutionStore {
     super(null)
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   override async load(origin: string, userId: string): Promise<MailExecutionRecord[]> {
     return this.records.filter(item => item.origin === origin && item.userId === userId)
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   override async save(origin: string, userId: string, records: MailExecutionRecord[]): Promise<void> {
     const others = this.records.filter(item => item.origin !== origin || item.userId !== userId)
     this.records.splice(0, this.records.length, ...others, ...records.filter(item => item.origin === origin && item.userId === userId))

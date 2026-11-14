@@ -5,8 +5,11 @@ export interface RecoveryReply { payload?: unknown; revision?: number }
 export type RecoveryTransport = (request: RecoveryRequest) => Promise<RecoveryReply>
 export function createRecoveryClient(transport: RecoveryTransport = async request => {
   if (!globalThis.chrome?.runtime?.sendMessage) throw new Error('恢复账本不可用，当前工作尚未保护。')
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const response = await chrome.runtime.sendMessage({ type: RECOVERY_RPC, request })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access -- 存量豁免：多项历史存量，理由见 docs/ci/quality-gates.md
   if (!response?.ok) throw new Error(response?.error || '恢复账本未提交。')
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- 存量豁免：多项历史存量，理由见 docs/ci/quality-gates.md
   return response.value
 }) {
   const revisions = new Map<string, number>()

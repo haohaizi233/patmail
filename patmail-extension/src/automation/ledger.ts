@@ -151,6 +151,7 @@ export function indexedTransactionStore(): TransactionStore | null {
     const request = factory.open('patmail-execution-ledger', 1)
     request.onupgradeneeded = () => request.result.createObjectStore('state')
     request.onsuccess = () => resolve(request.result)
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
     request.onerror = () => reject(request.error)
   })
   return {
@@ -168,10 +169,13 @@ export function indexedTransactionStore(): TransactionStore | null {
             tx.oncomplete = () => resolve(result)
           } catch (error) {
             tx.abort()
+            // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
             reject(error)
           }
         }
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
         current.onerror = () => reject(current.error)
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
         tx.onerror = () => reject(tx.error)
       })
     }

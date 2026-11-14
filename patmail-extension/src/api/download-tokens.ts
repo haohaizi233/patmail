@@ -14,10 +14,12 @@ export class DownloadTokens {
   }
 
   acquire(kind: Kind, signal: AbortSignal): Promise<() => void> {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
     if (signal.aborted) return Promise.reject(signal.reason)
     return new Promise((resolve, reject) => {
       const waiter: Waiter = { kind, signal, resolve, abort: () => {
         this.waiters = this.waiters.filter(item => item !== waiter)
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
         reject(signal.reason)
         this.drain()
       } }

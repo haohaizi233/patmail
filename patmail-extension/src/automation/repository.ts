@@ -226,9 +226,11 @@ export class MemoryTaskRepository extends TaskRepository {
   readonly tasks: AutomationTask[] = []
   readonly opaque: unknown[] = []
   constructor() { super(null) }
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   override async list(origin: string, operatorId: string, includeArchived = false): Promise<AutomationTask[]> {
     return this.tasks.filter(item => item.origin === origin && item.operatorId === operatorId && (includeArchived || !item.archived))
   }
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   override async save(task: AutomationTask): Promise<TaskSaveResult> {
     const scoped = this.tasks.filter(item => item.origin === task.origin && item.operatorId === task.operatorId)
     const prior = scoped.find(item => item.taskId === task.taskId)
@@ -240,6 +242,7 @@ export class MemoryTaskRepository extends TaskRepository {
     }
     return decided.result
   }
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   override async updateTaskAtomically(origin: string, operatorId: string, taskId: string, expectedVersion: number, transition: (current: AutomationTask) => { ok: true; task: AutomationTask } | { ok: false; message: string }): Promise<TaskSaveResult> {
     const scoped = this.tasks.filter(item => item.origin === origin && item.operatorId === operatorId)
     const result = applyAtomicTaskUpdate(scoped, taskId, expectedVersion, transition)
@@ -250,6 +253,7 @@ export class MemoryTaskRepository extends TaskRepository {
     }
     return { ok: false, code: result.code ?? 'INVALID_TRANSITION', message: result.message, current: result.task ?? undefined }
   }
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   override async archive(origin: string, operatorId: string, taskId: string): Promise<{ ok: boolean; message: string }> {
     const task = this.tasks.find(item => item.origin === origin && item.operatorId === operatorId && item.taskId === taskId)
     if (!task) return { ok: false, message: '没有这个任务。' }

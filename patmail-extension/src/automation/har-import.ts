@@ -38,7 +38,7 @@ function shapeOf(text: string | undefined): string {
   try {
     const parsed = JSON.parse(text) as unknown
     if (!parsed || typeof parsed !== 'object') return typeof parsed
-    return `object(${Object.keys(parsed as object).sort().join(',')})`
+    return `object(${Object.keys(parsed).sort().join(',')})`
   } catch {
     return 'text'
   }

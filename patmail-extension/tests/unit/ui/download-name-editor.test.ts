@@ -21,6 +21,7 @@ vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
     return () => h('select', { ...attrs, value: props.modelValue, onChange: (event: Event) => {
       const value = (event.target as HTMLSelectElement).value
       emit('update:modelValue', value); emit('change', value)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- 存量豁免：多项历史存量，理由见 docs/ci/quality-gates.md
     } }, props.options.map((option: { value: string; label: string }) => h('option', { value: option.value }, option.label)))
   } }) }
 })

@@ -14,7 +14,7 @@ type DomConstructors = {
 
 /** iframe 里的控件属于子文档的构造函数。Window 类型本身不声明这些构造函数。 */
 function realm(element: Element): DomConstructors {
-  return (element.ownerDocument.defaultView ?? window) as unknown as DomConstructors
+  return element.ownerDocument.defaultView ?? window
 }
 
 export function isInputElement(element: Element): element is HTMLInputElement {

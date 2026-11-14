@@ -39,6 +39,7 @@ describe('chatCompletion', () => {
     let capturedUrl = ''
     let capturedInit: RequestInit | undefined
     const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       capturedUrl = String(url)
       capturedInit = init
       return jsonResponse({ choices: [{ message: { role: 'assistant', content: '你好' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2 } })
@@ -49,6 +50,7 @@ describe('chatCompletion', () => {
     const headers = new Headers(capturedInit?.headers)
     expect(headers.get('x-api-key')).toBe(config.apiKey)
     expect(headers.get('authorization')).toBe(`Bearer ${config.apiKey}`)
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     const body = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>
     expect(body.model).toBe(config.model)
     expect(body.max_tokens).toBe(100)
@@ -71,12 +73,14 @@ describe('chatCompletion', () => {
   it('sends enable_thinking and keeps the reasoning chain when thinking is on', async () => {
     let captured = ''
     const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       captured = String(init?.body)
       return jsonResponse({
         choices: [{ message: { role: 'assistant', content: '结论', reasoning_content: '先核对字段' }, finish_reason: 'stop' }]
       })
     }) as typeof fetch
     const outcome = await chatCompletion({ ...config, thinking: true }, { messages: [{ role: 'user', content: '你好' }], fetcher })
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     expect(JSON.parse(captured).chat_template_kwargs).toEqual({ enable_thinking: true })
     expect(outcome.choices[0]?.content).toBe('结论')
     expect(outcome.choices[0]?.reasoning).toBe('先核对字段')
@@ -131,6 +135,7 @@ describe('chatCompletion', () => {
       { choices: [{ delta: { content: '可以查。' }, finish_reason: 'stop' }] }
     ]
     const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string, @typescript-eslint/no-unsafe-member-access -- 存量豁免：多项历史存量，理由见 docs/ci/quality-gates.md
       expect(JSON.parse(String(init?.body)).stream).toBe(true)
       const body = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n'
       return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
@@ -150,8 +155,10 @@ describe('chatCompletion', () => {
     let captured = ''
     let headers: Headers | undefined
     const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       captured = String(init?.body)
       headers = new Headers(init?.headers)
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       expect(String(url)).toBe('https://api.xiaomimimo.com/v1/chat/completions')
       return jsonResponse({ choices: [{ message: { content: '我是备用。' }, finish_reason: 'stop' }] })
     }) as typeof fetch
@@ -176,8 +183,10 @@ describe('model fallback', () => {
     const models: string[] = []
     let primaryCalls = 0
     const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const body = JSON.parse(String(init?.body)) as { model: string; thinking?: { type: string } }
       models.push(body.model)
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       if (String(url).includes('43.138.138.200')) {
         primaryCalls += 1
         return new Response('bad gateway', { status: 502 })

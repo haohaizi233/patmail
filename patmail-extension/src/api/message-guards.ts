@@ -324,10 +324,12 @@ export function isDictionaryResult(value: unknown): value is ApiResult<Dictionar
 }
 
 function isBoundedText(value: unknown, limit: number): value is string {
+  // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
   return typeof value === 'string' && value.length <= limit && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)
 }
 
 function isVolumeToken(value: unknown): value is string {
+  // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
   return typeof value === 'string' && value.length >= 1 && value.length <= 80 && !/[\u0000-\u001f<>]/.test(value)
 }
 

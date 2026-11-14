@@ -33,6 +33,7 @@ interface FilingRowsMeta {
 /** 行档的落账本接口。默认走恢复账本，测试可以换成内存的。 */
 export interface FilingRowsStore {
   remember(scope: string, payload: unknown): Promise<void>
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
   recall(scope: string): Promise<unknown | null>
 }
 

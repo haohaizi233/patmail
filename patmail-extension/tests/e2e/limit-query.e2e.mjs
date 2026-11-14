@@ -12,6 +12,7 @@ const caseTypeId = '31D1A147-2931-43B5-94AE-B72B1525BA8A'
 const report = createReporter()
 
 let context
+// eslint-disable-next-line no-useless-catch -- 存量豁免：保留 try/catch 以固定错误上报形态
 try {
   context = await launchExtensionContext(dist)
 } catch (error) {

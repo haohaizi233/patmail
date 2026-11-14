@@ -12,6 +12,7 @@ describe('READ_ONLY_AUTO', () => {
     const seen: string[] = []
     const runtime = new EasyRuntime(EASY_ORIGIN, {
       fetcher: async (input) => {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         seen.push(String(input))
         return new Response('{}', { status: 200 })
       }

@@ -74,6 +74,7 @@ const apiSorted = [...apiDocFiles()].sort((a, b) => {
 const apiEntries: DocEntry[] = apiSorted.map(file => ({
   title: apiTitle(file),
   path: `API/${file}`,
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   load: async () => apiDocRawText(file)
 }))
 

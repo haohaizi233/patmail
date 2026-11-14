@@ -22,15 +22,15 @@ describe('分页请求池', () => {
       called.push(page)
       active += 1
       peak = Math.max(peak, active)
-      try { return await gates[page - 1]!.promise }
+      try { return await gates[page - 1].promise }
       finally { active -= 1 }
     }, { onPage: (page, rows) => { received.push([page, rows]) } })
 
     expect(called).toEqual([1, 2, 3, 4, 5, 6])
-    gates[2]!.resolve(success(3))
+    gates[2].resolve(success(3))
     await vi.waitFor(() => { expect(called).toEqual([1, 2, 3, 4, 5, 6, 7]) })
     expect(active).toBe(6)
-    for (const page of [6, 1, 5, 2, 4, 9, 8, 7]) gates[page - 1]!.resolve(success(page))
+    for (const page of [6, 1, 5, 2, 4, 9, 8, 7]) gates[page - 1].resolve(success(page))
 
     expect(await pending).toEqual([])
     expect(peak).toBe(6)

@@ -1,3 +1,5 @@
+/* global target: readonly */
+// target 是扩展 Service Worker 暴露的下载目标句柄，仅在 worker.evaluate 回调内使用。
 import { chromium } from 'playwright'
 import ts from 'typescript'
 import assert from 'node:assert/strict'
@@ -62,6 +64,7 @@ try {
   console.log('stage app')
   report.controller = await app.evaluate(() => !!navigator.serviceWorker.controller)
   const download = app.waitForEvent('download', { timeout: 400000 })
+  // eslint-disable-next-line require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   async function call(action, extra = {}) {
     return worker.evaluate(request => target.host(request), {
       channel: 'PATMAIL_BROWSER_FILE',

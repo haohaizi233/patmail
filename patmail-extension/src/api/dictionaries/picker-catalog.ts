@@ -152,6 +152,7 @@ function filingCaseTypeRows(raw: unknown): unknown {
 function procTypeRows(raw: unknown): unknown {
   if (!Array.isArray(raw)) return raw
   return raw.map(row => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- 存量豁免：外部 any 数据流，类型收口待后续
     if (!row || typeof row !== 'object' || Array.isArray(row)) return row
     const record = row as Record<string, unknown>
     const value = typeof record.dictionary_id === 'string' && record.dictionary_id

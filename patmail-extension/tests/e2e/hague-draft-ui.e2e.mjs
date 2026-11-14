@@ -48,6 +48,7 @@ try{
     const destination=destinations.get(message.tabId)??'portfolio'
     setTimeout(()=>callback({ok:true,page:destination,documentId:'doc',draftSaved:destination==='portfolio'&&!!message.reference,...(destination==='portfolio'?{}:{reference:references.get(message.tabId)}),...(command.op==='print'?{downloadId:42}:{})}),window.__commandDelay??10)
    }
+  // eslint-disable-next-line require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   }},storage:{local:{get:async key=>({[key]:storage[key]}),set:async value=>Object.assign(storage,value)}},downloads:{show(){}},tabs:{create:()=>{const id=nextTab++;destinations.set(id,'portfolio');return Promise.resolve({id})},get:id=>Promise.resolve({id,status:'complete',url:'https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml'}),onUpdated:{addListener(){},removeListener(){}},onRemoved:{addListener(){},removeListener(){}}}})
   window.addEventListener('patmail-agent-workflow',event=>{const job=event.detail;job.accepted=true;const refs=[...job.message.matchAll(/^案件文号：(.+)$/gm)].map(m=>m[1]);job.resolve(JSON.stringify({results:refs.map(caseVolume=>({caseVolume,decision:{applicant,creators:[{sourceName:'张三',givenName:'san',familyName:'zhang'}],parties:['EM','JP'],publicationMonths:6,priorities:[],warnings:[],evidence:['fixture']}}))}))})
  })

@@ -240,6 +240,7 @@ function sealSkipped(state: AgentMemoryState, calls: AssistantToolCall[]): Agent
 }
 
 /** 先把超长工具结果收成头尾，再摘更早的原话。摘录连续三次没变短就停。 */
+// eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
 async function compress(_config: AgentConfig, state: AgentMemoryState, _complete: Complete): Promise<AgentMemoryState> {
   const trimmed = trimToolResults(state)
   if ((trimmed.digestMisses ?? 0) >= DIGEST_MISS_LIMIT) return trimmed
@@ -254,6 +255,7 @@ async function compress(_config: AgentConfig, state: AgentMemoryState, _complete
 }
 
 /** 手动收摘录。最近一大段原话照留，缓存还没超出这段时不动。 */
+// eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
 export async function compactAgentMemory(_config: AgentConfig, memory: AgentMemoryState, _complete: Complete = chatCompletion): Promise<{ memory: AgentMemoryState; reply: string }> {
   const trimmed = trimToolResults(memory)
   const { older } = splitForCompression(trimmed)

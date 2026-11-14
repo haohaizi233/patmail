@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 
 export async function runPanelWindow(ctx) {
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const { report, context, worker, extensionId, page, panel, host, url, easyUrl, apiCalls, visible, tabFor, showPanel } = ctx
   const check = (name, action) => report.check(name, action)
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const note = (line) => report.note(line)
   await check('collapse, expand, drag, pointer cancel, and resize stay in viewport', async () => {
     await panel.getByRole('button', { name: '收起面板' }).click()
@@ -39,6 +41,7 @@ export async function runPanelWindow(ctx) {
   await check('close and SHOW_PANEL keep one host; reload does not restore it', async () => {
     await panel.getByRole('button', { name: '关闭面板' }).click()
     await host.waitFor({ state: 'detached' })
+    // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
     const tab = (await worker.evaluate((target) => chrome.tabs.query({}), url)).find((item) => item.url === url)
     assert(tab?.id)
     for (let index = 0; index < 2; index++) {
@@ -58,6 +61,7 @@ export async function runPanelWindow(ctx) {
     const popup = await context.newPage()
     await popup.goto(`chrome-extension://${extensionId}/src/popup/index.html`)
     await popup.getByText('插件运行中').waitFor()
+    // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
     const tab = (await worker.evaluate((target) => chrome.tabs.query({}), url)).find((item) => item.url === url)
     assert(tab?.id)
     await popup.evaluate((tabId) => chrome.tabs.update(tabId, { active: true }), tab.id)

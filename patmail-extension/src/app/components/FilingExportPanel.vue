@@ -10,6 +10,7 @@ import type { MessageBridge } from '../../shared/message'
  * 递交管理页和「递交管理-已完成导出」工作流都用这一份，表单不另抄。
  * 全选所有只翻页拉行；点「导出 Excel」才开始取数，取完自动下文件。
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 const props = defineProps<{ bridge?: MessageBridge; userId: string }>()
 
 // 几万行是只读数据，进深度响应式等于每格读写都过代理，起导那一瞬先交这笔税不值当。

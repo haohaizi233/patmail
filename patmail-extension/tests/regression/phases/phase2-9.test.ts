@@ -83,9 +83,9 @@ describe('用户命名空间与快照', () => {
     const source = input()
     const task = buildTask(source)
     source.rules.subject.template = '改过的标题'
-    source.rules.recipients[0]!.to[0] = 'b@example.com'
-    source.files[0]!.customerBinding!.confirmed = false
-    source.profiles[0]!.easyCustomerId = guid('eeeeeeee')
+    source.rules.recipients[0].to[0] = 'b@example.com'
+    source.files[0].customerBinding!.confirmed = false
+    source.profiles[0].easyCustomerId = guid('eeeeeeee')
     expect(task.ruleSnapshot.subject.template).toBe('关于{文件名称}的通知')
     expect(task.ruleSnapshot.recipients[0]?.to).toEqual(['a@example.com'])
     expect(task.selectedFiles[0]?.customerBinding?.confirmed).toBe(true)
@@ -93,7 +93,7 @@ describe('用户命名空间与快照', () => {
     expect(task.identitySnapshot[0]?.easyCustomerId).not.toBe(task.identitySnapshot[0]?.profileId)
     expect(validateTask(task, input(userA, [file(fileA)], rules(), [profile(guid('eeeeeeee'))])).status).toBe('STALE')
     const forward = rules()
-    forward.mappings = [...forward.mappings, { ...forward.mappings[0]!, id: 'map-2', fileDescriptionText: '另一描述' }]
+    forward.mappings = [...forward.mappings, { ...forward.mappings[0], id: 'map-2', fileDescriptionText: '另一描述' }]
     const backward = rules()
     backward.mappings = [...forward.mappings].reverse()
     expect(taskFingerprint(input(userA, [file(fileA)], forward))).toBe(taskFingerprint(input(userA, [file(fileA)], backward)))

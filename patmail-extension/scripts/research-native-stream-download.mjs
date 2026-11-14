@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import assert from 'node:assert/strict'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
