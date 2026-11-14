@@ -1,4 +1,5 @@
-# Full Gate：main 推送 / 手动触发的完整验证。
+# Full Gate：main 推送 / PR / 手动触发的完整验证。
+# PR 事件下 checkout 固定到 head SHA：self-hosted runner 从本地仓库镜像取代码，拿不到 GitHub 生成的 merge commit。
 # 覆盖：完整测试产物、全量浏览器回归、下载故障注入与续传、旧桥接协议兼容、覆盖率、构建可复现性。
 name: E2E Full
 
@@ -6,6 +7,7 @@ env:
   SME_SNAPSHOT_STUB: "1"
 
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -28,6 +30,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 构建
         run: node scripts/ci-check.mjs --steps build,manifest,dist
@@ -52,6 +56,8 @@ jobs:
         group: [full-functional, full-lifetime]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 缓存 Playwright 浏览器
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -95,6 +101,8 @@ jobs:
       PATMAIL_TEST_DIST: ${{ github.workspace }}/patmail-extension/dist
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 安装 Python（桥接协议与 ZIP 校验）
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -138,6 +146,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 全量测试 + 覆盖率
         run: pnpm test:coverage
@@ -159,6 +169,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: ./.github/actions/setup-patmail
       - name: 两次独立构建比对 Hash
         run: node scripts/verify-reproducible.mjs
@@ -179,6 +191,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
