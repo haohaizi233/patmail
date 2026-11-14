@@ -3,7 +3,8 @@ import {collectTraceEvent,getDiagnosticEvents,setDiagnosticMode,clearDiagnosticE
 import {sanitizeTraceEvent} from '../../../src/hague/diagnostics/schema.mjs'
 import {HagueDiagnosticError,normalizeDiagnosticError} from '../../../src/hague/diagnostics/errors'
 afterEach(()=>{clearDiagnosticEvents();setDiagnosticMode(false)})
-it('is disabled by default and does not leak secrets through errors or traces',()=>{
+it('honors explicit disabling and does not leak secrets through errors or traces',()=>{
+ setDiagnosticMode(false)
  const ctx=makeTraceContext('case-1',1,'upload','http',7)
  emitTrace(ctx,'request.dispatched');expect(getDiagnosticEvents()).toHaveLength(0)
  setDiagnosticMode(true)

@@ -2,9 +2,9 @@ import type {TraceContext,TraceEvent,TracePhase} from './trace'
 import {sanitizeTraceEvent} from './schema.mjs'
 const key='hague.diagnostics.v1',maxEvents=5000,maxBytes=4_000_000,maxAge=86400000
 let researchStatus:TraceEvent|null=null,droppedEvents=0
-let restored=false,enabled=false,events:TraceEvent[]=[],bytes=0,notifyQueued=false,saveTimer:ReturnType<typeof setTimeout>|undefined
+let restored=false,enabled=true,events:TraceEvent[]=[],bytes=0,notifyQueued=false,saveTimer:ReturnType<typeof setTimeout>|undefined
 const listeners=new Set<(events:readonly TraceEvent[])=>void>()
-function publish(){if(notifyQueued)return;notifyQueued=true;queueMicrotask(()=>{notifyQueued=false;for(const listener of listeners)try{listener(getDiagnosticEvents())}catch{/* Diagnostics cannot affect execution. */}})}
+function publish(){if(notifyQueued)return;notifyQueued=true;queueMicrotask(()=>{notifyQueued=false;const snapshot=events.slice();for(const listener of listeners)try{listener(snapshot)}catch{/* Diagnostics cannot affect execution. */}})}
 function persist(){if(saveTimer||typeof chrome==='undefined'||!chrome.storage?.local)return;saveTimer=setTimeout(()=>{saveTimer=undefined;try{void chrome.storage.local.set({[key]:events}).catch(()=>{})}catch{/* Optional persistence. */}},750)}
 export function setDiagnosticMode(value:boolean):void {enabled=value===true;publish()}
 export function isDiagnosticModeEnabled():boolean{return enabled}
