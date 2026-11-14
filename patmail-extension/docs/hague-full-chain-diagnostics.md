@@ -357,3 +357,12 @@ UI：协议诊断从案件区底部移到材料工具栏之前，开关名称为
 监听器已重启加载共享AST代码，并再次验证connected/research enabled；扩展dist已构建，但已有页面仍需加载新版本才能使用新协议处理器和顶部诊断入口。本次没有操作WIPO188121，没有重建或删除真实草稿，真实业务修复效果仍待现场验证。
 
 最终源码验证：1783/1783测试通过，失败0、跳过0（hague-dialog-final-tests.json）；类型检查、变更文件ESLint、构建及补丁检查通过；诊断面板和草稿UI隔离E2E通过。上述通过不替代WIPO188121实站恢复确认。
+
+
+2026-11-14后续现场已确认保存Yes按钮使用PrimeFaces.bcn包装，而非上一阶段合成的直接ab+hide结构；实际拒绝点和严格兼容修复见[创建后异常专项报告](hague-incident-2026-11-14-create-save.md)。
+
+
+后续HAR与应用Trace确认新失败已推进至申请人保存后的非活动Designationform输出面板，详见[申请人DOM更新专项报告](hague-incident-applicant-dom-update.md)。不能把它与先前bcn识别或旧创建检查点恢复混为同一个失败点。
+
+
+后续本轮区分了旧申请人检查点与指定国remote定义污染，修复与边界见[指定国与旧申请人专项报告](hague-incident-party-remote.md)。
