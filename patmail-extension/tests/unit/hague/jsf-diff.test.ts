@@ -131,3 +131,28 @@ describe('JSF Protocol Fingerprint & Drift Detection', () => {
     expect(fp1).not.toBe(fp2)
   })
 })
+
+
+describe('P1 canonical action observations', () => {
+  it('compares Worker actionTypes and preserves action order', () => {
+    expect(detectProtocolDrift({ actionTypes: ['update', 'extension'] }, { actionTypes: ['redirect'] }).driftStatus).toBe('drift_detected')
+    expect(detectProtocolDrift({ actionTypes: ['update', 'eval'] }, { actionTypes: ['eval', 'update'] }).changes).toContainEqual(expect.objectContaining({ type: 'action_sequence_changed' }))
+  })
+  it('requires evidence, distinguishing observed empty actions from absent or failed parsing', () => {
+    expect(detectProtocolDrift({ actionTypes: [] }, { actionTypes: [] }).driftStatus).toBe('no_drift')
+    expect(detectProtocolDrift({ actionTypes: [] }, {}).driftStatus).toBe('unresolved')
+    for (const observationStatus of ['parse_failed', 'unsupported']) {
+      expect(detectProtocolDrift({ actionTypes: [] }, { actionTypes: [], observationStatus }).driftStatus).toBe('unresolved')
+    }
+    expect(detectProtocolDrift(null, { actionTypes: [] }).driftStatus).toBe('baseline_missing')
+  })
+  it('treats unknown metadata as missing evidence rather than a proven change', () => {
+    expect(detectProtocolDrift({ actionTypes: [], facesNamespace: 'javax.faces', viewStateBehavior: 'present' }, { actionTypes: [], facesNamespace: 'unknown', viewStateBehavior: 'unknown' }).driftStatus).toBe('unresolved')
+  })
+  it('accepts each legacy baseline field without ignoring conflicting evidence', () => {
+    for (const field of ['expectedActions', 'observedActions', 'actionTypes']) {
+      expect(detectProtocolDrift({ [field]: ['update'] }, { actionTypes: ['update'] }).driftStatus).toBe('no_drift')
+    }
+    expect(detectProtocolDrift({ expectedActions: ['eval'], actionTypes: ['update'] }, { actionTypes: ['update'] }).driftStatus).toBe('unresolved')
+  })
+})

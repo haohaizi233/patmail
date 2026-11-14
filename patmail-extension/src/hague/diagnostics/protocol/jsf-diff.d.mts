@@ -11,6 +11,7 @@ export interface ProtocolBaseline {
   expectedActions?: string[]
   observedActions?: string[]
   viewStateBehavior?: string
+  observationStatus?: string
   version?: number | string
   scenarioId?: string
   [key: string]: unknown
@@ -59,25 +60,14 @@ export interface ProtocolDriftReport {
 
 export function computeProtocolFingerprint(req?: ProtocolFingerprintInput): string
 export function computeScenarioFingerprint(steps?: ScenarioStepInput[]): string
+export interface ProtocolObservation extends ProtocolFingerprintInput {
+  httpMethod: string
+  actionTypes: string[]
+  observationStatus?: 'observed' | 'missing' | 'parse_failed' | 'unsupported'
+  viewStateBehavior?: 'present' | 'missing' | 'unknown'
+}
+export function normalizeProtocolObservation(input: unknown): (ProtocolBaseline & { actionTypes: string[] }) | null
 export function detectProtocolDrift(
-  baseline?: {
-    version?: string
-    scenarioId?: string
-    urlPath?: string
-    facesNamespace?: string
-    sourceComponent?: string
-    expectedActions?: string[]
-    observedActions?: string[]
-    viewStateBehavior?: string
-  } | null,
-  observed?: {
-    version?: string
-    scenarioId?: string
-    urlPath?: string
-    facesNamespace?: string
-    sourceComponent?: string
-    expectedActions?: string[]
-    observedActions?: string[]
-    viewStateBehavior?: string
-  } | null
+  baseline?: ProtocolBaseline | null,
+  observed?: ProtocolBaseline | null
 ): ProtocolDriftReport

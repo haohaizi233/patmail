@@ -37,6 +37,22 @@ export function computeScenarioFingerprint(steps = []) {
   return `scenario:${fnv1a(normalized)}`
 }
 
+// A present empty array is evidence; absent, invalid or conflicting fields are not.
+export function normalizeProtocolObservation(input) {
+  if (!input || typeof input !== 'object') return null
+  if (input.observationStatus !== undefined && input.observationStatus !== 'observed') return null
+  let actionTypes
+  for (const field of ['actionTypes', 'expectedActions', 'observedActions', 'actions']) {
+    if (input[field] === undefined) continue
+    if (!Array.isArray(input[field])) return null
+    const values = input[field].map(action => field === 'actions' && typeof action === 'object' && action !== null ? action.action : action)
+    if (values.some(action => typeof action !== 'string' || !/^(update|insert|delete|attributes|eval|extension|error|redirect)$/.test(action))) return null
+    if (actionTypes && JSON.stringify(actionTypes) !== JSON.stringify(values)) return null
+    actionTypes = values
+  }
+  return actionTypes === undefined ? null : { ...input, actionTypes }
+}
+
 export function detectProtocolDrift(baseline, observed) {
   if (!baseline) {
     return {
@@ -51,12 +67,15 @@ export function detectProtocolDrift(baseline, observed) {
     }
   }
 
-  if (!observed) {
+  const expected = normalizeProtocolObservation(baseline)
+  const actual = normalizeProtocolObservation(observed)
+  const missingMetadata = ['facesNamespace', 'sourceComponent', 'viewStateBehavior'].some(field => baseline[field] && (!observed?.[field] || observed[field] === 'unknown'))
+  if (!expected || !actual) {
     return {
       hasDrift: false,
       driftStatus: 'unresolved',
       severity: 'low',
-      baselineVersion: baseline.version || '1.0.0',
+      baselineVersion: String(baseline.version || '1.0.0'),
       protocolFingerprint: undefined,
       changes: [],
       confidence: 'unresolved',
@@ -68,7 +87,7 @@ export function detectProtocolDrift(baseline, observed) {
   let severity = 'low'
 
   // 1. Faces namespace change
-  if (baseline.facesNamespace && observed.facesNamespace && baseline.facesNamespace !== observed.facesNamespace) {
+  if (baseline.facesNamespace && observed.facesNamespace && baseline.facesNamespace !== 'unknown' && observed.facesNamespace !== 'unknown' && baseline.facesNamespace !== observed.facesNamespace) {
     changes.push({
       type: 'namespace_changed',
       from: baseline.facesNamespace,
@@ -79,8 +98,13 @@ export function detectProtocolDrift(baseline, observed) {
   }
 
   // 2. Actions comparison
-  const expectedActions = baseline.expectedActions || baseline.observedActions || []
-  const actualActions = observed.observedActions || observed.expectedActions || []
+  const expectedActions = expected.actionTypes
+  const actualActions = actual.actionTypes
+
+  if (JSON.stringify(expectedActions) !== JSON.stringify(actualActions)) {
+    changes.push({ type: 'action_sequence_changed', details: 'Ordered Partial Response action sequence changed' })
+    if (severity !== 'high') severity = 'medium'
+  }
 
   for (const exp of expectedActions) {
     if (!actualActions.includes(exp)) {
@@ -105,7 +129,7 @@ export function detectProtocolDrift(baseline, observed) {
   }
 
   // 3. ViewState behavior change
-  if (baseline.viewStateBehavior && observed.viewStateBehavior && baseline.viewStateBehavior !== observed.viewStateBehavior) {
+  if (baseline.viewStateBehavior && observed.viewStateBehavior && baseline.viewStateBehavior !== 'unknown' && observed.viewStateBehavior !== 'unknown' && baseline.viewStateBehavior !== observed.viewStateBehavior) {
     changes.push({
       type: 'viewstate_behavior_anomaly',
       from: baseline.viewStateBehavior,
@@ -141,11 +165,14 @@ export function detectProtocolDrift(baseline, observed) {
   }
 
   const hasDrift = changes.length > 0
+  if (!hasDrift && missingMetadata) {
+    return { hasDrift: false, driftStatus: 'unresolved', severity: 'low', baselineVersion: String(baseline.version || '1.0.0'), protocolFingerprint: computeProtocolFingerprint(observed), changes: [], confidence: 'unresolved', unresolvedReasons: ['insufficient_data'] }
+  }
   return {
     hasDrift,
     driftStatus: hasDrift ? 'drift_detected' : 'no_drift',
     severity: hasDrift ? severity : 'low',
-    baselineVersion: baseline.version || '1.0.0',
+    baselineVersion: String(baseline.version || '1.0.0'),
     protocolFingerprint: computeProtocolFingerprint(observed),
     changes,
     confidence: 'exact',
