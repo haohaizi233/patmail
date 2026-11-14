@@ -39,9 +39,18 @@ export function buildDiagnosticReport(input: readonly unknown[]) {
   const stepIdentity=(event:TraceEvent)=>JSON.stringify([event.caseRunId,event.traceId,event.stepIndex])
   events.forEach((event,index)=>{if(event.traceId&&authoritative(event))terminal.set(stepIdentity(event),index)})
   const fingerprints = [...new Set(events.flatMap(e => e.protocolFingerprint ? [e.protocolFingerprint] : []))]
-  const driftEvent = events.find(e => e.driftStatus)
-  const driftStatus = (driftEvent?.driftStatus as string) ?? (fingerprints.length ? 'no_drift' : 'baseline_missing')
-  const baselineVersion = events.find(e => e.baselineVersion)?.baselineVersion
+  // A failed body/XML analysis has no jsf.parsed event, but still prevents a
+  // complete comparison. Successful body companions and AST skips do not.
+  const missingObservation = (event: TraceEvent) => (event.phase === 'body.observed' && event.bodyStatus !== 'body_available') || (event.phase === 'analysis.skipped' && event.analysisKind === 'xml')
+  const observations = events.filter(e => e.phase === 'jsf.parsed' || e.driftStatus || (e.protocolFingerprint && e.phase !== 'protocol.analyzed') || missingObservation(e))
+  const compared = (event: TraceEvent) => event.driftCompared === true && !!event.baselineVersion && ['no_drift', 'drift_detected'].includes(event.driftStatus ?? '')
+  const baselineVersions = [...new Set(observations.flatMap(e => e.baselineVersion ? [e.baselineVersion] : []))].sort()
+  const statuses = observations.map(e => missingObservation(e) ? 'unresolved' : compared(e) ? e.driftStatus : e.baselineVersion || (e.driftStatus && e.driftStatus !== 'baseline_missing') ? 'unresolved' : 'baseline_missing')
+  const driftPartial = baselineVersions.length > 1 || statuses.some(status => status === 'unresolved' || status === 'baseline_missing')
+  const driftStatus = statuses.includes('drift_detected') ? 'drift_detected'
+    : !statuses.length || statuses.every(status => status === 'baseline_missing') ? 'baseline_missing'
+      : driftPartial ? 'unresolved' : 'no_drift'
+  const baselineVersion = baselineVersions.length === 1 ? baselineVersions[0] : undefined
 
   return {
     version: 1 as const,
@@ -59,6 +68,8 @@ export function buildDiagnosticReport(input: readonly unknown[]) {
       missingEvidence: [!events.some(e => e.source === 'cdp') ? 'CDP 数据缺失' : '', !events.some(authoritative) ? '权威业务回执证据缺失' : ''].filter(Boolean),
       protocolFingerprints: fingerprints,
       driftStatus,
+      driftPartial,
+      baselineVersions,
       baselineVersion: baselineVersion ?? null
     },
     timeline: events.map(event => ({ alias: alias(event), event })),
@@ -76,6 +87,7 @@ export function exportDiagnostics(input: readonly unknown[], format: 'json' | 'j
     `查看来源：${provenance === 'offline-replay' ? '离线回放（不执行业务）' : '观测记录'}`, `事件：${report.summary.eventCount}；案件：${report.summary.caseCount}`, `CDP：${report.summary.cdpMissing ? '数据缺失' : '有观测记录'}`,
     `首个已证明失败：${report.summary.firstProvenFailure?.phase ?? '未采集到'}`, `存在不确定结果：${report.summary.hasUncertainty}`,
     `协议指纹：${report.summary.protocolFingerprints.join(', ') || '未采集'}；漂移状态：${report.summary.driftStatus}`,
+    `基线版本：${report.summary.baselineVersions.join(', ') || '无'}；部分或不可比结论：${report.summary.driftPartial}`,
     `恢复决定：${report.summary.recoveryDecision}`, '', '| 案件 | 阶段 | HTTP | 协议 | 业务 | 关联置信度 |', '| --- | --- | --- | --- | --- | --- |',
     ...report.timeline.map(({ alias, event: e }) => `| ${alias} | ${e.phase} | ${e.httpStatus ?? '未知'} | ${e.protocolStatus ?? '未知'} | ${e.businessStatus ?? '未知'} | ${e.correlationConfidence ?? (e.source === 'application' ? 'application-trace' : 'unmatched')} |`),
     '', '## 分层证据与缺失证据', ...report.evidence.map(item=>item.explanation),

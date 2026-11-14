@@ -88,17 +88,14 @@ parentPort.on('message', async (msg) => {
         urlPath: options.urlPath || scope?.urlPath,
         facesNamespace: parsed.namespace,
         sourceComponent: options.sourceComponent,
-        actions: parsed.actions,
         actionTypes: parsed.actions?.map(a => a.action),
+        observationStatus: !parsed.xmlParsed ? 'parse_failed' : parsed.bodyStatus === 'body_unsupported' || parsed.unknownNodeCount > 0 ? 'unsupported' : 'observed',
         viewStateBehavior: parsed.viewStatePresent ? 'present' : 'missing'
       }
       const fingerprint = computeProtocolFingerprint(observedMeta)
 
       // Drift detection
-      let drift = undefined
-      if (options.baseline !== undefined) {
-        drift = detectProtocolDrift(options.baseline, observedMeta)
-      }
+      const drift = detectProtocolDrift(options.baseline, observedMeta)
 
       // Track observed components
       for (const compId of parsed.updatedComponents ?? []) {
@@ -137,6 +134,7 @@ parentPort.on('message', async (msg) => {
         viewStateStatus: transitionRes.status,
         protocolFingerprint: fingerprint,
         driftStatus: drift?.driftStatus,
+        driftCompared: drift.confidence === 'exact',
         driftSeverity: drift?.severity,
         baselineVersion: drift?.baselineVersion,
         unresolvedReasons: [...parsed.unresolvedReasons, ...(drift?.unresolvedReasons ?? [])]

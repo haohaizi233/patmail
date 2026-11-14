@@ -7,6 +7,91 @@ import { analyzeEvidence } from '../../../src/hague/diagnostics/evidence/evidenc
 import { buildDiagnosticReport, exportDiagnostics } from '../../../src/hague/diagnostics/reports'
 import type { ProtocolBaseline } from '../../../src/hague/diagnostics/protocol/jsf-diff.mjs'
 
+describe('P1 Worker drift and report evidence', () => {
+  it('compares actual XML actions, including order and invalid observations', async () => {
+    const worker = new AnalysisWorker({ timeoutMs: 5000 })
+    try {
+      const result = await worker.analyze('xml', '<partial-response><redirect url="/login"/></partial-response>', { baseline: { version: 'v1', actionTypes: ['update', 'extension'] } })
+      expect(result).toMatchObject({ driftStatus: 'drift_detected', driftCompared: true, baselineVersion: 'v1' })
+      const trace = { version: 1, source: 'cdp', phase: 'jsf.parsed', timestamp: '2026-11-14T00:00:00Z', requestId: '1', ...result }
+      expect(buildDiagnosticReport([trace]).summary.driftStatus).toBe('drift_detected')
+      const reordered = await worker.analyze('xml', '<partial-response><changes><eval>void 0</eval><update id="panel">ok</update></changes></partial-response>', { baseline: { version: 'v1', actionTypes: ['update', 'eval'] } })
+      expect(reordered.driftStatus).toBe('drift_detected')
+      expect(await worker.analyze('xml', '<partial-response/>')).toMatchObject({ driftStatus: 'baseline_missing', driftCompared: false })
+      const same = await worker.analyze('xml', '<partial-response/>', { baseline: { version: 'v1', actionTypes: [] } })
+      expect(same).toMatchObject({ driftStatus: 'no_drift', driftCompared: true })
+      expect(buildDiagnosticReport([{ ...trace, ...same }]).summary.driftStatus).toBe('no_drift')
+      for (const xml of ['<partial-response>', '<html/>']) {
+        expect((await worker.analyze('xml', xml, { baseline: { version: 'v1', actionTypes: [] } })).driftStatus).toBe('unresolved')
+      }
+    } finally { worker.clear() }
+  })
+  it('keeps Session B live when Session A is cancelled before XML parsing in the real Worker', async () => {
+    const worker = new AnalysisWorker({ timeoutMs: 5000 })
+    const a = { sessionId: 'A', targetId: 'T', frameId: 'F', loaderId: 'L', formId: 'form' }
+    const b = { ...a, sessionId: 'B' }
+    try {
+      // Start the Worker before sending its fire-and-forget lifecycle signals.
+      await worker.analyze('state', null)
+      worker.signal('begin_request', { scope: a, requestId: '123' })
+      worker.signal('begin_request', { scope: b, requestId: '123' })
+      worker.signal('forget_request', { scope: { sessionId: 'A' }, requestId: '123' })
+      const xml = '<partial-response><changes><update id="javax.faces.ViewState">PRIVATE_STATE</update></changes></partial-response>'
+      const cancelled = await worker.analyze('xml', xml, { scope: a, requestId: '123' })
+      const retained = await worker.analyze('xml', xml, { scope: b, requestId: '123' })
+      expect(cancelled.viewStateTransition).toBe('STATE_UNVERIFIABLE')
+      expect(retained.viewStateTransition).toBe('INITIAL_OBSERVED')
+      expect(JSON.stringify([cancelled, retained])).not.toContain('PRIVATE_STATE')
+    } finally { worker.clear() }
+  })
+  const event = (requestId: string, driftStatus?: string, baselineVersion?: string, driftCompared = false) => ({
+    version: 1, source: 'cdp', phase: 'jsf.parsed', timestamp: '2026-11-14T00:00:00Z', requestId,
+    protocolFingerprint: 'proto:12345678', driftStatus, baselineVersion, driftCompared
+  })
+  it.each([
+    { phase: 'body.observed', bodyStatus: 'body_unavailable' },
+    { phase: 'body.observed', bodyStatus: 'body_too_large' },
+    { phase: 'body.observed', bodyStatus: 'body_unsupported' },
+    { phase: 'analysis.skipped', analysisKind: 'xml', skipReason: 'time_limit' },
+  ])('cannot declare a complete comparison when another request has $phase / $bodyStatus / $skipReason', failure => {
+    const missing = { version: 1, source: 'cdp', timestamp: '2026-11-14T00:00:00Z', requestId: '2', ...failure }
+    const events = [event('1', 'no_drift', 'v1', true), missing]
+    expect(buildDiagnosticReport(events).summary).toMatchObject({ driftStatus: 'unresolved', driftPartial: true })
+    expect(JSON.parse(exportDiagnostics(events, 'json')).summary.driftStatus).toBe('unresolved')
+    expect(exportDiagnostics(events, 'markdown')).toContain('漂移状态：unresolved')
+  })
+  it('does not count successful companion body events or skipped AST as missing XML observations', () => {
+    const complete = event('1', 'no_drift', 'v1', true)
+    expect(buildDiagnosticReport([
+      complete,
+      { ...complete, driftStatus: undefined, baselineVersion: undefined, driftCompared: undefined, protocolFingerprint: undefined, phase: 'body.observed', bodyStatus: 'body_available' },
+      { version: 1, source: 'cdp', phase: 'analysis.skipped', timestamp: complete.timestamp, analysisKind: 'ast', skipReason: 'time_limit' },
+    ]).summary.driftStatus).toBe('no_drift')
+  })
+  it.each([
+    ['fingerprint only', [event('1')], 'baseline_missing'],
+    ['no observations', [], 'baseline_missing'],
+    ['missing observation', [event('1', 'unresolved', 'v1')], 'unresolved'],
+    ['unverified no drift', [event('1', 'no_drift', 'v1')], 'unresolved'],
+    ['verified identical', [event('1', 'no_drift', 'v1', true)], 'no_drift'],
+    ['mixed requests', [event('1', 'baseline_missing'), event('2', 'drift_detected', 'v1', true), event('3', 'no_drift', 'v1', true)], 'drift_detected'],
+    ['partial comparison', [event('1', 'baseline_missing'), event('2', 'no_drift', 'v1', true)], 'unresolved'],
+    ['different versions', [event('1', 'no_drift', 'v1', true), event('2', 'no_drift', 'v2', true)], 'unresolved'],
+  ])('%s keeps sanitized JSON and Markdown conclusions consistent', (_label, events, status) => {
+    const report = buildDiagnosticReport(events)
+    expect(report.summary.driftStatus).toBe(status)
+    expect(buildDiagnosticReport(report.events).summary.driftStatus).toBe(status)
+    expect(JSON.parse(exportDiagnostics(events, 'json')).summary.driftStatus).toBe(status)
+    expect(exportDiagnostics(events, 'markdown')).toContain(`漂移状态：${status}`)
+    expect(buildDiagnosticReport([...events].reverse()).summary.driftStatus).toBe(status)
+    if (_label === 'different versions') {
+      expect(report.summary.baselineVersions).toEqual(['v1', 'v2'])
+      expect(report.summary.driftPartial).toBe(true)
+      expect(exportDiagnostics(events, 'markdown')).toContain('v1, v2')
+    }
+  })
+})
+
 describe('Hague Research Full Chain Integration', () => {
   let workersToClean: AnalysisWorker[] = []
 
