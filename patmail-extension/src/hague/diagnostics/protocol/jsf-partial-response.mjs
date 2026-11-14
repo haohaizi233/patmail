@@ -65,25 +65,53 @@ const standard=new Set(['partial.ajax','source','partial.execute','partial.rende
 const components=value=>value.split(/\s+/).filter(Boolean).slice(0,30).map(v=>/^@(all|form|this|none)$/.test(v)?v:safeComponentId(v)).join(' ')
 export function parseJsfRequest(request={}){
  const mime=String(request.mime??request.contentType??'').toLowerCase(),isUpload=request.isUpload===true||mime.startsWith('multipart/')
- const out={eligibleAjax:false,isUpload,parameterNames:[],requestMetadataStatus:'unsupported'}
- if(isUpload||mime&&!mime.startsWith('application/x-www-form-urlencoded'))return out
+ const out={eligibleAjax:false,isUpload,parameterNames:[],requestMetadataStatus:'unsupported',protocolConfidence:'unresolved',unresolvedReasons:[]}
+ if(isUpload||mime&&!mime.startsWith('application/x-www-form-urlencoded')){out.requestFamily=isUpload?'multipart':'unsupported';return out}
  const data=request.postData
- if(typeof data!=='string')return out
- if(new TextEncoder().encode(data).byteLength>MAX_BYTES)return {...out,requestMetadataStatus:'too_large'}
+ if(typeof data!=='string'){out.requestMetadataStatus='unsupported';out.unresolvedReasons.push('missing_post_data');return out}
+ if(new TextEncoder().encode(data).byteLength>MAX_BYTES)return {...out,requestMetadataStatus:'too_large',unresolvedReasons:['post_data_too_large']}
  // Bound form allocation and iteration independently of the byte budget.
  let pairs=1
- for(let i=0;i<data.length;i++)if(data[i]==='&'&&++pairs>256)return {...out,requestMetadataStatus:'too_large'}
+ for(let i=0;i<data.length;i++)if(data[i]==='&'&&++pairs>256)return {...out,requestMetadataStatus:'too_large',unresolvedReasons:['too_many_parameters']}
  const params=new URLSearchParams(data);out.requestMetadataStatus='parsed'
- for(const [key,value]of params){if(!standard.has(key))continue;if(!out.parameterNames.includes(key))out.parameterNames.push(key)
+ let javaxCount=0,jakartaCount=0,duplicateCount=0
+ const seenKeys=new Set(),unknownKeys=new Set()
+ for(const [key,value]of params){
+  if(seenKeys.has(key))duplicateCount++
+  seenKeys.add(key)
+  if(key.startsWith('javax.faces.'))javaxCount++
+  else if(key.startsWith('jakarta.faces.'))jakartaCount++
+  else if(!standard.has(key))unknownKeys.add(key)
+  if(!standard.has(key))continue
+  if(!out.parameterNames.includes(key))out.parameterNames.push(key)
   const suffix=key.replace(/^(javax|jakarta)\.faces\./,'')
-  if(suffix==='partial.ajax'&&value==='true')out.eligibleAjax=true
+  if(suffix==='partial.ajax'&&value==='true'){out.eligibleAjax=true;out.ajaxMarkerPresent=true}
   if(suffix==='source')out.sourceComponent=safeComponentId(value)
-  if(suffix==='partial.execute')out.process=components(value)
-  if(suffix==='partial.render')out.update=components(value)
+  if(suffix==='partial.execute'){
+   out.process=components(value)
+   out.executeComponents=value.split(/\s+/).filter(Boolean).slice(0,30).map(v=>/^@(all|form|this|none)$/.test(v)?v:safeComponentId(v))
+  }
+  if(suffix==='partial.render'){
+   out.update=components(value)
+   out.renderComponents=value.split(/\s+/).filter(Boolean).slice(0,30).map(v=>/^@(all|form|this|none)$/.test(v)?v:safeComponentId(v))
+  }
+  if(suffix==='behavior.event')out.behaviorEvent=value
+  else if(suffix==='partial.event'&&!out.behaviorEvent)out.behaviorEvent=value
+  if(suffix==='ViewState')out.viewStatePresent=true
  }
- // A form is a component identifier derived only from the standard source field.
+ let facesNamespace='unknown'
+ if(javaxCount>0&&jakartaCount>0){facesNamespace='mixed';out.unresolvedReasons.push('namespace_conflict')}
+ else if(javaxCount>0)facesNamespace='javax'
+ else if(jakartaCount>0)facesNamespace='jakarta'
+ out.facesNamespace=facesNamespace
  const source=params.get('javax.faces.source')??params.get('jakarta.faces.source')
  if(source?.includes(':'))out.form=safeComponentId(source.split(':')[0])
+ out.requestFamily=out.eligibleAjax?'faces_ajax':'form_post'
+ out.duplicateParameterCount=duplicateCount
+ out.unknownParameterCount=unknownKeys.size
+ out.viewStatePresent=out.viewStatePresent??(params.has('javax.faces.ViewState')||params.has('jakarta.faces.ViewState'))
+ out.ajaxMarkerPresent=out.ajaxMarkerPresent??false
+ out.protocolConfidence=out.unresolvedReasons.length===0&&out.eligibleAjax&&out.sourceComponent?'exact':out.eligibleAjax?'partial':'unresolved'
  return out
 }
 
