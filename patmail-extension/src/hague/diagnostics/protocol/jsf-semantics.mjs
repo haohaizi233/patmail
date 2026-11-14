@@ -31,14 +31,38 @@ function limit(value, fallback) {
   return Number.isSafeInteger(value) && value > 0 ? Math.min(value, fallback) : fallback
 }
 
+export const KNOWN_ERROR_CATEGORIES = new Set([
+  'view_expired',
+  'validation_error',
+  'conversion_error',
+  'protocol_error',
+  'expression_error',
+  'timeout',
+  'internal_server_error',
+  'unknown_jsf_error'
+])
+
+const VETTED_ERROR_NAMES = {
+  view_expired: 'ViewExpiredException',
+  validation_error: 'ValidationException',
+  conversion_error: 'ConverterException',
+  protocol_error: 'ProtocolException',
+  expression_error: 'ExpressionException',
+  timeout: 'TimeoutException',
+  internal_server_error: 'InternalServerError',
+  unknown_jsf_error: 'UnknownJsfError'
+}
+
 export function safeErrorCategory(name, message) {
   const text = `${name || ''} ${message || ''}`.toLowerCase()
   if (text.includes('viewexpired') || text.includes('view expired')) return 'view_expired'
   if (text.includes('conversion') || text.includes('converter')) return 'conversion_error'
   if (text.includes('validation') || text.includes('validator')) return 'validation_error'
+  if (text.includes('protocol') || text.includes('partialresponse') || text.includes('malformed')) return 'protocol_error'
   if (text.includes('nosuchmethod') || text.includes('evaluationexception') || text.includes('propertynotfound')) return 'expression_error'
   if (text.includes('timeout') || text.includes('timed out')) return 'timeout'
-  return 'internal_server_error'
+  if (text.includes('nullpointer') || text.includes('illegalargument') || text.includes('server') || text.includes('internal')) return 'internal_server_error'
+  return 'unknown_jsf_error'
 }
 
 export function parseJsfProtocol(body, options = {}) {
@@ -69,131 +93,103 @@ export function parseJsfProtocol(body, options = {}) {
     nodes: 0
   }
 
+  const earlyFailure = base => ({
+    recognized: false,
+    namespace: 'unknown',
+    actions: [],
+    viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
+    viewStatePresent: false,
+    viewStateLength: 0,
+    validation: { failed: false, evidenceSource: 'none' },
+    protocolErrors: [],
+    parserError: false,
+    jsfError: false,
+    validationFailed: false,
+    redirectDetected: false,
+    updateCount: 0,
+    insertCount: 0,
+    deleteCount: 0,
+    attributeCount: 0,
+    evalCount: 0,
+    extensionCount: 0,
+    unknownNodeCount: 0,
+    updatedComponents: [],
+    expectedUpdates: [],
+    stats,
+    ...base
+  })
+
   let text
   try {
     text = typeof body === 'string' ? body : new TextDecoder('utf-8', { fatal: true }).decode(body ?? new Uint8Array())
   } catch {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'malformed',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'invalid_xml',
       errorCode: 'INVALID_XML',
       parserError: true,
       bodyStatus: 'body_parse_failed',
       xmlParsed: false,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['invalid_utf8_encoding'],
-      stats
-    }
+      unresolvedReasons: ['invalid_utf8_encoding']
+    })
   }
 
   const byteLen = new TextEncoder().encode(text).byteLength
   if (byteLen > limit(options.maxBytes, MAX_BYTES)) {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'unsupported',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'unsupported',
       errorCode: 'PROTOCOL_UNSUPPORTED',
       bodyStatus: 'body_too_large',
       xmlParsed: false,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['body_too_large'],
-      stats
-    }
+      unresolvedReasons: ['body_too_large']
+    })
   }
 
   const trimmed = text.trim()
   if (!trimmed) {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'empty',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'empty',
       errorCode: 'EMPTY_RESPONSE',
       bodyStatus: 'body_available',
       xmlParsed: false,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['empty_response'],
-      stats
-    }
+      unresolvedReasons: ['empty_response']
+    })
   }
 
   if (/^(?:<!doctype\s+html|<html\b)/i.test(trimmed)) {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'full_html',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'html',
       errorCode: 'PROTOCOL_UNSUPPORTED',
       bodyStatus: 'body_unsupported',
       xmlParsed: false,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['html_response'],
-      stats
-    }
+      unresolvedReasons: ['html_response']
+    })
   }
 
   const mime = (options.mime ?? '').split(';')[0].trim().toLowerCase()
   if (mime && !['text/xml', 'application/xml', 'application/xhtml+xml'].includes(mime) && !mime.endsWith('+xml')) {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'unsupported',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'unsupported',
       errorCode: 'INVALID_MIME',
       bodyStatus: 'body_unsupported',
       xmlParsed: false,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['invalid_mime'],
-      stats
-    }
+      unresolvedReasons: ['invalid_mime']
+    })
   }
 
   if (/^[{[]/.test(trimmed)) {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'unsupported',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'unsupported',
       errorCode: 'PROTOCOL_UNSUPPORTED',
       bodyStatus: 'body_unsupported',
       xmlParsed: false,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['json_payload'],
-      stats
-    }
+      unresolvedReasons: ['json_payload']
+    })
   }
 
   const stack = []
@@ -231,7 +227,8 @@ export function parseJsfProtocol(body, options = {}) {
 
     if (!KNOWN_NODES.has(name)) {
       stats.unknownNodeCount++
-      unresolvedReasons.push(`unknown_node:${name}`)
+      const safeNode = String(name).slice(0, 32).replace(/[^a-zA-Z0-9_-]/g, '')
+      unresolvedReasons.push(`unknown_node:${safeNode}`)
     }
 
     if (name === 'update') {
@@ -294,8 +291,8 @@ export function parseJsfProtocol(body, options = {}) {
       if (actions.length < MAX_ACTIONS) {
         actions.push({
           action: 'extension',
-          ln: lnVal ? String(lnVal).slice(0, 32) : undefined,
-          type: typeVal ? String(typeVal).slice(0, 32) : undefined
+          ln: lnVal ? String(lnVal).slice(0, 32).replace(/[^a-zA-Z0-9_-]/g, '') : undefined,
+          type: typeVal ? String(typeVal).slice(0, 32).replace(/[^a-zA-Z0-9_-]/g, '') : undefined
         })
       }
     } else if (name === 'error') {
@@ -316,14 +313,36 @@ export function parseJsfProtocol(body, options = {}) {
     }
   })
 
+  const MAX_VIEWSTATE_TEXT = 65536
+  const MAX_EXTENSION_TEXT = 16384
+  const MAX_ERROR_NAME_TEXT = 256
+  const MAX_ERROR_MSG_TEXT = 1024
+
   const content = value => {
     for (let i = stack.length - 1; i >= 0; i--) {
       const frame = stack[i]
-      if (frame.name === 'extension' ||
-          (frame.name === 'update' && isViewStateId(frame.id)) ||
-          frame.name === 'error-name' ||
-          frame.name === 'error-message') {
-        frame.text += value
+      if (frame.name === 'update' && isViewStateId(frame.id)) {
+        if (frame.text.length + value.length <= MAX_VIEWSTATE_TEXT) {
+          frame.text += value
+        }
+        break
+      }
+      if (frame.name === 'extension') {
+        if (frame.text.length + value.length <= MAX_EXTENSION_TEXT) {
+          frame.text += value
+        }
+        break
+      }
+      if (frame.name === 'error-name') {
+        if (frame.text.length + value.length <= MAX_ERROR_NAME_TEXT) {
+          frame.text += value
+        }
+        break
+      }
+      if (frame.name === 'error-message') {
+        if (frame.text.length + value.length <= MAX_ERROR_MSG_TEXT) {
+          frame.text += value
+        }
         break
       }
     }
@@ -353,18 +372,18 @@ export function parseJsfProtocol(body, options = {}) {
     }
 
     if (frame.name === 'error-name' && currentError) {
-      const parts = frame.text.trim().split('.')
-      currentError.errorName = parts[parts.length - 1] || 'JsfError'
+      currentError.errorName = frame.text.trim().slice(0, 256)
     }
 
     if (frame.name === 'error-message' && currentError) {
-      currentError.errorMessage = frame.text.trim()
+      currentError.errorMessage = frame.text.trim().slice(0, 1024)
     }
 
     if (frame.name === 'error' && currentError) {
       const category = safeErrorCategory(currentError.errorName, currentError.errorMessage)
+      const errorName = VETTED_ERROR_NAMES[category] || 'UnknownJsfError'
       protocolErrors.push({
-        errorName: currentError.errorName || 'Error',
+        errorName,
         category
       })
       currentError = null
@@ -378,44 +397,26 @@ export function parseJsfProtocol(body, options = {}) {
   }
 
   if (invalid) {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'malformed',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'invalid_xml',
       errorCode: 'INVALID_XML',
       parserError: true,
       bodyStatus: 'body_parse_failed',
       xmlParsed: false,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['invalid_xml_structure'],
-      stats
-    }
+      unresolvedReasons: ['invalid_xml_structure']
+    })
   }
 
   if (root !== 'partial-response') {
-    return {
-      recognized: false,
-      namespace: 'unknown',
+    return earlyFailure({
       kind: 'unsupported',
-      actions: [],
-      viewState: { present: false, length: 0, namespace: 'unknown', count: 0 },
-      validation: { failed: false, evidenceSource: 'none' },
-      protocolErrors: [],
       protocolStatus: 'unsupported',
       errorCode: 'PROTOCOL_UNSUPPORTED',
       bodyStatus: 'body_unsupported',
       xmlParsed: true,
-      updatedComponents: [],
-      expectedUpdates: [],
-      unresolvedReasons: ['root_not_partial_response'],
-      stats
-    }
+      unresolvedReasons: ['root_not_partial_response']
+    })
   }
 
   if (viewStateJavax && viewStateJakarta) detectedNamespace = 'mixed'
@@ -438,7 +439,11 @@ export function parseJsfProtocol(body, options = {}) {
     kind = 'redirect'
   }
 
-  return {
+  if (options.onViewState && views.length) {
+    try { options.onViewState(views) } catch {}
+  }
+
+  const result = {
     recognized: true,
     namespace: detectedNamespace,
     kind,
@@ -477,47 +482,115 @@ export function parseJsfProtocol(body, options = {}) {
     unresolvedReasons,
     stats
   }
+
+  // Internal temporary reference for HMAC state machine within worker turn (never serialized)
+  Object.defineProperty(result, '_rawViewState', {
+    value: views.length ? views[views.length - 1] : null,
+    enumerable: false,
+    writable: true,
+    configurable: true
+  })
+
+  return result
 }
 
 /**
- * Compare SAX result against DOMParser semantic facts on the exact same XML.
+ * Extracts protocol facts using browser/DOMParser semantics, exactly mirroring
+ * the production xmlEvidence() and http-context.ts fact identification.
+ */
+export function extractHttpProtocolFacts(xmlText) {
+  let xmlParsed = false
+  let parserError = false
+  let jsfError = false
+  let validationFailed = false
+  let redirectDetected = false
+  let updateCount = 0
+  let insertCount = 0
+  let deleteCount = 0
+  let viewStatePresent = false
+  const updatedComponents = []
+
+  const trimmed = typeof xmlText === 'string' ? xmlText.trim() : ''
+  if (/^(?:<!doctype\s+html|<html\b)/i.test(trimmed) || !/<partial-response[\s>]/.test(trimmed)) {
+    return {
+      xmlParsed: false,
+      parserError: !/^(?:<!doctype\s+html|<html\b)/i.test(trimmed),
+      jsfError: false,
+      validationFailed: false,
+      redirectDetected: false,
+      updateCount: 0,
+      insertCount: 0,
+      deleteCount: 0,
+      viewStatePresent: false,
+      updatedComponents: []
+    }
+  }
+
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml')
+    const hasParserError = !!doc.querySelector('parsererror')
+    if (hasParserError) {
+      parserError = true
+      xmlParsed = false
+    } else {
+      xmlParsed = true
+      redirectDetected = !!doc.querySelector('redirect')
+      jsfError = !!doc.querySelector('error')
+      for (const node of doc.querySelectorAll('extension')) {
+        try {
+          const args = JSON.parse(node.textContent ?? '')
+          if (args && typeof args === 'object' && args.validationFailed === true) {
+            validationFailed = true
+          }
+        } catch {}
+      }
+      const updates = doc.querySelectorAll('update')
+      updateCount = updates.length
+      for (const u of updates) {
+        const id = u.getAttribute('id') || u.id || ''
+        if (isViewStateId(id)) viewStatePresent = true
+        else if (id) updatedComponents.push(safeComponentId(id))
+      }
+      insertCount = doc.querySelectorAll('insert').length
+      deleteCount = doc.querySelectorAll('delete').length
+    }
+  } catch {
+    parserError = true
+    xmlParsed = false
+  }
+
+  return {
+    xmlParsed,
+    parserError,
+    jsfError,
+    validationFailed,
+    redirectDetected,
+    updateCount,
+    insertCount,
+    deleteCount,
+    viewStatePresent,
+    updatedComponents
+  }
+}
+
+/**
+ * Compare SAX result against production-identical DOMParser protocol facts on the exact same XML.
  * Confirms consistency without creating business side effects.
  */
 export function compareJsfDualParsers(xmlText) {
   const saxResult = parseJsfProtocol(xmlText)
-
-  // DOMParser parse
-  let domResult = { updateCount: 0, viewStatePresent: false, validationFailed: false, jsfError: false }
-  try {
-    const doc = new DOMParser().parseFromString(xmlText, 'application/xml')
-    const hasParserError = !!doc.querySelector('parsererror')
-    if (!hasParserError) {
-      const updates = doc.querySelectorAll('update')
-      let vsPresent = false
-      for (const u of updates) {
-        if (isViewStateId(u.id)) vsPresent = true
-      }
-      let valFailed = false
-      for (const ext of doc.querySelectorAll('extension')) {
-        try {
-          const parsed = JSON.parse(ext.textContent ?? '')
-          if (parsed && typeof parsed === 'object' && parsed.validationFailed === true) valFailed = true
-        } catch {}
-      }
-      domResult = {
-        updateCount: updates.length,
-        viewStatePresent: vsPresent,
-        validationFailed: valFailed,
-        jsfError: !!doc.querySelector('error')
-      }
-    }
-  } catch {}
+  const domResult = extractHttpProtocolFacts(xmlText)
 
   const consistent =
+    saxResult.xmlParsed === domResult.xmlParsed &&
+    saxResult.parserError === domResult.parserError &&
+    saxResult.jsfError === domResult.jsfError &&
+    saxResult.validationFailed === domResult.validationFailed &&
+    saxResult.redirectDetected === domResult.redirectDetected &&
     saxResult.updateCount === domResult.updateCount &&
-    saxResult.viewState.present === domResult.viewStatePresent &&
-    saxResult.validation.failed === domResult.validationFailed &&
-    saxResult.jsfError === domResult.jsfError
+    saxResult.insertCount === domResult.insertCount &&
+    saxResult.deleteCount === domResult.deleteCount &&
+    saxResult.viewState.present === domResult.viewStatePresent
 
   return { consistent, saxResult, domResult }
 }

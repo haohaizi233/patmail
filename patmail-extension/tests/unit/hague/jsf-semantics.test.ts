@@ -87,17 +87,51 @@ describe('JSF Protocol Semantics Engine', () => {
     expect(res.unresolvedReasons).toContain('unknown_node:unknownCustomWidget')
   })
 
-  it('maintains dual-parser semantic consistency between SAX and DOMParser', () => {
-    const xml = wrap(`
-      <update id="ApplicantForm"><![CDATA[<div>Form</div>]]></update>
-      <update id="javax.faces.ViewState"><![CDATA[viewstate-token]]></update>
-      <extension ln="primefaces" type="args">{"validationFailed":false}</extension>
-    `)
-    const comparison = compareJsfDualParsers(xml)
-    expect(comparison.consistent).toBe(true)
-    expect(comparison.saxResult.updateCount).toBe(2)
-    expect(comparison.domResult.updateCount).toBe(2)
-    expect(comparison.saxResult.viewStatePresent).toBe(true)
-    expect(comparison.domResult.viewStatePresent).toBe(true)
+  it('sanitizes untrusted error names and never leaks raw class names into diagnostic errorName', () => {
+    const maliciousXml = '<partial-response><error><error-name>com.wipo.internal.PrivateDatabaseFailureException</error-name><error-message>Confidential server details at line 42</error-message></error></partial-response>'
+    const res = parseJsfProtocol(maliciousXml)
+    expect(res.protocolStatus).toBe('jsf_error')
+    expect(res.protocolErrors).toHaveLength(1)
+    // Never leaks the arbitrary raw class name
+    expect(res.protocolErrors[0].errorName).not.toContain('PrivateDatabaseFailureException')
+    expect(res.protocolErrors[0].errorName).toBe('InternalServerError')
+    expect(res.protocolErrors[0].category).toBe('internal_server_error')
+    expect(JSON.stringify(res)).not.toContain('PrivateDatabaseFailureException')
+    expect(JSON.stringify(res)).not.toContain('Confidential server details')
+  })
+
+  it('bounds text and CDATA accumulation to prevent memory exhaustion', () => {
+    const hugeNoise = 'A'.repeat(100000)
+    const xml = wrap(`<update id="javax.faces.ViewState"><![CDATA[${hugeNoise}]]></update>`)
+    const res = parseJsfProtocol(xml)
+    expect(res.recognized).toBe(true)
+    expect(res.viewState.present).toBe(true)
+    // Capped at 65536
+    expect(res.viewState.length).toBeLessThanOrEqual(65536)
+  })
+
+  it('maintains dual-parser semantic consistency between SAX and DOMParser across all standard fixture types', () => {
+    const fixtures = [
+      { name: 'normal update', xml: wrap('<update id="ApplicantForm"><p>text</p></update>') },
+      { name: 'multiple updates', xml: wrap('<update id="ApplicantForm"><div>1</div></update><update id="CreatorForm"><div>2</div></update>') },
+      { name: 'ViewState update', xml: wrap('<update id="javax.faces.ViewState">TOKEN123</update>') },
+      { name: 'ViewRoot update', xml: wrap('<update id="javax.faces.ViewRoot"><html><body>new root</body></html></update>') },
+      { name: 'insert action', xml: wrap('<insert id="table:row"><p>new row</p></insert>') },
+      { name: 'delete action', xml: wrap('<delete id="table:row"/>') },
+      { name: 'attributes action', xml: wrap('<attributes id="comp1"><attribute name="disabled" value="true"/></attributes>') },
+      { name: 'eval script', xml: wrap('<eval>console.log("hi")</eval>') },
+      { name: 'extension metadata', xml: wrap('<extension ln="primefaces" type="args">{"validationFailed":false}</extension>') },
+      { name: 'redirect action', xml: '<partial-response><redirect url="https://hague.wipo.int/HagueEFilingWeb/login"/></partial-response>' },
+      { name: 'protocol error', xml: '<partial-response><error><error-name>Exception</error-name></error></partial-response>' },
+      { name: 'validation failed', xml: wrap('<extension ln="primefaces" type="args">{"validationFailed":true}</extension>') },
+      { name: 'html page', xml: '<html><body>Not XML</body></html>' },
+      { name: 'invalid xml', xml: '<partial-response><unclosed>' },
+      { name: 'unknown xml node', xml: wrap('<customUnknownNode id="u1"/>') }
+    ]
+
+    for (const fixture of fixtures) {
+      const comparison = compareJsfDualParsers(fixture.xml)
+      expect(comparison.consistent, `Fixture failed dual-parser consistency: ${fixture.name}`).toBe(true)
+    }
   })
 })
