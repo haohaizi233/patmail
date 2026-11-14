@@ -158,3 +158,14 @@ it('invalidates per-chain widget analysis when an existing script node changes',
  driver.state.document.scripts[0].textContent="PrimeFaces.cw('DataTable','reproDTW',{id:'designForm:reproDT',paginator:{rowCount:1}})"
  expect(count()).toBe(1)
 })
+
+it('resolves a unique remote command without executing unrelated page initialization',()=>{
+ const doc=new DOMParser().parseFromString(`<form id="menuForm"></form><script>var uiState=0;if(window.PrimeFaces){uiState++;}$(function(){PrimeFaces.cw('Dialog','dlg',{id:'dialog'})});</script><script>refreshDesignationUI=function(){PrimeFaces.ab({s:'menuForm:designation',f:'menuForm',u:'Designationform'});};</script><script>function refreshAll(){refreshDesignationUI();}</script>`,'text/html')
+ const button=doc.createElement('button')
+ expect(jsfAction('refreshDesignationUI([])',button,doc)).toMatchObject({source:'menuForm:designation',form:'menuForm',update:'Designationform'})
+ for(const extra of [`refreshDesignationUI=function(){PrimeFaces.ab({s:'other'});};`,`refreshDesignationUI=unknown;`,`window.refreshDesignationUI=unknown;`,`({refreshDesignationUI}=unknown);`]){
+  const script=doc.createElement('script');script.textContent=extra;doc.body.append(script)
+  expect(()=>jsfAction('refreshDesignationUI([])',button,doc)).toThrow(/协议/)
+  script.remove()
+ }
+})

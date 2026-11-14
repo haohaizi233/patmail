@@ -18,7 +18,7 @@ it('retries a supported operation once using a verified fresh receipt and persis
  expect(writes).toBe(2);expect(recover).toHaveBeenCalledOnce();expect(result.recoveryAttempts?.['3']).toBe(1);expect(result.next).toBe(4)
 })
 it.each(['wrong-reference','exhausted','unsupported','cancelled'] as const)('never retries when recovery is %s',async kind=>{
- const controller=new AbortController(),state=checkpoint(kind==='unsupported'?1:3)
+ const controller=new AbortController(),state=checkpoint(kind==='unsupported'?2:3)
  if(kind==='exhausted')state.recoveryAttempts={'3':1}
  let writes=0
  const recover=vi.fn(async():Promise<DraftRecovery>=>{if(kind==='cancelled')controller.abort();return{outcome:'retry',receipt:{...receipt,reference:kind==='wrong-reference'?'999':'123'}}})
@@ -55,4 +55,11 @@ it('does not resend a retry authorization after a crash or recover an unfingerpr
  await expect(runDraftPlan(plan,7,{call,recover,save:async()=>{}},undefined,{...stored!,status:'running'})).rejects.toThrow(/核对/)
  await expect(runDraftPlan(plan,7,{call,recover,save:async()=>{}},undefined,{...checkpoint(),status:'uncertain',planKey:undefined})).rejects.toThrow(/指纹/)
  expect(call).not.toHaveBeenCalled();expect(recover).not.toHaveBeenCalled()
+})
+
+it('never accepts a retry authorization for an allocated create step',async()=>{
+ let creates=0
+ const recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'retry',receipt}))
+ await expect(runDraftPlan(plan,7,{recover,save:async()=>{},call:async c=>{if(c.op==='inspect')return receipt;if(c.op==='create')creates++;return{ok:false,error:'unconfirmed'}}},undefined,checkpoint(1))).rejects.toThrow()
+ expect(creates).toBe(1);expect(recover).toHaveBeenCalledOnce()
 })

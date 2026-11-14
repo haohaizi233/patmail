@@ -66,7 +66,7 @@ it('extracts the sole save request when a confirmation handler also hides its di
  for(const suffix of [`PF('saveDialog').deleteDraft();`,`PF(dynamicName).hide();`,`PF('saveDialog').hide(fetch('/write'));`,`var PF=custom;PF('saveDialog').hide();`,`new (PF('saveDialog').hide)();`])expect(()=>jsfAction(`PrimeFaces.ab({s:"headerForm:yes"});${suffix}`,button,d.state.document)).toThrow(/协议/)
 })
 
-it('saves the allocated draft with one network action despite a local dialog hide call',async()=>{
+it('saves the allocated draft once through the observed bcn loading and AJAX wrapper',async()=>{
  const sent:string[]=[]
  const driver=new HagueHttpDriver('initial-save',async(_url,init)=>{
   if(init?.method==='POST'){
@@ -76,8 +76,68 @@ it('saves the allocated draft with one network action despite a local dialog hid
   const response=new Response('<form id="quickSearchPanel"><button class="filtered">Draft(s)</button></form><form id="portfolio"><input name="javax.faces.ViewState" value="B"><table><tbody><tr><td>WIPO123</td></tr></tbody></table></form>')
   Object.defineProperty(response,'url',{value:'https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml'});return response
  })
- driver.state.load(`<html><head><title>WIPO reference 123</title></head><body><form id="headerForm"><input name="javax.faces.ViewState" value="A"><button type="button" id="headerForm:backApp" onclick="PF('saveDialog').show();return false;">Close</button><div class="ui-dialog">Draft(s)<button type="button" id="headerForm:yes" onclick="PrimeFaces.ab({s:'headerForm:yes',f:'headerForm'});PF('saveDialog').hide();return false;">Yes</button></div></form></body></html>`,'/HagueEFilingWeb/protected/page/application.xhtml')
+ driver.state.load(`<html><head><title>WIPO reference 123</title></head><body><form id="headerForm"><input name="javax.faces.ViewState" value="A"><button type="button" id="headerForm:backApp" onclick="PF('saveDialog').show();return false;">Close</button><div class="ui-dialog">Draft(s)<button type="button" id="headerForm:yes" onclick="PrimeFaces.bcn(this,event,[function(event){showBlockUIOnSend('');},function(event){PrimeFaces.ab({s:'headerForm:yes',f:'headerForm',onco:function(xhr,status,args){PF('saveDialog').hide();}});return false;}]);">Yes</button></div></form></body></html>`,'/HagueEFilingWeb/protected/page/application.xhtml')
  expect(await driver.call({op:'inspect'})).toMatchObject({reference:'123',page:'application'});
  const result=await driver.call({op:'saveDraft'},'123');expect(result.error).toBeUndefined();expect(result).toMatchObject({ok:true,page:'portfolio',draftSaved:true});expect(driver.state.reference).toBe('123')
  expect(sent).toEqual(['headerForm:yes'])
+})
+
+it('extracts the live save-dialog bcn wrapper without executing its loading helper',()=>{
+ const d=new HagueHttpDriver('live-wrapper');d.state.load('<form id="j_idt900"><input name="javax.faces.ViewState" value="A"><button id="j_idt900:yes">Yes</button></form>','/HagueEFilingWeb/protected/page/application.xhtml')
+ const button=d.state.document.getElementById('j_idt900:yes')!
+ const ajax=`PrimeFaces.ab({s:'j_idt900:yes',f:'j_idt900',onco:function(xhr,status,args){PF('saveDialog').hide();}});return false;`
+ const handler=`PrimeFaces.bcn(this,event,[function(event){showBlockUIOnSend('');},function(event){${ajax}}]);`
+ expect(jsfAction(handler,button,d.state.document)).toMatchObject({source:'j_idt900:yes',form:'j_idt900'})
+ for(const prefix of ['return false;','return gate();','unknownHelper(this);','showBlockUIOnSend(fetch("/write"));']){
+  expect(()=>jsfAction(`PrimeFaces.bcn(this,event,[function(event){${prefix}},function(event){${ajax}}]);`,button,d.state.document)).toThrow(/协议/)
+ }
+ expect(()=>jsfAction(`function showBlockUIOnSend(){fetch('/write')} ${handler}`,button,d.state.document)).toThrow(/协议/)
+ expect(()=>jsfAction(`PrimeFaces.bcn(this,event,[function(event){showBlockUIOnSend('');},function(event){PrimeFaces.ab({s:'j_idt900:yes'});PrimeFaces.ab({s:'other'});return false;}]);`,button,d.state.document)).toThrow(/协议/)
+})
+
+it('recovers an allocated create step only by finding and opening its exact persisted draft',async()=>{
+ for(const scenario of ['saved','missing','wrong-editor'] as const){
+  const sources:string[]=[]
+  const driver=new HagueHttpDriver('recover-allocation',async(url,init)=>{
+   if(init?.method==='POST'){
+    const p=new URLSearchParams(typeof init.body==='string'?init.body:'');const source=p.get('javax.faces.source')??'';sources.push(source)
+    return new Response(source==='portfolio:open'?'<partial-response><redirect url="/HagueEFilingWeb/protected/page/application.xhtml"/></partial-response>':'<partial-response><changes/></partial-response>')
+   }
+   const html=url.endsWith('application.xhtml')?`<title>WIPO reference ${scenario==='wrong-editor'?'999':'123'}</title><input name="javax.faces.ViewState" value="B">`:`<form id="quickSearchPanel"><button type="button" class="filtered" id="quickSearchPanel:drafts" onclick="PrimeFaces.ab({s:'quickSearchPanel:drafts'});">Draft(s)</button></form><form id="portfolio"><input name="javax.faces.ViewState" value="A"><table><tbody>${scenario==='missing'?'':`<tr><td>WIPO123</td><td><button type="button" id="portfolio:open" title="Open/edit" onclick="PrimeFaces.ab({s:'portfolio:open'});">Open</button></td></tr>`}</tbody></table></form>`
+   const response=new Response(html);Object.defineProperty(response,'url',{value:url});return response
+  })
+  const checkpoint={tabId:7,reference:'123',next:1,total:31,status:'uncertain' as const,stage:'创建新草稿',planKey:'verified-plan'}
+  const result=await driver.recoverStep({op:'create'},checkpoint)
+  expect(result.outcome).toBe(scenario==='saved'?'completed':'unknown')
+  if(scenario==='saved')expect(result.receipt).toMatchObject({ok:true,reference:'123',page:'application'})
+  expect(sources.every(source=>['quickSearchPanel:drafts','portfolio:open'].includes(source))).toBe(true)
+  if(scenario==='missing')expect(sources).toEqual(['quickSearchPanel:drafts'])
+ }
+})
+
+it('does not inspect a creation recovery with missing identity, fingerprint or the wrong boundary',async()=>{
+ let reads=0;const driver=new HagueHttpDriver('allocation-guard',async()=>{reads++;throw Error('unexpected request')})
+ const base={tabId:7,reference:'123',next:1,total:31,status:'uncertain' as const,stage:'创建新草稿',planKey:'verified-plan'}
+ for(const change of [{reference:undefined},{planKey:undefined},{next:2},{status:'stopped' as const}])expect(await driver.recoverStep({op:'create'},{...base,...change})).toEqual({outcome:'unknown'})
+ expect(reads).toBe(0)
+})
+
+it.each(['match','country-dropdown','mismatch','extra-record','email-mismatch','qualification-mismatch','missing-cancel'] as const)('reads saved applicant fields without another save: %s',async scenario=>{
+ const sources:string[]=[];const reference='123'
+ const data={name:'Example Ltd.',address:'One Road',city:'City',region:'Region',postalCode:'12345',country:'China'}
+ const list='<form id="quickSearchPanel"><button type="button" class="filtered" id="quickSearchPanel:drafts" onclick="PrimeFaces.ab({s:this});">Draft(s)</button></form><form id="portfolio"><input name="javax.faces.ViewState" value="A"><table><tbody><tr><td>WIPO123</td><td><button type="button" id="portfolio:open" title="Open/edit" onclick="PrimeFaces.ab({s:this});">Open</button></td></tr></tbody></table></form>'
+ const canonical=`<form id="ApplicantForm"><input name="javax.faces.ViewState" value="A"><button type="button" id="ApplicantForm:applicantViewPanel:0:editApp" onclick="PrimeFaces.ab({s:this});">Edit</button>${scenario==='extra-record'?'<button id="ApplicantForm:applicantViewPanel:1:editApp">Edit</button>':''}</form>`
+ const fields={firstname:scenario==='mismatch'?'Other Ltd.':data.name,address:data.address,cp:data.postalCode,city:data.city,state:data.region,country:scenario==='country-dropdown'?'CN - China':data.country,email:scenario==='email-mismatch'?'other@example.test':'draft@example.test',nationality:scenario==='qualification-mismatch'?'SG':'CN',domicile:'CN',establishment:'CN',residence:'CN',acp:'CN'}
+ const edit=`<form id="ApplicantForm"><input name="javax.faces.ViewState" value="A"><input type="radio" value="true" checked>${Object.entries(fields).map(([k,v])=>`<input id="ApplicantForm:${k}:input" value="${v}">`).join('')}${scenario==='missing-cancel'?'':`<button type="button" id="ApplicantForm:cancelApp" onclick="PrimeFaces.ab({s:this});">Cancel</button>`}<button id="ApplicantForm:saveAppBtn">Save</button></form>`
+ const driver=new HagueHttpDriver('applicant-recovery',async(url,init)=>{
+  let body=''
+  if(init?.method==='GET')body=url.endsWith('application.xhtml')?`<title>WIPO reference 123</title>${canonical}`:list
+  else{const source=new URLSearchParams(typeof init?.body==='string'?init.body:'').get('javax.faces.source')??'';sources.push(source);body=source==='portfolio:open'?'<partial-response><redirect url="/HagueEFilingWeb/protected/page/application.xhtml"/></partial-response>':source.endsWith(':editApp')||source==='ApplicantForm:cancelApp'?`<partial-response><changes><update id="ApplicantForm"><![CDATA[${source.endsWith(':editApp')?edit:canonical}]]></update></changes></partial-response>`:'<partial-response><changes/></partial-response>'}
+  const response=new Response(body);Object.defineProperty(response,'url',{value:url});return response
+ })
+ const result=await driver.recoverStep({op:'applicant',data,index:0,email:'draft@example.test'},{tabId:7,reference,next:2,total:31,status:'uncertain',stage:'申请人 1',planKey:'verified-plan'})
+ expect(result.outcome).toBe(['match','country-dropdown'].includes(scenario)?'completed':'unknown')
+ if(['match','country-dropdown'].includes(scenario))expect(result.receipt).toMatchObject({reference,applicants:1,page:'application'})
+ expect(sources).not.toContain('ApplicantForm:saveAppBtn')
+ expect(sources.every(s=>['quickSearchPanel:drafts','portfolio:open','ApplicantForm:applicantViewPanel:0:editApp','ApplicantForm:cancelApp'].includes(s))).toBe(true)
 })

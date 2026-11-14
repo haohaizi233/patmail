@@ -199,7 +199,10 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
 }
 async function acknowledgeDraft(row: Row, completed: boolean): Promise<void> {
   if (!row.draft || busy.value) return
-  await storeDraft(row, { ...row.draft, next:row.draft.next+(completed?1:0), status:'stopped', recoveryDecision:undefined,error:undefined, stage:'已由用户核对，等待继续' })
+  const recoveryAttempts = { ...(row.draft.recoveryAttempts ?? {}) }
+  delete recoveryAttempts[String(row.draft.next)]
+  delete recoveryAttempts[String(row.draft.next + (completed ? 1 : 0))]
+  await storeDraft(row, { ...row.draft, next:row.draft.next+(completed?1:0), status:'stopped', recoveryDecision:undefined, error:undefined, stage:'已由用户核对，等待继续', recoveryAttempts })
 }
 const bridge = createFullPageBridge()
 let controller: AbortController | undefined
