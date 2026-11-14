@@ -202,8 +202,10 @@ export function createViewStateStateMachine(options = {}) {
 
       const docKey = fullDocumentKey(scope)
       const doc = documentStates.get(docKey)
+      const inFlightKey = requestId ? `${docKey}:${requestId}` : null
+      const reqInfo = inFlightKey ? inFlight.get(inFlightKey) : null
 
-      if (!doc) {
+      if (!doc || (requestId && !reqInfo)) {
         return { status: 'STATE_UNVERIFIABLE', transition: 'STATE_UNVERIFIABLE' }
       }
 
@@ -215,12 +217,10 @@ export function createViewStateStateMachine(options = {}) {
 
       const activeGen = generation
       const newTag = await computeHmacTag(newViewState)
-      if (activeGen !== generation || !secret) {
+      if (activeGen !== generation || !secret || documentStates.get(docKey) !== doc || (inFlightKey && inFlight.get(inFlightKey) !== reqInfo)) {
         return { status: 'STATE_UNVERIFIABLE', transition: 'STATE_UNVERIFIABLE' }
       }
 
-      const inFlightKey = requestId ? `${docKey}:${requestId}` : null
-      const reqInfo = inFlightKey ? inFlight.get(inFlightKey) : null
       if (inFlightKey) inFlight.delete(inFlightKey)
 
       // Section 3.4: First observation semantics
@@ -325,18 +325,13 @@ export function createViewStateStateMachine(options = {}) {
     },
 
     forgetRequest(scope, requestId) {
-      if (!requestId) return
-      const docKey = fullDocumentKey(scope)
-      if (docKey) {
-        inFlight.delete(`${docKey}:${requestId}`)
-      } else {
-        // Fallback search across all inFlight
-        for (const k of inFlight.keys()) {
-          if (k.endsWith(`:${requestId}`)) {
-            inFlight.delete(k)
-          }
-        }
-      }
+      if (!scope || typeof scope !== 'object' || Array.isArray(scope) || typeof requestId !== 'string' || !requestId) return
+      if (typeof scope.sessionId !== 'string' || !scope.sessionId) return
+      const fields = ['sessionId', 'targetId', 'frameId', 'loaderId', 'formId']
+      if (fields.some(field => scope[field] !== undefined && (typeof scope[field] !== 'string' || !scope[field]))) return
+      // Partial scopes are safe only when the registered identity is unique.
+      const matches = [...inFlight].filter(([, request]) => request.requestId === requestId && fields.every(field => scope[field] === undefined || scope[field] === request.scope[field]))
+      if (matches.length === 1) inFlight.delete(matches[0][0])
     },
 
     getDiagnosticsSnapshot(scope) {

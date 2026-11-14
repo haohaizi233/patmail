@@ -47,6 +47,7 @@ export interface ViewStateStateMachine {
   }
   invalidateDocument(scope: ViewStateScope): void
   invalidateSession(sessionId: string): void
+  /** Partial scopes require one uniquely matching request within the named session. */
   forgetRequest(scope: ViewStateScope, requestId: string): void
   prune(now?: number): void
   clear(): void

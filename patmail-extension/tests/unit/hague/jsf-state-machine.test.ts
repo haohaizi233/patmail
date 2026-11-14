@@ -240,3 +240,46 @@ describe('ViewState State Machine & Causal Chain Tracking', () => {
     expect(resNew.transition).toBe('STATE_CHANGED')
   })
 })
+
+
+describe('P1 scoped cancellation', () => {
+  const a = { sessionId: 'A', targetId: 'T', frameId: 'F', loaderId: 'L', formId: 'form' }
+  it.each(['sessionId', 'frameId', 'loaderId', 'formId'] as const)('retains the other %s identity with the same requestId', async field => {
+    const sm = createViewStateStateMachine()
+    const b = { ...a, [field]: 'other' }
+    await sm.recordInitialViewState(a, 'initial-a')
+    await sm.recordInitialViewState(b, 'initial-b')
+    sm.beginRequest(a, '123'); sm.beginRequest(b, '123')
+    sm.forgetRequest(field === 'sessionId' ? { sessionId: 'A' } : a, '123')
+    expect(sm.getDiagnosticsSnapshot().inFlightCount).toBe(1)
+    expect((await sm.recordResponseViewState(b, '123', 'next-b')).transition).toBe('STATE_CHANGED')
+    expect((await sm.recordResponseViewState(a, '123', 'next-a')).transition).toBe('STATE_UNVERIFIABLE')
+    expect(sm.getState(a)).toBe('REQUEST_IN_FLIGHT')
+  })
+  it('rejects missing, malformed and ambiguous scope without global deletion', () => {
+    const sm = createViewStateStateMachine()
+    sm.beginRequest(a, '123'); sm.beginRequest({ ...a, frameId: 'other' }, '123')
+    for (const scope of [undefined, null, {}, { sessionId: 'A', frameId: 42 }, { sessionId: 'A' }]) {
+      expect(() => { Reflect.apply(sm.forgetRequest.bind(sm), sm, [scope, '123']) }).not.toThrow()
+      expect(sm.getDiagnosticsSnapshot().inFlightCount).toBe(2)
+    }
+    sm.forgetRequest(a, '123'); sm.forgetRequest(a, '123')
+    expect(sm.getDiagnosticsSnapshot().inFlightCount).toBe(1)
+  })
+  it('does not commit a response cancelled while private HMAC parsing is in progress', async () => {
+    const sm = createViewStateStateMachine()
+    sm.beginRequest(a, '123')
+    const response = sm.recordResponseViewState(a, '123', 'private-token')
+    sm.forgetRequest(a, '123')
+    expect((await response).transition).toBe('STATE_UNVERIFIABLE')
+    expect(sm.getState(a)).toBe('REQUEST_IN_FLIGHT')
+    expect(JSON.stringify(sm.getDiagnosticsSnapshot(a))).not.toContain('private-token')
+  })
+  it('ignores a late cancellation after clear without touching another session', async () => {
+    const sm = createViewStateStateMachine()
+    sm.beginRequest(a, '123'); sm.clear()
+    const b = { ...a, sessionId: 'B' }
+    sm.beginRequest(b, '123'); sm.forgetRequest({ sessionId: 'A' }, '123')
+    expect((await sm.recordResponseViewState(b, '123', 'new-private-token')).transition).toBe('INITIAL_OBSERVED')
+  })
+})

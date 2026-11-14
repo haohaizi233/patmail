@@ -208,8 +208,12 @@ export class HagueResearchDiagnostics {
   }
 
   forget(sessionId, p) {
-    this.requests.delete(`${sessionId}:${p.requestId}`)
-    this.worker.signal?.('forget_request', { scope: { sessionId }, requestId: p.requestId })
+    const key = `${sessionId}:${p?.requestId}`
+    const request = this.requests.get(key)
+    if (!request || request.sessionId !== sessionId || request.requestId !== p?.requestId) return
+    const scope = { sessionId: request.sessionId, targetId: request.targetId, frameId: request.frameId, loaderId: request.loaderId, formId: request.request.form || undefined }
+    this.worker.signal?.('forget_request', { scope, requestId: request.requestId })
+    this.requests.delete(key)
   }
 
   bodyCommandAllowed(params, sessionId) {

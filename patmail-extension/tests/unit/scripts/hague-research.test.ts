@@ -13,8 +13,39 @@ it('does not resurrect the real debugger when disabled before deep activation',a
  expect(research.status().mode).toBe('basic');expect(deep.target).toBeNull();expect(deep.state).toBe('off')
  expect(commands).not.toContain('Debugger.enable');expect(commands).not.toContain('Network.enable')
 })
-function setup(){const commands:any[]=[];const events:any[]=[];const deep:any={target:null,status(){return {enabled:!!this.target,state:this.state??(this.target?'enabled':'off')}},async enable(t:any){this.target=t;this.state='enabled'},async disable(){this.target=null;this.state='off'}};const worker:any={clear(){},async analyze(kind:string){return kind==='lookup'?{astCorrelationConfidence:'unmatched'}:{bodyStatus:'body_available',expectedUpdates:['form:panel']}}};const research=new HagueResearchDiagnostics(deep,async(method:any,params:any,session:any)=>{commands.push({method,params,session});return {body:'<partial-response/>',base64Encoded:false}},(_k:any,e:any)=>events.push(e),{worker});return {research,commands,events}}
+function setup(){const commands:any[]=[];const events:any[]=[];const deep:any={target:null,status(){return {enabled:!!this.target,state:this.state??(this.target?'enabled':'off')}},async enable(t:any){this.target=t;this.state='enabled'},async disable(){this.target=null;this.state='off'}};const worker:any={clear(){},async analyze(kind:string){return kind==='lookup'?{astCorrelationConfidence:'unmatched'}:{bodyStatus:'body_available',expectedUpdates:['form:panel']}}};const research=new HagueResearchDiagnostics(deep,async(method:any,params:any,session:any)=>{commands.push({method,params,session});return {body:'<partial-response/>',base64Encoded:false}},(_k:any,e:any)=>events.push(e),{worker});return {research,commands,events,worker}}
 const request={requestId:'r',frameId:'f',loaderId:'l',type:'XHR',request:{url:target.url,method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},postData:'javax.faces.partial.ajax=true&javax.faces.source=form%3Asave&password=secret'}}
+
+it('forgets the registered document before removing metadata and ignores unknown cancellations', async () => {
+ const {research,worker}=setup();const signals:any[]=[];await research.enable(target)
+ worker.signal=(kind:string,data:any)=>signals.push({kind,data,registered:research.requests.has('session:r')})
+ research.request(target,'session',request)
+ signals.length=0
+ research.forget('other',{requestId:'r'});expect(signals).toHaveLength(0)
+ research.forget('session',{requestId:'r'})
+ expect(signals).toEqual([{kind:'forget_request',data:{scope:{sessionId:'session',targetId:'target',frameId:'f',loaderId:'l',formId:'form'},requestId:'r'},registered:true}])
+ expect(research.requests.size).toBe(0)
+ research.forget('session',{requestId:'r'});expect(signals).toHaveLength(1)
+ await research.disable();await research.enable(target)
+ research.forget('session',{requestId:'r'});expect(signals.filter(s=>s.kind==='forget_request')).toHaveLength(1)
+ await research.disable()
+})
+
+it.each(['body', 'worker'])('drops a cancelled request during deferred %s processing and releases its lease', async stage => {
+ const {research,worker,events}=setup();await research.enable(target)
+ let release:()=>void=()=>{};let entered:()=>void=()=>{}
+ const waiting=new Promise<void>(resolve=>entered=resolve)
+ const pending=new Promise<void>(resolve=>release=resolve)
+ if(stage==='body')research.send=async()=>{entered();await pending;return {body:'<partial-response/>'}}
+ else worker.analyze=async(kind:string)=>{if(kind==='lookup')return {};entered();await pending;return {bodyStatus:'body_available'}}
+ research.request(target,'session',request);research.response('session',{requestId:'r',response:{status:200,mimeType:'text/xml'}})
+ const done=research.finished('session',{requestId:'r'})
+ await waiting;research.forget('session',{requestId:'r'});release();await done
+ expect(events.filter(e=>e.phase==='jsf.parsed')).toHaveLength(0)
+ expect(research.requests.size).toBe(0)
+ expect(research.status().stats.activeReads).toBe(0)
+ await research.disable()
+})
 describe('research admission',()=>{
  it('requires explicit enable and active matching session for body permission',async()=>{const {research,commands}=setup();research.request(target,'session',request);expect(research.requests.size).toBe(0);await research.enable(target);research.request(target,'other',request);expect(research.requests.size).toBe(0);expect(research.bodyCommandAllowed({requestId:'r'},'session')).toBe(false);expect(commands.map(c=>c.method)).toEqual(['Network.enable'])})
  it('reads only after response and completion; emits safe metadata',async()=>{const {research,commands,events}=setup();await research.enable(target);research.request(target,'session',request);research.response('session',{requestId:'r',response:{status:200,mimeType:'text/xml'}});await research.finished('session',{requestId:'r',encodedDataLength:20});expect(commands.filter(c=>c.method==='Network.getResponseBody')).toHaveLength(1);expect(events.some(e=>e.phase==='jsf.parsed')).toBe(true);expect(JSON.stringify(events)).not.toContain('secret');expect(JSON.stringify(events)).not.toContain('<partial-response');expect(research.bodyCommandAllowed({requestId:'r'},'session')).toBe(false)})
