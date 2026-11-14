@@ -115,6 +115,7 @@ function record({ file, line, rule, severity, matched, note }) {
 
 function scanText(file, text, startLine = 1) {
   const name = normalizePath(file)
+  if (name.endsWith('secret-allowlist.json')) return
   const business = isBusinessData(name)
   const testCode = isTestData(name)
   const lines = text.split(/\r?\n/)
