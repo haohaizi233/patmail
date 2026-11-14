@@ -6,3 +6,5 @@ export function analyzeJavaScript(source:string,options?:AstOptions):AstAnalysis
 export function extractStaticActions(source:string,options?:AstOptions):StaticAction[]
 
 export function clearAstCache():void
+
+export function isStaticUiHandler(source:string):boolean

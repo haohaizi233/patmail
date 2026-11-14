@@ -1,6 +1,6 @@
 import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
 import {HagueDiagnosticError} from './diagnostics/errors'
-import {analyzeJavaScript,extractStaticActions,type AstCall,type AstAnalysis} from './diagnostics/ast/analyzer.mjs'
+import {analyzeJavaScript,extractStaticActions,isStaticUiHandler,type AstCall,type AstAnalysis} from './diagnostics/ast/analyzer.mjs'
 import { HagueHttpContext, type JsfAction, type HagueFetch } from './http-context'
 import { executeDraftPage } from './draft-page'
 import type { DraftCommand, DraftReceipt,DraftCheckpoint,DraftRecovery } from './draft-contract'
@@ -19,7 +19,7 @@ export function jsfAction(script:string,element:HTMLElement,doc:Document,onAnaly
   }
   try{onAnalysis?.(report)}catch{/* Diagnostic observers cannot affect extraction. */}
   if(actions.length!==1){
-    if(script.trim()&&!/^(?:return\s+false\s*;?|PF\([^;]*;?)$/.test(script.trim()))throw unsupported()
+    if(script.trim()&&!isStaticUiHandler(script))throw unsupported()
     return null
   }
   const {_kind,_line,_column,...action}=actions[0]

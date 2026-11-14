@@ -56,6 +56,11 @@ function run(source,options={},execution=false){
    }
    if(n.type==='CallExpression'||n.type==='NewExpression'){
     const raw=path(n.callee),name=aliases.get(raw)??(env.has(raw.split('.')[0])?'':raw),args=n.arguments
+    // Detached protocol execution never runs UI helpers. Ignore only literal PF widget visibility calls.
+    // Keep unknown methods, arguments, computed access and shadowed helpers fail-closed.
+    const ui=n.callee,widget=ui.type==='MemberExpression'&&!ui.computed?ui.object:null
+    if(execution&&active&&n.type==='CallExpression'&&widget?.type==='CallExpression'&&widget.callee.type==='Identifier'&&widget.callee.name==='PF'&&!env.has('PF')&&!functions.has('PF')&&!aliases.has('PF')&&['show','hide'].includes(ui.property.name)&&args.length===0&&widget.arguments.length===1&&widget.arguments[0].type==='StringLiteral'&&/^[A-Za-z_$][A-Za-z0-9_$]{0,119}$/.test(widget.arguments[0].value))return
+
     if(functions.has(name)&&active){const f=functions.get(name);if(f.generator||f.async){unresolved.add('unsupported_function_kind');return}const local=new Map(env),vals=args.map(a=>value(a,env));f.params.forEach((p,i)=>{if(p.type==='Identifier')local.set(p.name,vals[i]??UNKNOWN)});local.set('arguments',vals)
      const savedAliases=new Map(aliases);for(const p of f.params)if(p.type==='Identifier')aliases.delete(p.name);const saved=new Map(env);for(const [k,v] of local)env.set(k,v);visit(f.body,d+1,name,true);env.clear();for(const [k,v] of saved)env.set(k,v);aliases.clear();for(const [k,v] of savedAliases)aliases.set(k,v);return}
     if(execution&&active&&!functions.has(name)&&!['PrimeFaces.ab','mojarra.ab','jsf.ajax.request','mojarra.jsfcljs','PrimeFaces.cw'].includes(name))unresolved.add('unsupported_call')
@@ -86,6 +91,7 @@ function run(source,options={},execution=false){
    const bindings=new Set(),pending=[ast]
    while(pending.length){const node=pending.pop();guard(0)
     const binding=node.type==='FunctionDeclaration'?node.id:node.type==='VariableDeclarator'?node.id:node.type==='AssignmentExpression'?node.left:null
+    if(binding?.type==='Identifier'&&binding.name==='PF'){unresolved.add('shadowed_ui_helper');return}
     if(binding?.type==='Identifier'){if(bindings.has(binding.name)){unresolved.add('duplicate_binding');return}bindings.add(binding.name)}
     for(const key of Object.keys(node)){if(['loc','extra','leadingComments','trailingComments','innerComments'].includes(key))continue;const child=node[key];for(const c of Array.isArray(child)?child:[child])if(c?.type)pending.push(c)}
    }
@@ -109,3 +115,18 @@ export function analyzeJavaScript(source,options={}){
 export function extractStaticActions(source,options={}){const r=run(source,options,true);return r.unresolved.length?[]:r.actions.filter(a=>a._active).map(({_active,...a})=>a)}
 
 export function clearAstCache(){cache.clear()}
+
+/** Only literal PrimeFaces widget visibility and return false; never execute handler code. */
+export function isStaticUiHandler(source){
+ if(typeof source!=='string'||source.length>4096)return false
+ try{
+  const body=parse(source,{sourceType:'script',allowReturnOutsideFunction:true}).program.body
+  return body.length>0&&body.every(n=>{
+   if(n.type==='EmptyStatement')return true
+   if(n.type==='ReturnStatement')return n.argument?.type==='BooleanLiteral'&&n.argument.value===false
+   if(n.type!=='ExpressionStatement'||n.expression.type!=='CallExpression')return false
+   const call=n.expression,member=call.callee,widget=member.type==='MemberExpression'&&!member.computed?member.object:null
+   return call.arguments.length===0&&['show','hide'].includes(member.property?.name)&&widget?.type==='CallExpression'&&widget.callee.type==='Identifier'&&widget.callee.name==='PF'&&widget.arguments.length===1&&widget.arguments[0].type==='StringLiteral'&&/^[A-Za-z_$][A-Za-z0-9_$]{0,119}$/.test(widget.arguments[0].value)
+  })
+ }catch{return false}
+}

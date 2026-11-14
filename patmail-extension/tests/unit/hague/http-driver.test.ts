@@ -58,3 +58,26 @@ it('includes the returned create-page validation text when no editor is confirme
  d.state.load(`<html><body><form id="portfolio"><input type="hidden" name="javax.faces.ViewState" value="A"><button type="button" id="portfolio:create" onclick='PrimeFaces.ab({s:"portfolio:create",p:"portfolio",u:"portfolio"});'>Confirm</button></form></body></html>`,'/HagueEFilingWeb/protected/portfolioManager.xhtml')
  await expect(d.call({op:'create'})).rejects.toThrow(/Choose the filing language/)
 })
+
+it('extracts the sole save request when a confirmation handler also hides its dialog',()=>{
+ const d=new HagueHttpDriver('save-dialog');d.state.load('<form id="headerForm"><input name="javax.faces.ViewState" value="A"><button id="headerForm:yes">Yes</button></form>','/HagueEFilingWeb/protected/page/application.xhtml')
+ const button=d.state.document.getElementById('headerForm:yes')!
+ expect(jsfAction(`PrimeFaces.ab({s:"headerForm:yes",f:"headerForm",p:"headerForm",u:"headerForm"});PF('saveDialog').hide();return false;`,button,d.state.document)).toMatchObject({source:'headerForm:yes',form:'headerForm',process:'headerForm',update:'headerForm'})
+ for(const suffix of [`PF('saveDialog').deleteDraft();`,`PF(dynamicName).hide();`,`PF('saveDialog').hide(fetch('/write'));`,`var PF=custom;PF('saveDialog').hide();`,`new (PF('saveDialog').hide)();`])expect(()=>jsfAction(`PrimeFaces.ab({s:"headerForm:yes"});${suffix}`,button,d.state.document)).toThrow(/协议/)
+})
+
+it('saves the allocated draft with one network action despite a local dialog hide call',async()=>{
+ const sent:string[]=[]
+ const driver=new HagueHttpDriver('initial-save',async(_url,init)=>{
+  if(init?.method==='POST'){
+   const params=new URLSearchParams(typeof init.body==='string'?init.body:'');sent.push(params.get('javax.faces.source')??'')
+   return new Response('<partial-response><redirect url="/HagueEFilingWeb/protected/portfolioManager.xhtml"/></partial-response>')
+  }
+  const response=new Response('<form id="quickSearchPanel"><button class="filtered">Draft(s)</button></form><form id="portfolio"><input name="javax.faces.ViewState" value="B"><table><tbody><tr><td>WIPO123</td></tr></tbody></table></form>')
+  Object.defineProperty(response,'url',{value:'https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml'});return response
+ })
+ driver.state.load(`<html><head><title>WIPO reference 123</title></head><body><form id="headerForm"><input name="javax.faces.ViewState" value="A"><button type="button" id="headerForm:backApp" onclick="PF('saveDialog').show();return false;">Close</button><div class="ui-dialog">Draft(s)<button type="button" id="headerForm:yes" onclick="PrimeFaces.ab({s:'headerForm:yes',f:'headerForm'});PF('saveDialog').hide();return false;">Yes</button></div></form></body></html>`,'/HagueEFilingWeb/protected/page/application.xhtml')
+ expect(await driver.call({op:'inspect'})).toMatchObject({reference:'123',page:'application'});
+ const result=await driver.call({op:'saveDraft'},'123');expect(result.error).toBeUndefined();expect(result).toMatchObject({ok:true,page:'portfolio',draftSaved:true});expect(driver.state.reference).toBe('123')
+ expect(sent).toEqual(['headerForm:yes'])
+})
