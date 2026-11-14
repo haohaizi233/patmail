@@ -26,14 +26,14 @@
 ## Tasks
 
 - [x] Fetch main, preserve work, record audit and baseline.
-- [ ] Schema v1 additive research/status/body/DOM/AST evidence contract; no incompatible parallel status system.
-- [ ] SAX XML parser with namespaces/CDATA and bounded size/depth/nodes; reject DTD/entities, never execute eval; session-scoped ViewState comparison only.
-- [ ] Evidence reducer and source index: independent edge confidence, no temporal exact, no XML/expected DOM/business inference.
-- [ ] Research controller + authenticated CLI: basic/deep/research lifecycle, safe body eligibility and commands, bounded reads/queue, hard worker timeout, teardown.
-- [ ] Wire existing observer events and deep AST production without duplicating daemon or execution logic.
-- [ ] Extend existing UI/status/filters/explanations/exports; provenance-aware app model vs browser receipt evidence.
-- [ ] Privacy/concurrency/lifecycle/XXE/limits/state tests, isolated browser E2E, actual resource measurements.
-- [ ] Full unit/integration/regression, typecheck/lint/build, independent review and final A–G report with real limits.
+- [x] Schema v1 additive research/status/body/DOM/AST evidence contract; no incompatible parallel status system.
+- [x] SAX XML parser with namespaces/CDATA and bounded size/depth/nodes; reject DTD/entities, never execute eval; session-scoped ViewState comparison only.
+- [x] Evidence reducer and source index: independent edge confidence, no temporal exact, no XML/expected DOM/business inference.
+- [x] Research controller + authenticated CLI: basic/deep/research lifecycle, safe body eligibility and commands, bounded reads/queue, hard worker timeout, teardown.
+- [x] Wire existing observer events and deep AST production without duplicating daemon or execution logic.
+- [x] Extend existing UI/status/filters/explanations/exports; provenance-aware app model vs browser receipt evidence.
+- [x] Privacy/concurrency/lifecycle/XXE/limits/state tests, isolated browser E2E, actual resource measurements.
+- [x] Full unit/integration/regression, typecheck/lint/build, independent review and final A–G report with real limits.
 
 ## Ownership and contracts
 
@@ -46,3 +46,5 @@ Correlation worker owns `diagnostics/correlation/correlator.mjs`, `diagnostics/e
 Research worker owns `scripts/hague-research*.mjs`, changes to existing observer/deep/CLI, worker analysis broker, scripts tests and research-related declarations. Composes existing deep controller; read-only response bodies only on authorized research session/request/known path/AJAX/text MIME/non-upload/non-download/loadingFinished, max age and generation guards. Body concurrency2, pending64(metadata),256KiB/resource, total buffer1MiB; source32/128KiB each/2MiB cumulative. Workers reuse AST/parser and have hard timeouts; cancellation clears pending/private indexes and never retries business. All CDP body commands validated against active admission, not just method name. `research-enable/status/disable` use existing loopback auth. No actual research enabling on daily Chrome in this task.
 
 Shared additive event fields will include mode/state/bodyStatus/domStatus/domEvidenceSource/eventId/research counters, structural XML counts, sanitized expectedUpdates and edge confidence metadata. Producers sanitize before log/bridge; payload values/headers/raw body/source never survive. Coordination messages will pin the final API shapes before integration.
+
+Final verification: 1776/1776 tests, zero failed/skipped; typecheck, lint baseline gate, build and isolated Chrome/Edge research + UI + draft/import E2E passed. Production research remains off; real-site full coverage not verified. See docs/hague-full-chain-diagnostics.md.

@@ -35,6 +35,15 @@
 
 旧版：Network/Runtime元数据与独立AST日志，加上应用HTTP模型Trace；无法从受控CDP响应解释完整JSF，也没有可验证的独立证据边。
 
+```mermaid
+flowchart LR
+ CDP[既有Observer] --> Network[Network/Runtime元数据]
+ CDP --> Deep[独立Deep AST日志]
+ App[应用HTTP模型Trace] --> Panel[原时间线和导出]
+ Network --> Panel
+ Deep --> Panel
+```
+
 新版：仍是一个Observer、一个CDP连接管理层和一个本地控制服务；Worker只是分析隔离线程。
 
 ```mermaid
@@ -227,3 +236,84 @@ node scripts/measure-hague-research.mjs
 - `expected_only/application_model`：缺少真实浏览器DOM证据；不能写“页面已更新”。
 - `unmatched/ambiguous`：查看缺失源码、脚本位置与作用域；不把同一时刻或同frame当作六路案件归属。
 - 大批量UI只显示一页200条，导出仍依据保留事件；容量淘汰和输出限流需同时检查drop指标。
+
+
+## 最终A–G验收记录（2026-11-14）
+
+### A. Git状态
+
+Base `7dbca12412485ac6fdea2cdffa6fd2358f49c0e7`；分支`codex/hague-research-mode`；Result commit未创建，交付工作区补丁；开始时已有3个修改全部保留。新增/修改文件按模块见本文A节和下方清单；未修改无关业务、Manifest或Origin权限。工作区其他任务的周报不属于本次交付。
+
+### B. 完成能力和实际入口
+
+|模块|实际路径和关键函数|
+|---|---|
+|CDP|scripts/cdp-observer-core.mjs + scripts/hague-research.mjs，HagueResearchDiagnostics.enable/disable/bodyCommandAllowed/readBody|
+|AST|src/hague/diagnostics/ast/analyzer.mjs，analyzeJavaScript；scripts/hague-diagnostics.mjs，HagueDeepDiagnostics.script|
+|JSF Parser|src/hague/diagnostics/protocol/jsf-partial-response.mjs，parseJsfPartialResponse/parseJsfRequest/createJsfProtocolAnalyzer|
+|Correlation|src/hague/diagnostics/correlation/correlator.mjs，createSourceIndex/correlateRequest|
+|Evidence Model|src/hague/diagnostics/evidence/evidence-model.mjs，analyzeEvidence|
+|Diagnostics UI|src/app/components/HagueDiagnostics.vue；src/hague/diagnostics/reports.ts，buildDiagnosticReport/exportDiagnostics|
+|Privacy Protection|src/hague/diagnostics/schema.mjs，sanitizeTraceEvent；scripts/hague-research-output.mjs，safeAnalysisOutput/ResearchOutputBudget|
+|Regression Tests|tests/unit/hague/research-*.test.ts、tests/unit/scripts/hague-research*.test.ts、既有hague/observer回归和tests/e2e/hague-research.e2e.mjs|
+
+### C. 架构变化
+
+改造前后依赖图与完整时序见本文B节。新增的是现有Observer内的受控准入和Worker分析链，没有第二套CDP守护进程，没有业务请求生成器。
+
+### D. 核心技术细节
+
+12项问题逐项答案见上一节，预算、SAX安全、关联置信度和成功判定边界见C–F节。独立审查发现的probable借用业务回执、异步授权反转、关闭后底层Debugger复活均已修复，并有针对性测试。
+
+### E. 测试与测量
+
+|检查|结果|
+|---|---|
+|Total / Passed / Failed / Skipped|1776 / 1776 / 0 / 0，最终命令exit 0|
+|完整测试|`pnpm exec vitest run --maxWorkers=2 --reporter=json --outputFile=test-results/hague-research-tests-final.json`|
+|Typecheck|`pnpm typecheck` exit 0|
+|Lint|`pnpm lint`基线门禁exit 0；全库432 errors/25 warnings，低于既有635/25基线，不能描述为全库零lint问题|
+|Build|`pnpm build` exit 0；两次Vite产物构建完成；普通启动未打开research|
+|研究E2E|Chrome及Edge各exit 0；实际CDP+Worker，1正文/1解析/1 AST exact，0暂停/0外网业务请求|
+|诊断UI E2E|`node tests/e2e/hague-diagnostics-ui.e2e.mjs` exit 0；桌面/窄屏、详情、导出、回放、清空、脱敏|
+|草稿UI E2E|`node tests/e2e/hague-draft-ui.e2e.mjs` exit 0；封装弹窗/取消/Esc/遮罩/六路重建/登录反馈，无外部写入|
+|导入E2E|`node tests/e2e/hague.e2e.mjs --fixture` exit 0；文档解析、进度及独立滚动|
+|依赖审计|官方npm生产依赖审计0漏洞；镜像不支持audit的失败已保留|
+|补丁检查|`git -c core.safecrlf=false diff --check` exit 0|
+
+首轮资源失败日志保留在`test-results/hague-research-tests.log`，最终有效结果在`test-results/hague-research-tests-final.{json,log}`。崩溃运行即使JSON出现success=true，也没有作为有效验收；最终检查要求进程exit 0且总数与通过数一致。
+
+性能测量命令`node scripts/measure-hague-research.mjs` exit 0，64请求/8并发批次/每响应32936字节；Mock CDP+真实Worker，非实站业务基准：
+
+|模式|墙钟ms|CPU user/system ms|峰值RSS MiB|Worker堆 MiB|正文读取|
+|---|---:|---:|---:|---:|---:||basic|2.588|0.0/0.0|56.52|0.00|0|
+|research|349.765|297.0/31.0|76.06|9.19|64|
+
+此次合成研究批次64个响应均解析，解析失败0；关闭后Worker、正文队列和请求表均清空。数值是本机测量样本，不承诺真实站点延迟或业务成功率。
+
+
+### F. 未解决/未验证
+
+本文“尚未支持或未验证”的6项限制仍成立。真实WIPO业务样本及生产性能为not_verified；研究模式不自动开启，当前实机Observer为waiting（0 Targets），research-status为basic/off、0正文读取。若浏览器出现远程调试授权提示，需要用户在浏览器中允许连接。不能把等待连接、unmatched或unconfirmed解释成业务已成功。
+
+### G. 验收结论
+
+|关键模块|状态|边界|
+|---|---|---|
+|Native CDP / 研究启停 / 受控正文|PASS|Mock及隔离真实CDP验证，默认basic；实机当前waiting|
+|AST识别/索引/Network源码边|PASS|静态唯一锚点精确匹配；动态/缺证据保留不确定|
+|JSF Parser安全/结构|PASS|namespace/CDATA/DTD实体/边界测试，禁止执行eval|
+|跨层关联及六层Evidence|PASS|probable不借回执，HTTP/XML/DOM不推导业务完成|
+|UI / 导出 / 回放|PASS|隔离浏览器及单元回归通过|
+|隐私/预算/生命周期P0条件|PASS|允许列表、硬超时、关闭清理及敏感值测试；无新增权限/真实业务请求|
+|现有工作流回归|PASS|1776测试及相关隔离E2E通过|
+|真实站点全样本覆盖/生产性能|PARTIAL|not_verified，没有读取用户私人正文或执行生产写入|
+
+本阶段实现与离线/隔离验收PASS；生产全链路覆盖仍为PARTIAL，不能宣称当前所有真实异常已验证消除。未遗留已知P0/P1审查项；最终竞态修复有真实类回归且包含在最终1776项通过结果内。
+
+
+### 本次交付文件清单
+
+```text
+patmail-extension/docs/hague-full-chain-diagnostics.md
+```
