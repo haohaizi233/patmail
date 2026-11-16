@@ -476,7 +476,9 @@ try {
   await app.screenshot({ path: join(resultDir, 'initial-results.png'), fullPage: true })
   // Reload proves real IndexedDB FileSystemHandles and uploaded IDs survive workbench refresh.
   await app.reload()
-  await app.locator('.jihua-upload-card').getByRole('button', { name: '开始使用', exact: true }).click()
+  // Desktop WAL restores the active workbench directly; the entry card belongs
+  // to the hidden workflow catalogue and must not be clicked after restoration.
+  await app.locator('.workflow-jihua').waitFor({ state: 'visible' })
   await app.getByRole('button', { name: '连接并检测登录', exact: true }).click()
   await app.locator('.jh-session-state.session-connected').waitFor()
   failUpdate = false
