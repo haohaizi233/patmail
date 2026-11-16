@@ -1,5 +1,5 @@
 import { createApp, nextTick } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it,vi } from 'vitest'
 import HagueDiagnostics from '../../../src/app/components/HagueDiagnostics.vue'
 import { clearDiagnosticEvents, collectTraceEvent, isDiagnosticModeEnabled, receiveCdpTrace, setDiagnosticMode } from '../../../src/hague/diagnostics/store'
 async function openPanel(host:HTMLElement){const panel=host.querySelector('details')!;panel.open=true;panel.dispatchEvent(new Event('toggle'));await nextTick()}
@@ -26,7 +26,7 @@ describe('Hague diagnostics panel', () => {
     expect(isDiagnosticModeEnabled()).toBe(true)
     collectTraceEvent({ version: 1, source: 'application', phase: 'http.response', timestamp: new Date().toISOString(), traceId: 'trace-one', caseRunId: 'case-one', httpStatus: 403, body: 'PRIVATE_BODY', caseVolume: 'PRIVATE_CASE', headers: { Cookie: 'PRIVATE_COOKIE' } })
     await new Promise<void>(resolve => queueMicrotask(resolve)); await nextTick()
-    expect(host.textContent).toContain('403')
+    await vi.waitFor(()=>expect(host.textContent).toContain('403'))
     const rowButton = host.querySelector('tbody button') as HTMLButtonElement
     rowButton.click(); await nextTick()
     expect(host.querySelector('pre')?.textContent).toContain('http.response')
@@ -59,7 +59,7 @@ describe('Hague diagnostics panel', () => {
     const host=document.createElement('div');const app=createApp(HagueDiagnostics);app.mount(host);await openPanel(host)
     receiveCdpTrace({version:1,source:'cdp',phase:'research.status',timestamp:new Date().toISOString(),mode:'research',researchState:'enabled',observerState:'connected',stats:{observedRequests:12,analyzedScripts:0}})
     await new Promise<void>(resolve=>queueMicrotask(resolve));await nextTick()
-    expect(host.querySelector('[data-testid=research-status]')?.textContent).toContain('research')
+    await vi.waitFor(()=>expect(host.querySelector('[data-testid=research-status]')?.textContent).toContain('research'))
     expect(host.textContent).toContain('已观测请求12')
     expect(host.textContent).toContain('已分析脚本0')
     expect(host.textContent).toContain('AST 调用未采集')

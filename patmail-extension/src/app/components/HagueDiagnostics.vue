@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { restoreDiagnosticEvents, clearDiagnosticEvents, getDiagnosticEvents, getResearchStatus, getCollectorStats, isDiagnosticModeEnabled, setDiagnosticMode, subscribeDiagnostics } from '../../hague/diagnostics/store'
 import { buildDiagnosticReport, exportDiagnostics } from '../../hague/diagnostics/reports'
 import { replayDiagnostics } from '../../hague/diagnostics/replay'
@@ -10,7 +10,7 @@ import { analyzeEvidence } from '../../hague/diagnostics/evidence/evidence-model
 void restoreDiagnosticEvents()
 const panelOpen = ref(false)
 const enabled = ref(isDiagnosticModeEnabled())
-const events = ref(getDiagnosticEvents())
+const events = shallowRef(getDiagnosticEvents())
 const researchStatus = ref(getResearchStatus())
 const collectorStats = ref(getCollectorStats())
 const featureState = computed(()=>{const status=researchStatus.value;if(!status)return{ast:'未采集',jsf:'未采集',correlation:'未采集'};const running=status.researchState==='enabled';return{ast:running&&['deep','research'].includes(status.mode??'')?'Enabled':'Disabled',jsf:running&&status.mode==='research'?'Enabled':'Disabled',correlation:running&&status.mode==='research'?'Enabled':'Disabled'}})
@@ -23,8 +23,8 @@ function trackOpen(event: Event, key: string, expanded: Set<string>) {
   if ((event.target as HTMLDetailsElement).open) expanded.add(key)
   else expanded.delete(key)
 }
-const replay = ref<TraceEvent[] | null>(null)
-const selected = ref<TraceEvent | null>(null)
+const replay = shallowRef<TraceEvent[] | null>(null)
+const selected = shallowRef<TraceEvent | null>(null)
 const replayError = ref('')
 const report = computed(() => buildDiagnosticReport(replay.value ?? events.value))
 const filteredTimeline = computed(()=>report.value.timeline.filter(({event})=>filterKeys.every(key=>!filters.value[key] || String(event[key]??'')===filters.value[key])))
@@ -43,7 +43,7 @@ const fingerprintChange = computed(() => {
   if (!first || !last) return null
   return diffFingerprints(fingerprintProtocol({ forms: first.forms, components: first.components }), fingerprintProtocol({ forms: last.forms, components: last.components }))
 })
-const stop = subscribeDiagnostics(next => { events.value = [...next]; enabled.value = isDiagnosticModeEnabled(); researchStatus.value = getResearchStatus(); collectorStats.value = getCollectorStats() })
+const stop = subscribeDiagnostics(next => { events.value = next as TraceEvent[]; enabled.value = isDiagnosticModeEnabled(); researchStatus.value = getResearchStatus(); collectorStats.value = getCollectorStats() })
 onBeforeUnmount(stop)
 function toggle(event: Event) { enabled.value = (event.target as HTMLInputElement).checked; setDiagnosticMode(enabled.value) }
 function download(format: 'json' | 'jsonl' | 'markdown') {
