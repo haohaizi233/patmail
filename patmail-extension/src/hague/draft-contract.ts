@@ -44,7 +44,8 @@ export function draftCheckpointSnapshot(value: DraftCheckpoint): DraftCheckpoint
   }
 }
 export type DraftCommand =
-  | { op: 'inspect' | 'prepare' | 'create' | 'closeDesign' | 'summary' | 'backToApplication' | 'saveDraft' }
+  | { op: 'inspect' | 'prepare' | 'create' | 'summary' | 'backToApplication' | 'saveDraft' }
+  | { op:'closeDesign';index?:number;count?:number;subclass?:string;product?:string }
   | { op:'print'; caseVolume:string }
   | { op: 'applicant'; data: Applicant; index: number; email: string }
   | { op: 'representative'; data: Applicant & { email: string } }
@@ -59,6 +60,7 @@ export type DraftCommand =
   | { op: 'priority'; index: number; data: Priority }
   | { op: 'publication'; months: number }
   | { op: 'signature'; reference: string; representative: string }
-export interface DraftReceipt { diagnosticState?:Pick<DiagnosticErrorData,'httpStatus'|'protocolStatus'|'transportStatus'>; diagnosticError?:DiagnosticErrorData; ok: boolean; error?: string; documentId?: string; reference?: string; page?: 'portfolio'|'application'|'summary'|'other'; applicants?: number; creators?: number; priorities?: number; designs?: number; reproductions?: number; printUrl?: string; downloadId?:number; warnings?: string[]; draftSaved?:boolean }
+export interface DraftReceipt { summaryKey?:string; diagnosticState?:Pick<DiagnosticErrorData,'httpStatus'|'protocolStatus'|'transportStatus'>; diagnosticError?:DiagnosticErrorData; ok: boolean; error?: string; documentId?: string; reference?: string; page?: 'portfolio'|'application'|'summary'|'other'; applicants?: number; creators?: number; priorities?: number; designs?: number; reproductions?: number; printUrl?: string; downloadId?:number; warnings?: string[]; draftSaved?:boolean }
 export interface DraftRecovery { outcome:'completed'|'retry'|'unknown'; receipt?:DraftReceipt; reason?:string; diagnosticError?:DiagnosticErrorData }
-export interface DraftCheckpoint { caseRunId?:string;lastTraceId?:string;diagnosticError?:DiagnosticErrorData; transport?: 'http'|'page'; reference?: string; documentId?: string; tabId: number; next: number; total: number; status: 'running'|'stopped'|'uncertain'|'saved'|'failed'; stage: string; error?: string; warnings?:string[]; designNumberCorrection?:{inputKey:string;note:string}; planKey?:string; downloadId?:number; generatedPriorities?:Priority[]; recoveryAttempts?:Record<string,number>; recoveryRetries?:Record<string,number>; acknowledged?:{next:number;op:DraftCommand['op'];page?:DraftReceipt['page']}; recoveryDecision?:{next:number;reference:string;outcome:'retry'} }
+export interface DraftCheckpoint { summaryKey?:string; caseRunId?:string;lastTraceId?:string;diagnosticError?:DiagnosticErrorData; transport?: 'http'|'page'; reference?: string; documentId?: string; tabId: number; next: number; total: number; status: 'running'|'stopped'|'uncertain'|'saved'|'failed'; stage: string; error?: string; warnings?:string[]; designNumberCorrection?:{inputKey:string;note:string}; planKey?:string; downloadId?:number; generatedPriorities?:Priority[]; recoveryAttempts?:Record<string,number>; recoveryRetries?:Record<string,number>; acknowledged?:{next:number;op:DraftCommand['op'];page?:DraftReceipt['page']}; recoveryDecision?:{next:number;reference:string;outcome:'retry'} }
+
