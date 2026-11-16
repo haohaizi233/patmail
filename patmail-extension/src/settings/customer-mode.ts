@@ -13,6 +13,10 @@ export function isCustomerMode(value: unknown): value is CustomerMode {
 export function modeOrigin(mode: CustomerMode): string {
   return mode === 'sme' ? SME_CUSTOMER_ORIGIN : LARGE_CUSTOMER_ORIGIN
 }
+/** Preserve the actually approved host: aliases are separate browser sessions. */
+export function preferredModeOrigin(mode:CustomerMode,preferred?:string):string {
+  return preferred&&originMatchesMode(preferred,mode)?preferred:modeOrigin(mode)
+}
 
 export function modeLabel(mode: CustomerMode): string {
   return mode === 'sme' ? '中小客户' : '大客户'

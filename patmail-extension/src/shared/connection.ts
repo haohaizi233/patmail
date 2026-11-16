@@ -216,6 +216,7 @@ export class EasyConnectionController {
       })
       return { ok: false, message: this.context.message }
     }
+    this.homeOrigin=origin
     const connectionVersion = this.context.connectionVersion + 1
     this.context = {
       ...emptyConnection(origin),
