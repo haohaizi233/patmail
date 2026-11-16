@@ -15,7 +15,9 @@ function rotr(value: number, bits: number): number {
 
 /** 同步 SHA-256。扩展页面和测试都能用，不把异步 Web Crypto 放进任务构建。 */
 export function sha256Hex(text: string): string {
-  const data = new TextEncoder().encode(text)
+  return sha256Bytes(new TextEncoder().encode(text))
+}
+export function sha256Bytes(data:Uint8Array):string {
   const bitLength = data.length * 8
   const withPad = new Uint8Array(((data.length + 9 + 63) >> 6) << 6)
   withPad.set(data)
