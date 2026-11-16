@@ -22,7 +22,18 @@ it('permits only an explicitly coordinated authentication navigation to await a 
  expect(verify).toHaveBeenCalledOnce()
  verify.mockResolvedValueOnce({tabId:7,title:'WIPO',documentId:'new-document',verifiedAt:Date.now(),expiresAt:Date.now()+300000})
  expect(await oa.verify(true)).toBe(true);expect(oa.verified.value).toBe(true)
- recovering=false;listeners.changed?.(7,{status:'loading'});expect(oa.verified.value).toBe(false);expect(oa.checking.value).toBe(false)
+ recovering=false;listeners.changed?.(7,{status:'loading'});expect(oa.verified.value).toBe(false);expect(oa.checking.value).toBe(true)
+})
+it('accepts only the fresh recovery result across its own navigation while keeping the old document unverified',async()=>{
+ const {oa,verify,listeners}=mountSession({deferPolling:()=>true,recoveringNavigation:()=>true})
+ await nextTick();oa.selected.value=7
+ let resolve!:(value:Awaited<ReturnType<typeof verify>>)=>void
+ verify.mockImplementationOnce(()=>new Promise(r=>{resolve=r}))
+ const work=oa.recover()
+ listeners.changed?.(7,{status:'loading'});listeners.changed?.(7,{status:'complete'})
+ expect(oa.verified.value).toBe(false);expect(oa.checking.value).toBe(true)
+ resolve({tabId:7,title:'WIPO',documentId:'fresh-after-SSO',verifiedAt:Date.now(),expiresAt:Date.now()+300000})
+ expect(await work).toBe(true);expect(oa.verified.value).toBe(true);expect(verify).toHaveBeenCalledOnce()
 })
 it('silently refreshes an explicitly verified session before the five-minute expiry',async()=>{
  const {oa,verify}=mountSession();await nextTick();oa.selected.value=7;await oa.verify()

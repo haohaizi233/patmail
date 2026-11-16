@@ -2,7 +2,7 @@ import type {TraceContext,DiagnosticErrorData} from '../hague/diagnostics/trace'
 import {normalizeDiagnosticError} from '../hague/diagnostics/errors'
 import { PermitPool } from '../utils/permit-pool'
 import { printOfflineHague } from './hague-offline-pdf'
-import {withHagueBusinessActivity} from './hague-activity'
+import {withHagueBusinessActivity,waitForHagueIdle} from './hague-activity'
 const network=new PermitPool(6)
 export const HAGUE_HTTP_CHANNEL='PATMAIL_HAGUE_HTTP'
 export interface HttpRequest {diagnosticsEnabled?:boolean;trace?:TraceContext;requestId?:string;url:string;method:'GET'|'POST';params?:[string,string][];headers?:Record<string,string>;file?:{field:string;name:string;mime:string;base64:string}}
@@ -47,6 +47,7 @@ export async function handleHagueHttp(message:unknown,sender:chrome.runtime.Mess
  try{
   const senderUrl=new URL(sender.url??'')
   if(sender.id!==chrome.runtime.id||senderUrl.pathname!=='/app.html'||senderUrl.protocol!=='chrome-extension:'||senderUrl.hostname!==chrome.runtime.id)throw new Error('接口调用方无效。')
+  if((message as {action?:string}).action==='waitIdle'){await waitForHagueIdle();return{ok:true}}
   const print=message as {action?:string;html?:string;caseVolume?:string;reference?:string;delivery?:'artifact'}
   if(print.action==='print'&&typeof print.html==='string'&&typeof print.caseVolume==='string'&&typeof print.reference==='string'){const result=await printOfflineHague(print.html,print.caseVolume,print.reference,print.delivery==='artifact'?'artifact':'download');return typeof result==='number'?{ok:true,downloadId:result}:{ok:true,...result}}
   const m=message as {tabId?:number;request?:HttpRequest},r=m.request

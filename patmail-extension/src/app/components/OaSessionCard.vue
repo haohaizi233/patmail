@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
-const props = defineProps<{ platform: string; tabs: { id: number; title: string }[]; selected: number; state: string; message: string; checking: boolean; listing: boolean }>()
+const props = defineProps<{ platform: string; tabs: { id: number; title: string }[]; selected: number; state: string; message: string; checking: boolean; listing: boolean;disabled?:boolean }>()
 const emit = defineEmits<{ 'update:selected': [value: number]; verify: []; refresh: []; open: [] }>()
 const options = computed(() => [{ value: -1, label: props.tabs.length ? '请选择平台标签页' : '没有找到已打开的标签页' }, ...props.tabs.map(t => ({ value: t.id, label: t.title }))])
 const captions: Record<string, string> = { checking: '正在验证', verified: '已验证', expired: '已过期', error: '未通过', idle: '未验证' }
@@ -13,12 +13,12 @@ const captions: Record<string, string> = { checking: '正在验证', verified: '
       <span class="theme-select-badge" :class="state === 'verified' ? 'tone-green' : 'tone-orange'">{{ captions[state] || '未验证' }}</span>
     </div>
     <div class="oa-session-select-wrap">
-      <ThemeSelect :model-value="selected" :options="options" :disabled="checking || listing || !tabs.length" @update:model-value="emit('update:selected', $event)" />
+      <ThemeSelect :model-value="selected" :options="options" :disabled="disabled || checking || listing || !tabs.length" @update:model-value="emit('update:selected', $event)" />
     </div>
     <div class="toolbar oa-session-actions">
-      <button type="button" class="solid" :disabled="checking || selected < 0" @click="emit('verify')">{{ checking ? '正在检测…' : '连接并检测登录' }}</button>
-      <button type="button" class="ghost" :disabled="checking || listing" title="查找已打开的平台标签页" @click="emit('refresh')">查找标签页</button>
-      <button type="button" class="ghost" :disabled="checking" title="在浏览器打开平台页面" @click="emit('open')">打开平台</button>
+      <button type="button" class="solid" :disabled="disabled || checking || selected < 0" @click="emit('verify')">{{ checking ? '正在检测…' : '连接并检测登录' }}</button>
+      <button type="button" class="ghost" :disabled="disabled || checking || listing" title="查找已打开的平台标签页" @click="emit('refresh')">查找标签页</button>
+      <button type="button" class="ghost" :disabled="disabled || checking" title="在浏览器打开平台页面" @click="emit('open')">打开平台</button>
     </div>
   </section>
 </template>

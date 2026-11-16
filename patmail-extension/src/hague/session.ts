@@ -24,5 +24,10 @@ export const hagueSessionClient = {
     if (!record(s) || s.tabId !== tabId || typeof s.documentId !== 'string' || !s.documentId || typeof s.title !== 'string' || typeof s.verifiedAt !== 'number' || typeof s.expiresAt !== 'number' || s.expiresAt <= Date.now() || s.expiresAt - s.verifiedAt > 300000) throw new Error('eHague 会话验证结果无效。')
     return { tabId, documentId: s.documentId, title: s.title, verifiedAt: s.verifiedAt, expiresAt: s.expiresAt }
   },
+  async recover(tabId:number):Promise<HagueSession>{
+    const response=await send('recover',tabId),s=response.session
+    if(!record(s)||s.tabId!==tabId||typeof s.documentId!=='string'||!s.documentId||typeof s.title!=='string'||typeof s.verifiedAt!=='number'||typeof s.expiresAt!=='number'||s.expiresAt<=Date.now()||s.expiresAt-s.verifiedAt>300000)throw new HagueSessionVerificationError(typeof response.error==='string'?response.error:'eHague 会话恢复未成功。',typeof response.code==='string'?response.code:'invalid')
+    return {tabId,documentId:s.documentId,title:s.title,verifiedAt:s.verifiedAt,expiresAt:s.expiresAt}
+  },
   async open(): Promise<void> { await send('open') }
 }

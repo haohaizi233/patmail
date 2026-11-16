@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 export interface OaSession { tabId: number; title: string; documentId: string; verifiedAt: number; expiresAt: number }
-export interface OaSessionClient { listTabs(): Promise<{ id: number; title: string }[]>; verify(tabId: number): Promise<OaSession>; open(): Promise<void>; isTransientError?(error:unknown):boolean }
+export interface OaSessionClient { listTabs(): Promise<{ id: number; title: string }[]>; verify(tabId: number): Promise<OaSession>;recover?(tabId:number):Promise<OaSession>; open(): Promise<void>; isTransientError?(error:unknown):boolean }
 export function useOaSession(client: OaSessionClient,options:{deferPolling?:()=>boolean;recoveringNavigation?:()=>boolean}={}) {
   const tabs = ref<{ id: number; title: string }[]>([]), selected = ref(-1), session = ref<OaSession | null>(null)
   const checking = ref(false), listing = ref(false), error = ref(''), now = ref(Date.now())
@@ -26,17 +26,17 @@ export function useOaSession(client: OaSessionClient,options:{deferPolling?:()=>
     } catch (e) { invalidate(); error.value = e instanceof Error ? e.message : '无法读取平台标签页。' }
     finally { listing.value = false }
   }
-  async function verify(quiet=false): Promise<boolean> {
+  async function verify(quiet=false,recover=false): Promise<boolean> {
     if(inFlight)return inFlight
     if(selected.value<0)return false
     const version=++generation,tabId=selected.value,previous=session.value
     lastAttemptAt=Date.now()
-    checking.value=!quiet||(!verified.value&&pollingApproved)
+    checking.value=recover||!quiet||(!verified.value&&pollingApproved)
     if(!quiet)session.value=null
     error.value=''
     const work=(async()=>{
       try{
-        const result=await client.verify(tabId)
+        const result=await(recover&&client.recover?client.recover(tabId):client.verify(tabId))
         if(version!==generation||tabId!==selected.value)return false
         session.value=result;now.value=Date.now();pollingApproved=true
         return verified.value
@@ -70,7 +70,12 @@ export function useOaSession(client: OaSessionClient,options:{deferPolling?:()=>
   const changed = (tabId: number, info: { url?: string; status?: string }) => {
     if(tabId!==selected.value)return
     if(info.url!==undefined||info.status==='loading'){
-      if(options.deferPolling?.()&&!options.recoveringNavigation?.()){invalidate(true);error.value='原站标签页已变化，请重新验证后继续。';return}
+      if(options.recoveringNavigation?.()&&inFlight){session.value=null;checking.value=true;error.value='正在恢复原站会话并核验新文档…';return}
+      if(options.deferPolling?.()&&!options.recoveringNavigation?.()){
+        generation++;inFlight=undefined;checking.value=true;error.value='原站文档已变化，等待工作流核验新文档及原草稿回执。'
+        session.value={tabId,title:session.value?.title||'WIPO',documentId:'',verifiedAt:0,expiresAt:0}
+        return
+      }
       if(pollingApproved){
         generation++; inFlight=undefined; checking.value=true; error.value='';
         // Blank documentId is an explicit pending state, never accepted as a
@@ -92,5 +97,5 @@ export function useOaSession(client: OaSessionClient,options:{deferPolling?:()=>
     invalidate(); clearInterval(timer)
     if (typeof chrome !== 'undefined') { chrome.tabs?.onUpdated?.removeListener(changed); chrome.tabs?.onRemoved?.removeListener(removed) }
   })
-  return { tabs, selected, checking, listing, verified, state, message, refresh, verify, ensureFresh, noteAuthenticatedActivity,open }
+  return { tabs, selected, checking, listing, verified, state, message, refresh, verify,recover:()=>verify(true,true), ensureFresh, noteAuthenticatedActivity,open }
 }
