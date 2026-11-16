@@ -5,6 +5,7 @@ import { HagueHttpContext, type JsfAction, type HagueFetch } from './http-contex
 import { executeDraftPage } from './draft-page'
 import type { DraftCommand, DraftReceipt,DraftCheckpoint,DraftRecovery } from './draft-contract'
 import { inspectPriorityRecovery,inspectDesignRecovery,inspectUploadRecovery } from './draft-recovery'
+import {summaryEvidenceKey} from './summary-evidence'
 
 const unsupported=()=>new HagueDiagnosticError({errorCode:'PROTOCOL_UNSUPPORTED',errorStage:'ast',transportStatus:'not_dispatched',sideEffectMayHaveOccurred:false})
 /** AST extraction is read-only. Ambiguous or dynamic handlers never become writes. */
@@ -87,19 +88,24 @@ export class HagueHttpDriver {
         const receipt=await this.call({op:'inspect'},reference)
         return receipt.ok&&receipt.reference===reference&&receipt.page==='application'?{outcome:'completed',receipt}:{outcome:'unknown'}
       }
-      if(command.op==='applicant'){
-        if(checkpoint.status!=='uncertain'||!checkpoint.planKey||!Number.isSafeInteger(command.index)||command.index<0||checkpoint.next!==command.index+2)return{outcome:'unknown'}
+      if(command.op==='applicant'||command.op==='representative'){
+        const representative=command.op==='representative',index=command.op==='applicant'?command.index:0
+        if(checkpoint.status!=='uncertain'||!checkpoint.planKey||!representative&&(!Number.isSafeInteger(index)||index<0||checkpoint.next!==index+2))return{outcome:'unknown'}
         const a=command.data,country=['SG','Singapore','SG - Singapore'].includes(a.country)?'SG':['CN','China','CN - China'].includes(a.country)?'CN':''
         if(!country)return{outcome:'unknown'}
         await this.resume(reference)
-        const records=()=>this.state.document.querySelectorAll('button[id^="ApplicantForm:applicantViewPanel:"][id$=":editApp"]').length
-        if(records()===command.index&&this.state.document.getElementById('ApplicantForm:showApplicantForm'))return{outcome:'retry',receipt:{ok:true,page:'application',reference,applicants:command.index}}
-        const edit=this.state.document.getElementById(`ApplicantForm:applicantViewPanel:${command.index}:editApp`)
-        if(records()!==command.index+1||!edit)return{outcome:'unknown'}
+        const repButtons=()=>[...this.state.document.querySelectorAll<HTMLButtonElement>('button[id^="ApplicantForm:representativesViewPanel:"]')]
+        const repEdits=()=>repButtons().filter(e=>e.id.endsWith(':editRep')||e.title==='Open/edit')
+        const records=()=>representative?repEdits().length:this.state.document.querySelectorAll('button[id^="ApplicantForm:applicantViewPanel:"][id$=":editApp"]').length
+        if(representative&&!repButtons().length&&this.state.document.getElementById('ApplicantForm:repBtn'))return{outcome:'retry',receipt:{ok:true,page:'application',reference}}
+        if(!representative&&records()===index&&this.state.document.getElementById('ApplicantForm:showApplicantForm'))return{outcome:'retry',receipt:{ok:true,page:'application',reference,applicants:index}}
+        const edit=representative?repEdits()[0]:this.state.document.getElementById(`ApplicantForm:applicantViewPanel:${index}:editApp`)
+        if(records()!==index+1||!edit)return{outcome:'unknown'}
         edit.click();await this.state.settle();this.checkFailure()
-        const expected={firstname:a.name,address:a.address,cp:a.postalCode,city:a.city,state:a.region,country:a.country,email:command.email,nationality:country,domicile:country,establishment:country,residence:country,acp:country}
+        const expected={...(representative?{name:a.name}:{firstname:a.name}),address:a.address,cp:a.postalCode,city:a.city,state:a.region,country:a.country,email:command.op==='representative'?command.data.email:command.email,...(!representative?{nationality:country,domicile:country,establishment:country,residence:country,acp:country}:{})}
         const normal=(value?:string)=>(value??'').normalize('NFKC').trim().replace(/\s+/g,' ')
-        const matches=!!this.state.document.getElementById('ApplicantForm:saveAppBtn')&&this.state.document.querySelector<HTMLInputElement>('#ApplicantForm input[type=radio][value=true]')?.checked===true&&Object.entries(expected).every(([key,value])=>{
+        const saveId=representative?'ApplicantForm:saveRepBtn':'ApplicantForm:saveAppBtn'
+        const matches=!!this.state.document.getElementById(saveId)&&this.state.document.querySelector<HTMLInputElement>('#ApplicantForm input[type=radio][value=true]')?.checked===true&&Object.entries(expected).every(([key,value])=>{
           const field=this.state.document.getElementById(`ApplicantForm:${key}:input`) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null
           if(!field||typeof field.value!=='string')return false
           const fv=normal(field.value),ev=normal(value)
@@ -111,16 +117,44 @@ export class HagueHttpDriver {
           }
           return fv===ev
         })
-        const cancel=this.state.document.getElementById('ApplicantForm:cancelApp')
+        const cancels=[...this.state.document.querySelectorAll<HTMLElement>('#ApplicantForm button')].filter(e=>e.textContent?.trim()==='Cancel')
+        const cancel=this.state.document.getElementById(representative?'ApplicantForm:cancelRep':'ApplicantForm:cancelApp')??(representative&&cancels.length===1?cancels[0]:null)
         if(!cancel)return{outcome:'unknown'}
         cancel.click();await this.state.settle();this.checkFailure()
-        if(!matches||this.state.document.getElementById('ApplicantForm:saveAppBtn')||records()!==command.index+1)return{outcome:'unknown'}
+        if(!matches||this.state.document.getElementById(saveId)||records()!==index+1)return{outcome:'unknown'}
         const receipt=await this.call({op:'inspect'},reference)
-        return receipt.ok&&receipt.reference===reference&&receipt.page==='application'&&receipt.applicants===command.index+1?{outcome:'completed',receipt}:{outcome:'unknown'}
+        return receipt.ok&&receipt.reference===reference&&receipt.page==='application'&&(representative||receipt.applicants===index+1)?{outcome:'completed',receipt}:{outcome:'unknown'}
+      }
+      if(['description','publication','signature'].includes(command.op)){
+        if(!checkpoint.planKey||checkpoint.status!=='uncertain')return{outcome:'unknown'}
+        await this.resume(reference);await this.remote('refreshOptionsUI')
+        const form={description:'DescriptionForm',publication:'PublicationForm',signature:'signForm'}[command.op as 'description'|'publication'|'signature']
+        // These setters replace a singular value and never allocate a record.
+        return this.state.document.getElementById(form)?{outcome:'retry',receipt:{ok:true,page:'application',reference}}:{outcome:'unknown'}
+      }
+      if(command.op==='print'){
+        if(!checkpoint.summaryKey||!checkpoint.planKey)return{outcome:'unknown'}
+        await this.resume(reference)
+        const summary=await this.call({op:'summary'},reference)
+        return summary.ok&&summary.reference===reference&&summary.summaryKey===checkpoint.summaryKey?{outcome:'retry',receipt:summary}:{outcome:'unknown'}
+      }
+      if(command.op==='closeDesign'){
+        if(!checkpoint.planKey||checkpoint.status!=='uncertain'||!Number.isSafeInteger(command.index)||command.index!<0||!Number.isSafeInteger(command.count)||command.count!<1||!command.subclass||!command.product)return{outcome:'unknown'}
+        await this.resume(reference);await this.remote('refreshDesignUI')
+        return inspectDesignRecovery(this.state.document,{op:'design',index:command.index!,subclass:command.subclass,product:command.product},reference,command.count)
       }
       if(command.op==='saveDraft'){
         const ack=checkpoint.acknowledged
-        if(ack?.next!==checkpoint.next||ack.op!=='saveDraft'||ack.page!=='portfolio')return{outcome:'unknown'}
+        if(ack?.next!==checkpoint.next||ack.op!=='saveDraft'||ack.page!=='portfolio'){
+          if(!checkpoint.planKey||!checkpoint.summaryKey)return{outcome:'unknown'}
+          await this.resume(reference)
+          const summary=await this.call({op:'summary'},reference)
+          if(!summary.ok||summary.page!=='summary'||summary.reference!==reference||summary.summaryKey!==checkpoint.summaryKey)return{outcome:'unknown'}
+          const back=await this.call({op:'backToApplication'},reference)
+          // No fields are replayed. Re-close only the exact draft whose persisted
+          // Summary is identical to the one already verified and printed.
+          return back.ok&&back.page==='application'&&back.reference===reference?{outcome:'retry',receipt:{...back,summaryKey:summary.summaryKey}}:{outcome:'unknown'}
+        }
         await this.initialize()
         const tab=[...this.state.document.querySelectorAll<HTMLButtonElement>('#quickSearchPanel button')].find(e=>/^Draft\(s\)/.test(e.textContent?.trim()??''))
         if(!tab)return{outcome:'unknown'}
@@ -296,7 +330,7 @@ export class HagueHttpDriver {
         const messages=[...this.state.document.querySelectorAll('.ui-message-error,.ui-messages-error,.b-input__error,[id$=":error"]')].map(node=>node.textContent?.trim()).filter(Boolean).join('；').slice(0,500)
         throw new Error(`接口创建回执未确认编辑器和 WIPO reference（返回 ${snapshot.page}），结果待核对，未自动重建。${messages?`原站提示：${messages}`:'未返回可识别校验提示，请先在原站核对是否已创建。'}`)
       }
-      return {...snapshot,documentId:this.state.id,...(result.warnings?{warnings:result.warnings}:{})}
+      return {...snapshot,documentId:this.state.id,...(snapshot.page==='summary'?{summaryKey:summaryEvidenceKey(this.state.document)}:{}),...(result.warnings?{warnings:result.warnings}:{})}
     }catch(error){if(error instanceof HagueDiagnosticError&&this.state.trace)error.diagnostic.traceId=this.state.trace.traceId;this.commandFailure=error instanceof Error?error:new Error('接口链结果待核对');throw this.commandFailure}finally{this.running=false}
   }
 }

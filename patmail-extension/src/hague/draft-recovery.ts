@@ -1,20 +1,20 @@
 import type { DraftCommand,DraftRecovery } from './draft-contract'
 
 export function recoverableDraftCommand(command:DraftCommand):boolean {
-  return ['create','applicant','parties','locarno','design','upload','legend','creator','priority','summary','backToApplication','saveDraft'].includes(command.op)
+  return ['create','applicant','representative','parties','locarno','design','upload','legend','closeDesign','description','creator','priority','publication','signature','summary','print','backToApplication','saveDraft'].includes(command.op)
 }
 
 /** Design save can succeed before a passive JSF update fails. Read the saved
  * table rather than editor inputs; never re-create an existing design. */
-export function inspectDesignRecovery(doc:Document,command:Extract<DraftCommand,{op:'design'}>,reference:string):DraftRecovery {
+export function inspectDesignRecovery(doc:Document,command:Extract<DraftCommand,{op:'design'}>,reference:string,reproductions=0):DraftRecovery {
   const table=doc.getElementById('designForm:designsDataTable_data')
   if(!table||!Number.isSafeInteger(command.index)||command.index<0)return{outcome:'unknown'}
   const rows=[...table.querySelectorAll<HTMLTableRowElement>('tr[data-ri]')]
   const receipt={ok:true,reference,page:'application' as const,designs:rows.length}
-  if(rows.length===0&&command.index===0)return{outcome:'retry',receipt}
+  if(reproductions===0&&rows.length===0&&command.index===0)return{outcome:'retry',receipt}
   if(rows.length!==command.index+1)return{outcome:'unknown'}
   const values=[...rows[command.index].cells].map(c=>(c.textContent??'').trim().replace(/\s+/g,' '))
-  if(values.length<4||values[0]!==String(command.index+1)||values[1]!=='0'||!/^\d+$/.test(values[2])||Number(values[2])!==Number(command.subclass)||values[3]!==command.product.trim().replace(/\s+/g,' '))return{outcome:'unknown'}
+  if(values.length<4||values[0]!==String(command.index+1)||values[1]!==String(reproductions)||!/^\d+$/.test(values[2])||Number(values[2])!==Number(command.subclass)||values[3]!==command.product.trim().replace(/\s+/g,' '))return{outcome:'unknown'}
   return{outcome:'completed',receipt}
 }
 

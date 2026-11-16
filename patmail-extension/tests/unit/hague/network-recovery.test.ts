@@ -8,6 +8,15 @@ function driver(body:string){
  ;(d as unknown as {remote:(name:string)=>Promise<void>}).remote=async()=>{}
  return d
 }
+it('retries an absent representative but does not treat an unrecognized existing representative as absent',async()=>{
+ const command={op:'representative' as const,data:{...creator.address,email:'rep@example.test'}}
+ expect(await driver('<form id="ApplicantForm"><button type="button" id="ApplicantForm:repBtn">Add</button></form>').recoverStep(command,checkpoint)).toMatchObject({outcome:'retry'})
+ expect(await driver('<form id="ApplicantForm"><button id="ApplicantForm:representativesViewPanel:0:unknown">Existing</button><button id="ApplicantForm:repBtn">Add</button></form>').recoverStep(command,checkpoint)).toMatchObject({outcome:'unknown'})
+})
+it.each([2,3])('accepts a closed design only when its saved count and fields match (%s images)',async count=>{
+ const d=driver('<form id="designForm"><table><tbody id="designForm:designsDataTable_data"><tr data-ri="0"><td>1</td><td>2</td><td>03</td><td>Product</td></tr></tbody></table></form>')
+ expect(await d.recoverStep({op:'closeDesign',index:0,count,subclass:'3',product:'Product'},checkpoint)).toMatchObject({outcome:count===2?'completed':'unknown'})
+})
 it('can retry an applicant only after finding its slot absent in the saved canonical list',async()=>{
  const d=driver('<form id="ApplicantForm"><button type="button" id="ApplicantForm:showApplicantForm">Add</button></form>')
  expect(await d.recoverStep({op:'applicant',index:0,data:creator.address,email:'draft@example.test'},{...checkpoint,next:2})).toMatchObject({outcome:'retry',receipt:{applicants:0}})

@@ -1,5 +1,14 @@
-import { expect,it } from 'vitest'
+import { expect,it,vi } from 'vitest'
 import { HagueHttpDriver,jsfAction } from '../../../src/hague/http-driver'
+it.each([true,false])('requires identical canonical Summary proof before re-closing a draft without a final acknowledgement (matching=%s)',async matching=>{
+ const d=new HagueHttpDriver('final-save-proof',async()=>{throw Error('unexpected network write')})
+ d.resume=async reference=>{expect(reference).toBe('123')}
+ const call=vi.spyOn(d,'call').mockImplementation(async command=>command.op==='summary'?{ok:true,page:'summary',reference:'123',summaryKey:matching?'sha256:proof':'sha256:different'}:{ok:true,page:'application',reference:'123'})
+ const result=await d.recoverStep({op:'saveDraft'},{tabId:7,reference:'123',next:20,total:21,status:'uncertain',stage:'Save',planKey:'same-plan',summaryKey:'sha256:proof'})
+ expect(result.outcome).toBe(matching?'retry':'unknown')
+ expect(call.mock.calls.map(([c])=>c.op)).toEqual(matching?['summary','backToApplication']:['summary'])
+ expect(call.mock.calls.some(([c])=>c.op==='saveDraft'||c.op==='create')).toBe(false)
+})
 it('does not treat an initial saved draft as final save proof without a matching acknowledgement',async()=>{
  let reads=0;const d=new HagueHttpDriver('proof',async()=>{reads++;throw new Error('must not request')})
  const checkpoint={tabId:7,reference:'123',next:10,total:11,status:'uncertain' as const,stage:'保存为草稿'}
