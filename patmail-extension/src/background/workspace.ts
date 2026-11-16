@@ -16,7 +16,7 @@ import { observeSearchPage, resolveSelectedFiles, toQueryObservation, type Query
 import { rememberFileTypeTree } from '../automation/file-description-resolver'
 import { isConfirmedOperator } from '../automation/operator'
 import { readSmeCustomerList } from '../customer/sme-customers'
-import { customerMode, modeLabel, modeOrigin, originMatchesMode, setCustomerMode as saveCustomerMode } from '../settings/customer-mode'
+import { customerMode, modeLabel, preferredModeOrigin, originMatchesMode, setCustomerMode as saveCustomerMode } from '../settings/customer-mode'
 import { planTrustedTask } from '../automation/task-planner'
 import type { AutomationTask } from '../automation/types'
 
@@ -249,14 +249,16 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     return workspaceResult({ ok: true, message: appTab.created ? '已打开工作台。' : '已回到已打开的工作台。', connection: host.connection.context, appTab })
   }
   if (action.action === 'openLogin') {
-    const origin = modeOrigin(customerMode())
+    const origin = preferredModeOrigin(customerMode(),host.connection.context.easyOrigin)
     host.connection.retarget(origin)
-    await host.createTab(`${origin}/`)
+    const existing=(await host.queryTabs()).find(tab=>tab.id!=null&&tabOrigin(tab.url)===origin)
+    if(existing?.id!=null)await host.focusTab(existing.id,existing.windowId)
+    else await host.createTab(`${origin}/`)
     return workspaceResult({ ok: true, message: `已打开${modeLabel(customerMode())}登录页面。登录后回到工作台即可读取该账号。`, connection: host.connection.context })
   }
   if (action.action === 'setCustomerMode') {
     await saveCustomerMode(action.mode)
-    host.connection.retarget(modeOrigin(action.mode))
+    host.connection.retarget(preferredModeOrigin(action.mode,host.connection.context.easyOrigin))
     const boundId = host.connection.context.easyTabId
     if (boundId != null && !originMatchesMode(host.connection.context.easyOrigin, action.mode)) {
       host.connection.detach(boundId)
@@ -638,10 +640,20 @@ function stillUnbound(host: WorkspaceHost, version: number): boolean {
   return host.connection.context.easyTabId == null && host.connection.context.connectionVersion === version
 }
 
-const SESSION_READ_MS = 12_000
+const SESSION_READ_MS = 35_000
+const sessionReads=new WeakMap<WorkspaceHost,Map<string,Promise<unknown>>>()
+function readTabSession(host:WorkspaceHost,tabId:number):Promise<unknown>{
+  let reads=sessionReads.get(host)
+  if(!reads){reads=new Map();sessionReads.set(host,reads)}
+  const key=`${tabId}:${host.connection.context.connectionVersion}`
+  const pending=reads.get(key)
+  if(pending)return pending
+  const work=readTabSessionOnce(host,tabId).finally(()=>reads.delete(key))
+  reads.set(key,work);return work
+}
 
 /** 内容脚本没回话时不能一直等，否则后面的登录检测全部排在这一次后面。 */
-function readTabSession(host: WorkspaceHost, tabId: number): Promise<unknown> {
+function readTabSessionOnce(host: WorkspaceHost, tabId: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('登录检测超时。')), SESSION_READ_MS)
     host.sendToTab(tabId, { type: MessageType.CheckSession }).then(
@@ -695,7 +707,6 @@ function holdForeignLogin(host: WorkspaceHost, tabId: number, userId: string, di
 async function observeTab(host: WorkspaceHost, tabId: number): Promise<SessionObservation | null> {
   try {
     const response = await readTabSession(host, tabId)
-    console.log('[patmail-bg] observeTab response', tabId, response)
     if (!isMessage(response) || response.type !== MessageType.SessionResult) {
       return { ok: false, message: '无法读取该标签页的登录状态。' }
     }
@@ -715,8 +726,7 @@ async function observeTab(host: WorkspaceHost, tabId: number): Promise<SessionOb
       checkedAt: response.payload.data.checkedAt,
       message: response.payload.data.message
     }
-  } catch (error) {
-    console.log('[patmail-bg] observeTab error', tabId, error)
+  } catch {
     return null
   }
 }
@@ -729,19 +739,15 @@ async function modeTabs(host: WorkspaceHost): Promise<EasyTabCandidate[]> {
 /** 工作台打开时跟随已经登录的 EASY 标签页。多个不同账号时不代为选择。 */
 async function ensureEasySession(host: WorkspaceHost): Promise<EasyTabCandidate[]> {
   const tabs = await modeTabs(host)
-  console.log('[patmail-bg] ensureEasySession tabs', tabs.length, tabs.map(t => ({ id: t.id, url: t.url })))
   const boundId = host.connection.context.easyTabId
   if (boundId != null) {
     if (tabs.some(tab => tab.id === boundId)) {
-      console.log('[patmail-bg] bound tab found, reading session', boundId)
       await readBoundSession(host)
-      console.log('[patmail-bg] after readBoundSession', host.connection.context.sessionStatus, host.connection.context.operatorId)
       if (host.connection.context.sessionStatus === 'authenticated' || host.connection.context.accountOffer) return tabs
       // 超时、失效、读失败都不要停在旧绑定上。接着看现在到底是谁登录。
       host.connection.detach(boundId)
       remember(host)
     } else {
-      console.log('[patmail-bg] bound tab missing, detach', boundId)
       host.connection.detach(boundId)
       remember(host)
     }
@@ -751,12 +757,10 @@ async function ensureEasySession(host: WorkspaceHost): Promise<EasyTabCandidate[
   for (const tab of tabs) {
     if (!stillUnbound(host, version)) return modeTabs(host)
     const observation = await observeTab(host, tab.id)
-    console.log('[patmail-bg] observeTab', tab.id, observation)
     if (!stillUnbound(host, version)) return modeTabs(host)
     if (observation) seen.push({ tab, observation })
   }
   const loggedIn = seen.filter(item => item.observation.ok && item.observation.status === 'authenticated' && item.observation.userId && isConfirmedOperator(item.observation.userId))
-  console.log('[patmail-bg] loggedIn count', loggedIn.length)
   const operators = new Set(loggedIn.map(item => item.observation.userId))
   if (operators.size === 1 && loggedIn[0]) {
     const found = loggedIn[0]
@@ -792,7 +796,7 @@ async function ensureEasySession(host: WorkspaceHost): Promise<EasyTabCandidate[
     remember(host)
   } else if (host.connection.context.easyTabId == null) {
     const label = modeLabel(customerMode())
-    const origin = modeOrigin(customerMode())
+    const origin = preferredModeOrigin(customerMode(),host.connection.context.easyOrigin)
     host.connection.context = {
       ...host.connection.context,
       easyOrigin: origin,
@@ -823,7 +827,6 @@ async function readBoundSession(host: WorkspaceHost, attempt = 0, adoptForeign =
   }
   try {
     const response = await readTabSession(host, tabId)
-    console.log('[patmail-bg] readBoundSession response', tabId, response)
     if (host.connection.context.easyTabId !== tabId) return
     if (host.connection.context.connectionVersion !== version) {
       await retry()
@@ -861,8 +864,7 @@ async function readBoundSession(host: WorkspaceHost, attempt = 0, adoptForeign =
       host.connection.context = { ...host.connection.context, message: '已切换到当前标签页的登录用户。' }
     }
     remember(host)
-  } catch (error) {
-    console.log('[patmail-bg] readBoundSession error', tabId, error)
+  } catch {
     if (host.connection.context.easyTabId !== tabId) return
     if (attempt < 2) {
       await retry()

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it,vi } from 'vitest'
 import { recheckBoundSession, type WorkspaceHost } from '../../../src/background/workspace'
 import { MemoryEvidenceStore } from '../../../src/automation/evidence-store'
 import { SerialTaskStore } from '../../../src/automation/indexed-store'
@@ -9,10 +9,10 @@ import { MessageType } from '../../../src/shared/message'
 const large = 'http://183.36.43.66:88'
 const userA = 'aaaaaaaa-1111-4111-8111-111111111111'
 
-function boundHost(answer: () => ReturnType<WorkspaceHost['sendToTab']>) {
-  const tabs = [{ id: 8, url: `${large}/inbox`, title: 'EASY' }]
+function boundHost(answer: () => ReturnType<WorkspaceHost['sendToTab']>,origin=large) {
+  const tabs = [{ id: 8, url: `${origin}/inbox`, title: 'EASY' }]
   const connection = new EasyConnectionController()
-  connection.beginBind({ id: 8, url: `${large}/inbox` })
+  connection.beginBind({ id: 8, url: `${origin}/inbox` })
   connection.applySession({ ok: true, status: 'authenticated', userId: userA, displayName: '测试员' }, connection.context.connectionVersion)
   const host: WorkspaceHost = {
     connection,
@@ -30,6 +30,18 @@ function boundHost(answer: () => ReturnType<WorkspaceHost['sendToTab']>) {
 }
 
 describe('会话复查的瞬时失败', () => {
+  it.each([large,'http://z.hiseeip.com:88'])('coalesces slow concurrent probes without expiring %s',async origin=>{
+    vi.useFakeTimers()
+    try{
+      const answer=vi.fn(()=>new Promise<unknown>(resolve=>setTimeout(()=>resolve({type:MessageType.SessionResult,payload:{ok:true,data:{status:'authenticated',userId:userA,displayName:'test',checkedAt:new Date().toISOString()}}}),20000)))
+      const {host,connection}=boundHost(answer,origin)
+      const jobs=[recheckBoundSession(host),recheckBoundSession(host),recheckBoundSession(host)]
+      await vi.advanceTimersByTimeAsync(20001)
+      expect(await Promise.all(jobs)).toEqual(['same','same','same'])
+      expect(answer).toHaveBeenCalledOnce();expect(connection.context.easyOrigin).toBe(origin)
+      expect(connection.context.operatorId).toBe(userA)
+    }finally{vi.useRealTimers()}
+  })
   it('检测超时或网络失败只算这次没读到，已登录状态和身份保持不动', async () => {
     for (const code of ['REQUEST_TIMEOUT', 'NETWORK_ERROR', 'HTTP_ERROR', 'AUTH_UNKNOWN'] as const) {
       const { connection, host } = boundHost(async () => ({
