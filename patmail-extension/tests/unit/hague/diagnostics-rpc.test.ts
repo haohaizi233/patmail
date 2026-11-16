@@ -5,13 +5,26 @@ import {HagueHttpContext} from '../../../src/hague/http-context'
 import {makeTraceContext,setDiagnosticMode,clearDiagnosticEvents,getDiagnosticEvents} from '../../../src/hague/diagnostics/store'
 const url='https://hague.wipo.int/HagueEFilingWeb/protected/page/application.xhtml'
 const trace=makeTraceContext('case-123',2,'applicant','http',7)
+it('detects protected GET authentication redirects without following into a CORS failure',async()=>{
+ const redirected=new Response('');Object.defineProperty(redirected,'type',{value:'opaqueredirect'})
+ const fetcher=vi.fn(async(_url:string,_init?:RequestInit)=>redirected);vi.stubGlobal('fetch',fetcher)
+ expect(await fetchHague({url,method:'GET',trace})).toMatchObject({diagnosticError:{errorCode:'AUTH_REDIRECT'}})
+ expect(fetcher.mock.calls[0]?.[1]).toMatchObject({redirect:'manual'})
+})
+it('classifies CORS-hidden expired authentication with a read-only probe and never resends the POST',async()=>{
+ const redirected=new Response('');Object.defineProperty(redirected,'type',{value:'opaqueredirect'})
+ const fetcher=vi.fn(async(_url:string,init?:RequestInit)=>{if(init?.method==='POST')throw new TypeError('Failed to fetch');return redirected});vi.stubGlobal('fetch',fetcher)
+ expect(await fetchHague({url,method:'POST',trace})).toMatchObject({diagnosticError:{errorCode:'AUTH_REDIRECT',sideEffectMayHaveOccurred:true}})
+ expect(fetcher.mock.calls.filter(([,init])=>init?.method==='POST')).toHaveLength(1)
+})
 afterEach(()=>{vi.unstubAllGlobals();setDiagnosticMode(false);clearDiagnosticEvents()})
-it('times out an unresponsive RPC once without waiting forever or repeating the request',async()=>{
+it('times out an unresponsive write RPC once without repeating the write',async()=>{
  const sendMessage=vi.fn(()=>new Promise<never>(()=>{}));vi.stubGlobal('chrome',{runtime:{sendMessage}})
  vi.useFakeTimers()
  try{
   const ctx=new HagueHttpContext('rpc-stall',hagueHttpFetch(7));ctx.setTrace(trace)
-  const check=expect(ctx.get(url)).rejects.toMatchObject({diagnostic:{errorCode:'NETWORK_TIMEOUT',transportStatus:'timeout',httpStatus:null}})
+  ctx.load('<form id="form"><input name="javax.faces.ViewState" value="A"><button type="button" id="form:save">Save</button></form>',url)
+  const check=expect(ctx.post({source:'form:save'})).rejects.toMatchObject({diagnostic:{errorCode:'NETWORK_TIMEOUT',transportStatus:'timeout',httpStatus:null}})
   await vi.advanceTimersByTimeAsync(60001);await check
   expect(sendMessage).toHaveBeenCalledOnce()
   const controller=new AbortController();controller.abort()

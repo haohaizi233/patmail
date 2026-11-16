@@ -1,6 +1,15 @@
 import { expect,it,vi } from 'vitest'
 import { createHagueKeepalive,probeHagueLogin } from '../../../src/background/hague-session'
 const tab={id:7,url:'https://hague.wipo.int/HagueEFilingWeb/protected/page/application.xhtml'}
+it('defers independent portfolio probes during business activity, including activity that starts while listing tabs',async()=>{
+ let active=true
+ const h={queryTabs:vi.fn(async()=>[tab]),executeScript:vi.fn(async()=>[])}
+ const poll=createHagueKeepalive(h,()=>60000,()=>active)
+ await poll();expect(h.executeScript).not.toHaveBeenCalled()
+ active=false;h.queryTabs.mockImplementationOnce(async()=>{active=true;return[tab]})
+ await poll();expect(h.executeScript).not.toHaveBeenCalled()
+ active=false;await createHagueKeepalive(h,()=>120000,()=>active)();expect(h.executeScript).toHaveBeenCalledOnce()
+})
 it('polls one protected WIPO tab once per minute, without navigation or writes',async()=>{
  let now=0
  const h={queryTabs:vi.fn(()=>Promise.resolve([{id:1,url:'https://hague.wipo.int.evil.test/'},{id:2,url:'https://hague.wipo.int/HagueEFilingWeb/common/sessionTimedOut.xhtml'},tab,{...tab,id:8}])),executeScript:vi.fn(()=>Promise.resolve([{result:{authenticated:true}}]))}

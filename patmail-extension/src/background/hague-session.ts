@@ -1,12 +1,15 @@
 import { HAGUE_HOME, HAGUE_ORIGIN, HAGUE_SESSION_CHANNEL } from '../hague/session-contract'
+import {hagueBusinessActive,withIdleHagueProbe} from './hague-activity'
 
 /** This function is injected on the selected tab. Keep it self-contained and read-only. */
 export async function probeHagueLogin(): Promise<{ authenticated: boolean; message?: string; reason?:'unavailable'|'unauthenticated'|'target_changed' }> {
   if (location.origin !== 'https://hague.wipo.int') return { authenticated: false, reason:'target_changed', message: '所选页面不是 eHague 官方页面。' }
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000)
   try {
-    const response = await fetch('/HagueEFilingWeb/protected/portfolioManager.xhtml', { method: 'GET', credentials: 'include', cache: 'no-store', redirect: 'follow', signal: controller.signal })
-    if ([401,403].includes(response.status)||new URL(response.url).origin !== 'https://hague.wipo.int' || new URL(response.url).pathname !== '/HagueEFilingWeb/protected/portfolioManager.xhtml') return { authenticated: false, reason:'unauthenticated', message: 'eHague 登录未通过，请先在原站完成登录及二次验证。' }
+    // Following the cross-origin SSO redirect makes Fetch reject with a generic
+    // CORS error. A manual redirect exposes the authentication boundary safely.
+    const response = await fetch('/HagueEFilingWeb/protected/portfolioManager.xhtml', { method: 'GET', credentials: 'include', cache: 'no-store', redirect: 'manual', signal: controller.signal })
+    if (response.type==='opaqueredirect'||[301,302,303,307,308,401,403].includes(response.status)||new URL(response.url).origin !== 'https://hague.wipo.int' || new URL(response.url).pathname !== '/HagueEFilingWeb/protected/portfolioManager.xhtml') return { authenticated: false, reason:'unauthenticated', message: 'eHague 登录未通过，请先在原站完成登录及二次验证。' }
     if(!response.ok)return {authenticated:false,reason:'unavailable',message:`eHague 登录探测暂不可用（HTTP ${response.status}），稍后自动复核。`}
     const doc = new DOMParser().parseFromString(await response.text(), 'text/html')
     const authenticated = !!doc.querySelector('form#portfolio') && !!doc.querySelector('form#quickSearchPanel') && !!doc.querySelector('input[name="javax.faces.ViewState"]') && !doc.querySelector('input[type="password"]')
@@ -61,14 +64,15 @@ export function handleHagueSessionMessage(message: unknown, sender: chrome.runti
 }
 
 /** One read-only touch per minute while a protected eHague tab is open; never opens or logs in. */
-export function createHagueKeepalive(host:Pick<HagueSessionHost,'queryTabs'|'executeScript'>,clock:()=>number=Date.now){
+export function createHagueKeepalive(host:Pick<HagueSessionHost,'queryTabs'|'executeScript'>,clock:()=>number=Date.now,defer:()=>boolean=()=>false){
   let running=false,lastStarted=Number.NEGATIVE_INFINITY
   return async():Promise<void>=>{
     const now=clock()
-    if(running||now-lastStarted<60000)return
+    if(running||defer()||now-lastStarted<60000)return
     running=true;lastStarted=now
     try{
       const tabs=await host.queryTabs()
+      if(defer())return
       const tab=tabs.find(t=>Number.isSafeInteger(t.id)&&isHague(t.url)&&new URL(t.url!).pathname.startsWith('/HagueEFilingWeb/protected/'))
       if(tab)await host.executeScript({target:{tabId:tab.id!,frameIds:[0]},world:'ISOLATED',func:probeHagueLogin})
     }catch{ /* Closed tabs or an expired login do not trigger navigation or another login attempt. */ }
@@ -77,5 +81,5 @@ export function createHagueKeepalive(host:Pick<HagueSessionHost,'queryTabs'|'exe
 }
 export const keepHagueSessionAlive=createHagueKeepalive({
   queryTabs:()=>chrome.tabs.query({url:`${HAGUE_ORIGIN}/*`}),
-  executeScript:injection=>chrome.scripting.executeScript(injection)
-})
+  executeScript:async injection=>await withIdleHagueProbe(()=>chrome.scripting.executeScript(injection))??[]
+},Date.now,hagueBusinessActive)

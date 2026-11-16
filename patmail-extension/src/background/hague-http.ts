@@ -2,6 +2,7 @@ import type {TraceContext,DiagnosticErrorData} from '../hague/diagnostics/trace'
 import {normalizeDiagnosticError} from '../hague/diagnostics/errors'
 import { PermitPool } from '../utils/permit-pool'
 import { printOfflineHague } from './hague-offline-pdf'
+import {withHagueBusinessActivity} from './hague-activity'
 const network=new PermitPool(6)
 export const HAGUE_HTTP_CHANNEL='PATMAIL_HAGUE_HTTP'
 export interface HttpRequest {diagnosticsEnabled?:boolean;trace?:TraceContext;requestId?:string;url:string;method:'GET'|'POST';params?:[string,string][];headers?:Record<string,string>;file?:{field:string;name:string;mime:string;base64:string}}
@@ -9,6 +10,7 @@ export interface HttpRequest {diagnosticsEnabled?:boolean;trace?:TraceContext;re
 export async function fetchHague(request:HttpRequest):Promise<{status:number|null;url:string;mime:string;base64:string;diagnosticError?:DiagnosticErrorData}>{
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000)
  let observedStatus:number|null=null
+ const authenticationFailure=(status:number|null,url='')=>({status,url,mime:'',base64:'',diagnosticError:{version:1 as const,errorCode:'AUTH_REDIRECT',errorStage:'http' as const,timestamp:new Date().toISOString(),traceId:request.trace?.traceId,httpStatus:status,transportStatus:'completed' as const,protocolStatus:'not_observed' as const,businessStatus:'unknown' as const,certainty:'unknown' as const,sideEffectMayHaveOccurred:request.method==='POST',autoRecoverable:false,message:'海牙认证已失效，请在原站重新登录；当前检查点已保留，未重复发送写入。'}})
  try{
   let body:BodyInit|undefined
   if(request.method==='POST'){
@@ -23,12 +25,23 @@ export async function fetchHague(request:HttpRequest):Promise<{status:number|nul
     if(path)(binding as (payload:string)=>void)(JSON.stringify({kind:'hague-trace',event:{version:1,source:'application',phase:'request.dispatched',timestamp:new Date().toISOString(),traceId:t.traceId,caseRunId:t.caseRunId,stepIndex:t.stepIndex,operation:t.operation,transportMode:t.transportMode,tabId:t.tabId,requestId:request.requestId,httpMethod:request.method,urlPath:path,httpStatus:null,transportStatus:'dispatched',businessStatus:'unknown'}}))
    }
   }catch{/* Optional observer cannot alter or retry fetch. */}
-  const response=await fetch(request.url,{method:request.method,credentials:'include',cache:'no-store',headers:request.headers,body,signal:controller.signal})
+  const protectedRead=request.method==='GET'&&/^\/HagueEFilingWeb\/protected\/(?:portfolioManager|page\/(?:application|summary))\.xhtml$/.test(new URL(request.url).pathname)
+  const response=await fetch(request.url,{method:request.method,credentials:'include',cache:'no-store',headers:request.headers,body,signal:controller.signal,...(protectedRead?{redirect:'manual' as const}:{})})
+  if(response.type==='opaqueredirect')return authenticationFailure(null)
   observedStatus=response.status
   if(new URL(response.url).origin!=='https://hague.wipo.int'||/login|sessionTimedOut/i.test(response.url))return{status:response.status,url:response.url,mime:'',base64:'',diagnosticError:{version:1,errorCode:'AUTH_REDIRECT',errorStage:'http',timestamp:new Date().toISOString(),traceId:request.trace?.traceId,httpStatus:response.status,transportStatus:'completed',protocolStatus:'not_observed',businessStatus:'unknown',certainty:'unknown',sideEffectMayHaveOccurred:request.method==='POST',autoRecoverable:false,message:'海牙请求返回登录页面，请重新验证登录。'}}
   const bytes=new Uint8Array(await response.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768))
   return{status:response.status,url:response.url,mime:response.headers.get('content-type')??'',base64:btoa(binary)}
- }catch(error){const aborted=error instanceof DOMException&&error.name==='AbortError';return{status:observedStatus,url:'',mime:'',base64:'',diagnosticError:{version:1,errorCode:controller.signal.aborted?'NETWORK_TIMEOUT':aborted?'NETWORK_ABORTED':'NETWORK_FAILED',errorStage:'transport',timestamp:new Date().toISOString(),traceId:request.trace?.traceId,httpStatus:observedStatus,transportStatus:controller.signal.aborted?'timeout':aborted?'aborted':'network_error',protocolStatus:'not_observed',businessStatus:'unknown',certainty:'unknown',sideEffectMayHaveOccurred:request.method==='POST',autoRecoverable:false,message:controller.signal.aborted?'海牙请求超时，业务结果待核对。':aborted?'海牙请求被取消，业务结果待核对。':'海牙网络请求失败，业务结果待核对。'}}}finally{clearTimeout(timer)}
+ }catch(error){
+  const aborted=error instanceof DOMException&&error.name==='AbortError'
+  // CORS can conceal an SSO redirect after an expired authenticated POST. Only
+  // inspect a protected GET; never replay the failed business request.
+  if(observedStatus===null&&!controller.signal.aborted&&!aborted)try{
+   const probe=await fetch('https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml',{method:'GET',credentials:'include',cache:'no-store',redirect:'manual',signal:controller.signal})
+   if(probe.type==='opaqueredirect'||[301,302,303,307,308,401,403].includes(probe.status))return authenticationFailure(null)
+  }catch{/* Preserve the original transport failure when authentication cannot be inspected. */}
+  return{status:observedStatus,url:'',mime:'',base64:'',diagnosticError:{version:1,errorCode:controller.signal.aborted?'NETWORK_TIMEOUT':aborted?'NETWORK_ABORTED':'NETWORK_FAILED',errorStage:'transport',timestamp:new Date().toISOString(),traceId:request.trace?.traceId,httpStatus:observedStatus,transportStatus:controller.signal.aborted?'timeout':aborted?'aborted':'network_error',protocolStatus:'not_observed',businessStatus:'unknown',certainty:'unknown',sideEffectMayHaveOccurred:request.method==='POST',autoRecoverable:false,message:controller.signal.aborted?'海牙请求超时，业务结果待核对。':aborted?'海牙请求被取消，业务结果待核对。':'海牙网络请求失败，业务结果待核对。'}}
+ }finally{clearTimeout(timer)}
 }
 export async function handleHagueHttp(message:unknown,sender:chrome.runtime.MessageSender):Promise<unknown>{
  try{
@@ -47,12 +60,12 @@ export async function handleHagueHttp(message:unknown,sender:chrome.runtime.Mess
   for(const key of Object.keys(r.headers??{}))if(!['content-type','faces-request','x-requested-with'].includes(key.toLowerCase()))throw new Error('不允许设置认证或任意请求头。')
   const tabId=Number(m.tabId),tab=await chrome.tabs.get(tabId)
   if(new URL(tab.url??'').origin!==url.origin)throw new Error('绑定的 eHague 标签页已变化。')
-  return await network.run(async()=>{
+  return await withHagueBusinessActivity(()=>network.run(async()=>{
    const frame=await chrome.webNavigation.getFrame({tabId,frameId:0});if(!frame?.documentId)throw new Error('无法确认接口宿主文档。')
    const result=(await chrome.scripting.executeScript({target:{tabId,documentIds:[frame.documentId]},world:'ISOLATED',func:fetchHague,args:[r]}))[0]?.result
    if(!result)throw new Error('接口未返回回执，结果待核对。')
    if(result.diagnosticError)return{ok:false,error:result.diagnosticError.message,diagnosticError:result.diagnosticError}
    return{ok:true,...result}
-  })
+  }))
  }catch(e){const diagnosticError=normalizeDiagnosticError(e,{errorCode:'RPC_FAILED',errorStage:'rpc',transportStatus:'rpc_error',httpStatus:null}).diagnostic;return{ok:false,error:e instanceof Error?e.message:diagnosticError.message,diagnosticError}}
 }

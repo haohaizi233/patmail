@@ -67,7 +67,7 @@ it.each([false,true])('reads and arbitrates materials with a restored approved c
     connect.click()
     await vi.waitFor(() => expect(root.textContent).toContain('US、EM、GB、JP、CA、KR'))
     expect(mocks.read).toHaveBeenCalledTimes(1); expect(mocks.complete).toHaveBeenCalledTimes(1)
-    if(restored){expect(root.textContent).toContain('修正为 1–2');expect(root.textContent).not.toContain('产品表设计编号重复')}
+    if(restored){expect(root.textContent).toContain('修正为 1–2');expect(root.textContent).not.toContain('产品表设计编号重复');expect([...root.querySelectorAll('button')].some(button=>button.textContent==='全部另建草稿')).toBe(true)}
     const detail = root.querySelector('.hague-creator-address dd')?.textContent
     expect(detail).toBe('Room 201, Qianhai Shenzhen-Hong Kong Cooperation Zone')
     expect(root.querySelector('.hague-creator-address')?.textContent).toContain('Shenzhen / Guangdong')

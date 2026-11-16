@@ -44,3 +44,9 @@ it('distinguishes an unavailable login probe from a confirmed login redirect',as
   expect(await probeHagueLogin()).toMatchObject({authenticated:false,reason:'unauthenticated'})
  }finally{vi.unstubAllGlobals()}
 })
+it('recognizes a manual authentication redirect instead of hiding it behind a CORS network error',async()=>{
+ vi.stubGlobal('location',{origin:'https://hague.wipo.int'})
+ const response=new Response('');Object.defineProperty(response,'type',{value:'opaqueredirect'})
+ const fetcher=vi.fn(async(_url:string,_init?:RequestInit)=>response);vi.stubGlobal('fetch',fetcher)
+ try{expect(await probeHagueLogin()).toMatchObject({authenticated:false,reason:'unauthenticated'});expect(fetcher.mock.calls[0]?.[1]).toMatchObject({redirect:'manual'})}finally{vi.unstubAllGlobals()}
+})

@@ -22,6 +22,7 @@ import { openDraftTab } from '../../hague/draft-tabs'
 import { createHttpChain, httpRestoreCommands, renderSavedSummary } from '../../hague/http-client'
 import { downloadDocuments } from '../../utils/download-documents'
 import type { DraftCheckpoint,DraftCommand } from '../../hague/draft-contract'
+import { draftCheckpointSnapshot, draftWarnings } from '../../hague/draft-contract'
 import { repairRepeatedDesignNumbers,restoreApprovedDesignNumbers,withDraftCorrections } from '../../hague/draft-repairs'
 import { showDraftCompletion,draftReviewNotes } from '../../hague/draft-completion'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
@@ -41,7 +42,7 @@ async function repairDesignNumbers(row:Row):Promise<void> {
   if(!row.decision)await process([row])
 }
 const filePicker = ref<HTMLInputElement | null>(null)
-const oa = useOaSession(hagueSessionClient)
+const oa = useOaSession(hagueSessionClient,{deferPolling:()=>draftRunning.value})
 const headExtraId = inject<string | null>('workflowHeadExtraId', null)
 const targetSelector = computed(() => {
   if (headExtraId) return `#${headExtraId}`
@@ -100,7 +101,7 @@ const restoredSavedCount = computed(() => savedDraftRows.value.filter(r => resto
 const draftIssue = (row: Row): string => { try { buildDraftPlan(row); return '' } catch(e) { return e instanceof Error ? e.message : '材料未就绪' } }
 const draftKey = (row: Row) => `hague.draft.v1.${row.folder.caseVolume}`
 async function storeDraft(row: Row, value: DraftCheckpoint): Promise<void> {
-  value=withDraftCorrections(value,row.filing)
+  value=draftCheckpointSnapshot(withDraftCorrections(value,row.filing))
   row.draft = { ...value }
   const displayed = rows.value.find(r => r.folder.path === row.folder.path)
   if (displayed && displayed !== row) displayed.draft = { ...value }
@@ -111,7 +112,7 @@ async function loadDraft(row: Row): Promise<void> {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return
   const data = await chrome.storage.local.get(draftKey(row))
   const saved: unknown = data[draftKey(row)]
-  if (saved && typeof saved === 'object' && 'next' in saved && 'tabId' in saved && 'status' in saved) { row.draft = saved as DraftCheckpoint; restoredDrafts.value.add(row.folder.path) }
+  if (saved && typeof saved === 'object' && 'next' in saved && 'tabId' in saved && 'status' in saved) { row.draft = draftCheckpointSnapshot(saved as DraftCheckpoint); restoredDrafts.value.add(row.folder.path) }
 }
 async function exportDraftZip():Promise<void>{
  if(busy.value)return
@@ -147,12 +148,12 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
     const jobs = targets.map(row => {
       if (!row.draft || (!asNew && row.draft.status !== 'saved')) return row
       const fresh: Row = { ...row, draft: undefined }
-      previousCheckpoints.set(fresh, { ...row.draft })
+      previousCheckpoints.set(fresh, draftCheckpointSnapshot(row.draft))
       return fresh
     })
     const checkpointFor=(row:Row,value:DraftCheckpoint):DraftCheckpoint=>{
       const previous=previousCheckpoints.get(row)
-      return {...value,transport:draftTransport.value,...(previous&&previous.status!=='saved'?{warnings:[...new Set([...(value.warnings??[]),'旧操作结果尚未确认；已归档原检查点并按用户确认另建新草稿，请审核可能重复的记录。'])]}:{})}
+      return {...value,transport:draftTransport.value,...(previous&&previous.status!=='saved'?{warnings:[...new Set([...draftWarnings(value.warnings),'旧操作结果尚未确认；已归档原检查点并按用户确认另建新草稿，请审核可能重复的记录。'])]}:{})}
     }
     notice.value = '正在验证 eHague 登录态，验证通过后开始填写…'
     const ready = await oa.ensureFresh()
@@ -180,10 +181,15 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
         let http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value,operation.signal):null
         try{return await runDraftPlan(plan,workerTab,{
           transport:draftTransport.value,
-          call:(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext)=>http?http.call(command,trace):callDraftPage(workerTab,command,documentId,reference,trace),
+          call:async(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext)=>{
+            const receipt=await(http?http.call(command,trace):callDraftPage(workerTab,command,documentId,reference,trace))
+            if(receipt.ok)oa.noteAuthenticatedActivity(tabId)
+            return receipt
+          },
           ...(http?{recover:async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext)=>{
             const fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
             const result=await fresh.recover(command,checkpoint,trace)
+            if(result.outcome!=='unknown'&&result.receipt?.ok)oa.noteAuthenticatedActivity(tabId)
             if(result.outcome!=='unknown')http=fresh
             return result
           }}:{}),
@@ -364,11 +370,12 @@ function exportData(): void {
         <label>草稿并发 <ThemeSelect v-model="draftConcurrency" :options="draftConcurrencyOptions" :disabled="busy" aria-label="草稿并发路数" /></label>
         <button type="button" class="solid" :disabled="busy || !oa.verified.value || !rows.some(r => r.decision)" @click="createDrafts(rows, true)">批量填写并存草稿</button>
         <button v-if="uncertainDraftRows.length" type="button" class="ghost" :disabled="busy || !oa.verified.value" @click="createDrafts(uncertainDraftRows, true, true)">将异常另建草稿</button>
+        <button v-if="rows.some(row=>row.draft)" type="button" class="ghost" :disabled="busy || !oa.verified.value || !rows.some(row=>row.decision)" @click="createDrafts(rows, true, true)">全部另建草稿</button>
         <button type="button" class="ghost" :disabled="busy || !oa.verified.value || !savedDraftRows.length" @click="exportDraftZip">已存草稿打包 ZIP</button>
         <button type="button" v-if="draftRunning" class="ghost" :disabled="stopping" @click="requestStop">{{ stopping ? '等待本步回执…' : '停止后续写入' }}</button>
       </div>
       <p v-if="rows.length" class="hint hague-draft-scope" role="status">本列表 {{ rows.length }} 件 · 本机记录曾保存 {{ savedDraftRows.length }} 件 · 待填写或恢复 {{ unsavedDraftRows.length }} 件<span v-if="restoredSavedCount"> · 本机恢复 {{ restoredSavedCount }} 件已保存记录</span>。本机记录不代表原站当前仍存在，原站当前状态未核验；可确认后再次创建。ZIP 仅打包本列表已保存编号对应的原站 Summary，包含本机恢复的历史保存记录，不包含待保存案件。材料有修改时，已保存草稿不会自动更新，请先在原站核对。<span v-if="!oa.verified.value">请先在 eHague 原站登录，再点击「连接并检测登录」。</span></p>
-      <p class="hint">默认 6 路并发，可按需调整为 1–6 路。{{ draftTransport === 'http' ? '每案按顺序填写；遇到异常先核对回执，无法确认时暂停该案。' : '批量填写时每路使用独立标签页，异常页保留供核对。' }}</p>
+      <p class="hint">默认 6 路并发，可按需调整为 1–6 路。{{ draftTransport === 'http' ? '同一会话的原站操作顺序发送；运行中自动核对回执和恢复，无需手动补做步骤。' : '批量填写时每路使用独立标签页，异常页保留供核对。' }}</p>
       <p v-if="busy && progress" class="hint hague-progress-hint">待解析 {{ progress.parsing || 0 }} · 取数 {{ progress.reading || 0 }} · 等待仲裁 {{ progress.queued || 0 }} · 仲裁中案件 {{ progress.arbitrating || 0 }} · 助手批次并发 1</p>
     </section>
     <div v-if="!rows.length && !busy" class="card tone-pink hague-empty" role="region" aria-label="案件材料拖放区">
