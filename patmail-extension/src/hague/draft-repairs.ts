@@ -1,8 +1,9 @@
 import { imageNumber,validateImages,type Filing } from './materials'
 import type { DraftCheckpoint } from './draft-contract'
+import { draftWarnings } from './draft-contract'
 
 export function withDraftCorrections(checkpoint:DraftCheckpoint,filing?:Filing):DraftCheckpoint {
-  return filing?.draftCorrections?.length?{...checkpoint,...(filing.designNumberCorrection?{designNumberCorrection:{...filing.designNumberCorrection}}:{}),warnings:[...new Set([...(checkpoint.warnings??[]),...filing.draftCorrections])]}:checkpoint
+  return filing?.draftCorrections?.length?{...checkpoint,...(filing.designNumberCorrection?{designNumberCorrection:{...filing.designNumberCorrection}}:{}),warnings:[...new Set([...draftWarnings(checkpoint.warnings),...draftWarnings(filing.draftCorrections)])]}:checkpoint
 }
 
 /** User-approved draft correction; the original Word file is never modified. */

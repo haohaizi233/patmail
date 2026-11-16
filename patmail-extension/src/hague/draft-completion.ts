@@ -1,8 +1,9 @@
 import type { HagueRow } from './workflow'
 import { confirmDialog } from '../app/dialog'
+import { draftWarnings } from './draft-contract'
 
 export function draftReviewNotes(row:HagueRow,error?:string):string[] {
-  return [...new Set([...(row.filing?.draftCorrections??[]),...(row.decision?.warnings??[]),...(row.draft?.warnings??[]),...(row.draft?.error?[row.draft.error]:[]),...(error?[error]:[])])].map(note=>`${row.folder.caseVolume}：${note}`)
+  return [...new Set([...draftWarnings(row.filing?.draftCorrections),...draftWarnings(row.decision?.warnings),...draftWarnings(row.draft?.warnings),...(row.draft?.error?[row.draft.error]:[]),...(error?[error]:[])])].map(note=>`${row.folder.caseVolume}：${note}`)
 }
 
 /** Use the workspace dialog for completion and review notes; Vue renders all content as text. */

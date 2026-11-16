@@ -57,7 +57,7 @@ it('fills priority values after Ajax selections and omits an invalid DAS with a 
  document.querySelector('#PriorityForm select')!.addEventListener('change',()=>{number().value=''})
  document.querySelector('#PriorityForm button')!.addEventListener('click',()=>{number().value=''})
  let savedNumber='',savedDas=''
- document.getElementById('PriorityForm:save')!.addEventListener('click',()=>{savedNumber=number().value;savedDas=(document.getElementById('PriorityForm:dascode:input') as HTMLInputElement).value;document.getElementById('PriorityForm')!.innerHTML='saved'})
+ document.getElementById('PriorityForm:save')!.addEventListener('click',()=>{savedNumber=number().value;savedDas=(document.getElementById('PriorityForm:dascode:input') as HTMLInputElement).value;document.getElementById('PriorityForm')!.innerHTML='<button type="button" title="Open/edit">Saved priority</button>'})
  try{const r=await executeDraftPage({op:'priority',index:0,data:{number:'202637387453.2',date:'2026-11-11',country:'CN',das:'111'}});expect(r.ok).toBe(true);expect(savedNumber).toBe('202637387453.2');expect(savedDas).toBe('');expect(r.warnings?.join()).toContain('四位格式')}finally{vi.unstubAllGlobals();document.body.innerHTML=''}
 })
 it('finds a reproduction beyond page ten by filename and maps its legend by name',async()=>{

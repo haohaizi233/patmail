@@ -2,9 +2,15 @@ import { expect,it,vi } from 'vitest'
 import { draftSteps,runDraftPlan,draftPlanKey } from '../../../src/hague/draft-runner'
 import type { DraftPlan } from '../../../src/hague/draft-plan'
 import type { DraftCommand,DraftCheckpoint,DraftReceipt,DraftRecovery } from '../../../src/hague/draft-contract'
+import {HagueDiagnosticError} from '../../../src/hague/diagnostics/errors'
 const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'',designs:[]}
 const checkpoint=(next=3):DraftCheckpoint=>({transport:'http',tabId:7,reference:'123',planKey:draftPlanKey(plan),next,total:draftSteps(plan).length,status:'stopped',stage:''})
 const receipt:DraftReceipt={ok:true,reference:'123',page:'application'}
+it('retries only network-failed receipt inspection and never replays an already completed write',async()=>{
+ vi.useFakeTimers();const controller=new AbortController();let reads=0,writes=0
+ const work=runDraftPlan(plan,7,{save:async()=>{},recover:async()=>++reads===1?{outcome:'unknown',diagnosticError:new HagueDiagnosticError({errorCode:'NETWORK_FAILED',errorStage:'transport'}).diagnostic}:{outcome:'completed',receipt},call:async()=>{writes++;controller.abort();return receipt}},controller.signal,{...checkpoint(),status:'uncertain'})
+ try{await vi.runAllTimersAsync();expect(await work).toMatchObject({next:4});expect(reads).toBe(2);expect(writes).toBe(1)}finally{vi.useRealTimers()}
+})
 it('reads back an uncertain boundary and advances without repeating a completed operation',async()=>{
  const controller=new AbortController(),writes:DraftCommand[]=[]
  const recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'completed',receipt}))
@@ -19,12 +25,12 @@ it('retries a supported operation once using a verified fresh receipt and persis
 })
 it.each(['wrong-reference','exhausted','unsupported','cancelled'] as const)('never retries when recovery is %s',async kind=>{
  const controller=new AbortController(),state=checkpoint(kind==='unsupported'?2:3)
- if(kind==='exhausted')state.recoveryAttempts={'3':1}
+ if(kind==='exhausted'){state.recoveryAttempts={'3':1};state.recoveryRetries={'3':1}}
  let writes=0
  const recover=vi.fn(async():Promise<DraftRecovery>=>{if(kind==='cancelled')controller.abort();return{outcome:'retry',receipt:{...receipt,reference:kind==='wrong-reference'?'999':'123'}}})
  await expect(runDraftPlan(plan,7,{recover,save:async()=>{},call:async c=>{if(c.op==='inspect')return receipt;writes++;return{ok:false,error:'unconfirmed'}}},controller.signal,state)).rejects.toThrow()
  expect(writes).toBe(1)
- if(kind==='unsupported'||kind==='exhausted')expect(recover).not.toHaveBeenCalled()
+ if(kind==='unsupported')expect(recover).not.toHaveBeenCalled();if(kind==='exhausted')expect(recover).toHaveBeenCalledOnce()
 })
 it('finishes a save with a persisted successful portfolio acknowledgement and a matching list readback',async()=>{
  const total=draftSteps(plan).length,state=checkpoint(total-1)
@@ -38,9 +44,10 @@ it('finishes a save with a persisted successful portfolio acknowledgement and a 
 })
 it('keeps the durable recovery budget on reload and rejects changed plans before readback',async()=>{
  const recover=vi.fn(async():Promise<DraftRecovery>=>({outcome:'retry',receipt}))
- await expect(runDraftPlan(plan,7,{recover,call:async()=>receipt,save:async()=>{}},undefined,{...checkpoint(),status:'uncertain',recoveryAttempts:{'3':1}})).rejects.toThrow(/核对/)
+ const call=vi.fn(async()=>receipt)
+ await expect(runDraftPlan(plan,7,{recover,call,save:async()=>{}},undefined,{...checkpoint(),status:'uncertain',recoveryAttempts:{'3':1},recoveryRetries:{'3':1}})).rejects.toThrow(/核对/)
  await expect(runDraftPlan(plan,7,{recover,call:async()=>receipt,save:async()=>{}},undefined,{...checkpoint(),status:'uncertain',planKey:'changed'})).rejects.toThrow(/变化/)
- expect(recover).not.toHaveBeenCalled()
+ expect(recover).toHaveBeenCalledOnce();expect(call).not.toHaveBeenCalled()
 })
 it('atomically persists completed recovery and the advanced step even if the process stops during save',async()=>{
  let stored:DraftCheckpoint|undefined

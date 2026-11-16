@@ -1,5 +1,6 @@
 import { expect,it,vi } from 'vitest'
 import { draftSteps,runDraftPlan,draftPlanKey } from '../../../src/hague/draft-runner'
+import {HagueDiagnosticError} from '../../../src/hague/diagnostics/errors'
 import type { DraftPlan } from '../../../src/hague/draft-plan'
 const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'text',designs:[]}
 it('stops on an uncertain write, preserving the WIPO reference and never retrying or printing',async()=>{
@@ -61,4 +62,29 @@ it.each(['completed','retry','missing-count'] as const)('accepts only verified r
  const job=runDraftPlan(applicantPlan,7,{call,recover,save:async state=>{if(state.next===3)controller.abort()}},controller.signal,{tabId:7,reference:'123',next:2,total:draftSteps(applicantPlan).length,status:'uncertain',stage:'申请人1',planKey:draftPlanKey(applicantPlan),recoveryAttempts:{'2':1}})
  if(kind==='completed')expect(await job).toMatchObject({next:3,status:'stopped'});else await expect(job).rejects.toThrow(/核对/)
  expect(call.mock.calls.every(([c])=>c.op==='inspect')).toBe(true);expect(recover).toHaveBeenCalledOnce()
+})
+
+it('allows a fresh explicit canonical recovery after a previous run could not confirm its receipt',async()=>{
+ const controller=new AbortController(),recover=vi.fn(async()=>({outcome:'completed' as const,receipt:{ok:true,page:'application' as const,reference:'123'}}))
+ const recoveryPlan={...plan,designs:[{number:'1',subclass:'3',product:'Product',images:[]}]};const locIndex=draftSteps(recoveryPlan).findIndex(s=>s.command.op==='design')
+ await runDraftPlan(recoveryPlan,7,{call:async()=>({ok:true,page:'application',reference:'123'}),recover,save:async value=>{if(value.next===locIndex+1)controller.abort()}},controller.signal,{tabId:7,reference:'123',next:locIndex,total:draftSteps(recoveryPlan).length,status:'uncertain',stage:'Design',planKey:draftPlanKey(recoveryPlan),recoveryAttempts:{[locIndex]:1}})
+ expect(recover).toHaveBeenCalledTimes(1)
+})
+
+
+it('resumes a local PDF export without repeating prior WIPO writes',async()=>{
+ const index=draftSteps(plan).findIndex(s=>s.command.op==='print'),controller=new AbortController(),commands:string[]=[]
+ const result=await runDraftPlan(plan,7,{call:async c=>{commands.push(c.op);if(c.op==='print')controller.abort();return {ok:true,page:'summary',reference:'123',downloadId:42}},save:async()=>{}},controller.signal,{tabId:7,reference:'123',next:index,total:draftSteps(plan).length,status:'uncertain',stage:'Print',planKey:draftPlanKey(plan)})
+ expect(commands).toEqual(['inspect','print']);expect(result.downloadId).toBe(42)
+})
+
+it('checks an already settled HTTP navigation before waiting for a background-tab timer',async()=>{
+ vi.useFakeTimers();const controller=new AbortController();let inspections=0
+ const job=runDraftPlan(plan,7,{transport:'http',call:async c=>{if(c.op==='inspect'){inspections++;if(inspections===2)controller.abort();return{ok:true,page:inspections===1?'portfolio':'application',reference:'123'}}return{ok:true,page:'application',reference:'123'}},save:async()=>{}},controller.signal,{tabId:7,next:1,total:draftSteps(plan).length,status:'stopped',stage:'create'})
+ try{await vi.advanceTimersByTimeAsync(0);expect(inspections).toBe(2)}finally{await vi.advanceTimersByTimeAsync(250);await job;vi.useRealTimers()}
+})
+
+it('keeps the actionable receipt error for the UI while retaining sanitized diagnostics',async()=>{
+ const call=vi.fn(async(c:{op:string})=>c.op==='inspect'?{ok:true,page:'application' as const,reference:'123'}:{ok:false,error:'优先权记录数量尚未确认，请核对回执。',diagnosticError:new HagueDiagnosticError({errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',httpStatus:null}).diagnostic})
+ await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toThrow('优先权记录数量尚未确认')
 })

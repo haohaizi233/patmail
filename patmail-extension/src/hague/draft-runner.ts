@@ -2,9 +2,17 @@ import type {TraceContext} from './diagnostics/trace'
 import {emitTrace,makeTraceContext} from './diagnostics/store'
 import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
 import { DRAFT_CONTACTS, type DraftPlan } from './draft-plan'
-import { HAGUE_DRAFT_CHANNEL, type DraftCheckpoint, type DraftCommand, type DraftReceipt,type DraftRecovery } from './draft-contract'
+import { HAGUE_DRAFT_CHANNEL, draftCheckpointSnapshot, draftWarnings, type DraftCheckpoint, type DraftCommand, type DraftReceipt,type DraftRecovery } from './draft-contract'
 import { recoverableDraftCommand } from './draft-recovery'
+import {withNetworkReadRetry} from './read-retry'
 interface Step { label:string;command:DraftCommand;file?:File }
+function receiptError(receipt:DraftReceipt):Error {
+ const error=receipt.diagnosticError?new HagueDiagnosticError(receipt.diagnosticError):new Error(receipt.error||'原站未确认操作结果')
+ // The UI needs the actual validation/control failure. Structured telemetry
+ // continues to use HagueDiagnosticError.diagnostic's fixed safe message.
+ if(receipt.error)error.message=receipt.error.slice(0,1200)
+ return error
+}
 export function draftSteps(plan:DraftPlan):Step[] {
  const steps:Step[]=[{label:'设置英文新申请',command:{op:'prepare'}},{label:'创建新草稿',command:{op:'create'}}]
  plan.applicants.forEach((data,index)=>steps.push({label:`申请人 ${index+1}`,command:{op:'applicant',data,index,email:DRAFT_CONTACTS.applicantEmail}}))
@@ -31,9 +39,10 @@ export function draftPlanKey(plan:DraftPlan):string {
  return `${body.length}-${(hash>>>0).toString(16)}`
 }
 export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?:AbortSignal,checkpoint?:DraftCheckpoint):Promise<DraftCheckpoint> {
+ if(checkpoint)checkpoint=draftCheckpointSnapshot(checkpoint)
  if(checkpoint?.generatedPriorities)plan={...plan,priorities:plan.priorities.map(p=>p.generated?checkpoint.generatedPriorities!.find(old=>old.generated&&old.originalNumber===p.originalNumber&&old.date===p.date&&old.country===p.country&&old.das===p.das)??p:p)}
  const steps=draftSteps(plan)
- const state:DraftCheckpoint=checkpoint?{...checkpoint,recoveryAttempts:{...checkpoint.recoveryAttempts},total:steps.length}:{tabId,next:0,total:steps.length,status:'running',stage:'检查目标页面'}
+ const state:DraftCheckpoint=checkpoint?{...draftCheckpointSnapshot(checkpoint),recoveryAttempts:{...checkpoint.recoveryAttempts},total:steps.length}:{tabId,next:0,total:steps.length,status:'running',stage:'检查目标页面'}
  state.transport=host.transport??state.transport??'http'
  state.caseRunId=state.caseRunId??'case-'+crypto.randomUUID()
  let trace=makeTraceContext(state.caseRunId,state.next,'inspect',state.transport??'http',tabId)
@@ -43,36 +52,51 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
  state.planKey=planKey
  state.generatedPriorities=plan.priorities.filter(p=>p.generated).map(p=>({...p}))
  const persist=async()=>{await host.save({...state});host.update?.({...state});emitTrace(trace,'checkpoint.persisted',{businessStatus:state.status==='saved'?'confirmed':state.status==='uncertain'?'unknown':'pending',evidenceCodes:state.status==='uncertain'?['CHECKPOINT_BEFORE_SEND']:[]})}
+ const recoveredThisRun=new Set<string>()
  const recover=async(command:DraftCommand):Promise<'completed'|'retry'|'unknown'>=>{
   const key=String(state.next)
-  if(!host.recover||!state.reference||!recoverableDraftCommand(command)||signal?.aborted||(!['create','applicant'].includes(command.op)&&(state.recoveryAttempts?.[key]??0)>=1))return'unknown'
-  state.recoveryAttempts={...state.recoveryAttempts,[key]:1};state.stage='读取原站回执，核对是否可恢复';await persist()
+  if(!host.recover||!state.reference||!recoverableDraftCommand(command)||signal?.aborted||recoveredThisRun.has(key)||state.recoveryDecision)return'unknown'
+  recoveredThisRun.add(key)
+  state.recoveryAttempts={...state.recoveryAttempts,[key]:(state.recoveryAttempts?.[key]??0)+1};state.stage='读取原站回执，核对是否可恢复';await persist()
   emitTrace(trace,'recovery.started',{businessStatus:'unknown'})
   let result:DraftRecovery
-  try{result=await host.recover(command,{...state},trace)}catch{return'unknown'}
+  try{result=await withNetworkReadRetry(async()=>{
+   const readback=await host.recover!(command,{...state},trace)
+   if(readback.outcome==='unknown'&&readback.diagnosticError)throw new HagueDiagnosticError(readback.diagnosticError)
+   return readback
+  },signal)}catch{return'unknown'}
+  // Explicit resumes may re-read a design/upload receipt, but a previously
+  // consumed retry authorization must never authorize another write.
+  if((state.recoveryRetries?.[key]??0)>=1&&result.outcome==='retry')return'unknown'
   emitTrace(trace,'recovery.decision',{recoveryDecision:result.outcome,businessStatus:result.outcome==='completed'?'confirmed':'unknown'})
   if(signal?.aborted||result.outcome==='unknown'||!result.receipt?.ok||result.receipt.reference!==state.reference)return'unknown'
   if(command.op==='create'&&(result.outcome!=='completed'||result.receipt.page!=='application'))return'unknown'
-  if(command.op==='applicant'&&(result.outcome!=='completed'||result.receipt.page!=='application'||result.receipt.applicants!==command.index+1))return'unknown'
+  if(command.op==='backToApplication'&&result.receipt.page!=='application'||command.op==='summary'&&result.receipt.page!=='summary')return'unknown'
+  if(command.op==='applicant'&&(result.receipt.page!=='application'||result.receipt.applicants!==command.index+(result.outcome==='completed'?1:0)))return'unknown'
+  if(command.op==='creator'&&(result.receipt.page!=='application'||result.receipt.creators!==command.index+(result.outcome==='completed'?1:0)))return'unknown'
   if(command.op==='saveDraft'&&(result.outcome!=='completed'||!result.receipt.draftSaved||state.acknowledged?.next!==state.next||state.acknowledged.op!=='saveDraft'||state.acknowledged.page!=='portfolio'))return'unknown'
   state.documentId=result.receipt.documentId??state.documentId;state.error=undefined
   state.warnings=[...new Set([...(state.warnings??[]),`步骤“${steps[state.next]?.label}”已自动核对原站回执并${result.outcome==='completed'?'确认完成':'恢复一次'}。`])]
   if(result.outcome==='completed'){
    state.next++;state.status='stopped';state.recoveryDecision=undefined
   }else{
+   state.recoveryRetries={...state.recoveryRetries,[key]:1}
    state.status='uncertain';state.recoveryDecision={next:state.next,reference:state.reference,outcome:'retry'}
   }
   await persist();return result.outcome
  }
  if(state.tabId!==tabId)throw new Error('目标标签页已变化，请先核对原草稿。')
  if(state.recoveryDecision)state.status='uncertain'
+ // Printing reads a verified Summary and creates a local file; it never writes
+ // a WIPO application. Reopen Summary normally, preserving all prior steps.
+ if(state.status==='uncertain'&&steps[state.next]?.command.op==='print')state.status='stopped'
  if(state.status==='uncertain'){
   const command=steps[state.next]?.command
   const outcome=command?await recover(command):'unknown'
   if(outcome==='unknown')throw new Error('操作结果仍待核对，未自动重试。请在原站核对后再继续。')
  }
  let receipt=await host.call({op:'inspect'},undefined,state.reference,trace)
- if(!receipt.ok)throw receipt.diagnosticError?new HagueDiagnosticError(receipt.diagnosticError):new Error(receipt.error||'目标页面无法检查')
+ if(!receipt.ok)throw receiptError(receipt)
  if(state.reference&&receipt.reference&&receipt.reference!==state.reference)throw new Error('原站回执编号与检查点不同，已停止。')
  if(!checkpoint&&receipt.page!=='portfolio')throw new Error('请先回到 eHague New 页面；现有草稿不会被自动覆盖。')
  state.documentId=receipt.documentId;state.reference=receipt.reference??state.reference
@@ -91,14 +115,14 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
    if(state.reference&&receipt.reference&&receipt.reference!==state.reference)throw new Error('原站回执编号与检查点不同，已停止。')
    state.reference=receipt.reference??state.reference
    state.documentId=receipt.documentId??state.documentId
-   if(!receipt.ok)throw receipt.diagnosticError?new HagueDiagnosticError(receipt.diagnosticError):new Error(receipt.error||'原站未确认操作结果')
+   if(!receipt.ok)throw receiptError(receipt)
    state.acknowledged={next:i,op:command.op,page:receipt.page};await persist()
    if(receipt.downloadId!==undefined)state.downloadId=receipt.downloadId
-   state.warnings=[...new Set([...(state.warnings??[]),...(receipt.warnings??[])])]
+   state.warnings=[...new Set([...draftWarnings(state.warnings),...draftWarnings(receipt.warnings)])]
    if(['create','summary','backToApplication','saveDraft'].includes(command.op)){
     const page=command.op==='create'||command.op==='backToApplication'?'application':command.op==='summary'?'summary':'portfolio'
     const end=Date.now()+20000
-    do{await new Promise(r=>setTimeout(r,250));receipt=await host.call({op:'inspect'},undefined,command.op==='create'||command.op==='saveDraft'?undefined:state.reference,trace);if(receipt.ok&&receipt.page===page)break}while(Date.now()<end)
+    for(;;){receipt=await host.call({op:'inspect'},undefined,command.op==='create'||command.op==='saveDraft'?undefined:state.reference,trace);if(receipt.ok&&receipt.page===page||Date.now()>=end)break;await new Promise(r=>setTimeout(r,250))}
     if(!receipt.ok||receipt.page!==page)throw new Error('页面跳转尚未确认，请检查原站，勿重复创建。')
     if(command.op==='saveDraft'){
      receipt=await host.call({op:'inspect'},undefined,state.reference,trace)
@@ -114,6 +138,7 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
    emitTrace(trace,'business.validated',{sideEffectMayHaveOccurred:!['prepare','summary','print','backToApplication'].includes(command.op),businessStatus:'confirmed',certainty:'confirmed',evidenceCodes:command.op==='saveDraft'?['DRAFT_LIST_MATCHED','BUSINESS_RECEIPT_VERIFIED']:['BUSINESS_RECEIPT_VERIFIED',...(state.reference?['REFERENCE_MATCHED']:[])]});emitTrace(trace,'step.completed',{durationMs:performance.now()-started,businessStatus:'completed',certainty:'confirmed'});await persist()
   }catch(error){
    const failure=normalizeDiagnosticError(error,{httpStatus:null,...receipt.diagnosticState,errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace);state.diagnosticError=failure.diagnostic;emitTrace(trace,'step.uncertain',{...failure.diagnostic});state.status='uncertain';state.error=error instanceof Error?error.message:'操作结果不确定';await persist()
+   if(failure.diagnostic.transportStatus==='not_dispatched'&&failure.diagnostic.sideEffectMayHaveOccurred===false){state.status='stopped';state.stage='请求尚未发送，等待继续';await persist();throw failure}
    const outcome=await recover(step.command)
    if(outcome==='completed')continue
    if(outcome==='retry'){i--;continue}

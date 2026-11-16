@@ -77,7 +77,9 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
       if(document.getElementById(representative?'ApplicantForm:saveRepBtn':'ApplicantForm:saveAppBtn'))throw new Error('原站尚未确认保存申请人/代理机构。')
       if(!representative&&applicantCount()!==command.index+1)throw new Error('申请人保存后记录数量不符，请核对原站回执。')
     } else if(command.op==='parties') {
-      await click(byId('Designationform:desPanel:changeDesignationsSelection'))
+      if(!document.querySelector('#Designationform input[type=checkbox]'))await click(byId('Designationform:desPanel:changeDesignationsSelection'))
+      const extra=[...document.querySelectorAll<HTMLInputElement>('#Designationform input[type=checkbox]:checked')].map(e=>/value:\s*'([A-Z]{2})'/.exec(e.getAttribute('onclick')??'')?.[1]).filter((code):code is string=>!!code&&!command.codes.includes(code))
+      for(const code of extra){const box=[...document.querySelectorAll<HTMLInputElement>('#Designationform input[type=checkbox]:checked')].find(e=>e.getAttribute('onclick')?.includes(`value: '${code}'`));if(box)await click(box)}
       for(const code of command.codes){const boxes=[...document.querySelectorAll<HTMLInputElement>('#Designationform input[type=checkbox]')];const e=boxes.find(e=>e.getAttribute('onclick')?.includes(`value: '${code}'`));if(!e)throw new Error(`不支持指定缔约方 ${code}`);if(!e.checked)await click(e)}
       const checked=[...document.querySelectorAll<HTMLInputElement>('#Designationform input[type=checkbox]:checked')].map(e=>/value:\s*'([A-Z]{2})'/.exec(e.getAttribute('onclick')??'')?.[1]).filter(Boolean)
       if(checked.length!==command.codes.length||checked.some(c=>!command.codes.includes(c!)))throw new Error('原站指定国与本案清单不一致，已停止。')
@@ -117,7 +119,7 @@ export async function executeDraftPage(command: DraftCommand, expectedReference?
       const selectAll=[...byId('PriorityForm').querySelectorAll<HTMLButtonElement>('button')].find(e=>e.textContent?.trim()==='Select all');if(selectAll)await click(selectAll)
       set('PriorityForm:nbFiling:input',command.data.number);const date=document.querySelector<HTMLInputElement>('#PriorityForm input[id$="input_input"]');if(!date)throw new Error('优先权日期控件缺失');set(date.id,command.data.date.split('-').reverse().join('/'))
       const das=command.data.das;if(das&&!/^[A-Za-z0-9]{4}$/.test(das))warnings.push(`优先权 ${command.index+1} 原始 DAS 接入码不符合四位格式，草稿留空，请人工补充；原值保留在核对材料中。`)
-      set('PriorityForm:dascode:input',/^[A-Za-z0-9]{4}$/.test(das)?das:'');await click(byId('PriorityForm:save'));ensure();if(document.getElementById('PriorityForm:nbFiling:input'))throw new Error('优先权尚未保存。')
+      set('PriorityForm:dascode:input',/^[A-Za-z0-9]{4}$/.test(das)?das:'');await click(byId('PriorityForm:save'));ensure();if(document.getElementById('PriorityForm:nbFiling:input')||document.querySelectorAll('#PriorityForm button[title="Open/edit"]').length!==command.index+1)throw new Error('优先权尚未保存。')
     } else if(command.op==='publication') {
       const edit=document.querySelector<HTMLElement>('#PublicationForm button:not([id$="savePublicationBtn"])');if(!edit)throw new Error('公开时间编辑控件缺失');await click(edit)
       const value=command.months===0?'Immediat':command.months===12?'Pub6':'Ajourn';const radio=document.querySelector<HTMLInputElement>(`#PublicationForm input[type=radio][value="${value}"]`);if(!radio)throw new Error('公开选项缺失');await click(radio)
