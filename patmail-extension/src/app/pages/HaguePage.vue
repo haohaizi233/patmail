@@ -19,7 +19,9 @@ import { buildDraftPlan } from '../../hague/draft-plan'
 import { callDraftPage, runDraftPlan } from '../../hague/draft-runner'
 import { runDraftBatch, type DraftBatchProgress } from '../../hague/draft-batch'
 import { openDraftTab } from '../../hague/draft-tabs'
-import { createHttpChain, httpRestoreCommands, renderSavedSummary } from '../../hague/http-client'
+import { createHttpChain, httpRestoreCommands, renderSavedSummary,runHagueSessionRead } from '../../hague/http-client'
+import {withNetworkReadRetry} from '../../hague/read-retry'
+import {HagueDiagnosticError} from '../../hague/diagnostics/errors'
 import { downloadDocuments } from '../../utils/download-documents'
 import type { DraftCheckpoint,DraftCommand } from '../../hague/draft-contract'
 import { draftCheckpointSnapshot, draftWarnings } from '../../hague/draft-contract'
@@ -42,7 +44,8 @@ async function repairDesignNumbers(row:Row):Promise<void> {
   if(!row.decision)await process([row])
 }
 const filePicker = ref<HTMLInputElement | null>(null)
-const oa = useOaSession(hagueSessionClient,{deferPolling:()=>draftRunning.value})
+const authenticationRefreshing=ref(false)
+const oa = useOaSession(hagueSessionClient,{deferPolling:()=>draftRunning.value,recoveringNavigation:()=>authenticationRefreshing.value})
 const headExtraId = inject<string | null>('workflowHeadExtraId', null)
 const targetSelector = computed(() => {
   if (headExtraId) return `#${headExtraId}`
@@ -165,6 +168,24 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
     draftProgress.value={tabId,next:0,total:0,status:'running',stage:draftTransport.value==='http'?'准备独立接口链':'准备独立工作标签页'}
     draftErrors.value={}
     draftSkipped.value={}
+    let authenticationRefresh:Promise<boolean>|undefined
+    const refreshAuthentication=():Promise<boolean>=>{
+      if(authenticationRefresh)return authenticationRefresh
+      authenticationRefreshing.value=true
+      const work=(async()=>{
+        try{
+          await withNetworkReadRetry(async()=>{
+            if(operation.signal.aborted)throw new DOMException('Stopped','AbortError')
+            if(!await runHagueSessionRead(()=>oa.verify(true),operation.signal))throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'})
+          },operation.signal)
+          return true
+        }catch{return false}
+        finally{authenticationRefreshing.value=false}
+      })()
+      authenticationRefresh=work
+      void work.then(()=>{if(authenticationRefresh===work)authenticationRefresh=undefined})
+      return work
+    }
     const result=await runDraftBatch(jobs,batch?draftConcurrency.value:1,{
       transport:draftTransport.value,
       recoverUncertain:draftTransport.value==='http',
@@ -180,15 +201,22 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
         draftActive.value.add(row.folder.path)
         let http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value,operation.signal):null
         try{return await runDraftPlan(plan,workerTab,{
+          refreshAuthentication,
           transport:draftTransport.value,
           call:async(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext)=>{
+            if(authenticationRefresh&&!await authenticationRefresh)throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'})
             const receipt=await(http?http.call(command,trace):callDraftPage(workerTab,command,documentId,reference,trace))
             if(receipt.ok)oa.noteAuthenticatedActivity(tabId)
             return receipt
           },
           ...(http?{recover:async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext)=>{
-            const fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
-            const result=await fresh.recover(command,checkpoint,trace)
+            if(authenticationRefresh&&!await authenticationRefresh)return{outcome:'unknown' as const}
+            let fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
+            let result=await fresh.recover(command,checkpoint,trace)
+            if(result.diagnosticError?.errorCode==='AUTH_REDIRECT'&&await refreshAuthentication()){
+              fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
+              result=await fresh.recover(command,checkpoint,trace)
+            }
             if(result.outcome!=='unknown'&&result.receipt?.ok)oa.noteAuthenticatedActivity(tabId)
             if(result.outcome!=='unknown')http=fresh
             return result
@@ -316,8 +344,8 @@ async function process(targets: Row[], refresh = false, parse = false): Promise<
 async function verifyOa(): Promise<void> {
   if (await oa.verify() && !busy.value && pendingRows.value.length) await process(pendingRows.value)
 }
-watch([oa.verified, oa.checking], ([ready, checking]) => {
-  if (!ready && !checking && busy.value && (draftRunning.value || rows.value.some(r => ['reading', 'queued', 'arbitrating'].includes(r.state)))) stopWithReason(`会话验证中断：${oa.message.value}`)
+watch([oa.verified, oa.checking,authenticationRefreshing], ([ready, checking,recovering]) => {
+  if (!ready && !checking && !recovering && busy.value && (draftRunning.value || rows.value.some(r => ['reading', 'queued', 'arbitrating'].includes(r.state)))) stopWithReason(`会话验证中断：${oa.message.value}`)
 })
 function changeReference(row: Row): void {
   row.folder.caseVolume = row.folder.caseVolume.trim().toUpperCase()
@@ -375,7 +403,7 @@ function exportData(): void {
         <button type="button" v-if="draftRunning" class="ghost" :disabled="stopping" @click="requestStop">{{ stopping ? '等待本步回执…' : '停止后续写入' }}</button>
       </div>
       <p v-if="rows.length" class="hint hague-draft-scope" role="status">本列表 {{ rows.length }} 件 · 本机记录曾保存 {{ savedDraftRows.length }} 件 · 待填写或恢复 {{ unsavedDraftRows.length }} 件<span v-if="restoredSavedCount"> · 本机恢复 {{ restoredSavedCount }} 件已保存记录</span>。本机记录不代表原站当前仍存在，原站当前状态未核验；可确认后再次创建。ZIP 仅打包本列表已保存编号对应的原站 Summary，包含本机恢复的历史保存记录，不包含待保存案件。材料有修改时，已保存草稿不会自动更新，请先在原站核对。<span v-if="!oa.verified.value">请先在 eHague 原站登录，再点击「连接并检测登录」。</span></p>
-      <p class="hint">默认 6 路并发，可按需调整为 1–6 路。{{ draftTransport === 'http' ? '同一会话的原站操作顺序发送；运行中自动核对回执和恢复，无需手动补做步骤。' : '批量填写时每路使用独立标签页，异常页保留供核对。' }}</p>
+      <p class="hint">默认 6 路并发，可按需调整为 1–6 路。{{ draftTransport === 'http' ? '新建草稿按顺序确认，填写按所选路数并行；认证切换时自动等待并核对回执。' : '批量填写时每路使用独立标签页，异常页保留供核对。' }}</p>
       <p v-if="busy && progress" class="hint hague-progress-hint">待解析 {{ progress.parsing || 0 }} · 取数 {{ progress.reading || 0 }} · 等待仲裁 {{ progress.queued || 0 }} · 仲裁中案件 {{ progress.arbitrating || 0 }} · 助手批次并发 1</p>
     </section>
     <div v-if="!rows.length && !busy" class="card tone-pink hague-empty" role="region" aria-label="案件材料拖放区">

@@ -2,6 +2,7 @@ import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
 import type {TraceContext,DiagnosticErrorData} from './diagnostics/trace'
 import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
 import { PermitPool } from '../utils/permit-pool'
+import {HagueSessionGate} from './session-gate'
 import { downloadDocuments } from '../utils/download-documents'
 import {downloadSummaryPdf,findSummaryDownload} from './summary-download'
 import {withNetworkReadRetry} from './read-retry'
@@ -52,13 +53,11 @@ export function httpRestoreCommands(plan:DraftPlan,next:number):DraftCommand[]{
 }
 // Only the allocation and initial-save handshake is serialized; later case work remains concurrent.
 const creationPool=new PermitPool(1)
-// WIPO shares mutable view/section state within the authenticated session.
-// Hold the lease for the entire multi-request command, including field edits;
-// different cases may queue concurrently and PDF asset reads remain parallel.
-const portfolioPool=new PermitPool(1)
+const portfolioPool=new HagueSessionGate()
+export const runHagueSessionRead=<T>(read:()=>Promise<T>,signal?:AbortSignal):Promise<T>=>portfolioPool.run(read,true,signal)
 export function createHttpChain(tabId:number,id:string,reference?:string,restore:DraftCommand[]=[],exportFormat:DocumentExportFormat='pdf',signal?:AbortSignal){
  const fetcher=hagueHttpFetch(tabId),driver=new HagueHttpDriver(id,fetcher);let ready=false
- const inPortfolio=<T>(work:()=>Promise<T>,owned=false):Promise<T>=>owned?work():portfolioPool.run(work,signal)
+ const inPortfolio=<T>(work:()=>Promise<T>,owned=false,exclusive=true):Promise<T>=>owned?work():portfolioPool.run(work,exclusive,signal)
  const recover=async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>=>{
   driver.state.setTrace(trace)
   const result=await inPortfolio(()=>driver.recoverStep(command,checkpoint))
@@ -95,7 +94,7 @@ export function createHttpChain(tabId:number,id:string,reference?:string,restore
     return{ok:true,page:'summary',reference:driver.state.reference,documentId:id,downloadId:exported.downloadId}
    }
    const invoke=()=>driver.call(command,driver.state.reference??reference)
-   const result=await inPortfolio(invoke,portfolioOwned)
+   const result=await inPortfolio(invoke,portfolioOwned,['create','inspect','summary','backToApplication','saveDraft'].includes(command.op))
    if(result.ok&&command.op==='create'){
     // Persist a recoverable draft before filling. Never depend on an unsaved server view.
     const saved=await driver.call({op:'saveDraft'},driver.state.reference)

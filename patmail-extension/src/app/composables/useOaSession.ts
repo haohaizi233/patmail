@@ -2,7 +2,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 export interface OaSession { tabId: number; title: string; documentId: string; verifiedAt: number; expiresAt: number }
 export interface OaSessionClient { listTabs(): Promise<{ id: number; title: string }[]>; verify(tabId: number): Promise<OaSession>; open(): Promise<void>; isTransientError?(error:unknown):boolean }
-export function useOaSession(client: OaSessionClient,options:{deferPolling?:()=>boolean}={}) {
+export function useOaSession(client: OaSessionClient,options:{deferPolling?:()=>boolean;recoveringNavigation?:()=>boolean}={}) {
   const tabs = ref<{ id: number; title: string }[]>([]), selected = ref(-1), session = ref<OaSession | null>(null)
   const checking = ref(false), listing = ref(false), error = ref(''), now = ref(Date.now())
   // A protected-tab navigation temporarily makes the old document unusable. Keep
@@ -70,7 +70,7 @@ export function useOaSession(client: OaSessionClient,options:{deferPolling?:()=>
   const changed = (tabId: number, info: { url?: string; status?: string }) => {
     if(tabId!==selected.value)return
     if(info.url!==undefined||info.status==='loading'){
-      if(options.deferPolling?.()){invalidate(true);error.value='原站标签页已变化，请重新验证后继续。';return}
+      if(options.deferPolling?.()&&!options.recoveringNavigation?.()){invalidate(true);error.value='原站标签页已变化，请重新验证后继续。';return}
       if(pollingApproved){
         generation++; inFlight=undefined; checking.value=true; error.value='';
         // Blank documentId is an explicit pending state, never accepted as a

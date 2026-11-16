@@ -6,6 +6,18 @@ import {HagueDiagnosticError} from '../../../src/hague/diagnostics/errors'
 const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'',designs:[]}
 const checkpoint=(next=3):DraftCheckpoint=>({transport:'http',tabId:7,reference:'123',planKey:draftPlanKey(plan),next,total:draftSteps(plan).length,status:'stopped',stage:''})
 const receipt:DraftReceipt={ok:true,reference:'123',page:'application'}
+it('pauses an authentication failure for a shared read-only refresh before canonical recovery',async()=>{
+ const controller=new AbortController();let writes=0
+ const refreshAuthentication=vi.fn(async()=>{expect(writes).toBe(1);return true})
+ const recover=vi.fn(async():Promise<DraftRecovery>=>{expect(refreshAuthentication).toHaveBeenCalledOnce();return{outcome:'retry',receipt}})
+ const result=await runDraftPlan(plan,7,{refreshAuthentication,recover,save:async()=>{},call:async c=>{if(c.op==='inspect')return receipt;if(++writes===1)return{ok:false,diagnosticError:new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'}).diagnostic};controller.abort();return receipt}},controller.signal,checkpoint())
+ expect(result.next).toBe(4);expect(writes).toBe(2);expect(refreshAuthentication).toHaveBeenCalledOnce()
+})
+it.each([true,false])('requires the persisted Summary digest before allowing one final close retry (%s)',async matching=>{
+ const state={...checkpoint(draftSteps(plan).length-1),summaryKey:'sha256:verified'};let closes=0
+ const job=runDraftPlan(plan,7,{save:async()=>{},refreshAuthentication:async()=>true,recover:async()=>({outcome:'retry',receipt:{...receipt,summaryKey:matching?state.summaryKey:'different'}}),call:async c=>{if(c.op==='saveDraft'){closes++;return closes===1?{ok:false,diagnosticError:new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'}).diagnostic}:{ok:true,page:'portfolio',reference:'123'}}return closes>1?{ok:true,page:'portfolio',reference:'123',draftSaved:true}:receipt}},undefined,state)
+ if(matching){expect((await job).status).toBe('saved');expect(closes).toBe(2)}else{await expect(job).rejects.toThrow();expect(closes).toBe(1)}
+})
 it('retries only network-failed receipt inspection and never replays an already completed write',async()=>{
  vi.useFakeTimers();const controller=new AbortController();let reads=0,writes=0
  const work=runDraftPlan(plan,7,{save:async()=>{},recover:async()=>++reads===1?{outcome:'unknown',diagnosticError:new HagueDiagnosticError({errorCode:'NETWORK_FAILED',errorStage:'transport'}).diagnostic}:{outcome:'completed',receipt},call:async()=>{writes++;controller.abort();return receipt}},controller.signal,{...checkpoint(),status:'uncertain'})
@@ -24,7 +36,7 @@ it('retries a supported operation once using a verified fresh receipt and persis
  expect(writes).toBe(2);expect(recover).toHaveBeenCalledOnce();expect(result.recoveryAttempts?.['3']).toBe(1);expect(result.next).toBe(4)
 })
 it.each(['wrong-reference','exhausted','unsupported','cancelled'] as const)('never retries when recovery is %s',async kind=>{
- const controller=new AbortController(),state=checkpoint(kind==='unsupported'?2:3)
+ const controller=new AbortController(),state=checkpoint(kind==='unsupported'?0:3)
  if(kind==='exhausted'){state.recoveryAttempts={'3':1};state.recoveryRetries={'3':1}}
  let writes=0
  const recover=vi.fn(async():Promise<DraftRecovery>=>{if(kind==='cancelled')controller.abort();return{outcome:'retry',receipt:{...receipt,reference:kind==='wrong-reference'?'999':'123'}}})

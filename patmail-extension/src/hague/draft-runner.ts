@@ -23,7 +23,7 @@ export function draftSteps(plan:DraftPlan):Step[] {
    steps.push({label:`上传图纸 ${image.number}`,command:{op:'upload',name:image.file.name,base64:'',mime:/\.tiff?$/i.test(image.file.name)?'image/tiff':'image/jpeg',count},file:image.file})
    steps.push({label:`核对视图 ${image.number}`,command:{op:'legend',name:image.file.name,label:image.legend}})
   })
-  steps.push({label:`保存设计 ${design.number}`,command:{op:'closeDesign'}})
+  steps.push({label:`保存设计 ${design.number}`,command:{op:'closeDesign',index,count:design.images.length,subclass:design.subclass,product:design.product}})
  })
  if(plan.description.trim())steps.push({label:'设计说明',command:{op:'description',text:plan.description}})
  plan.creators.forEach((c,index)=>steps.push({label:`设计人 ${index+1}`,command:{op:'creator',index,...c}}))
@@ -31,7 +31,7 @@ export function draftSteps(plan:DraftPlan):Step[] {
  steps.push({label:'公开时间',command:{op:'publication',months:plan.publicationMonths}},{label:'签名和我方文号',command:{op:'signature',reference:plan.reference,representative:DRAFT_CONTACTS.representative.name}},{label:'生成 Summary',command:{op:'summary'}},{label:'生成打印文件',command:{op:'print',caseVolume:plan.reference}},{label:'返回草稿编辑器',command:{op:'backToApplication'}},{label:'保存为草稿',command:{op:'saveDraft'}})
  return steps
 }
-interface Host {transport?:'http'|'page';call(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext):Promise<DraftReceipt>;save(value:DraftCheckpoint):Promise<void>;update?(value:DraftCheckpoint):void;recover?(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>}
+interface Host {refreshAuthentication?():Promise<boolean>;transport?:'http'|'page';call(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext):Promise<DraftReceipt>;save(value:DraftCheckpoint):Promise<void>;update?(value:DraftCheckpoint):void;recover?(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>}
 export function draftPlanKey(plan:DraftPlan):string {
  const body=JSON.stringify({...plan,designs:plan.designs.map(d=>({...d,images:d.images.map(i=>({number:i.number,legend:i.legend,file:{name:i.file.name,size:i.file.size,lastModified:i.file.lastModified}}))}))})
  let hash=2166136261
@@ -74,8 +74,12 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
   if(command.op==='backToApplication'&&result.receipt.page!=='application'||command.op==='summary'&&result.receipt.page!=='summary')return'unknown'
   if(command.op==='applicant'&&(result.receipt.page!=='application'||result.receipt.applicants!==command.index+(result.outcome==='completed'?1:0)))return'unknown'
   if(command.op==='creator'&&(result.receipt.page!=='application'||result.receipt.creators!==command.index+(result.outcome==='completed'?1:0)))return'unknown'
-  if(command.op==='saveDraft'&&(result.outcome!=='completed'||!result.receipt.draftSaved||state.acknowledged?.next!==state.next||state.acknowledged.op!=='saveDraft'||state.acknowledged.page!=='portfolio'))return'unknown'
+  if(command.op==='saveDraft'){
+   if(result.outcome==='completed'&&(!result.receipt.draftSaved||state.acknowledged?.next!==state.next||state.acknowledged.op!=='saveDraft'||state.acknowledged.page!=='portfolio'))return'unknown'
+   if(result.outcome==='retry'&&(!state.summaryKey||result.receipt.summaryKey!==state.summaryKey||result.receipt.page!=='application'))return'unknown'
+  }
   state.documentId=result.receipt.documentId??state.documentId;state.error=undefined
+  if(result.receipt.summaryKey)state.summaryKey=result.receipt.summaryKey
   state.warnings=[...new Set([...(state.warnings??[]),`步骤“${steps[state.next]?.label}”已自动核对原站回执并${result.outcome==='completed'?'确认完成':'恢复一次'}。`])]
   if(result.outcome==='completed'){
    state.next++;state.status='stopped';state.recoveryDecision=undefined
@@ -116,6 +120,7 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
    state.reference=receipt.reference??state.reference
    state.documentId=receipt.documentId??state.documentId
    if(!receipt.ok)throw receiptError(receipt)
+   if(receipt.summaryKey)state.summaryKey=receipt.summaryKey
    state.acknowledged={next:i,op:command.op,page:receipt.page};await persist()
    if(receipt.downloadId!==undefined)state.downloadId=receipt.downloadId
    state.warnings=[...new Set([...draftWarnings(state.warnings),...draftWarnings(receipt.warnings)])]
@@ -139,6 +144,12 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
   }catch(error){
    const failure=normalizeDiagnosticError(error,{httpStatus:null,...receipt.diagnosticState,errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace);state.diagnosticError=failure.diagnostic;emitTrace(trace,'step.uncertain',{...failure.diagnostic});state.status='uncertain';state.error=error instanceof Error?error.message:'操作结果不确定';await persist()
    if(failure.diagnostic.transportStatus==='not_dispatched'&&failure.diagnostic.sideEffectMayHaveOccurred===false){state.status='stopped';state.stage='请求尚未发送，等待继续';await persist();throw failure}
+   if(failure.diagnostic.errorCode==='AUTH_REDIRECT'&&host.refreshAuthentication&&!signal?.aborted){
+    state.stage='等待原站认证恢复，暂不发送写入';await persist()
+    let authenticated=false
+    try{authenticated=await host.refreshAuthentication()}catch{/* A failed refresh never authorizes a write. */}
+    if(!authenticated||signal?.aborted)throw failure
+   }
    const outcome=await recover(step.command)
    if(outcome==='completed')continue
    if(outcome==='retry'){i--;continue}
@@ -158,3 +169,4 @@ export async function callDraftPage(tabId:number,command:DraftCommand,documentId
   })
  })
 }
+

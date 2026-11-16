@@ -7,7 +7,7 @@ export async function withNetworkReadRetry<T>(read:()=>Promise<T>,signal?:AbortS
  for(let attempt=0;;attempt++){
   if(signal?.aborted)throw new DOMException('Read cancelled','AbortError')
   try{return await read()}catch(error){
-   if(!(error instanceof HagueDiagnosticError)||!['NETWORK_FAILED','NETWORK_TIMEOUT','RPC_FAILED'].includes(error.diagnostic.errorCode)||attempt>=delays.length)throw error
+   if(!(error instanceof HagueDiagnosticError)||!['NETWORK_FAILED','NETWORK_TIMEOUT','RPC_FAILED','AUTH_REDIRECT'].includes(error.diagnostic.errorCode)||attempt>=delays.length)throw error
    await new Promise<void>((resolve,reject)=>{
     const abort=()=>{clearTimeout(timer);reject(new DOMException('Read cancelled','AbortError'))}
     const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve()},delays[attempt])

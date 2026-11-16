@@ -27,10 +27,10 @@ it('adds every applicant independently and completes each image group before add
  expect(grouped).toEqual([
   {op:'design',index:0,subclass:'3',product:'First product'},
   {op:'upload',name:'1.1.jpg',base64:'',mime:'image/jpeg',count:0},{op:'legend',name:'1.1.jpg',label:'Front'},
-  {op:'upload',name:'1.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'1.2.jpg',label:'Front'},{op:'closeDesign'},
+  {op:'upload',name:'1.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'1.2.jpg',label:'Front'},{op:'closeDesign',index:0,count:2,subclass:'3',product:'First product'},
   {op:'design',index:1,subclass:'3',product:'Second product'},
   {op:'upload',name:'2.1.jpg',base64:'',mime:'image/jpeg',count:0},{op:'legend',name:'2.1.jpg',label:'Front'},
-  {op:'upload',name:'2.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'2.2.jpg',label:'Front'},{op:'closeDesign'}
+  {op:'upload',name:'2.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'2.2.jpg',label:'Front'},{op:'closeDesign',index:1,count:2,subclass:'3',product:'Second product'}
  ])
 })
 it('recovers a completed final save using the exact draft-list receipt without another write',async()=>{

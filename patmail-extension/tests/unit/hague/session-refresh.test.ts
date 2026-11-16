@@ -3,7 +3,7 @@ import {createApp,h,nextTick} from 'vue'
 import {useOaSession} from '../../../src/app/composables/useOaSession'
 let unmount=()=>{}
 afterEach(()=>{unmount();vi.useRealTimers();vi.unstubAllGlobals()})
-function mountSession(options?:{deferPolling?:()=>boolean}){
+function mountSession(options?:{deferPolling?:()=>boolean;recoveringNavigation?:()=>boolean}){
  vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-13T00:00:00Z'))
  const listeners:{changed?:(tabId:number,info:{status?:string;url?:string})=>void}={}
  vi.stubGlobal('chrome',{tabs:{onUpdated:{addListener:(fn:typeof listeners.changed)=>{listeners.changed=fn},removeListener(){}},onRemoved:{addListener(){},removeListener(){}}}})
@@ -14,6 +14,16 @@ function mountSession(options?:{deferPolling?:()=>boolean}){
  app.mount(root);unmount=()=>app.unmount()
  return {oa,verify,listeners}
 }
+it('permits only an explicitly coordinated authentication navigation to await a new document verification',async()=>{
+ let recovering=true
+ const {oa,verify,listeners}=mountSession({deferPolling:()=>true,recoveringNavigation:()=>recovering})
+ await nextTick();oa.selected.value=7;await oa.verify()
+ listeners.changed?.(7,{status:'loading'});expect(oa.verified.value).toBe(false);expect(oa.checking.value).toBe(true)
+ expect(verify).toHaveBeenCalledOnce()
+ verify.mockResolvedValueOnce({tabId:7,title:'WIPO',documentId:'new-document',verifiedAt:Date.now(),expiresAt:Date.now()+300000})
+ expect(await oa.verify(true)).toBe(true);expect(oa.verified.value).toBe(true)
+ recovering=false;listeners.changed?.(7,{status:'loading'});expect(oa.verified.value).toBe(false);expect(oa.checking.value).toBe(false)
+})
 it('silently refreshes an explicitly verified session before the five-minute expiry',async()=>{
  const {oa,verify}=mountSession();await nextTick();oa.selected.value=7;await oa.verify()
  await vi.advanceTimersByTimeAsync(360000)

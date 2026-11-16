@@ -93,3 +93,11 @@ it('keeps a whole field command exclusive from new application allocation',async
  const allocation=createHttpChain(7,'allocation-during-field').call({op:'create'})
  try{await new Promise(r=>setTimeout(r,10));expect(calls).not.toContain('create')}finally{release();await Promise.all([field,allocation])}
 })
+it('runs independent case field commands concurrently while keeping allocation behind them',async()=>{
+ const chains=Array.from({length:3},(_,i)=>createHttpChain(7,`parallel-${i}`,String(900+i)))
+ await Promise.all(chains.map(chain=>chain.call({op:'inspect'})))
+ let release!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve})
+ chains.forEach((chain,i)=>{const original=chain.driver.call.bind(chain.driver);chain.driver.call=async(command,...args)=>{if(command.op==='locarno'){calls.push(`field-${i}`);await pending}return original(command,...args)}})
+ const fields=chains.map(chain=>chain.call({op:'locarno',value:'14'}))
+ try{await vi.waitFor(()=>expect(calls.filter(c=>c.startsWith('field-'))).toHaveLength(3))}finally{release();await Promise.all(fields)}
+})
