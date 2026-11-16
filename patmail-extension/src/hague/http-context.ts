@@ -4,6 +4,7 @@ import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/error
 import {structuralSnapshot,structureDiff,xmlEvidence} from './diagnostics/protocol'
 import { HAGUE_ORIGIN } from './session-contract'
 import { PermitPool } from '../utils/permit-pool'
+import {withNetworkReadRetry} from './read-retry'
 const network=new PermitPool(6)
 
 export interface JsfAction { source:string; form?:string; process?:string; update?:string; event?:string; params?:Record<string,string>; full?:boolean; analysis?:{scriptHash?:string;fingerprint?:string;callType?:string;line?:number;column?:number;confidence?:string} }
@@ -90,20 +91,38 @@ export class HagueHttpContext {
     let missing=0,inactiveUpdateCount=0
     const redirect=xml.querySelector('redirect')?.getAttribute('url')
     if(redirect){await this.get(redirect);return}
+    const applyUpdate=(id:string,content:string):boolean=>{
+      const existing=this.document.getElementById(id),tableBody=this.document.getElementById(`${id}_data`)
+      if(tableBody?.tagName==='TBODY'&&/^\s*(?:<tr\b|$)/i.test(content))tableBody.innerHTML=content
+      else if(existing){
+        // PrimeFaces renders widget initializers beside the component. Replace
+        // the previous initializer with the same ID as part of this update.
+        if(/<script\b/i.test(content)){
+          const fragment=this.document.createElement('template');fragment.innerHTML=content
+          const scriptIds=new Set([...fragment.content.querySelectorAll('script[id]')].map(script=>script.id))
+          for(const old of this.document.querySelectorAll('script[id]'))if(scriptIds.has(old.id)&&!existing.contains(old))old.remove()
+        }
+        existing.outerHTML=content
+      }
+      else return false
+      return true
+    }
+    let deferred:Array<{id:string;content:string}>=[]
     for(const update of xml.querySelectorAll('update')){
       const id=update.id,content=update.textContent??''
       if(/javax.faces.ViewState/.test(id)){
         this.viewState=content
       }else if(id==='javax.faces.ViewRoot'){this.load(content,this.url)}
       else{
-        const existing=this.document.getElementById(id)
-        const tableBody=this.document.getElementById(`${id}_data`)
-        // PrimeFaces DataTable pagination returns rows, not its outer widget.
-        if(tableBody?.tagName==='TBODY'&&/^\s*(?:<tr\b|$)/i.test(content))tableBody.innerHTML=content
-        else if(existing)existing.outerHTML=content
-        else if(this.inactiveDesignationOutput(id,content,submittedForm))inactiveUpdateCount++
-        else missing++
+        if(!applyUpdate(id,content))deferred.push({id,content})
       }
+    }
+    // A later parent fragment can mount a previously absent child. Resolve
+    // those dependencies before classifying a genuinely unmounted section.
+    for(;;){const remaining=deferred.filter(({id,content})=>!applyUpdate(id,content));if(remaining.length===deferred.length){deferred=remaining;break}deferred=remaining}
+    for(const {id,content}of deferred){
+      if(this.inactiveSectionUpdate(id,content,submittedForm)||this.inactiveDesignationOutput(id,content,submittedForm))inactiveUpdateCount++
+      else{missing++;emitTrace(this.trace,'dom.updated',{sourceComponent:id,form:submittedForm,unknownComponentCount:1,businessStatus:'unknown'})}
     }
     for(const form of this.document.forms){
       let input=form.querySelector<HTMLInputElement>('input[name="javax.faces.ViewState"]')
@@ -128,8 +147,18 @@ export class HagueHttpContext {
     }
   }
   /** PrimeFaces may refresh a passive output panel in a section not mounted in this view. */
+  private inactiveSectionUpdate(id:string,content:string,submittedForm?:string):boolean {
+    const owner=id.split(':')[0]
+    if(!submittedForm||!['ApplicantForm','Designationform','locarnoClassForm','designForm','refDesForm','DescriptionForm','CreatorForm','UsClaimForm','PriorityForm','ExhibitionForm','DisclosureForm','PublicationForm','signForm'].includes(owner))return false
+    // JSF ignores updates for unmounted tabs. Do not materialize their controls
+    // into the active view; refreshOptionsUI will mount the canonical section.
+    const template=this.document.createElement('template');template.innerHTML=content
+    const root=template.content.firstElementChild
+    const onlyWidgetInitializers=[...template.content.children].slice(1).every(node=>node.tagName==='SCRIPT')
+    return onlyWidgetInitializers&&root?.id===id&&(id===owner?owner!==submittedForm&&root.tagName==='FORM':root.matches('div.ui-outputpanel')&&/:(?:j_idt\d+|creatorIssuesPanel)$/.test(id)||id==='designForm:designsDataTable'&&root.matches('div.ui-datatable'))
+  }
   private inactiveDesignationOutput(id:string,content:string,submittedForm?:string):boolean {
-    if(submittedForm!=='ApplicantForm'||!id.startsWith('Designationform:')||this.document.getElementById('Designationform'))return false
+    if(!['ApplicantForm','designForm'].includes(submittedForm??'')||!id.startsWith('Designationform:'))return false
     const template=this.document.createElement('template');template.innerHTML=content
     const root=template.content.firstElementChild
     if(template.content.children.length!==1||!root?.matches('div.ui-outputpanel')||root.id!==id)return false
@@ -143,7 +172,7 @@ export class HagueHttpContext {
   }
   async get(path=this.url):Promise<void> {
     const url=protectedUrl(path,this.url)
-    await this.read(await this.fetchComplete(url.href,{method:'GET',credentials:'include',cache:'no-store'}))
+    await this.read(await withNetworkReadRetry(()=>this.fetchComplete(url.href,{method:'GET',credentials:'include',cache:'no-store'})))
     if(!this.document.querySelector('input[name="javax.faces.ViewState"]'))throw new Error('接口未返回有效 JSF ViewState，需重新验证登录。')
   }
   controls(form:HTMLFormElement):URLSearchParams {

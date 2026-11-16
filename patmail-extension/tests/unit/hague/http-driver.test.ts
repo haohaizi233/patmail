@@ -122,12 +122,12 @@ it('does not inspect a creation recovery with missing identity, fingerprint or t
  expect(reads).toBe(0)
 })
 
-it.each(['match','country-dropdown','mismatch','extra-record','email-mismatch','qualification-mismatch','missing-cancel'] as const)('reads saved applicant fields without another save: %s',async scenario=>{
+it.each(['match','country-dropdown','normalized-punctuation','mismatch','extra-record','email-mismatch','qualification-mismatch','missing-cancel'] as const)('reads saved applicant fields without another save: %s',async scenario=>{
  const sources:string[]=[];const reference='123'
- const data={name:'Example Ltd.',address:'One Road',city:'City',region:'Region',postalCode:'12345',country:'China'}
+ const data={name:'Example Ltd.',address:scenario==='normalized-punctuation'?'One，Road':'One Road',city:'City',region:'Region',postalCode:'12345',country:'China'}
  const list='<form id="quickSearchPanel"><button type="button" class="filtered" id="quickSearchPanel:drafts" onclick="PrimeFaces.ab({s:this});">Draft(s)</button></form><form id="portfolio"><input name="javax.faces.ViewState" value="A"><table><tbody><tr><td>WIPO123</td><td><button type="button" id="portfolio:open" title="Open/edit" onclick="PrimeFaces.ab({s:this});">Open</button></td></tr></tbody></table></form>'
  const canonical=`<form id="ApplicantForm"><input name="javax.faces.ViewState" value="A"><button type="button" id="ApplicantForm:applicantViewPanel:0:editApp" onclick="PrimeFaces.ab({s:this});">Edit</button>${scenario==='extra-record'?'<button id="ApplicantForm:applicantViewPanel:1:editApp">Edit</button>':''}</form>`
- const fields={firstname:scenario==='mismatch'?'Other Ltd.':data.name,address:data.address,cp:data.postalCode,city:data.city,state:data.region,country:scenario==='country-dropdown'?'CN - China':data.country,email:scenario==='email-mismatch'?'other@example.test':'draft@example.test',nationality:scenario==='qualification-mismatch'?'SG':'CN',domicile:'CN',establishment:'CN',residence:'CN',acp:'CN'}
+ const fields={firstname:scenario==='mismatch'?'Other Ltd.':data.name,address:scenario==='normalized-punctuation'?'One,Road':data.address,cp:data.postalCode,city:data.city,state:data.region,country:scenario==='country-dropdown'?'CN - China':data.country,email:scenario==='email-mismatch'?'other@example.test':'draft@example.test',nationality:scenario==='qualification-mismatch'?'SG':'CN',domicile:'CN',establishment:'CN',residence:'CN',acp:'CN'}
  const edit=`<form id="ApplicantForm"><input name="javax.faces.ViewState" value="A"><input type="radio" value="true" checked>${Object.entries(fields).map(([k,v])=>`<input id="ApplicantForm:${k}:input" value="${v}">`).join('')}${scenario==='missing-cancel'?'':`<button type="button" id="ApplicantForm:cancelApp" onclick="PrimeFaces.ab({s:this});">Cancel</button>`}<button id="ApplicantForm:saveAppBtn">Save</button></form>`
  const driver=new HagueHttpDriver('applicant-recovery',async(url,init)=>{
   let body=''
@@ -136,8 +136,22 @@ it.each(['match','country-dropdown','mismatch','extra-record','email-mismatch','
   const response=new Response(body);Object.defineProperty(response,'url',{value:url});return response
  })
  const result=await driver.recoverStep({op:'applicant',data,index:0,email:'draft@example.test'},{tabId:7,reference,next:2,total:31,status:'uncertain',stage:'申请人 1',planKey:'verified-plan'})
- expect(result.outcome).toBe(['match','country-dropdown'].includes(scenario)?'completed':'unknown')
- if(['match','country-dropdown'].includes(scenario))expect(result.receipt).toMatchObject({reference,applicants:1,page:'application'})
+ expect(result.outcome).toBe(['match','country-dropdown','normalized-punctuation'].includes(scenario)?'completed':'unknown')
+ if(['match','country-dropdown','normalized-punctuation'].includes(scenario))expect(result.receipt).toMatchObject({reference,applicants:1,page:'application'})
  expect(sources).not.toContain('ApplicantForm:saveAppBtn')
  expect(sources.every(s=>['quickSearchPanel:drafts','portfolio:open','ApplicantForm:applicantViewPanel:0:editApp','ApplicantForm:cancelApp'].includes(s))).toBe(true)
+})
+
+it('does not reject an absent optional reproduction table because an unrelated table is redacted',async()=>{
+ const d=new HagueHttpDriver('unrelated-widget',async()=>{throw new Error('unexpected network')})
+ d.state.load('<title>WIPO reference 123</title><form id="designForm"></form><script>PrimeFaces.cw("DataTable","other",{id:"unrelatedForm:table",paginator:{rows:10,rowCount:0}})</script>','/HagueEFilingWeb/protected/page/application.xhtml')
+ expect(await d.call({op:'inspect'},'123')).toMatchObject({ok:true,reference:'123',reproductions:0})
+})
+
+
+it('recovers a Summary return by reopening the exact saved application without resending Back',async()=>{
+ let requests=0;const d=new HagueHttpDriver('back-readback',async()=>{requests++;throw new Error('unexpected write')})
+ d.resume=async reference=>{expect(reference).toBe('123');d.state.load('<title>WIPO reference 123</title><form id="ApplicantForm"></form>','/HagueEFilingWeb/protected/page/application.xhtml')}
+ expect(await d.recoverStep({op:'backToApplication'},{tabId:7,reference:'123',next:20,total:22,status:'uncertain',stage:'Back',planKey:'same-plan'})).toMatchObject({outcome:'completed',receipt:{reference:'123',page:'application'}})
+ expect(requests).toBe(0)
 })

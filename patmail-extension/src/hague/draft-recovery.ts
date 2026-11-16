@@ -1,7 +1,31 @@
 import type { DraftCommand,DraftRecovery } from './draft-contract'
 
 export function recoverableDraftCommand(command:DraftCommand):boolean {
-  return ['create','applicant','parties','locarno','priority','saveDraft'].includes(command.op)
+  return ['create','applicant','parties','locarno','design','upload','legend','creator','priority','summary','backToApplication','saveDraft'].includes(command.op)
+}
+
+/** Design save can succeed before a passive JSF update fails. Read the saved
+ * table rather than editor inputs; never re-create an existing design. */
+export function inspectDesignRecovery(doc:Document,command:Extract<DraftCommand,{op:'design'}>,reference:string):DraftRecovery {
+  const table=doc.getElementById('designForm:designsDataTable_data')
+  if(!table||!Number.isSafeInteger(command.index)||command.index<0)return{outcome:'unknown'}
+  const rows=[...table.querySelectorAll<HTMLTableRowElement>('tr[data-ri]')]
+  const receipt={ok:true,reference,page:'application' as const,designs:rows.length}
+  if(rows.length===0&&command.index===0)return{outcome:'retry',receipt}
+  if(rows.length!==command.index+1)return{outcome:'unknown'}
+  const values=[...rows[command.index].cells].map(c=>(c.textContent??'').trim().replace(/\s+/g,' '))
+  if(values.length<4||values[0]!==String(command.index+1)||values[1]!=='0'||!/^\d+$/.test(values[2])||Number(values[2])!==Number(command.subclass)||values[3]!==command.product.trim().replace(/\s+/g,' '))return{outcome:'unknown'}
+  return{outcome:'completed',receipt}
+}
+
+export function inspectUploadRecovery(doc:Document,command:Extract<DraftCommand,{op:'upload'}>,reference:string,total?:number):DraftRecovery {
+  const body=doc.getElementById('designForm:reproDT_data')
+  if(!body||!Number.isSafeInteger(command.count)||command.count<0)return{outcome:'unknown'}
+  const rows=[...body.querySelectorAll<HTMLTableRowElement>('tr[data-ri]')],count=total??rows.length
+  const matches=rows.filter(r=>r.cells[2]?.textContent?.trim()===command.name)
+  const receipt={ok:true,reference,page:'application' as const,reproductions:count}
+  if(count===command.count&&rows.length===count&&!matches.length)return{outcome:'retry',receipt}
+  return count===command.count+1&&matches.length===1?{outcome:'completed',receipt}:{outcome:'unknown'}
 }
 
 /** Read canonical display records, never infer success from an open editor's values. */

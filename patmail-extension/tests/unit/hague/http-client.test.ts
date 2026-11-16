@@ -43,7 +43,7 @@ it('cancels a queued creation without sending it and releases the creation slot'
  const controller=new AbortController()
  const second=createHttpChain(7,'cancelled',undefined,[],'pdf',controller.signal).call({op:'create'})
  controller.abort()
- await expect(second).rejects.toThrow('已停止')
+ await expect(second).rejects.toMatchObject({diagnostic:{errorCode:'NETWORK_ABORTED',transportStatus:'not_dispatched',sideEffectMayHaveOccurred:false}})
  release();await first
  expect(calls.filter(op=>op==='create')).toHaveLength(1)
  control.resume=null
@@ -74,4 +74,22 @@ it('preserves Summary stylesheet HTTP failures and does not print an error page'
   await expect(renderSavedSummary(7,'PO1HAGUE','123')).rejects.toMatchObject({diagnostic:{errorCode:'HTTP_503',httpStatus:503}})
   expect(sendMessage).toHaveBeenCalledOnce()
  }finally{vi.unstubAllGlobals()}
+})
+
+it('does not change the shared portfolio view while another chain is reopening a draft',async()=>{
+ let release!:()=>void;control.resume=new Promise<void>(resolve=>{release=resolve})
+ const existing=createHttpChain(7,'existing','999').call({op:'inspect'})
+ await vi.waitFor(()=>expect(calls).toContain('resume:999'))
+ const allocation=createHttpChain(7,'allocation').call({op:'create'})
+ try{await new Promise(r=>setTimeout(r,10));expect(calls).not.toContain('create')}finally{release();await Promise.all([existing,allocation])}
+})
+
+it('keeps a whole field command exclusive from new application allocation',async()=>{
+ const existing=createHttpChain(7,'existing-field','999');await existing.call({op:'inspect'})
+ let release!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve}),original=existing.driver.call.bind(existing.driver)
+ existing.driver.call=async(command,...args)=>{if(command.op==='applicant'){calls.push('field-start');await pending}return original(command,...args)}
+ const field=existing.call({op:'applicant',index:0,email:'a@example.test',data:{name:'A Ltd.',address:'Road',city:'City',region:'Region',postalCode:'12345',country:'CN'}})
+ await vi.waitFor(()=>expect(calls).toContain('field-start'))
+ const allocation=createHttpChain(7,'allocation-during-field').call({op:'create'})
+ try{await new Promise(r=>setTimeout(r,10));expect(calls).not.toContain('create')}finally{release();await Promise.all([field,allocation])}
 })

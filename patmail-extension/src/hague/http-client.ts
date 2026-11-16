@@ -3,6 +3,8 @@ import type {TraceContext,DiagnosticErrorData} from './diagnostics/trace'
 import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
 import { PermitPool } from '../utils/permit-pool'
 import { downloadDocuments } from '../utils/download-documents'
+import {downloadSummaryPdf,findSummaryDownload} from './summary-download'
+import {withNetworkReadRetry} from './read-retry'
 import type { DocumentExportFormat } from '../utils/document-export'
 import { HagueHttpDriver } from './http-driver'
 import type { HagueFetch } from './http-context'
@@ -50,23 +52,30 @@ export function httpRestoreCommands(plan:DraftPlan,next:number):DraftCommand[]{
 }
 // Only the allocation and initial-save handshake is serialized; later case work remains concurrent.
 const creationPool=new PermitPool(1)
+// WIPO shares mutable view/section state within the authenticated session.
+// Hold the lease for the entire multi-request command, including field edits;
+// different cases may queue concurrently and PDF asset reads remain parallel.
+const portfolioPool=new PermitPool(1)
 export function createHttpChain(tabId:number,id:string,reference?:string,restore:DraftCommand[]=[],exportFormat:DocumentExportFormat='pdf',signal?:AbortSignal){
  const fetcher=hagueHttpFetch(tabId),driver=new HagueHttpDriver(id,fetcher);let ready=false
+ const inPortfolio=<T>(work:()=>Promise<T>,owned=false):Promise<T>=>owned?work():portfolioPool.run(work,signal)
  const recover=async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>=>{
   driver.state.setTrace(trace)
-  const result=await driver.recoverStep(command,checkpoint)
+  const result=await inPortfolio(()=>driver.recoverStep(command,checkpoint))
   if(result.outcome!=='unknown')ready=true
   return {...result,receipt:result.receipt?{...result.receipt,documentId:id}:undefined}
  }
- const call=async(command:DraftCommand,trace?:TraceContext):Promise<DraftReceipt>=>{
+ const call=async(command:DraftCommand,trace?:TraceContext,portfolioOwned=false):Promise<DraftReceipt>=>{
   driver.state.setTrace(trace)
   try{
    // New-case preflight does not mutate a shared server New view outside the allocation slot.
    // Login has been verified by the workspace; the actual GET and prepare run together with create.
    if(!ready&&!reference&&(command.op==='inspect'||command.op==='prepare'))return{ok:true,page:'portfolio',documentId:id}
    if(!ready){
-    if(reference){await driver.resume(reference);for(const step of restore){const restored=await driver.call(step,reference);if(!restored.ok)throw new Error(restored.error??'检查点页面恢复失败。')}}
-    else if(command.op!=='create')await driver.initialize()
+    await inPortfolio(async()=>{
+     if(reference){await driver.resume(reference);for(const step of restore){const restored=await driver.call(step,reference);if(!restored.ok)throw new Error(restored.error??'检查点页面恢复失败。')}}
+     else if(command.op!=='create')await driver.initialize()
+    },portfolioOwned)
     ready=true
    }
    if(command.op==='create'&&!reference){
@@ -76,11 +85,17 @@ export function createHttpChain(tabId:number,id:string,reference?:string,restore
     if(!prepared.ok)throw new Error(prepared.error??'创建前未确认新申请表单。')
    }
    if(command.op==='print'){
+    if(exportFormat==='pdf'){
+     const completed=await findSummaryDownload(`${command.caseVolume}-Summary-WIPO${driver.state.reference}.pdf`,trace?.caseRunId)
+     if(completed!==undefined)return{ok:true,page:'summary',reference:driver.state.reference,documentId:id,downloadId:completed}
+    }
     const pdf=await renderSummary(driver,fetcher,command.caseVolume)
+    if(exportFormat==='pdf')return{ok:true,page:'summary',reference:driver.state.reference,documentId:id,downloadId:await downloadSummaryPdf(pdf,trace?.caseRunId)}
     const exported=await downloadDocuments(exportFormat,[{name:pdf.name,open:()=>Promise.resolve(pdf.bytes)}],pdf.name.replace(/\.pdf$/i,'.'+exportFormat))
     return{ok:true,page:'summary',reference:driver.state.reference,documentId:id,downloadId:exported.downloadId}
    }
-   const result=await driver.call(command,driver.state.reference??reference)
+   const invoke=()=>driver.call(command,driver.state.reference??reference)
+   const result=await inPortfolio(invoke,portfolioOwned)
    if(result.ok&&command.op==='create'){
     // Persist a recoverable draft before filling. Never depend on an unsaved server view.
     const saved=await driver.call({op:'saveDraft'},driver.state.reference)
@@ -91,7 +106,13 @@ export function createHttpChain(tabId:number,id:string,reference?:string,restore
    return !result.ok&&!result.diagnosticError?{...result,diagnosticError:normalizeDiagnosticError(new Error(),{...driver.state.diagnosticState(),errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace).diagnostic}:result
   }catch(e){const failure=normalizeDiagnosticError(e,{...driver.state.diagnosticState(),errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace);return{ok:false,reference:driver.state.reference,documentId:id,error:e instanceof Error?e.message:failure.message,diagnosticError:failure.diagnostic}}
  }
- return{driver,recover,call:(command:DraftCommand,trace?:TraceContext)=>(command.op==='create'?creationPool.run(()=>call(command,trace),signal):call(command,trace)).then(result=>({...result,diagnosticState:driver.state.diagnosticState()}))}
+ return{driver,recover,call:(command:DraftCommand,trace?:TraceContext)=>{
+  let entered=false
+  return(command.op==='create'?creationPool.run(()=>inPortfolio(()=>{entered=true;return call(command,trace,true)}),signal).catch(error=>{
+   if(!entered&&signal?.aborted)throw new HagueDiagnosticError({errorCode:'NETWORK_ABORTED',errorStage:'transport',transportStatus:'not_dispatched',httpStatus:null,sideEffectMayHaveOccurred:false,traceId:trace?.traceId})
+   throw error
+  }):call(command,trace)).then(result=>({...result,diagnosticState:driver.state.diagnosticState()}))
+ }}
 }
 
 async function renderSummary(driver:HagueHttpDriver,transport:HagueFetch,caseVolume:string){
@@ -99,7 +120,7 @@ async function renderSummary(driver:HagueHttpDriver,transport:HagueFetch,caseVol
      const trace=driver.state.trace,requestId='req-'+crypto.randomUUID(),started=performance.now()
      emitTrace(trace,'request.prepared',{requestId,httpMethod:'GET',urlPath:url})
      emitTrace(trace,'request.dispatched',{requestId,httpMethod:'GET',urlPath:url,httpStatus:null,transportStatus:'dispatched',businessStatus:'unknown'})
-     const response=await transport(url,init,trace,requestId)
+     const response=await withNetworkReadRetry(()=>transport(url,init,trace,requestId))
      emitTrace(trace,'http.response',{requestId,httpMethod:'GET',urlPath:url,httpStatus:response.status,transportStatus:'completed',businessStatus:'unknown',durationMs:performance.now()-started})
      if(!response.ok)throw new HagueDiagnosticError({errorCode:`HTTP_${response.status}`,errorStage:'http',httpStatus:response.status,traceId:trace?.traceId})
      return response
@@ -123,8 +144,10 @@ async function renderSummary(driver:HagueHttpDriver,transport:HagueFetch,caseVol
 }
 export async function renderSavedSummary(tabId:number,caseVolume:string,reference:string){
  const fetcher=hagueHttpFetch(tabId),driver=new HagueHttpDriver(`export-${crypto.randomUUID()}`,fetcher)
- await driver.resume(reference)
- const summary=await driver.call({op:'summary'},reference)
- if(!summary.ok)throw new Error(summary.error??'无法读取已保存草稿的 Summary。')
+ await portfolioPool.run(async()=>{
+  await driver.resume(reference)
+  const summary=await driver.call({op:'summary'},reference)
+  if(!summary.ok)throw new Error(summary.error??'无法读取已保存草稿的 Summary。')
+ })
  return renderSummary(driver,fetcher,caseVolume)
 }

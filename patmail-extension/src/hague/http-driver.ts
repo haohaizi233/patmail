@@ -1,10 +1,10 @@
 import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
-import {HagueDiagnosticError} from './diagnostics/errors'
+import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
 import {analyzeJavaScript,extractStaticActions,isStaticUiHandler,selectRemoteDefinition,type AstCall,type AstAnalysis} from './diagnostics/ast/analyzer.mjs'
 import { HagueHttpContext, type JsfAction, type HagueFetch } from './http-context'
 import { executeDraftPage } from './draft-page'
 import type { DraftCommand, DraftReceipt,DraftCheckpoint,DraftRecovery } from './draft-contract'
-import { inspectPriorityRecovery } from './draft-recovery'
+import { inspectPriorityRecovery,inspectDesignRecovery,inspectUploadRecovery } from './draft-recovery'
 
 const unsupported=()=>new HagueDiagnosticError({errorCode:'PROTOCOL_UNSUPPORTED',errorStage:'ast',transportStatus:'not_dispatched',sideEffectMayHaveOccurred:false})
 /** AST extraction is read-only. Ambiguous or dynamic handlers never become writes. */
@@ -75,6 +75,11 @@ export class HagueHttpDriver {
     const reference=checkpoint.reference
     if(!reference||!/^\d+$/.test(reference))return{outcome:'unknown'}
     try{
+      if(command.op==='backToApplication'||command.op==='summary'){
+        await this.resume(reference)
+        const receipt=await this.call(command.op==='summary'?{op:'summary'}:{op:'inspect'},reference)
+        return receipt.ok&&receipt.reference===reference&&receipt.page===(command.op==='summary'?'summary':'application')?{outcome:'completed',receipt}:{outcome:'unknown'}
+      }
       if(command.op==='create'){
         // Only recover the allocation boundary. Never allocate a replacement or save unknown fields.
         if(checkpoint.next!==1||checkpoint.status!=='uncertain'||!checkpoint.planKey)return{outcome:'unknown'}
@@ -88,11 +93,12 @@ export class HagueHttpDriver {
         if(!country)return{outcome:'unknown'}
         await this.resume(reference)
         const records=()=>this.state.document.querySelectorAll('button[id^="ApplicantForm:applicantViewPanel:"][id$=":editApp"]').length
+        if(records()===command.index&&this.state.document.getElementById('ApplicantForm:showApplicantForm'))return{outcome:'retry',receipt:{ok:true,page:'application',reference,applicants:command.index}}
         const edit=this.state.document.getElementById(`ApplicantForm:applicantViewPanel:${command.index}:editApp`)
         if(records()!==command.index+1||!edit)return{outcome:'unknown'}
         edit.click();await this.state.settle();this.checkFailure()
         const expected={firstname:a.name,address:a.address,cp:a.postalCode,city:a.city,state:a.region,country:a.country,email:command.email,nationality:country,domicile:country,establishment:country,residence:country,acp:country}
-        const normal=(value?:string)=>(value??'').trim().replace(/\s+/g,' ')
+        const normal=(value?:string)=>(value??'').normalize('NFKC').trim().replace(/\s+/g,' ')
         const matches=!!this.state.document.getElementById('ApplicantForm:saveAppBtn')&&this.state.document.querySelector<HTMLInputElement>('#ApplicantForm input[type=radio][value=true]')?.checked===true&&Object.entries(expected).every(([key,value])=>{
           const field=this.state.document.getElementById(`ApplicantForm:${key}:input`) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null
           if(!field||typeof field.value!=='string')return false
@@ -122,6 +128,64 @@ export class HagueHttpDriver {
         const receipt=await this.call({op:'inspect'},reference)
         return receipt.ok&&receipt.draftSaved?{outcome:'completed',receipt:{...receipt,reference}}:{outcome:'unknown'}
       }
+      if(command.op==='upload'){
+        if(checkpoint.status!=='uncertain'||!checkpoint.planKey||!/^\d+\.\d+\.(?:jpe?g|tiff?)$/i.test(command.name))return{outcome:'unknown'}
+        await this.resume(reference);await this.remote('refreshDesignUI')
+        const index=Number(command.name.split('.')[0])-1
+        const opened=await this.call({op:'openDesign',index},reference)
+        if(!opened.ok)return{outcome:'unknown'}
+        const total=this.reproCount(),config=this.widget('DataTable','designForm:reproDT',true),rows=config?.paginator?.rows
+        if(!Number.isSafeInteger(rows)||!rows||rows<1)return{outcome:'unknown'}
+        if(command.count>=rows)await this.state.post({source:'designForm:reproDT',form:'designForm',process:'designForm:reproDT',update:'designForm:reproDT',params:{'designForm:reproDT_pagination':'true','designForm:reproDT_first':String(Math.floor(command.count/rows)*rows),'designForm:reproDT_rows':String(rows),'designForm:reproDT_skipChildren':'true','designForm:reproDT_encodeFeature':'true'}})
+        return inspectUploadRecovery(this.state.document,command,reference,total)
+      }
+      if(command.op==='legend'){
+        if(checkpoint.status!=='uncertain'||!checkpoint.planKey||!/^\d+\.\d+\.(?:jpe?g|tiff?)$/i.test(command.name))return{outcome:'unknown'}
+        await this.resume(reference);await this.remote('refreshDesignUI')
+        const opened=await this.call({op:'openDesign',index:Number(command.name.split('.')[0])-1},reference)
+        if(!opened.ok)return{outcome:'unknown',diagnosticError:opened.diagnosticError}
+        const config=this.widget('DataTable','designForm:reproDT'),rows=config?.paginator?.rows
+        const count=Number(command.name.split('.')[1])-1
+        if(rows&&count>=rows)await this.state.post({source:'designForm:reproDT',form:'designForm',process:'designForm:reproDT',update:'designForm:reproDT',params:{'designForm:reproDT_pagination':'true','designForm:reproDT_first':String(Math.floor(count/rows)*rows),'designForm:reproDT_rows':String(rows),'designForm:reproDT_skipChildren':'true','designForm:reproDT_encodeFeature':'true'}})
+        const matches=[...this.state.document.querySelectorAll<HTMLTableRowElement>('[id="designForm:reproDT_data"] tr[data-ri]')].filter(row=>row.cells[2]?.textContent?.trim()===command.name)
+        // Replacing a single named legend is idempotent; it cannot add a file.
+        return matches.length===1?{outcome:'retry',receipt:{ok:true,page:'application',reference}}:{outcome:'unknown'}
+      }
+      if(command.op==='creator'){
+        if(checkpoint.status!=='uncertain'||!checkpoint.planKey||!Number.isSafeInteger(command.index)||command.index<0)return{outcome:'unknown'}
+        await this.resume(reference);await this.remote('refreshOptionsUI')
+        const form=this.state.document.getElementById('CreatorForm')
+        if(!form)return{outcome:'unknown'}
+        const records=()=>[...this.state.document.querySelectorAll<HTMLElement>('#CreatorForm button[title="Open/edit"],#CreatorForm button[id$=":editCre"]')]
+        const count=records().length,receipt={ok:true,page:'application' as const,reference,creators:count}
+        if(count===command.index&&form.querySelector('button[id$=":addCreator"]'))return{outcome:'retry',receipt}
+        if(count!==command.index+1)return{outcome:'unknown'}
+        records()[command.index].click();await this.state.settle();this.checkFailure()
+        const a=command.address,expected={name:command.givenName,lastname:command.familyName,address:a.address,cp:a.postalCode,city:a.city,state:a.region,country:a.country}
+        const normal=(value:string)=>value.normalize('NFKC').trim().replace(/\s+/g,' ')
+        const matches=Object.entries(expected).every(([key,value])=>{
+          const field=this.state.document.getElementById(`CreatorForm:${key}:input`) as HTMLInputElement|null
+          if(!field)return false
+          const actual=normal(field.value),target=normal(value)
+          return actual===target||key==='country'&&/^[A-Z]{2}$/.test(target)&&actual.startsWith(`${target} - `)
+        })
+        const associations=[...this.state.document.querySelectorAll<HTMLInputElement>('#CreatorForm input[type=checkbox]')]
+        const associated=associations.length>0&&associations.every(box=>box.checked)
+        const cancel=[...this.state.document.querySelectorAll<HTMLButtonElement>('#CreatorForm button')].filter(button=>button.textContent?.trim()==='Cancel')
+        if(cancel.length!==1)return{outcome:'unknown'}
+        cancel[0].click();await this.state.settle();this.checkFailure()
+        return matches&&associated&&!this.state.document.getElementById('CreatorForm:name:input')&&records().length===count?{outcome:'completed',receipt}:{outcome:'unknown'}
+      }
+      if(command.op==='design'){
+        if(checkpoint.status!=='uncertain'||!checkpoint.planKey)return{outcome:'unknown'}
+        await this.resume(reference)
+        await this.remote('refreshDesignUI')
+        const result=inspectDesignRecovery(this.state.document,command,reference)
+        if(result.outcome!=='completed')return result
+        const opened=await this.call({op:'openDesign',index:command.index},reference)
+        if(!opened.ok||!this.state.document.getElementById('designForm:fileuploader:fileupload_input'))return{outcome:'unknown'}
+        return{outcome:'completed',receipt:opened}
+      }
       if(!['priority','parties','locarno'].includes(command.op))return{outcome:'unknown'}
       await this.resume(reference)
       if(command.op==='priority'){
@@ -130,7 +194,14 @@ export class HagueHttpDriver {
       }
       if(command.op==='parties'){
         await this.remote('refreshDesignationUI')
-        return this.state.document.getElementById('Designationform')?{outcome:'retry',receipt:{ok:true,reference,page:'application'}}:{outcome:'unknown'}
+        const change=this.state.document.getElementById('Designationform:desPanel:changeDesignationsSelection')
+        if(!change)return{outcome:'unknown'}
+        change.click();await this.state.settle();this.checkFailure()
+        const boxes=[...this.state.document.querySelectorAll<HTMLInputElement>('#Designationform input[type=checkbox]')]
+        if(!boxes.length)return{outcome:'unknown'}
+        const selected=boxes.filter(e=>e.checked).map(e=>/value:\s*'([A-Z]{2})'/.exec(e.getAttribute('onclick')??'')?.[1])
+        if(selected.some(code=>!code))return{outcome:'unknown'}
+        return{outcome:selected.length===command.codes.length&&selected.every(code=>command.codes.includes(code!))?'completed':'retry',receipt:{ok:true,reference,page:'application'}}
       }
       if(command.op==='locarno'){
         await this.remote('refreshDesignUI')
@@ -139,7 +210,7 @@ export class HagueHttpDriver {
         return{outcome:Number(input.value)===Number(command.value)?'completed':'retry',receipt:{ok:true,reference,page:'application'}}
       }
       return{outcome:'unknown'}
-    }catch{return{outcome:'unknown',reason:'原站回执暂无法确认，保留检查点等待核对。'}}
+    }catch(error){return{outcome:'unknown',reason:'原站回执暂无法确认，保留检查点等待核对。',diagnosticError:normalizeDiagnosticError(error,{errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business'},this.state.trace).diagnostic}}
   }
   async resume(reference:string):Promise<void>{
     if(!/^\d+$/.test(reference))throw new Error('恢复的 WIPO reference 无效。')
@@ -173,7 +244,7 @@ export class HagueHttpDriver {
   }
   private widget(type:'DataTable'|'FileUpload',componentId:string,required=false):AstCall|undefined{
     const reports=[...this.state.document.scripts].map(script=>{const text=script.textContent??'';let cached=this.widgetReports.get(script);if(!cached||cached.text!==text){cached={text,report:analyzeJavaScript(text)};this.widgetReports.set(script,cached)}if(isDiagnosticModeEnabled()&&cached.emittedTrace!==this.state.trace?.traceId){this.reportAnalysis(cached.report);cached.emittedTrace=this.state.trace?.traceId}return cached.report})
-    if(reports.some(r=>r.calls.some(c=>c.kind==='PrimeFaces.cw'&&((c.widgetType===type&&(!c.componentId||c.componentId==='[redacted]'))||(c.componentId===componentId&&c.widgetType!==type)))))throw unsupported()
+    if(reports.some(r=>r.calls.some(c=>c.kind==='PrimeFaces.cw'&&((c.widgetType===type&&!c.componentId)||(c.componentId===componentId&&c.widgetType!==type)))))throw unsupported()
     const matches=reports.flatMap(r=>r.calls.filter(c=>c.kind==='PrimeFaces.cw'&&c.widgetType===type&&c.componentId===componentId).map(call=>({call,report:r})))
     if(matches.length!==1){if(required||matches.length>1)throw unsupported();return undefined}
     const {call,report}=matches[0]
