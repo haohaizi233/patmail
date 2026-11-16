@@ -11,6 +11,8 @@ vi.mock('../../../src/shell/components/PageHead.vue', () => ({ default: { render
 vi.mock('../../../src/app/services/full-page-bridge', () => ({ createFullPageBridge: () => ({ request: mocks.read }) }))
 vi.mock('../../../src/app/dialog', async importOriginal => ({...await importOriginal<typeof import('../../../src/app/dialog')>(),confirmDialog:async()=>true}))
 vi.mock('../../../src/hague/dropped-folders', () => ({ readDroppedFolders: dropped.read }))
+vi.mock('../../../src/recovery/client',()=>({createRecoveryClient:()=>({get:async()=>null,put:async()=>{}})}))
+vi.mock('../../../src/hague/workspace-recovery',async importOriginal=>({...await importOriginal<typeof import('../../../src/hague/workspace-recovery')>(),saveWorkspaceMaterials:async()=>{},pruneWorkspaceMaterials:async()=>{},withHagueBatchLock:async(work:()=>Promise<void>)=>work()}))
 vi.mock('../../../src/app/assistant-job', () => ({ requestAssistantJob: mocks.complete }))
 vi.mock('../../../src/hague/session', () => ({ hagueSessionClient: {
   listTabs: async () => [{ id: 1, title: 'WIPO' }],

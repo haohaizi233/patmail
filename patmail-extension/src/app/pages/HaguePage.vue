@@ -3,6 +3,9 @@ import PageHead from '../../shell/components/PageHead.vue'
 import Bunny from '../../shell/components/Bunny.vue'
 import { bg } from '../../shell/assets'
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { createRecoveryClient } from '../../recovery/client'
+import { HAGUE_HTTP_CHANNEL } from '../../background/hague-http'
+import { HAGUE_WORKSPACE_SCOPE,workspaceRows,saveWorkspaceMaterials,pruneWorkspaceMaterials,restoreWorkspaceRows,checkpointForBatch,withHagueBatchLock,type HagueWorkspace,type ActiveDraftBatch } from '../../hague/workspace-recovery'
 import { discoverCases, readFiling, validateImages, imageNumber, validCaseVolume } from '../../hague/materials'
 import { arbitrate } from '../../hague/arbitration'
 import { createFullPageBridge } from '../services/full-page-bridge'
@@ -20,7 +23,6 @@ import { callDraftPage, runDraftPlan } from '../../hague/draft-runner'
 import { runDraftBatch, type DraftBatchProgress } from '../../hague/draft-batch'
 import { openDraftTab } from '../../hague/draft-tabs'
 import { createHttpChain, httpRestoreCommands, renderSavedSummary,runHagueSessionRead } from '../../hague/http-client'
-import {withNetworkReadRetry} from '../../hague/read-retry'
 import {HagueDiagnosticError} from '../../hague/diagnostics/errors'
 import { downloadDocuments } from '../../utils/download-documents'
 import type { DraftCheckpoint,DraftCommand } from '../../hague/draft-contract'
@@ -97,17 +99,83 @@ const draftErrors = ref<Record<string,string>>({})
 const draftSkipped = ref<Record<string,boolean>>({})
 const draftActive = ref(new Set<string>())
 const restoredDrafts = ref(new Set<string>())
+const workspaceRecovery=createRecoveryClient()
+let materialId='',workspaceReady=false,materialsDurable=false,ownsBatchLock=false,activeBatch:ActiveDraftBatch|undefined,workspaceTimer:ReturnType<typeof setTimeout>|undefined
+function workspaceSnapshot():HagueWorkspace {
+  return JSON.parse(JSON.stringify({version:1,materialId,rows:workspaceRows(rows.value,materialId),selected:selected.value,concurrency:draftConcurrency.value,transport:draftTransport.value,exportFormat:draftExportFormat.value,batch:draftBatch.value,current:draftProgress.value,activeBatch,approvedTab:oa.selected.value})) as HagueWorkspace
+}
+async function persistWorkspace():Promise<void>{
+  clearTimeout(workspaceTimer)
+  if(!workspaceReady||!materialId||!materialsDurable)return
+  const commit=()=>workspaceRecovery.put('workflow-exec',HAGUE_WORKSPACE_SCOPE,workspaceSnapshot())
+  if(ownsBatchLock)await commit()
+  else await withHagueBatchLock(commit,()=>{})
+}
+async function ownWorkspace(work:()=>Promise<void>):Promise<void>{
+  await withHagueBatchLock(async()=>{ownsBatchLock=true;try{await work()}finally{ownsBatchLock=false}},()=>{notice.value='另一工作台正在执行海牙批次，本页保留记录，未重复写入。'})
+}
+function scheduleWorkspace():void {
+  if(!workspaceReady||!materialId)return
+  clearTimeout(workspaceTimer)
+  workspaceTimer=setTimeout(()=>{void persistWorkspace().catch(()=>{notice.value='工作台恢复记录未能落盘，请保留本页。'})},400)
+}
+// Checkpoint writes have their own mandatory durability barrier. Do not deep-watch
+// them (or File bytes) and reserialize the whole material set on every receipt.
+watch(()=>[selected.value,draftConcurrency.value,draftTransport.value,draftExportFormat.value,...rows.value.flatMap(row=>[row.state,row.confirmed,row.error,row.source,row.decision,row.filing,row.folder.caseVolume,...(row.decision?.creators.flatMap(creator=>[creator.givenName,creator.familyName])??[])])],scheduleWorkspace)
+function flushWorkspaceOnHide():void{void persistWorkspace().catch(()=>{})}
+window.addEventListener('pagehide',flushWorkspaceOnHide)
+onMounted(async()=>{
+  try{
+    const snapshot=await workspaceRecovery.get('workflow-exec',HAGUE_WORKSPACE_SCOPE) as HagueWorkspace|null
+    if(snapshot?.version===1){
+      const restored=await restoreWorkspaceRows(snapshot)
+      if(!alive)return
+      rows.value=restored;materialId=snapshot.materialId;materialsDurable=true;selected.value=Math.max(0,Math.min(snapshot.selected,restored.length-1))
+      draftConcurrency.value=Math.max(1,Math.min(6,snapshot.concurrency||6));draftTransport.value=snapshot.transport;draftExportFormat.value=snapshot.exportFormat
+      draftBatch.value=snapshot.batch;draftProgress.value=snapshot.current;activeBatch=snapshot.activeBatch
+      // The case storage is the authoritative, awaited pre-send journal.
+      await Promise.all(rows.value.map(loadDraft))
+      for(const job of activeBatch?.jobs??[]){const row=rows.value.find(row=>row.folder.path===job.path);if(row)row.draft=checkpointForBatch(row.draft,job.caseRunId)}
+      workspaceReady=true
+      notice.value=`已恢复 ${restored.length} 件材料及工作台。`
+      if(activeBatch&&alive){
+        const targets=activeBatch.jobs.map(job=>rows.value.find(row=>row.folder.path===job.path))
+        if(targets.some(row=>!row))throw new Error('恢复批次材料不完整，未自动写入。')
+        if(snapshot.transport!=='http')throw new Error('页面填写模式已恢复，请核对原标签页后手动继续。')
+        await oa.refresh()
+        if(!oa.tabs.value.some(tab=>tab.id===snapshot.approvedTab))throw new Error('原先批准的 eHague 标签页已关闭，未自动切换到其他草稿。')
+        oa.selected.value=snapshot.approvedTab!
+        await createDrafts(targets as Row[],activeBatch.parallel,false,true)
+      }
+    }
+  }catch(error){notice.value=error instanceof Error?error.message:'工作台恢复失败，请重新导入材料。'}
+  finally{workspaceReady=true}
+})
 const savedDraftRows = computed(() => rows.value.filter(r => r.draft?.status === 'saved' && r.draft.reference))
 const uncertainDraftRows = computed(() => rows.value.filter(r => r.draft?.status === 'uncertain' || r.draft?.status === 'failed'))
 const unsavedDraftRows = computed(() => rows.value.filter(r => r.draft?.status !== 'saved'))
 const restoredSavedCount = computed(() => savedDraftRows.value.filter(r => restoredDrafts.value.has(r.folder.path)).length)
-const draftIssue = (row: Row): string => { try { buildDraftPlan(row); return '' } catch(e) { return e instanceof Error ? e.message : '材料未就绪' } }
+const draftIssues=computed(()=>new Map(rows.value.map(row=>{try{buildDraftPlan(row);return[row.folder.path,''] as const}catch(error){return[row.folder.path,error instanceof Error?error.message:'材料未就绪'] as const}})))
+const draftIssue = (row: Row): string => draftIssues.value.get(row.folder.path)??'材料未就绪'
+const pendingDraftDisplay=new Map<string,DraftCheckpoint>()
+let displayTimer:ReturnType<typeof setTimeout>|undefined,pendingBatch:DraftBatchProgress|undefined,pendingCurrent:DraftCheckpoint|undefined
+function flushDraftDisplay():void{
+  clearTimeout(displayTimer);displayTimer=undefined
+  for(const row of rows.value){const value=pendingDraftDisplay.get(row.folder.path);if(value)row.draft=value}
+  pendingDraftDisplay.clear()
+  if(pendingBatch){draftBatch.value=pendingBatch;pendingBatch=undefined}
+  if(pendingCurrent){draftProgress.value=pendingCurrent;pendingCurrent=undefined}
+}
+function queueDraftDisplay():void{displayTimer??=setTimeout(flushDraftDisplay,150)}
 const draftKey = (row: Row) => `hague.draft.v1.${row.folder.caseVolume}`
 async function storeDraft(row: Row, value: DraftCheckpoint): Promise<void> {
   value=draftCheckpointSnapshot(withDraftCorrections(value,row.filing))
   row.draft = { ...value }
   const displayed = rows.value.find(r => r.folder.path === row.folder.path)
-  if (displayed && displayed !== row) displayed.draft = { ...value }
+  if (displayed && displayed !== row){
+    pendingDraftDisplay.set(row.folder.path,{...value})
+    if(value.status==='saved'||value.error)flushDraftDisplay();else queueDraftDisplay()
+  }
   restoredDrafts.value.delete(row.folder.path)
   if (typeof chrome !== 'undefined' && chrome.storage?.local) await chrome.storage.local.set({ [draftKey(row)]:value })
 }
@@ -133,11 +201,17 @@ async function exportDraftZip():Promise<void>{
   notice.value=`已导出 ${targets.length} 份 PDF，ZIP 下载已完成。`;await chrome.downloads.show(result.downloadId)
  }catch(error){if(zipProgress.value)zipProgress.value={...zipProgress.value,error:true};notice.value=error instanceof Error?error.message:'批量导出失败。'}finally{busy.value=false;stopping.value=false}
 }
-async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<void> {
+async function createDrafts(targets: Row[], batch=false, asNew=false,resuming=false): Promise<void> {
+  if(busy.value||!workspaceReady)return
+  if(!materialsDurable){notice.value='材料尚未可靠落盘，请重新导入后再运行。';return}
+  try{await ownWorkspace(()=>createDraftsLocked(targets,batch,asNew,resuming))}
+  catch(error){notice.value=error instanceof Error?error.message:'工作流运行锁不可用。'}
+}
+async function createDraftsLocked(targets: Row[], batch=false, asNew=false,resuming=false): Promise<void> {
   if (busy.value || !targets.length) return
   busy.value = true; stopping.value = false; stopReason.value=''; const operation = new AbortController(); controller = operation; batchId = ''
   try {
-    const saved = targets.filter(row => row.draft && (asNew || row.draft.status === 'saved'))
+    const saved = resuming?[]:targets.filter(row => row.draft && (asNew || row.draft.status === 'saved'))
     if (saved.length && !await confirmDialog({
       title: '确认重新创建草稿',
       message: asNew ? `为 ${saved.length} 件案件另建新草稿？旧操作结果尚未确认，原站可能已有草稿。确认后将归档旧检查点，使用当前材料创建新编号；不修改或删除旧草稿，请审核可能重复的记录。` : `重新创建 ${saved.length} 件曾保存的案件草稿？\n本机历史记录不代表原站草稿仍存在。确认后将按当前材料创建新草稿、新编号，保留旧编号记录，不修改或删除旧草稿。${targets.length > saved.length ? `其余 ${targets.length - saved.length} 件继续正常填写或恢复。` : ''}`,
@@ -149,7 +223,7 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
     // The displayed historical receipt stays intact until the new runner persists its checkpoint.
     const previousCheckpoints = new Map<Row, DraftCheckpoint>()
     const jobs = targets.map(row => {
-      if (!row.draft || (!asNew && row.draft.status !== 'saved')) return row
+      if (resuming || !row.draft || (!asNew && row.draft.status !== 'saved')) return {...row,draft:row.draft?draftCheckpointSnapshot(row.draft):undefined}
       const fresh: Row = { ...row, draft: undefined }
       previousCheckpoints.set(fresh, draftCheckpointSnapshot(row.draft))
       return fresh
@@ -158,10 +232,16 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
       const previous=previousCheckpoints.get(row)
       return {...value,transport:draftTransport.value,...(previous&&previous.status!=='saved'?{warnings:[...new Set([...draftWarnings(value.warnings),'旧操作结果尚未确认；已归档原检查点并按用户确认另建新草稿，请审核可能重复的记录。'])]}:{})}
     }
-    notice.value = '正在验证 eHague 登录态，验证通过后开始填写…'
-    const ready = await oa.ensureFresh()
+    notice.value = resuming?'正在等待旧请求结束并核验原站回执…':'正在验证 eHague 登录态，验证通过后开始填写…'
+    const idle=await chrome.runtime.sendMessage<unknown,{ok:boolean;error?:string}>({channel:HAGUE_HTTP_CHANNEL,action:'waitIdle'})
+    if(!idle.ok)throw new Error(idle.error==='接口参数无效。'?'新版后台尚未启用，请在 Chrome 扩展管理页重新加载 PatMail，再恢复本工作台。':idle.error||'旧请求尚未结束，未重复写入。')
+    const ready = resuming?await oa.recover():await oa.ensureFresh()
     if (operation.signal.aborted) { notice.value = '已停止，未开始草稿填写。'; return }
     if (!ready) { notice.value = oa.message.value; return }
+    if(!resuming)activeBatch={parallel:batch,jobs:jobs.map(row=>({path:row.folder.path,caseRunId:row.draft?.caseRunId??'case-'+crypto.randomUUID()}))}
+    const runIds=new Map(activeBatch?.jobs.map(job=>[job.path,job.caseRunId])??[])
+    if(jobs.some(row=>!runIds.has(row.folder.path)))throw new Error('批次运行代号不完整，未开始写入。')
+    await persistWorkspace() // intent + stable run IDs must survive before first dispatch
     const tabId = oa.selected.value
     notice.value = ''; zipProgress.value=null
     draftRunning.value = true; startedAt = Date.now(); elapsed.value = 0
@@ -174,11 +254,8 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
       authenticationRefreshing.value=true
       const work=(async()=>{
         try{
-          await withNetworkReadRetry(async()=>{
-            if(operation.signal.aborted)throw new DOMException('Stopped','AbortError')
-            if(!await runHagueSessionRead(()=>oa.verify(true),operation.signal))throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'})
-          },operation.signal)
-          return true
+          if(operation.signal.aborted)return false
+          return await runHagueSessionRead(()=>oa.recover(),operation.signal)
         }catch{return false}
         finally{authenticationRefreshing.value=false}
       })()
@@ -189,9 +266,10 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
     const result=await runDraftBatch(jobs,batch?draftConcurrency.value:1,{
       transport:draftTransport.value,
       recoverUncertain:draftTransport.value==='http',
+      completed:row=>resuming&&row.draft?.status==='saved'&&row.draft.caseRunId===runIds.get(row.folder.path),
       open:()=>draftTransport.value==='http'?Promise.resolve(tabId):batch?openDraftTab():Promise.resolve(tabId),
       save:(row,value)=>storeDraft(row,checkpointFor(row,value)),
-      update:value=>{draftBatch.value=value},
+      update:value=>{pendingBatch=value;queueDraftDisplay()},
       error:(row,message,kind)=>{draftErrors.value[row.folder.path]=message;draftSkipped.value[row.folder.path]=kind==='skipped';if(kind==='failed'&&/登录|login/i.test(message))stopWithReason(`原站业务请求未通过登录校验：${message}`)},
       run:async(row,plan,workerTab,update)=>{
         const previous = previousCheckpoints.get(row)
@@ -201,9 +279,11 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
         draftActive.value.add(row.folder.path)
         let http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value,operation.signal):null
         try{return await runDraftPlan(plan,workerTab,{
+          caseRunId:runIds.get(row.folder.path),
           refreshAuthentication,
           transport:draftTransport.value,
           call:async(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext)=>{
+            if(oa.checking.value&&!oa.verified.value&&!authenticationRefresh&&!await refreshAuthentication())throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'})
             if(authenticationRefresh&&!await authenticationRefresh)throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'})
             const receipt=await(http?http.call(command,trace):callDraftPage(workerTab,command,documentId,reference,trace))
             if(receipt.ok)oa.noteAuthenticatedActivity(tabId)
@@ -222,14 +302,17 @@ async function createDrafts(targets: Row[], batch=false, asNew=false): Promise<v
             return result
           }}:{}),
           save:value=>storeDraft(row,checkpointFor(row,value)),
-          update:value=>{draftProgress.value={...value,stage:`${row.folder.caseVolume} · ${value.stage}`};update(value)}
+          update:value=>{pendingCurrent={...value,stage:`${row.folder.caseVolume} · ${value.stage}`};queueDraftDisplay();update(value)}
         },controller?.signal,row.draft)}finally{draftActive.value.delete(row.folder.path)}
       }
     },controller.signal)
+    flushDraftDisplay()
     notice.value=`草稿批次${result.stopped?'已停止':'已结束'}：成功 ${result.succeeded}，异常 ${result.failed}，跳过 ${result.skipped}。${result.stopped?`停止原因：${stopReason.value||'当前草稿未执行完成，检查点已保留。'}`:''}${result.failed||result.skipped?'请在各案查看原因及原站现场。':''}`
+    activeBatch=undefined
+    await persistWorkspace()
     void showDraftCompletion(notice.value,jobs.flatMap(row=>draftReviewNotes(row,draftErrors.value[row.folder.path])))
   } catch(e) { notice.value = e instanceof Error ? e.message : '草稿操作已停止，请检查原站。' }
-  finally { busy.value = false; draftRunning.value = false; stopping.value = false }
+  finally { flushDraftDisplay();busy.value = false; draftRunning.value = false; stopping.value = false }
 }
 async function acknowledgeDraft(row: Row, completed: boolean): Promise<void> {
   if (!row.draft || busy.value) return
@@ -248,13 +331,26 @@ watch(() => active.value?.folder.path, () => { previewIndex.value = null })
 watch(() => props.isActive, value => { if (!value) previewIndex.value = null })
 function preview(file: File): string { if (!urls.has(file)) urls.set(file, URL.createObjectURL(file)); return urls.get(file)! }
 function cleanup(): void { previewIndex.value = null; urls.forEach(url => URL.revokeObjectURL(url)); urls.clear() }
-onBeforeUnmount(() => { alive = false; if (busy.value) stopWithReason('工作台已卸载，停止后续处理。'); window.clearInterval(tick); cleanup() })
+onBeforeUnmount(() => { alive = false; if (busy.value) stopWithReason('工作台已卸载，停止后续处理。'); clearTimeout(workspaceTimer);void persistWorkspace().catch(()=>{});window.removeEventListener('pagehide',flushWorkspaceOnHide);window.clearInterval(tick); cleanup() })
 function issues(row: Row): string[] { return [...row.folder.issues, ...(row.filing?.issues ?? []), ...(row.filing ? validateImages(row.filing, row.folder.images) : [])] }
 async function importFiles(files: File[]): Promise<void> {
+  if(!files.length||busy.value)return
+  try{await ownWorkspace(()=>importFilesLocked(files))}
+  catch(error){notice.value=error instanceof Error?error.message:'工作台恢复存储不可用。'}
+}
+async function importFilesLocked(files: File[]): Promise<void> {
   if (!files.length || busy.value) return
   cleanup(); restoredDrafts.value.clear(); selected.value = 0; notice.value = ''; progress.value = null
   rows.value = discoverCases(files).map(folder => ({ folder, state: 'parsing', error: '', confirmed: false }))
-  await Promise.all(rows.value.map(loadDraft))
+  materialId=crypto.randomUUID();activeBatch=undefined;materialsDurable=false;busy.value=true
+  try{
+    await saveWorkspaceMaterials(rows.value,materialId);materialsDurable=true
+    await Promise.all(rows.value.map(loadDraft))
+    await persistWorkspace()
+    await pruneWorkspaceMaterials(materialId)
+  }catch(error){notice.value=error instanceof Error?error.message:'材料持久化失败，请重新导入。';return}
+  finally{busy.value=false}
+  if(!alive)return
   if (!rows.value.length) { notice.value = '没有发现案件文件夹，请选择包含定稿 Word 和编号图片的目录。'; return }
   await process(rows.value, false, true)
 }
@@ -308,6 +404,7 @@ async function onDrop(event: DragEvent): Promise<void> {
 }
 function requestStop(): void {stopWithReason('用户停止后续处理。')}
 function stopWithReason(reason:string):void {
+  activeBatch=undefined;void persistWorkspace().catch(()=>{})
   if(!stopReason.value)stopReason.value=reason
   stopping.value = true; controller?.abort()
   if (batchId && !draftRunning.value) void bridge.request({ type: MessageType.CancelHagueRead, payload: { batchId } })
@@ -342,7 +439,13 @@ async function process(targets: Row[], refresh = false, parse = false): Promise<
   }
 }
 async function verifyOa(): Promise<void> {
-  if (await oa.verify() && !busy.value && pendingRows.value.length) await process(pendingRows.value)
+  if(busy.value)return
+  await ownWorkspace(async()=>{
+    authenticationRefreshing.value=true
+    let ready=false
+    try{ready=await runHagueSessionRead(()=>oa.recover())}finally{authenticationRefreshing.value=false}
+    if(ready&&!busy.value&&pendingRows.value.length)await process(pendingRows.value)
+  })
 }
 watch([oa.verified, oa.checking,authenticationRefreshing], ([ready, checking,recovering]) => {
   if (!ready && !checking && !recovering && busy.value && (draftRunning.value || rows.value.some(r => ['reading', 'queued', 'arbitrating'].includes(r.state)))) stopWithReason(`会话验证中断：${oa.message.value}`)
@@ -378,9 +481,9 @@ function exportData(): void {
       <div id="hague-standalone-head-extra" class="workflow-head-extra" />
     </PageHead>
     <Teleport v-if="canTeleport && targetSelector" :to="targetSelector">
-      <OaSessionCard platform="WIPO eHague" :tabs="oa.tabs.value" :selected="oa.selected.value" :state="oa.state.value" :message="oa.message.value" :checking="oa.checking.value" :listing="oa.listing.value" @update:selected="oa.selected.value = $event" @verify="verifyOa" @refresh="oa.refresh" @open="oa.open" />
+      <OaSessionCard :disabled="busy || authenticationRefreshing" platform="WIPO eHague" :tabs="oa.tabs.value" :selected="oa.selected.value" :state="oa.state.value" :message="oa.message.value" :checking="oa.checking.value" :listing="oa.listing.value" @update:selected="oa.selected.value = $event" @verify="verifyOa" @refresh="oa.refresh" @open="oa.open" />
     </Teleport>
-    <OaSessionCard v-else-if="!canTeleport" platform="WIPO eHague" :tabs="oa.tabs.value" :selected="oa.selected.value" :state="oa.state.value" :message="oa.message.value" :checking="oa.checking.value" :listing="oa.listing.value" @update:selected="oa.selected.value = $event" @verify="verifyOa" @refresh="oa.refresh" @open="oa.open" />
+    <OaSessionCard v-else-if="!canTeleport" :disabled="busy || authenticationRefreshing" platform="WIPO eHague" :tabs="oa.tabs.value" :selected="oa.selected.value" :state="oa.state.value" :message="oa.message.value" :checking="oa.checking.value" :listing="oa.listing.value" @update:selected="oa.selected.value = $event" @verify="verifyOa" @refresh="oa.refresh" @open="oa.open" />
     <HagueDiagnostics />
     <section class="card hague-prepare">
       <header class="card-head">

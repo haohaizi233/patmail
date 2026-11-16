@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Bunny from '../../shell/components/Bunny.vue'
 import MailTypeTreeSelect from '../../shell/components/MailTypeTreeSelect.vue'
 import PageHead from '../../shell/components/PageHead.vue'
@@ -46,6 +46,9 @@ import { SKILLS, skillTint, stepCaption } from '../../workflow/skills'
 import { useWorkflowChoices } from '../composables/useWorkflowChoices'
 import { useQuerySurfaces } from '../composables/useQuerySurfaces'
 import { confirmDialog } from '../dialog'
+import { createRecoveryClient } from '../../recovery/client'
+import { systemScope } from '../../recovery/wal-ledger'
+import { sanitizeWorkflowDeskState } from './workflow-desk-state'
 
 type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague'
 
@@ -67,6 +70,40 @@ const { surfaces: querySurfaces } = useQuerySurfaces()
 const WORD_PARAMS = new Set(['type_keyword', 'customer_keyword', 'our_keyword', 'city_keyword', 'other_city_keyword'])
 const LISTED_CHOICES = new Set(['sender_mailset', 'surface_label'])
 let silence = false
+const recovery = createRecoveryClient()
+const recoveryScope = systemScope(location.origin, 'workflow')
+let hydrated = false
+let persistTimer: ReturnType<typeof setTimeout> | undefined
+function validDraft(value: unknown): value is WorkflowDefinition {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<WorkflowDefinition>
+  return typeof candidate.id === 'string' && typeof candidate.label === 'string' && typeof candidate.summary === 'string' && Array.isArray(candidate.steps) && candidate.steps.every(step => !!step && typeof step.id === 'string' && typeof step.title === 'string' && typeof step.detail === 'string' && Array.isArray(step.params) && step.params.every(param => !!param && typeof param.id === 'string' && typeof param.label === 'string' && typeof param.value === 'string' && typeof param.help === 'string'))
+}
+
+function deskState() {
+  return { screen: screen.value, hagueView: hagueView.value, jihuaView: jihuaView.value, draft: draft.value, selectedId: selectedId.value, dirty: dirty.value, picked: picked.value, newName: newName.value }
+}
+
+function flushDeskState(): void {
+  if (!hydrated) return
+  clearTimeout(persistTimer)
+  persistTimer = undefined
+  const snapshot = JSON.parse(JSON.stringify(deskState())) as ReturnType<typeof deskState>
+  void recovery.put('workflow-desk', recoveryScope, snapshot).catch(() => undefined)
+}
+
+function handlePageHide(): void { flushDeskState() }
+window.addEventListener('pagehide', handlePageHide)
+onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', handlePageHide)
+  flushDeskState()
+})
+
+watch([screen, hagueView, jihuaView, draft, selectedId, dirty, picked, newName], () => {
+  if (!hydrated) return
+  clearTimeout(persistTimer)
+  persistTimer = setTimeout(flushDeskState, 120)
+}, { deep: true })
 
 const ID_CHOICES = new Set(['customer_type_id', 'our_type_id', 'sender_mailset'])
 
@@ -83,6 +120,17 @@ function replaceDraft(next: WorkflowDefinition | null, markDirty: boolean): void
 
 onMounted(async () => {
   catalog.value = await loadWorkflowCatalog()
+  const restored = sanitizeWorkflowDeskState<WorkflowDefinition>(await recovery.get('workflow-desk', recoveryScope).catch(() => null), validDraft)
+  if (restored) {
+    screen.value = restored.screen
+    hagueView.value = restored.hagueView
+    jihuaView.value = restored.jihuaView
+    replaceDraft(restored.draft, restored.dirty)
+    selectedId.value = restored.selectedId
+    picked.value = restored.picked
+    newName.value = restored.newName
+  }
+  hydrated = true
 })
 
 watch(screen, (value) => {
