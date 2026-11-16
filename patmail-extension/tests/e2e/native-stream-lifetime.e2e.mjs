@@ -33,7 +33,7 @@ await writeFile(
 )
 await writeFile(
   path.join(ext, 'worker.js'),
-  `import {createNativeDownloadTarget} from './target.js'; globalThis.target=createNativeDownloadTarget({openNavigation:async(url)=>{await chrome.runtime.sendMessage({channel:'NAV',url})},resolveFileName:()=> '纯TS验证.zip',attachTimeoutMs:15000,finishTimeoutMs:8000});self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>target.handleFetch(e));`,
+  `import {createNativeDownloadTarget} from './target.js'; globalThis.target=createNativeDownloadTarget({openNavigation:async(url)=>{if(self.clients?.claim)await self.clients.claim();await chrome.runtime.sendMessage({channel:'NAV',url})},resolveFileName:()=> '纯TS验证.zip',attachTimeoutMs:15000,finishTimeoutMs:8000});self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>target.handleFetch(e));`,
 )
 await writeFile(path.join(ext, 'app.html'), '<!doctype html><script src="app.js"></script>')
 await writeFile(
@@ -68,7 +68,13 @@ try {
   })
   worker.on('console', m => report.errors.push(m.text()))
   await app.goto(base + '/app.html')
+  await worker.evaluate(async () => {
+    if (self.clients?.claim) await self.clients.claim()
+  })
   await app.reload()
+  await worker.evaluate(async () => {
+    if (self.clients?.claim) await self.clients.claim()
+  })
   console.log('stage app')
   report.stage = 'page-control'
   report.controller = await app.evaluate(() => !!navigator.serviceWorker?.controller)
