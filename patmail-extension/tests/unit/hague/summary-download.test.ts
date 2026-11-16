@@ -1,40 +1,47 @@
 import {it,expect,vi,afterEach} from 'vitest'
 import {downloadSummaryPdf,findSummaryDownload,summaryDownloadKey} from '../../../src/hague/summary-download'
-afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals()})
-it('confirms a PDF through Chrome downloads without requiring a page service-worker controller',async()=>{
- const download=vi.fn(async()=>42),search=vi.fn(async()=>[{id:42,state:'complete'}])
- vi.stubGlobal('chrome',{downloads:{download,search}})
- expect(await downloadSummaryPdf({name:'PO1HAGUE-Summary-WIPO123.pdf',bytes:new Uint8Array([37,80,68,70,45])})).toBe(42)
- expect(download).toHaveBeenCalledWith(expect.objectContaining({filename:'PO1HAGUE-Summary-WIPO123.pdf',saveAs:false}))
+const name='PO1HAGUE-Summary-WIPO123.pdf',pdf={name,bytes:new Uint8Array([37,80,68,70,45])}
+afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks()})
+function setup(search=vi.fn(async()=>[{state:'complete',filename:name,exists:true}]),id=42){
+ let created:((item:{id:number;url:string})=>void)|undefined,changed:((delta:{id:number;state:{current:string}})=>void)|undefined
+ const removeCreated=vi.fn(),removeChanged=vi.fn(),revoke=vi.fn(),download=vi.fn()
+ vi.stubGlobal('URL',{createObjectURL:vi.fn(()=>'blob:summary-test'),revokeObjectURL:revoke})
+ vi.stubGlobal('chrome',{downloads:{download,search,onCreated:{addListener:vi.fn((fn:(item:{id:number;url:string})=>void)=>{created=fn}),removeListener:removeCreated},onChanged:{addListener:vi.fn((fn:(delta:{id:number;state:{current:string}})=>void)=>{changed=fn}),removeListener:removeChanged}}})
+ const click=vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(function(this:HTMLAnchorElement){expect(this.download).toBe(name);created?.({id:999,url:'blob:other-case'});created?.({id,url:this.href})})
+ return{search,download,click,revoke,removeCreated,removeChanged,changed:(state:string)=>changed?.({id,state:{current:state}})}
+}
+it('names the native Blob download and correlates its Chrome record without a page service-worker controller',async()=>{
+ const h=setup();expect(await downloadSummaryPdf(pdf)).toBe(42)
+ expect(h.click).toHaveBeenCalledOnce();expect(h.download).not.toHaveBeenCalled();expect(h.search).toHaveBeenCalledWith({id:42})
+ expect(h.revoke).toHaveBeenCalledWith('blob:summary-test');expect(h.removeCreated).toHaveBeenCalledOnce()
 })
 it('rejects interrupted downloads and never reports them as completed',async()=>{
- vi.stubGlobal('chrome',{downloads:{download:async()=>43,search:async()=>[{state:'interrupted'}]}})
- await expect(downloadSummaryPdf({name:'PO1HAGUE-Summary-WIPO123.pdf',bytes:new Uint8Array([37,80,68,70,45])})).rejects.toThrow(/中断/)
+ const h=setup(vi.fn(async()=>[{state:'interrupted',filename:name,exists:false}]))
+ await expect(downloadSummaryPdf(pdf)).rejects.toThrow(/中断/);expect(h.revoke).toHaveBeenCalledOnce()
 })
-
-it('performs a final state check after a background-tab timer is delayed past its deadline',async()=>{
- vi.useFakeTimers();const search=vi.fn().mockResolvedValueOnce([{state:'in_progress'}]).mockResolvedValue([{state:'complete'}]);vi.stubGlobal('chrome',{downloads:{download:async()=>44,search}})
- const result=downloadSummaryPdf({name:'PO1HAGUE-Summary-WIPO123.pdf',bytes:new Uint8Array([37,80,68,70,45])})
- await vi.advanceTimersByTimeAsync(1);vi.setSystemTime(Date.now()+120000);await vi.advanceTimersByTimeAsync(250)
- await expect(result).resolves.toBe(44);vi.useRealTimers()
+it('rejects a completed download whose filename was replaced',async()=>{
+ setup(vi.fn(async()=>[{state:'complete',filename:'下载.pdf',exists:true}]))
+ await expect(downloadSummaryPdf(pdf)).rejects.toThrow(/文件名/)
 })
-
-it('confirms completion from the Chrome event without waiting for a throttled page timer',async()=>{
- vi.useFakeTimers();let changed!:(delta:{id:number;state:{current:string}})=>void
- vi.stubGlobal('chrome',{downloads:{download:async()=>45,search:async()=>[{state:'in_progress'}],onChanged:{addListener:vi.fn((fn:(delta:{id:number;state:{current:string}})=>void)=>{changed=fn}),removeListener:vi.fn()}}})
- const job=downloadSummaryPdf({name:'PO1HAGUE-Summary-WIPO123.pdf',bytes:new Uint8Array([37,80,68,70,45])});await vi.advanceTimersByTimeAsync(0)
- expect(changed).toBeTypeOf('function');changed({id:45,state:{current:'complete'}})
- await expect(job).resolves.toBe(45);vi.useRealTimers()
+it('performs a final state check after background timers are delayed past the deadline',async()=>{
+ vi.useFakeTimers();setup(vi.fn().mockResolvedValueOnce([{state:'in_progress'}]).mockResolvedValue([{state:'complete',filename:name}]))
+ const job=downloadSummaryPdf(pdf);await vi.advanceTimersByTimeAsync(1);vi.setSystemTime(Date.now()+120000);await vi.advanceTimersByTimeAsync(250)
+ expect(await job).toBe(42)
 })
-
-it('reuses a durable completed download after reload and rejects a deleted file',async()=>{
- const name='PO1HAGUE-Summary-WIPO123.pdf',key=summaryDownloadKey(name,'case-abc'),search=vi.fn().mockResolvedValueOnce([{state:'complete',exists:true}]).mockResolvedValueOnce([{state:'complete',exists:false}])
- vi.stubGlobal('chrome',{storage:{local:{get:async()=>({[key]:{id:71}})}},downloads:{search}})
- expect(await findSummaryDownload(name,'case-abc')).toBe(71)
- expect(await findSummaryDownload(name,'case-abc')).toBeUndefined()
+it('uses the Chrome completion event without waiting for a throttled polling timer',async()=>{
+ vi.useFakeTimers();const h=setup(vi.fn().mockResolvedValueOnce([{state:'in_progress'}]).mockResolvedValue([{state:'complete',filename:name}]))
+ const job=downloadSummaryPdf(pdf);await vi.advanceTimersByTimeAsync(0);h.changed('complete');expect(await job).toBe(42)
 })
-it('does not trust a malformed durable download identifier',async()=>{
- const name='PO1HAGUE-Summary-WIPO123.pdf',key=summaryDownloadKey(name,'case-abc'),search=vi.fn()
- vi.stubGlobal('chrome',{storage:{local:{get:async()=>({[key]:{id:'71'}})}},downloads:{search}})
+it('bounds a blocked native download and removes its temporary resources',async()=>{
+ vi.useFakeTimers();const h=setup();h.click.mockImplementation(()=>{})
+ const assertion=expect(downloadSummaryPdf(pdf)).rejects.toThrow(/下载记录/);await vi.runAllTimersAsync();await assertion;expect(h.revoke).toHaveBeenCalledOnce()
+})
+it('reuses a durable completed download only when its name and existence still match',async()=>{
+ const search=vi.fn().mockResolvedValueOnce([{state:'complete',exists:true,filename:name}]).mockResolvedValueOnce([{state:'complete',exists:false,filename:name}]).mockResolvedValueOnce([{state:'complete',exists:true,filename:'下载.pdf'}])
+ vi.stubGlobal('chrome',{storage:{local:{get:async()=>({[summaryDownloadKey(name,'case-abc')]:{id:71}})}},downloads:{search}})
+ expect(await findSummaryDownload(name,'case-abc')).toBe(71);expect(await findSummaryDownload(name,'case-abc')).toBeUndefined();expect(await findSummaryDownload(name,'case-abc')).toBeUndefined()
+})
+it('does not trust a malformed durable identifier',async()=>{
+ const search=vi.fn();vi.stubGlobal('chrome',{storage:{local:{get:async()=>({[summaryDownloadKey(name,'case-abc')]:{id:'71'}})}},downloads:{search}})
  expect(await findSummaryDownload(name,'case-abc')).toBeUndefined();expect(search).not.toHaveBeenCalled()
 })
