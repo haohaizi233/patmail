@@ -1,16 +1,35 @@
 import { expect,it,vi } from 'vitest'
-import { draftSteps,runDraftPlan,draftPlanKey } from '../../../src/hague/draft-runner'
+import { draftSteps,runDraftPlan,draftPlanKey,upgradeLegacyDraftCheckpoint } from '../../../src/hague/draft-runner'
 import type { DraftPlan } from '../../../src/hague/draft-plan'
 import type { DraftCommand,DraftCheckpoint,DraftReceipt,DraftRecovery } from '../../../src/hague/draft-contract'
 import {HagueDiagnosticError} from '../../../src/hague/diagnostics/errors'
 const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'',designs:[]}
 const checkpoint=(next=3):DraftCheckpoint=>({transport:'http',tabId:7,reference:'123',planKey:draftPlanKey(plan),next,total:draftSteps(plan).length,status:'stopped',stage:''})
 const receipt:DraftReceipt={ok:true,reference:'123',page:'application'}
-it('pauses an authentication failure for a shared read-only refresh before canonical recovery',async()=>{
+it('resumes a verified legacy plan when only a later creator field changed, without changing the current operation',async()=>{
+ const applicant={name:'Example',address:'Street',city:'City',region:'Region',country:'CN',postalCode:'1'}
+ const original={...plan,creators:[{givenName:'Anwen',familyName:'AN',address:applicant}]}
+ const next=draftSteps(original).findIndex(s=>s.command.op==='locarno')
+ const checkpoint:DraftCheckpoint={tabId:7,transport:'http',reference:'123',next,total:draftSteps(original).length,status:'uncertain',stage:'locarno',planKey:draftPlanKey(original)}
+ const migrated=await upgradeLegacyDraftCheckpoint(checkpoint,original)
+ const current={...original,creators:[{...original.creators[0],givenName:'An'}]},controller=new AbortController()
+ const recover=vi.fn(async()=>({outcome:'completed' as const,receipt}))
+ const result=await runDraftPlan(current,7,{recover,call:async()=>{controller.abort();return receipt},save:async()=>{}},controller.signal,migrated)
+ expect(recover).toHaveBeenCalledOnce();expect(result.next).toBe(next+1);expect(result.reference).toBe('123')
+ expect(result.warnings?.join()).toContain('尚未执行')
+ expect(result.planKey).toBe(draftPlanKey(current))
+ const changedCurrent={...current,locarno:'12'}
+ await expect(runDraftPlan(changedCurrent,7,{recover,call:async()=>receipt,save:async()=>{}},undefined,migrated)).rejects.toThrow('已执行或结果待核对')
+ expect(recover).toHaveBeenCalledOnce()
+})
+it('refuses a legacy migration without a complete matching original plan witness',async()=>{
+ await expect(upgradeLegacyDraftCheckpoint(checkpoint(),{...plan,publicationMonths:0})).rejects.toThrow('旧指纹不匹配')
+})
+it.each(['AUTH_REDIRECT','RPC_FAILED','NETWORK_ABORTED'] as const)('coordinates a shared session refresh before canonical recovery after %s',async code=>{
  const controller=new AbortController();let writes=0
  const refreshAuthentication=vi.fn(async()=>{expect(writes).toBe(1);return true})
  const recover=vi.fn(async():Promise<DraftRecovery>=>{expect(refreshAuthentication).toHaveBeenCalledOnce();return{outcome:'retry',receipt}})
- const result=await runDraftPlan(plan,7,{refreshAuthentication,recover,save:async()=>{},call:async c=>{if(c.op==='inspect')return receipt;if(++writes===1)return{ok:false,diagnosticError:new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'}).diagnostic};controller.abort();return receipt}},controller.signal,checkpoint())
+ const result=await runDraftPlan(plan,7,{refreshAuthentication,recover,save:async()=>{},call:async c=>{if(c.op==='inspect')return receipt;if(++writes===1)return{ok:false,diagnosticError:new HagueDiagnosticError({errorCode:code,errorStage:'http'}).diagnostic};controller.abort();return receipt}},controller.signal,checkpoint())
  expect(result.next).toBe(4);expect(writes).toBe(2);expect(refreshAuthentication).toHaveBeenCalledOnce()
 })
 it.each([true,false])('requires the persisted Summary digest before allowing one final close retry (%s)',async matching=>{

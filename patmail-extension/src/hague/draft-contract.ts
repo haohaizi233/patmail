@@ -34,6 +34,7 @@ export function draftCheckpointSnapshot(value: DraftCheckpoint): DraftCheckpoint
   }
   return {
     ...value, warnings: draftWarnings(value.warnings),
+    ...(value.planIdentity?{planIdentity:{version:value.planIdentity.version,steps:[...value.planIdentity.steps]}}:{}),
     ...(priorities ? { generatedPriorities: priorities.map(priority => ({ ...priority })) } : {}),
     ...(value.recoveryAttempts ? { recoveryAttempts: { ...value.recoveryAttempts } } : {}),
     ...(value.recoveryRetries ? { recoveryRetries: { ...value.recoveryRetries } } : {}),
@@ -62,5 +63,5 @@ export type DraftCommand =
   | { op: 'signature'; reference: string; representative: string }
 export interface DraftReceipt { summaryKey?:string; diagnosticState?:Pick<DiagnosticErrorData,'httpStatus'|'protocolStatus'|'transportStatus'>; diagnosticError?:DiagnosticErrorData; ok: boolean; error?: string; documentId?: string; reference?: string; page?: 'portfolio'|'application'|'summary'|'other'; applicants?: number; creators?: number; priorities?: number; designs?: number; reproductions?: number; printUrl?: string; downloadId?:number; warnings?: string[]; draftSaved?:boolean }
 export interface DraftRecovery { outcome:'completed'|'retry'|'unknown'; receipt?:DraftReceipt; reason?:string; diagnosticError?:DiagnosticErrorData }
-export interface DraftCheckpoint { summaryKey?:string; caseRunId?:string;lastTraceId?:string;diagnosticError?:DiagnosticErrorData; transport?: 'http'|'page'; reference?: string; documentId?: string; tabId: number; next: number; total: number; status: 'running'|'stopped'|'uncertain'|'saved'|'failed'; stage: string; error?: string; warnings?:string[]; designNumberCorrection?:{inputKey:string;note:string}; planKey?:string; downloadId?:number; generatedPriorities?:Priority[]; recoveryAttempts?:Record<string,number>; recoveryRetries?:Record<string,number>; acknowledged?:{next:number;op:DraftCommand['op'];page?:DraftReceipt['page']}; recoveryDecision?:{next:number;reference:string;outcome:'retry'} }
+export interface DraftCheckpoint { planIdentity?:import('./plan-identity').PlanIdentity; summaryKey?:string; caseRunId?:string;lastTraceId?:string;diagnosticError?:DiagnosticErrorData; transport?: 'http'|'page'; reference?: string; documentId?: string; tabId: number; next: number; total: number; status: 'running'|'stopped'|'uncertain'|'saved'|'failed'; stage: string; error?: string; warnings?:string[]; designNumberCorrection?:{inputKey:string;note:string}; planKey?:string; downloadId?:number; generatedPriorities?:Priority[]; recoveryAttempts?:Record<string,number>; recoveryRetries?:Record<string,number>; acknowledged?:{next:number;op:DraftCommand['op'];page?:DraftReceipt['page']}; recoveryDecision?:{next:number;reference:string;outcome:'retry'} }
 

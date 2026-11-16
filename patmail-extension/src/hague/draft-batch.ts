@@ -10,6 +10,7 @@ export interface DraftBatchProgress {
 interface Host {
   transport?:'http'|'page'
   recoverUncertain?:boolean
+  completed?(row:HagueRow):boolean
   plan?(row:HagueRow):DraftPlan
   open():Promise<number>
   run(row:HagueRow,plan:DraftPlan,tabId:number,update:(value:DraftCheckpoint)=>void):Promise<DraftCheckpoint>
@@ -24,21 +25,29 @@ export async function runDraftBatch(rows:readonly HagueRow[],concurrency:number,
   const progress=new Map<HagueRow,number>(),claimed=new Set<number>()
   const refCounts=new Map<string,number>(),tabCounts=new Map<number,number>(),wipoCounts=new Map<string,number>()
   for(const row of rows){const key=row.folder.caseVolume.trim().toUpperCase();refCounts.set(key,(refCounts.get(key)??0)+1);if(row.draft?.reference)wipoCounts.set(row.draft.reference,(wipoCounts.get(row.draft.reference)??0)+1);if(row.draft&&row.draft.status!=='saved')tabCounts.set(row.draft.tabId,(tabCounts.get(row.draft.tabId)??0)+1)}
-  const jobs:Array<{row:HagueRow;plan:DraftPlan;total:number}>=[]
+  const jobs:Array<{row:HagueRow;plan:DraftPlan;total:number;cost:number}>=[]
   const emit=()=>{state.done=[...progress.values()].reduce((a,b)=>a+b,0);host.update?.({...state})}
   for(const row of rows){
     try{
-      if(row.draft?.status==='saved'){state.skipped++;continue}
+      if(row.draft?.status==='saved'){
+        if(host.completed?.(row)){const total=draftSteps((host.plan??buildDraftPlan)(row)).length;state.succeeded++;state.total+=total;progress.set(row,total)}
+        else state.skipped++
+        continue
+      }
       if(row.draft&&row.draft.next>0&&(row.draft.transport??'page')!==(host.transport??'page'))throw new Error('检查点执行模式不同，请使用原模式继续，未重复创建。')
       if((refCounts.get(row.folder.caseVolume.trim().toUpperCase())??0)>1)throw new Error('同文号存在多个材料版本，请选择唯一版本后填写，未并发创建重复草稿。')
       if(row.draft?.reference&&(wipoCounts.get(row.draft.reference)??0)>1)throw new Error('多个案件指向同一 WIPO reference，请先核对检查点，未并发恢复。')
       if(row.draft?.status==='uncertain'&&!(host.transport==='http'&&host.recoverUncertain))throw new Error('草稿步骤结果待核对，请先确认原站是否已执行，未自动重试。')
       if(host.transport!=='http'&&row.draft&&(tabCounts.get(row.draft.tabId)??0)>1)throw new Error('多个检查点指向同一标签页，请先核对目标草稿，未交错写入。')
-      const plan=(host.plan??buildDraftPlan)(row),total=draftSteps(plan).length
-      jobs.push({row,plan,total});state.total+=total;progress.set(row,Math.min(row.draft?.next??0,total))
+      const plan=(host.plan??buildDraftPlan)(row),steps=draftSteps(plan),total=steps.length
+      const cost=steps.slice(row.draft?.next??0).reduce((sum,step)=>sum+(step.command.op==='upload'?3:1),0)
+      jobs.push({row,plan,total,cost});state.total+=total;progress.set(row,Math.min(row.draft?.next??0,total))
     }catch(error){state.skipped++;host.error?.(row,error instanceof Error?error.message:'材料未就绪','skipped')}
   }
-  state.settled=state.skipped;emit()
+  // Stable longest-remaining-work first reduces the final long-case tail.
+  // It changes only which independent case starts next, never its step order.
+  if(host.transport==='http')jobs.sort((a,b)=>b.cost-a.cost)
+  state.settled=state.skipped+state.succeeded;emit()
   const reserved=new Set(jobs.flatMap(j=>j.row.draft?[j.row.draft.tabId]:[]))
   let cursor=0,sessionLost=false
   await Promise.all(Array.from({length:Math.min(limit,jobs.length)},async()=>{

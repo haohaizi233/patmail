@@ -5,6 +5,7 @@ import { DRAFT_CONTACTS, type DraftPlan } from './draft-plan'
 import { HAGUE_DRAFT_CHANNEL, draftCheckpointSnapshot, draftWarnings, type DraftCheckpoint, type DraftCommand, type DraftReceipt,type DraftRecovery } from './draft-contract'
 import { recoverableDraftCommand } from './draft-recovery'
 import {withNetworkReadRetry} from './read-retry'
+import {createPlanIdentity,comparePlanIdentity} from './plan-identity'
 interface Step { label:string;command:DraftCommand;file?:File }
 function receiptError(receipt:DraftReceipt):Error {
  const error=receipt.diagnosticError?new HagueDiagnosticError(receipt.diagnosticError):new Error(receipt.error||'原站未确认操作结果')
@@ -31,12 +32,19 @@ export function draftSteps(plan:DraftPlan):Step[] {
  steps.push({label:'公开时间',command:{op:'publication',months:plan.publicationMonths}},{label:'签名和我方文号',command:{op:'signature',reference:plan.reference,representative:DRAFT_CONTACTS.representative.name}},{label:'生成 Summary',command:{op:'summary'}},{label:'生成打印文件',command:{op:'print',caseVolume:plan.reference}},{label:'返回草稿编辑器',command:{op:'backToApplication'}},{label:'保存为草稿',command:{op:'saveDraft'}})
  return steps
 }
-interface Host {refreshAuthentication?():Promise<boolean>;transport?:'http'|'page';call(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext):Promise<DraftReceipt>;save(value:DraftCheckpoint):Promise<void>;update?(value:DraftCheckpoint):void;recover?(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>}
+interface Host {caseRunId?:string;refreshAuthentication?():Promise<boolean>;transport?:'http'|'page';call(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext):Promise<DraftReceipt>;save(value:DraftCheckpoint):Promise<void>;update?(value:DraftCheckpoint):void;recover?(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>}
 export function draftPlanKey(plan:DraftPlan):string {
  const body=JSON.stringify({...plan,designs:plan.designs.map(d=>({...d,images:d.images.map(i=>({number:i.number,legend:i.legend,file:{name:i.file.name,size:i.file.size,lastModified:i.file.lastModified}}))}))})
  let hash=2166136261
  for(let i=0;i<body.length;i++)hash=Math.imul(hash^body.charCodeAt(i),16777619)
  return `${body.length}-${(hash>>>0).toString(16)}`
+}
+/** A legacy migration must supply an entire original plan that reproduces the
+ * stored fingerprint. It never clears progress, reference or uncertainty. */
+export async function upgradeLegacyDraftCheckpoint(checkpoint:DraftCheckpoint,original:DraftPlan):Promise<DraftCheckpoint>{
+ if(!checkpoint.planKey||draftPlanKey(original)!==checkpoint.planKey)throw new Error('历史执行计划与旧指纹不匹配，未升级检查点。')
+ if(checkpoint.planIdentity)return draftCheckpointSnapshot(checkpoint)
+ return draftCheckpointSnapshot({...checkpoint,planIdentity:await createPlanIdentity(draftSteps(original))})
 }
 export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?:AbortSignal,checkpoint?:DraftCheckpoint):Promise<DraftCheckpoint> {
  if(checkpoint)checkpoint=draftCheckpointSnapshot(checkpoint)
@@ -44,11 +52,17 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
  const steps=draftSteps(plan)
  const state:DraftCheckpoint=checkpoint?{...draftCheckpointSnapshot(checkpoint),recoveryAttempts:{...checkpoint.recoveryAttempts},total:steps.length}:{tabId,next:0,total:steps.length,status:'running',stage:'检查目标页面'}
  state.transport=host.transport??state.transport??'http'
- state.caseRunId=state.caseRunId??'case-'+crypto.randomUUID()
+ state.caseRunId=state.caseRunId??host.caseRunId??'case-'+crypto.randomUUID()
  let trace=makeTraceContext(state.caseRunId,state.next,'inspect',state.transport??'http',tabId)
  const planKey=draftPlanKey(plan)
  if(checkpoint&&(checkpoint.status==='uncertain'||checkpoint.recoveryDecision)&&!checkpoint.planKey)throw new Error('旧检查点缺少材料指纹，请先核对原草稿，未自动恢复。')
- if(state.planKey&&state.planKey!==planKey)throw new Error('材料或字段在存档后已变化，请先核对原站草稿，不能按旧检查点继续写入。')
+ const identity=await createPlanIdentity(steps)
+ if(state.planIdentity){
+  const comparison=comparePlanIdentity(state.planIdentity,identity,state.next)
+  if(comparison.outcome==='changed')throw new Error(`已执行或结果待核对的第 ${comparison.changed[0]+1} 步材料/字段发生变化，保留原草稿等待核对。`)
+  if(comparison.outcome==='future-changed')state.warnings=[...new Set([...(state.warnings??[]),'已核验已执行步骤与当前待核对步骤未变；仅更新尚未执行的后续字段。'])]
+ }else if(state.planKey&&state.planKey!==planKey)throw new Error('材料或字段在存档后已变化；旧检查点缺少逐步指纹，请恢复匹配旧指纹的执行计划后升级检查点，未覆盖原草稿。')
+ state.planIdentity=identity
  state.planKey=planKey
  state.generatedPriorities=plan.priorities.filter(p=>p.generated).map(p=>({...p}))
  const persist=async()=>{await host.save({...state});host.update?.({...state});emitTrace(trace,'checkpoint.persisted',{businessStatus:state.status==='saved'?'confirmed':state.status==='uncertain'?'unknown':'pending',evidenceCodes:state.status==='uncertain'?['CHECKPOINT_BEFORE_SEND']:[]})}
@@ -144,7 +158,7 @@ export async function runDraftPlan(plan:DraftPlan,tabId:number,host:Host,signal?
   }catch(error){
    const failure=normalizeDiagnosticError(error,{httpStatus:null,...receipt.diagnosticState,errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace);state.diagnosticError=failure.diagnostic;emitTrace(trace,'step.uncertain',{...failure.diagnostic});state.status='uncertain';state.error=error instanceof Error?error.message:'操作结果不确定';await persist()
    if(failure.diagnostic.transportStatus==='not_dispatched'&&failure.diagnostic.sideEffectMayHaveOccurred===false){state.status='stopped';state.stage='请求尚未发送，等待继续';await persist();throw failure}
-   if(failure.diagnostic.errorCode==='AUTH_REDIRECT'&&host.refreshAuthentication&&!signal?.aborted){
+   if(['AUTH_REDIRECT','RPC_FAILED','NETWORK_ABORTED'].includes(failure.diagnostic.errorCode)&&host.refreshAuthentication&&!signal?.aborted){
     state.stage='等待原站认证恢复，暂不发送写入';await persist()
     let authenticated=false
     try{authenticated=await host.refreshAuthentication()}catch{/* A failed refresh never authorizes a write. */}
