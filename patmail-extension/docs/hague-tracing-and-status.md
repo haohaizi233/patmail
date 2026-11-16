@@ -1,5 +1,8 @@
 # 海牙 Trace、状态与诊断面板
 
+> 状态：superseded。下文保留历史研究和实现演进，不作为当前生产结论。当前权威规范见[对应专题](engineering/hague/correlation-evidence.md)，核验基线与证据边界见[总览](engineering/README.md)。
+
+
 应用诊断默认关闭。海牙页面下方展开“协议诊断”，勾选“应用内诊断采集”后收集后续安全事件。展开面板不会采集脚本，也不会连接 CDP。关闭应用诊断不会修改业务检查点或触发重试。
 
 CDP 深度脚本分析是 Observer 的独立明确授权操作，参见 [CDP 使用说明](cdp-observer.md)。Observer使用严格固定的脱敏事件桥发送至已识别的PatMail应用页面，不依赖前端取得本机控制令牌；缺少CDP事件时明确显示“CDP数据缺失”。统一版本的 CDP Trace JSONL 可以通过离线回放查看，不能把本机旧式 Observer 原始日志直接当作本 Schema。

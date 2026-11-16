@@ -37,6 +37,8 @@ jobs:
       - uses: ./.github/actions/setup-patmail
       - name: Typecheck / Lint / Format
         run: node scripts/ci-check.mjs --steps typecheck,lint,format
+      - name: Offline documentation gate
+        run: pnpm docs:check
       - name: 上传静态检查报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -1,5 +1,8 @@
 # 海牙 CDP、JSF 与 AST 确定性证据关联模型
 
+> 状态：superseded。下文保留历史研究和实现演进，不作为当前生产结论。当前权威规范见[对应专题](engineering/hague/correlation-evidence.md)，核验基线与证据边界见[总览](engineering/README.md)。
+
+
 **文件标识**：`docs/hague-correlation-evidence.md`  
 **核心实现**：
 - `src/hague/diagnostics/correlation/correlator.mjs`

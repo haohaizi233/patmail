@@ -1,5 +1,8 @@
 # 海牙协议指纹与协议漂移检测引擎 (Protocol Drift Detection)
 
+> 状态：superseded。下文保留历史研究和实现演进，不作为当前生产结论。当前权威规范见[对应专题](engineering/hague/protocol-fingerprint.md)，核验基线与证据边界见[总览](engineering/README.md)。
+
+
 **文件标识**：`docs/hague-protocol-drift.md`  
 **核心实现**：`src/hague/diagnostics/protocol/jsf-diff.mjs` / `jsf-diff.d.mts`  
 **测试证据**：`tests/unit/hague/jsf-diff.test.ts` (4/4 passed)

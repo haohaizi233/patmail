@@ -1,5 +1,8 @@
 # 海牙 CDP 协议观察审计
 
+> 状态：superseded。下文保留历史研究和实现演进，不作为当前生产结论。当前权威规范见[对应专题](engineering/hague/cdp-research.md)，核验基线与证据边界见[总览](engineering/README.md)。
+
+
 2026-11-13：以下为源码审计和离线Fixture证据，不代表生产页面已实际观测。当前日志状态为 waiting、0 targets；未建立新CDP连接、未读取真实页面源码、未触发任何WIPO写入。
 
 ```mermaid

@@ -1,5 +1,8 @@
 # Hague JavaScript protocol analysis
 
+> 状态：superseded。下文保留历史研究和实现演进，不作为当前生产结论。当前权威规范见[对应专题](engineering/hague/javascript-ast.md)，核验基线与证据边界见[总览](engineering/README.md)。
+
+
 `src/hague/diagnostics/ast/analyzer.mjs` is shared by the extension and the native Node CDP observer. It imports Babel's actual parser and traverses parser-produced AST node fields (excluding source metadata/comments). It never executes fetched source. `analyzeJavaScript` returns a sanitized structural report; `extractStaticActions` is an internal execution API whose parameter values must never enter diagnostic storage.
 
 ## Evidence audit

@@ -1,0 +1,166 @@
+[
+  {
+    "old_path": "docs/hague-foundation-integration-gap.md",
+    "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-integration-gap.md",
+    "operation": "REMOVE_DUPLICATE",
+    "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+    "evidence": {
+      "sha256": "317bf620fdb401feafb4b14ca01b7f92e3e57638a59ce878a9d5494977c9349d",
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "archived_sha256": "fb732958de453867f2051302ebcadc9c153fa320bb952ffab7a3ba07993d7543",
+      "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-foundation-integration-gap.md",
+    "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-integration-gap.md",
+    "operation": "ARCHIVE",
+    "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+    "evidence": {
+      "sha256": "317bf620fdb401feafb4b14ca01b7f92e3e57638a59ce878a9d5494977c9349d",
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "archived_sha256": "fb732958de453867f2051302ebcadc9c153fa320bb952ffab7a3ba07993d7543",
+      "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+    }
+  },
+  {
+    "old_path": "docs/hague-foundation-fix-acceptance.md",
+    "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-fix-acceptance.md",
+    "operation": "REMOVE_DUPLICATE",
+    "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+    "evidence": {
+      "sha256": "1e69fb954cd9356c5f4dc43d23cda865c24ca9ff43ee0330ccf32f7107a817cf",
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "archived_sha256": "25f212ac1c00a7436178e02aa6fc1a813d4fcbe3dc0e950893b939e7630b8178",
+      "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-foundation-fix-acceptance.md",
+    "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-fix-acceptance.md",
+    "operation": "ARCHIVE",
+    "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+    "evidence": {
+      "sha256": "1e69fb954cd9356c5f4dc43d23cda865c24ca9ff43ee0330ccf32f7107a817cf",
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "archived_sha256": "25f212ac1c00a7436178e02aa6fc1a813d4fcbe3dc0e950893b939e7630b8178",
+      "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/concurrency-and-recovery.md",
+    "operation": "SPLIT",
+    "reason": "保留材料解析与来源规则；执行层合并到当前容灾规范，独有历史故障原文完整保留",
+    "evidence": {
+      "historical_copy": "patmail-extension/docs/archive/hague/海牙接口链与容灾算法-2026-11-13.md",
+      "sha256": "39f91a457d9b8efaea0f9fd5b052ce3688c0a6b02d7242ed5dc97a453e76f744",
+      "archived_sha256": "5f9e0d8ff581384d5a53fc5e2d7bf74dff3fe855e376d6157a56acb35999bd98",
+      "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-ast-analysis.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/javascript-ast.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-cdp-reverse-engineering.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/cdp-research.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-correlation-evidence.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-full-chain-diagnostics.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/diagnostics-and-maintenance.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-protocol-drift.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/protocol-fingerprint.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-protocol-semantics.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/jsf-protocol.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-tracing-and-status.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  },
+  {
+    "old_path": "patmail-extension/docs/hague-viewstate-lifecycle.md",
+    "canonical_path": "patmail-extension/docs/engineering/hague/viewstate-state-machine.md",
+    "operation": "UPDATE",
+    "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+    "evidence": {
+      "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    }
+  }
+]

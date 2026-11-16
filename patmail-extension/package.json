@@ -55,7 +55,9 @@
     "pack:source": "node scripts/pack-source.mjs",
     "pack:delivery": "node scripts/pack-delivery.mjs",
     "verify:archive": "node scripts/verify-archive.mjs",
-    "live:readonly": "node scripts/live-readonly.mjs"
+    "live:readonly": "node scripts/live-readonly.mjs",
+    "docs:check": "node scripts/docs-check.mjs",
+    "docs:audit": "node scripts/docs-audit.mjs"
   },
   "dependencies": {
     "@babel/parser": "^7.29.13",

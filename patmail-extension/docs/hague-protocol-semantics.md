@@ -1,5 +1,8 @@
 # 海牙 JSF / PrimeFaces 协议语义引擎设计与规范
 
+> 状态：superseded。下文保留历史研究和实现演进，不作为当前生产结论。当前权威规范见[对应专题](engineering/hague/jsf-protocol.md)，核验基线与证据边界见[总览](engineering/README.md)。
+
+
 **文件标识**：`docs/hague-protocol-semantics.md`  
 **核心实现**：`src/hague/diagnostics/protocol/jsf-semantics.mjs` / `jsf-semantics.d.mts`  
 **测试证据**：`tests/unit/hague/jsf-semantics.test.ts` (8/8 passed)

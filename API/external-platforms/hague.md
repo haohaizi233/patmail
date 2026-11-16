@@ -1,8 +1,14 @@
 # WIPO eHague 接口与草稿调用契约
 
-更新：2026-11-13。本文依据当前仓库实现、原站 DOM/PrimeFaces 元数据及本机 CDP 排障经验整理，是本项目的集成契约，不是 WIPO 官方公开 API 规范。范围为材料读取、草稿填写、Summary 与下载、草稿保存；正式递交、付款及登录认证协议未实现。
+更新：2026-11-13。本文依据当前仓库实现、原站 DOM/PrimeFaces 元数据及本机 CDP 排障经验整理，是本项目的集成契约，不是 WIPO 官方公开 API 规范。范围为材料读取、草稿填写、Summary 与下载、草稿保存；正式递交、付款及凭据登录协议未实现；既有会话支持探测与有限导航恢复。
 
 相关文档：[技术算法与容灾](../../patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md)、[工作流操作说明](../../patmail-extension/docs/workflows/海牙新申请.md)、[CDP 监听约束](../../patmail-extension/docs/cdp-observer.md)。
+
+## 当前核验状态（2026-11-16）
+
+代码基线 `de2ee0d`。用户确认最新实际业务验收通过；仓库阶段性记录与本机未提交原始证据分别评价。当前 Research Worker 已调用统一 JSF 语义、文档级 ViewState 状态机、协议漂移和组件注册表；执行链已使用逐步计划身份、材料 Blob/WAL 恢复与剩余工作量排序。
+
+权威解释见[技术总览](../../patmail-extension/docs/engineering/hague/README.md)及[并发恢复](../../patmail-extension/docs/engineering/hague/concurrency-and-recovery.md)。本文专注接口与内部 RPC 契约，不把 HTTP 200 等同于业务保存。原始 ViewState、Cookie 和凭据不作为示例记录。
 
 ## 1. 当前架构与验证等级
 
@@ -16,12 +22,12 @@
 | 扩展 RPC | `chrome.runtime.sendMessage` 内部消息 | 不能直接向 WIPO 发送这些 JSON |
 | 本地 PDF 输出 | 离线渲染与 Chrome 打印 | 不是 WIPO 独立 PDF 下载接口 |
 
-验证证据分开记录：
+以下四项为 2026-11-13 的历史验收快照，保留当时边界；不是当前缺陷清单：
 
 - **真实站点已验证**：本批 13 件最终保存在 13 个不同 reference 下，13 份 Summary PDF 下载完成；既有编号续接、CN/SG 法人、分页定位、图纸与 PDF 等在本批实际处理过。
 - **现场辅助恢复**：本批部分异常由 CDP 核对回执后续接，不能据此断言后加的自动恢复全量生产验收通过。
 - **自动恢复代码验证**：2026-11-13 海牙 149 项测试、类型检查、ESLint 基线门禁、根目录和扩展构建通过；包含故障注入与刷新中断测试。
-- **当前边界**：新增自动恢复的后续真实只读核查未取得 Draft(s) 入口，返回 unknown，没有进行业务写入；新自动恢复尚无一轮全量真实成功回归。
+- **该次边界**：新增自动恢复的后续真实只读核查未取得 Draft(s) 入口，返回 unknown，没有进行业务写入；新自动恢复尚无一轮全量真实成功回归。
 
 本页替代此前研究阶段“没有通用请求拼装器、仅页面驱动、纯接口尚未接入”的结论。历史实验不再作为当前能力描述。
 
@@ -226,7 +232,7 @@ tabId 实际必须为非负安全整数；params/headers/file 均按需省略。
 
 page 为 portfolio/application/summary/other；检查点状态为 running/stopped/uncertain/saved/failed。next 是下一步下标，不是已执行但尚未确认的当前步骤完成数。
 
-自动恢复是本地 `Host.recover → createHttpChain.recover → driver.recoverStep`，不是新增 WIPO endpoint，也不是新的扩展 RPC action。仅 HTTP 模式接入。原子推进、一次预算、优先权匹配和保存证明算法详见[技术文档第 6 节](../../patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md#6-有界自动恢复)。
+自动恢复是本地 `Host.recover → createHttpChain.recover → driver.recoverStep`，不是新增 WIPO endpoint，也不是新的扩展 RPC action。仅 HTTP 模式接入。原子推进、一次预算、优先权匹配和保存证明算法详见[技术文档第 6 节](../../patmail-extension/docs/engineering/hague/concurrency-and-recovery.md#写前持久化与不确定结果)。
 
 ## 7. 关键限制与维护入口
 

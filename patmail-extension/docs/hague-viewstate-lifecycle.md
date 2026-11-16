@@ -1,5 +1,8 @@
 # 海牙 ViewState 生命周期与跨请求状态迁移状态机
 
+> 状态：superseded。下文保留历史研究和实现演进，不作为当前生产结论。当前权威规范见[对应专题](engineering/hague/viewstate-state-machine.md)，核验基线与证据边界见[总览](engineering/README.md)。
+
+
 **文件标识**：`docs/hague-viewstate-lifecycle.md`  
 **核心实现**：`src/hague/diagnostics/protocol/jsf-state-machine.mjs` / `jsf-state-machine.d.mts`  
 **测试证据**：`tests/unit/hague/jsf-state-machine.test.ts` (6/6 passed)
