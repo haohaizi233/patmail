@@ -38,6 +38,7 @@ it.each([false,true])('reads and arbitrates materials with a restored approved c
   try {
     const concurrency=root.querySelector<HTMLButtonElement>('[aria-label="草稿并发路数"]')!
     expect(concurrency.textContent?.trim()).toBe('6 路')
+    await vi.waitFor(()=>expect(concurrency.disabled).toBe(false))
     concurrency.click()
     await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"]')].map(o => o.textContent?.trim())).toEqual(['1 路（串行）', '2 路', '3 路', '4 路', '5 路', '6 路']))
     concurrency.click()
@@ -63,10 +64,7 @@ it.each([false,true])('reads and arbitrates materials with a restored approved c
     const input = root.querySelector<HTMLInputElement>('input[aria-label="选择海牙申请总文件夹"]')!
     Object.defineProperty(input, 'files', { value: files })
     input.dispatchEvent(new Event('change'))
-    await vi.waitFor(() => expect(root.textContent).toContain(restored?'材料已就绪，请先连接并验证 eHague 登录态':'等待 eHague 登录验证'))
-    expect(mocks.read).not.toHaveBeenCalled(); expect(mocks.complete).not.toHaveBeenCalled()
-    const connect = [...root.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === '连接并检测登录')!
-    connect.click()
+    // The already-open Hague tab is verified automatically; material processing needs no connection click.
     await vi.waitFor(() => expect(root.textContent).toContain('US、EM、GB、JP、CA、KR'))
     expect(mocks.read).toHaveBeenCalledTimes(1); expect(mocks.complete).toHaveBeenCalledTimes(1)
     if(restored){expect(root.textContent).toContain('修正为 1–2');expect(root.textContent).not.toContain('产品表设计编号重复');expect([...root.querySelectorAll('button')].some(button=>button.textContent==='全部另建草稿')).toBe(true)}
@@ -77,4 +75,14 @@ it.each([false,true])('reads and arbitrates materials with a restored approved c
     expect(root.querySelector('.hague-page [role=progressbar]')).toBeNull()
     expect(root.querySelector('.test-top-actions [role=progressbar]')?.getAttribute('aria-valuenow')).toBe('100')
   } finally { app.unmount(); vi.unstubAllGlobals() }
+})
+
+it('offers the kawaii theme reproduction toggle checked by default and allows switching it off',async()=>{
+ const el=document.createElement('div');document.body.append(el);const app=createApp(HaguePage);app.mount(el)
+ try{
+  await vi.waitFor(()=>{const button=[...el.querySelectorAll('button')].find(b=>b.textContent?.includes('导出图纸'));expect(button?.disabled).toBe(false)})
+  const button=[...el.querySelectorAll('button')].find(b=>b.textContent?.includes('导出图纸'))!
+  expect(button.classList.contains('solid')).toBe(true);expect(button.getAttribute('aria-pressed')).toBe('true')
+  button.click();await Promise.resolve();expect(button.getAttribute('aria-pressed')).toBe('false');expect(button.classList.contains('ghost')).toBe(true)
+ }finally{app.unmount();el.remove();vi.unstubAllGlobals()}
 })

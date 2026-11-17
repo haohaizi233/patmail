@@ -33,5 +33,5 @@ it('renders OaSessionCard compactly inside WorkflowWorkspace header without dupl
   const parent = card?.parentElement
   expect(parent?.classList.contains('workflow-head-extra')).toBe(true)
   expect(card?.textContent).toContain('WIPO eHague')
-  expect(card?.textContent).toContain('连接并检测登录')
+  expect(card?.textContent).toContain('重新检测')
 })

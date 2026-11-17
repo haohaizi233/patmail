@@ -4,7 +4,9 @@ function record(value: unknown): value is Record<string, unknown> { return !!val
 async function send(action: string, tabId?: number): Promise<Record<string, unknown>> {
   const response = await new Promise<unknown>((resolve, reject) => {
     if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) { reject(new Error('请在扩展工作台中连接 eHague。')); return }
+    const timer=setTimeout(()=>reject(new HagueSessionVerificationError('eHague 检测超时，稍后自动复核。','unavailable')),action==='recover'?150000:20000)
     chrome.runtime.sendMessage({ channel: HAGUE_SESSION_CHANNEL, action, ...(tabId === undefined ? {} : { tabId }) }, (reply: unknown) => {
+      clearTimeout(timer)
       if (chrome.runtime.lastError) reject(new HagueSessionVerificationError('eHague 连接通道暂不可用，稍后自动复核。','unavailable'))
       else resolve(reply)
     })
@@ -13,7 +15,7 @@ async function send(action: string, tabId?: number): Promise<Record<string, unkn
   return response
 }
 export const hagueSessionClient = {
-  isTransientError:(error:unknown):boolean=>error instanceof HagueSessionVerificationError&&error.code==='unavailable',
+  isTransientError:(error:unknown):boolean=>error instanceof HagueSessionVerificationError&&['unavailable','busy'].includes(error.code),
   async listTabs(): Promise<HagueTab[]> {
     const response = await send('listTabs')
     if (!Array.isArray(response.tabs)) throw new Error('eHague 标签页列表无效。')

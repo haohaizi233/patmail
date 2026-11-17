@@ -38,3 +38,9 @@ it('keeps portfolio probes quiet between batch commands and resumes after one id
  const probe=vi.fn(async()=>{});vi.setSystemTime(1059999);await withIdleHagueProbe(probe);expect(probe).not.toHaveBeenCalled()
  vi.setSystemTime(1060000);await withIdleHagueProbe(probe);expect(probe).toHaveBeenCalledOnce()
 })
+
+it('does not overlap independent automatic probes even while no business is running',async()=>{
+ vi.resetModules();const {withIdleHagueProbe}=await import('../../../src/background/hague-activity');let finish!:()=>void
+ const first=withIdleHagueProbe(()=>new Promise<void>(r=>{finish=r}));const second=vi.fn(async()=>{})
+ expect(await withIdleHagueProbe(second)).toBeUndefined();expect(second).not.toHaveBeenCalled();finish();await first
+})

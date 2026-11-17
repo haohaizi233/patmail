@@ -93,8 +93,9 @@ async function navigateAndWait(tabId:number,url:string):Promise<void>{
  })
 }
 let productionHandler:ReturnType<typeof createHagueSessionHandler>|undefined
-export function handleHagueSessionMessage(message:unknown,sender:chrome.runtime.MessageSender):Promise<unknown>{
+export async function handleHagueSessionMessage(message:unknown,sender:chrome.runtime.MessageSender):Promise<unknown>{
  productionHandler??=createHagueSessionHandler({extensionId:chrome.runtime.id,queryTabs:()=>chrome.tabs.query({}),getTab:id=>chrome.tabs.get(id),getDocumentId:async tabId=>(await chrome.webNavigation.getFrame({tabId,frameId:0}))?.documentId,createTab:async url=>{await chrome.tabs.create({url})},navigateTab:navigateAndWait,executeScript:injection=>chrome.scripting.executeScript(injection)})
+ if(record(message)&&message.action==='verify')return await withIdleHagueProbe(()=>productionHandler!(message,sender))??{ok:false,code:'busy',error:'原站任务或检测正在进行，空闲后自动复核。'}
  return productionHandler(message,sender)
 }
 

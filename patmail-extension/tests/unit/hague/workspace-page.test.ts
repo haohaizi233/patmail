@@ -48,10 +48,11 @@ it('automatically resumes only the unfinished same-generation job after quiet an
  expect(mocks.run.mock.calls[0][2].caseRunId).toBe('batch-two')
  expect(mocks.put.mock.calls.at(-1)?.[2]).not.toHaveProperty('activeBatch')
 })
-it('does not verify or write when restored material bytes cannot be recovered',async()=>{
+it('does not write when restored material bytes cannot be recovered',async()=>{
  setup();mocks.restore.mockRejectedValueOnce(new Error('恢复材料缺失'))
  const root=mount();await vi.waitFor(()=>expect(root.textContent).toContain('恢复材料缺失'))
- expect(mocks.verify).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled()
+ // Read-only automatic login detection is independent of material recovery.
+ expect(mocks.run).not.toHaveBeenCalled()
 })
 it('reactively displays canonical checkpoints newer than the workspace snapshot without an active batch',async()=>{
  setup();const snapshot=await mocks.get();mocks.get.mockResolvedValue({...snapshot!,activeBatch:undefined})

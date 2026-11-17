@@ -18,7 +18,7 @@ export async function waitForHagueIdle(timeout=120000,quiet=500):Promise<void>{
  })
 }
 export async function withIdleHagueProbe<T>(read:()=>Promise<T>):Promise<T|undefined>{
- if(hagueBusinessActive())return
+ if(hagueBusinessActive()||probe)return
  const current=read();probe=current
- try{return await current}finally{if(probe===current)probe=undefined}
+ try{return await current}finally{if(probe===current)probe=undefined;for(const notify of idleListeners)notify()}
 }
