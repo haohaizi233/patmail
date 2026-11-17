@@ -1,3 +1,4 @@
+import {exportReproductions,readReproductionsPdf} from './reproductions'
 import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
 import type {TraceContext,DiagnosticErrorData} from './diagnostics/trace'
 import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
@@ -105,7 +106,7 @@ export function createHttpChain(tabId:number,id:string,reference?:string,restore
    return !result.ok&&!result.diagnosticError?{...result,diagnosticError:normalizeDiagnosticError(new Error(),{...driver.state.diagnosticState(),errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace).diagnostic}:result
   }catch(e){const failure=normalizeDiagnosticError(e,{...driver.state.diagnosticState(),errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',businessStatus:'unconfirmed'},trace);return{ok:false,reference:driver.state.reference,documentId:id,error:e instanceof Error?e.message:failure.message,diagnosticError:failure.diagnostic}}
  }
- return{driver,recover,call:(command:DraftCommand,trace?:TraceContext)=>{
+ return{driver,recover,exportReproductions:(caseVolume:string,trace?:TraceContext)=>{const form=driver.state.document.getElementById('designForm') as HTMLFormElement|null;return exportReproductions(driver.state.document,driver.state.url,driver.state.reference??'',caseVolume,fetcher,trace,signal,form?driver.state.controls(form):undefined)},call:(command:DraftCommand,trace?:TraceContext)=>{
   let entered=false
   return(command.op==='create'?creationPool.run(()=>inPortfolio(()=>{entered=true;return call(command,trace,true)}),signal).catch(error=>{
    if(!entered&&signal?.aborted)throw new HagueDiagnosticError({errorCode:'NETWORK_ABORTED',errorStage:'transport',transportStatus:'not_dispatched',httpStatus:null,sideEffectMayHaveOccurred:false,traceId:trace?.traceId})
@@ -149,4 +150,29 @@ export async function renderSavedSummary(tabId:number,caseVolume:string,referenc
   if(!summary.ok)throw new Error(summary.error??'无法读取已保存草稿的 Summary。')
  })
  return renderSummary(driver,fetcher,caseVolume)
+}
+
+export async function exportPageReproductions(tabId:number,reference:string,caseVolume:string,documentId?:string,trace?:TraceContext,signal?:AbortSignal):Promise<number>{
+ signal?.throwIfAborted()
+ const request=chrome.runtime.sendMessage<unknown,{ok:boolean;form?:string;title?:string;url?:string;params?:Array<[string,string]>;error?:string}>({channel:HAGUE_HTTP_CHANNEL,action:'reproductionForm',tabId,reference,documentId})
+ const reply=await new Promise<Awaited<typeof request>>((resolve,reject)=>{
+  const cleanup=()=>{clearTimeout(timer);signal?.removeEventListener('abort',aborted)}
+  const aborted=()=>{cleanup();reject(new DOMException('图纸导出已停止。','AbortError'))}
+  const timer=setTimeout(()=>{cleanup();reject(new Error('图纸表单读取超时，请核对原站后重试。'))},15000)
+  signal?.addEventListener('abort',aborted,{once:true})
+  if(signal?.aborted){aborted();return}
+  void request.then(value=>{cleanup();resolve(value)},error=>{cleanup();reject(error instanceof Error?error:new Error('图纸表单读取失败。'))})
+ })
+ if(!reply.ok||!reply.form||!reply.url||!reply.params)throw new Error(reply.error??'未取得当前图纸表单。')
+ const doc=new DOMParser().parseFromString(reply.form,'text/html');doc.title=reply.title??''
+ return exportReproductions(doc,reply.url,reference,caseVolume,hagueHttpFetch(tabId),trace,signal,new URLSearchParams(reply.params))
+}
+
+export async function renderSavedReproductions(tabId:number,caseVolume:string,reference:string){
+ const fetcher=hagueHttpFetch(tabId),driver=new HagueHttpDriver(`reproductions-${crypto.randomUUID()}`,fetcher)
+ return portfolioPool.run(async()=>{
+  await driver.resume(reference)
+  const form=driver.state.document.getElementById('designForm') as HTMLFormElement|null
+  return readReproductionsPdf(driver.state.document,driver.state.url,reference,caseVolume,fetcher,undefined,form?driver.state.controls(form):undefined)
+ })
 }

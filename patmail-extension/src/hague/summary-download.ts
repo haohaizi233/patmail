@@ -28,7 +28,7 @@ export async function findSummaryDownload(name:string,caseRunId?:string):Promise
  return item?.state==='complete'&&item.exists!==false&&matchesName(item.filename,name)?record.id:undefined
 }
 export async function downloadSummaryPdf(pdf:{name:string;bytes:Uint8Array},caseRunId?:string):Promise<number>{
- if(!/^P[A-Z0-9-]*HAGUE-Summary-WIPO\d+\.pdf$/i.test(pdf.name)||String.fromCharCode(...pdf.bytes.subarray(0,5))!=='%PDF-')throw new Error('Summary PDF 文件名或内容无效。')
+ if(!/^P[A-Z0-9-]*HAGUE-(?:Summary|Reproductions)-WIPO\d+\.pdf$/i.test(pdf.name)||String.fromCharCode(...pdf.bytes.subarray(0,5))!=='%PDF-')throw new Error('Summary PDF 文件名或内容无效。')
  const{id,release}=await startSummaryDownload(pdf)
  try{if(caseRunId&&chrome.storage?.local)await chrome.storage.local.set({[summaryDownloadKey(pdf.name,caseRunId)]:{id}})}catch(error){release();throw error}
  return new Promise<number>((resolve,reject)=>{

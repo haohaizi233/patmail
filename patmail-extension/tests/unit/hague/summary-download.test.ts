@@ -45,3 +45,10 @@ it('does not trust a malformed durable identifier',async()=>{
  const search=vi.fn();vi.stubGlobal('chrome',{storage:{local:{get:async()=>({[summaryDownloadKey(name,'case-abc')]:{id:'71'}})}},downloads:{search}})
  expect(await findSummaryDownload(name,'case-abc')).toBeUndefined();expect(search).not.toHaveBeenCalled()
 })
+
+it('downloads the official reproduction PDF with a filename distinct from Summary',async()=>{
+ const drawName='PO1HAGUE-Reproductions-WIPO123.pdf';const h=setup(vi.fn(async()=>[{state:'complete',filename:drawName,exists:true}]))
+ h.click.mockRestore()
+ vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(function(this:HTMLAnchorElement){expect(this.download).toBe(drawName);const created=(chrome.downloads.onCreated.addListener as unknown as {mock:{calls:Array<[(item:unknown)=>void]>}}).mock.calls.at(-1)![0];created({id:42,url:this.href})})
+ expect(await downloadSummaryPdf({...pdf,name:drawName})).toBe(42)
+})

@@ -8,7 +8,7 @@ interface AssetRef { key: string; name: string; type: string; size: number; last
 type StoredRow = Omit<HagueRow, 'folder'> & { folder: Omit<HagueRow['folder'], 'documents' | 'images'> & { documents: AssetRef[]; images: AssetRef[] } }
 export interface HagueWorkspace {
   version: 1; materialId: string; rows: StoredRow[]; selected: number; concurrency: number
-  transport: 'http' | 'page'; exportFormat: 'pdf' | 'zip'; batch: DraftBatchProgress
+  exportReproductions?:boolean; transport: 'http' | 'page'; exportFormat: 'pdf' | 'zip'; batch: DraftBatchProgress
   current: DraftCheckpoint | null; activeBatch?: ActiveDraftBatch; approvedTab?: number
 }
 const DATABASE = 'patmail-hague-materials-v1'

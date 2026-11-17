@@ -1,3 +1,4 @@
+import {beforeSummaryExport} from '../../../src/hague/reproductions'
 import { expect,it,vi } from 'vitest'
 import { draftSteps,runDraftPlan,draftPlanKey } from '../../../src/hague/draft-runner'
 import {HagueDiagnosticError} from '../../../src/hague/diagnostics/errors'
@@ -87,4 +88,11 @@ it('checks an already settled HTTP navigation before waiting for a background-ta
 it('keeps the actionable receipt error for the UI while retaining sanitized diagnostics',async()=>{
  const call=vi.fn(async(c:{op:string})=>c.op==='inspect'?{ok:true,page:'application' as const,reference:'123'}:{ok:false,error:'优先权记录数量尚未确认，请核对回执。',diagnosticError:new HagueDiagnosticError({errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',httpStatus:null}).diagnostic})
  await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toThrow('优先权记录数量尚未确认')
+})
+
+it('does not recover past a failed reproduction export prerequisite or advance the Summary checkpoint',async()=>{
+ const next=draftSteps(plan).findIndex(s=>s.command.op==='summary'),recover=vi.fn(),save=vi.fn(async(_v:unknown)=>{})
+ const call=vi.fn(async(c:{op:string})=>{if(c.op==='inspect')return{ok:true,page:'application' as const,reference:'123',documentId:'doc'};await beforeSummaryExport(async()=>{throw new Error('图纸下载中断')});return{ok:true}})
+ await expect(runDraftPlan(plan,7,{call,save,recover},undefined,{tabId:7,reference:'123',documentId:'doc',next,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toMatchObject({diagnostic:{errorCode:'REPRODUCTIONS_EXPORT_FAILED'}})
+ expect(recover).not.toHaveBeenCalled();expect(save.mock.calls.at(-1)?.[0]).toMatchObject({status:'stopped',next});expect(call.mock.calls.filter(([c])=>c.op!=='inspect')).toHaveLength(1)
 })

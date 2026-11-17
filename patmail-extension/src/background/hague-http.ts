@@ -43,6 +43,14 @@ export async function fetchHague(request:HttpRequest):Promise<{status:number|nul
   return{status:observedStatus,url:'',mime:'',base64:'',diagnosticError:{version:1,errorCode:controller.signal.aborted?'NETWORK_TIMEOUT':aborted?'NETWORK_ABORTED':'NETWORK_FAILED',errorStage:'transport',timestamp:new Date().toISOString(),traceId:request.trace?.traceId,httpStatus:observedStatus,transportStatus:controller.signal.aborted?'timeout':aborted?'aborted':'network_error',protocolStatus:'not_observed',businessStatus:'unknown',certainty:'unknown',sideEffectMayHaveOccurred:request.method==='POST',autoRecoverable:false,message:controller.signal.aborted?'海牙请求超时，业务结果待核对。':aborted?'海牙请求被取消，业务结果待核对。':'海牙网络请求失败，业务结果待核对。'}}
  }finally{clearTimeout(timer)}
 }
+/** Self-contained for Chrome executeScript serialization; capture live form properties. */
+export function snapshotReproductionForm(reference:string){
+ if(/WIPO reference\s+(\d+)/i.exec(document.title+' '+document.body.textContent)?.[1]!==reference)throw new Error('图纸案件编号不匹配。')
+ const form=document.getElementById('designForm') as HTMLFormElement|null;if(!form||form.tagName!=='FORM')throw new Error('图纸表单缺失。')
+ const params:Array<[string,string]>=[]
+ for(const [key,value]of new FormData(form))if(typeof value==='string')params.push([key,value])
+ return{form:form.outerHTML,title:document.title,url:location.href,params}
+}
 export async function handleHagueHttp(message:unknown,sender:chrome.runtime.MessageSender):Promise<unknown>{
  try{
   const senderUrl=new URL(sender.url??'')
@@ -50,6 +58,15 @@ export async function handleHagueHttp(message:unknown,sender:chrome.runtime.Mess
   if((message as {action?:string}).action==='waitIdle'){await waitForHagueIdle();return{ok:true}}
   const print=message as {action?:string;html?:string;caseVolume?:string;reference?:string;delivery?:'artifact'}
   if(print.action==='print'&&typeof print.html==='string'&&typeof print.caseVolume==='string'&&typeof print.reference==='string'){const result=await printOfflineHague(print.html,print.caseVolume,print.reference,print.delivery==='artifact'?'artifact':'download');return typeof result==='number'?{ok:true,downloadId:result}:{ok:true,...result}}
+  if((message as {action?:string}).action==='reproductionForm'){
+   const m=message as {tabId?:number;reference?:string;documentId?:string}
+   if(!Number.isSafeInteger(m.tabId)||Number(m.tabId)<0||!/^\d+$/.test(m.reference??''))throw new Error('图纸案件参数无效。')
+   const tabId=Number(m.tabId),frame=await chrome.webNavigation.getFrame({tabId,frameId:0})
+   if(!frame?.documentId||m.documentId&&frame.documentId!==m.documentId||new URL(frame.url).origin!=='https://hague.wipo.int'||!new URL(frame.url).pathname.endsWith('/protected/page/application.xhtml'))throw new Error('图纸页面已变化。')
+   const result=(await chrome.scripting.executeScript({target:{tabId,documentIds:[frame.documentId]},world:'ISOLATED',func:snapshotReproductionForm,args:[m.reference!]}))[0]?.result
+   if(!result)throw new Error('图纸表单未返回。')
+   return{ok:true,...result}
+  }
   const m=message as {tabId?:number;request?:HttpRequest},r=m.request
   if(!Number.isSafeInteger(m.tabId)||Number(m.tabId)<0||!r||!['GET','POST'].includes(r.method))throw new Error('接口参数无效。')
   const url=new URL(r.url)
