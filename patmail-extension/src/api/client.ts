@@ -16,6 +16,9 @@ import { buildLimitMonitorParams, type LimitMonitorQuery } from './limit-monitor
 import { buildFilingSearchParams, type FilingSearchQuery } from './filing-search-params'
 import { normalizeFilingSearch } from './filing-search-normalizer'
 import type { FilingSearchResult } from './filing-search-types'
+import { buildFeeSearchParams, buildFeeSearchAmountParams, type FeeSearchQuery } from './fee-search-params'
+import { normalizeFeeSearch } from './fee-search-normalizer'
+import type { FeeSearchResult } from './fee-search-types'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
 import { buildMailProcessParams, buildProcessListParams, filingNeedsCpcFlag, normalizeMailProcess, normalizeProcessList, processFormPath, type ProcessKind, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from './mail-process'
 import { isRecord } from './response-guards'
@@ -148,6 +151,8 @@ export class EasyRuntime {
   private limitSequence = 0
   private filingController: AbortController | null = null
   private filingSequence = 0
+  private feeController: AbortController | null = null
+  private feeSequence = 0
   private activeSearch: { signature: string; promise: Promise<ApiResult<FileSearchResult>> } | null = null
   private readonly history: HistoryQueryService
   private readonly dictionaries: DictionaryService
@@ -189,10 +194,12 @@ export class EasyRuntime {
       if (result.ok && result.data.status !== 'authenticated') {
         this.cancelFileSearch()
         this.cancelLimitMonitor()
+        this.cancelFeeSearch()
       }
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
         this.cancelFileSearch()
         this.cancelLimitMonitor()
+        this.cancelFeeSearch()
       }
       const nextKey = result.ok && result.data.status === 'authenticated' ? result.data.userId ?? '' : ''
       if (nextKey !== this.historyUserKey) {
@@ -856,6 +863,48 @@ export class EasyRuntime {
     this.filingSequence++
     this.filingController?.abort()
     this.filingController = null
+  }
+
+  searchFees(query: FeeSearchQuery, timeoutMs?: number, batch = false): Promise<ApiResult<FeeSearchResult>> {
+    const controller = new AbortController()
+    if (!batch) {
+      this.cancelFeeSearch()
+      this.feeController = controller
+    }
+    const requestNumber = batch ? 0 : ++this.feeSequence
+    return (async (): Promise<ApiResult<FeeSearchResult>> => {
+      if (!(await this.confirmAccountRead())) {
+        return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      }
+      const params = buildFeeSearchParams(query)
+      const response = await this.transport.post('feeSearch', params.data, controller.signal, timeoutMs)
+      if (!batch && requestNumber !== this.feeSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
+      const result = response.ok ? normalizeFeeSearch(response.data, query) : response
+      if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
+        this.session.expire()
+        this.cancelFeeSearch()
+      }
+      return result
+    })()
+  }
+
+  searchFeesAmount(query: FeeSearchQuery, timeoutMs?: number): Promise<ApiResult<Record<string, unknown>>> {
+    const controller = new AbortController()
+    return (async (): Promise<ApiResult<Record<string, unknown>>> => {
+      if (!(await this.confirmAccountRead())) {
+        return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      }
+      const params = buildFeeSearchAmountParams(query)
+      const response = await this.transport.post('feeSearchAmount', params.data, controller.signal, timeoutMs)
+      if (!response.ok) return response
+      return { ok: true, data: isRecord(response.data) ? response.data : {} }
+    })()
+  }
+
+  cancelFeeSearch(): void {
+    this.feeSequence++
+    this.feeController?.abort()
+    this.feeController = null
   }
 
   private readonly userInfoCache = new Map<string, FilingUser>()

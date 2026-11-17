@@ -68,6 +68,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [41-发文页读取.md](41-发文页读取.md) | 发文页 Filing.aspx 打开时的读取。24 个 Call |
 | [42-案件页读取.md](42-案件页读取.md) | 案件页 CaseManage.aspx 的权限、读取和留痕。9 个 Call |
 | [43-首页与待办.md](43-首页与待办.md) | 首页与流程待办页 ProcessNew.aspx。6 个 Call |
+| [44-费用查询.md](44-费用查询.md) | 官费管理 FeeSearch 与 FeeSearchTotalAmount 请求、84列与响应。2 个 Call |
 
 14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。下面的入口表才是去重后的 390。
 
@@ -442,11 +443,13 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Report.ashx
 
-20 个。
+22 个。
 
 | Call | 文档 |
 |---|---|
 | `CustomizedInit` | [骨架](40-报表.md#reportashx-customizedinit) |
+| `FeeSearch` | [44-费用查询.md](44-费用查询.md) |
+| `FeeSearchTotalAmount` | [44-费用查询.md](44-费用查询.md) |
 | `FlowMonitorInfo` | [09](09-期限监控.md#2-getlimitmonitorcaselist)。type=flow 时列表 Call 改成这个，响应未核对 |
 | `GetBjshBatchMailReportConfig` | [骨架](40-报表.md#reportashx-getbjshbatchmailreportconfig) |
 | `GetCommonReportList` | [骨架](40-报表.md#reportashx-getcommonreportlist) |

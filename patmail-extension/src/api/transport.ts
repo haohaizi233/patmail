@@ -15,6 +15,7 @@ export type EasyOperation =
   | 'agencySearchCase' | 'agencyCaseInfo' | 'patentCaseData' | 'icSearch' | 'customerList'
   | 'hagueApplicants' | 'haguePriorities' | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName' | 'fileDownload'
   | 'filingSearch' | 'filingFlowNode' | 'contractInit'
+  | 'feeSearch' | 'feeSearchAmount'
 
 export interface TransportOptions {
   fetcher?: typeof fetch
@@ -94,7 +95,9 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   fileDownload: { path: '/AjaxServers/BaseInfo.ashx', call: 'DownLoad' },
   filingSearch: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFinished' },
   filingFlowNode: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFilingFlowNode' },
-  contractInit: { path: '/AjaxServers/Customer.ashx', call: 'InitContractStatus' }
+  contractInit: { path: '/AjaxServers/Customer.ashx', call: 'InitContractStatus' },
+  feeSearch: { path: '/AjaxServers/Report.ashx', call: 'FeeSearch' },
+  feeSearchAmount: { path: '/AjaxServers/Report.ashx', call: 'FeeSearchTotalAmount' }
 }
 
 function loginRedirect(response: Response, origin: string): boolean {

@@ -11,10 +11,11 @@ import type { MailRuleBundle } from '../mail/types'
 import { isQueryGuid, isQueryTemplate } from '../query/query-validator'
 import type { QueryTemplate } from '../query/query-types'
 import { isEasyConnection, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope } from './connection'
-import { isCaseContactResult, isDictionaryResult, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isFileTempNamesResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
+import { isCaseContactResult, isDictionaryResult, isFeeSearchApiResult, isFeeSearchQuery, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isFileTempNamesResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
 import type { FileTempNameList } from '../api/file-temp-name'
 import type { LimitMonitorQuery } from '../api/limit-monitor-params'
 import type { FilingSearchQuery } from '../api/filing-search-params'
+import type { FeeSearchQuery } from '../api/fee-search-params'
 import { isProcessOpenTarget, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from '../api/mail-process'
 import type { CaseContactExport } from '../case-contact/query'
 import type { CaseDemandAsset } from '../mail/easy/case-demand'
@@ -23,6 +24,7 @@ import type { MailContactAsset } from '../mail/easy/mail-contacts'
 import type { AccountReviewerList } from '../workflow/contracts'
 import type { LimitMonitorResult } from '../api/limit-monitor-types'
 import type { FilingSearchResult } from '../api/filing-search-types'
+import type { FeeSearchResult } from '../api/fee-search-types'
 import type { FilingFlowRow, FilingUser } from '../api/filing-export'
 import type { DictionaryLoadRequest, DictionarySnapshot } from '../api/dictionaries'
 import type { FileSearchQuery } from '../api/file-search-params'
@@ -66,6 +68,10 @@ export const MessageType = {
   SearchLimitMonitorResult: 'SEARCH_LIMIT_MONITOR_RESULT',
   SearchFiling: 'SEARCH_FILING',
   SearchFilingResult: 'SEARCH_FILING_RESULT',
+  SearchFee: 'SEARCH_FEE',
+  SearchFeeResult: 'SEARCH_FEE_RESULT',
+  SearchFeeAmount: 'SEARCH_FEE_AMOUNT',
+  SearchFeeAmountResult: 'SEARCH_FEE_AMOUNT_RESULT',
   SubmitLimitMail: 'SUBMIT_LIMIT_MAIL',
   SubmitLimitMailResult: 'SUBMIT_LIMIT_MAIL_RESULT',
   SubmitFileManage: 'SUBMIT_FILE_MANAGE',
@@ -196,6 +202,8 @@ export type ContentRequest =
   | Request<'CANCEL_FILE_SEARCH'> | Request<'CANCEL_LIMIT_MONITOR'> | Response<'SEARCH_FILES', { query: FileSearchQuery; continuation?: { querySessionId: string }; timeoutMs?: number; batch?: true }>
   | Response<'SEARCH_LIMIT_MONITOR', { query: LimitMonitorQuery; timeoutMs?: number }>
   | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number; batch?: true }>
+  | Response<'SEARCH_FEE', { query: FeeSearchQuery; timeoutMs?: number; batch?: true }>
+  | Response<'SEARCH_FEE_AMOUNT', { query: FeeSearchQuery; timeoutMs?: number }>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; namedBusiness?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string; addresses?: Pick<FileMailConfig, 'to' | 'cc'> }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
@@ -414,6 +422,8 @@ export type ContentResponse =
   | Response<'SEARCH_FILES_RESULT', ApiResult<FileSearchResult>>
   | Response<'SEARCH_LIMIT_MONITOR_RESULT', ApiResult<LimitMonitorResult>>
   | Response<'SEARCH_FILING_RESULT', ApiResult<FilingSearchResult>>
+  | Response<'SEARCH_FEE_RESULT', ApiResult<FeeSearchResult>>
+  | Response<'SEARCH_FEE_AMOUNT_RESULT', ApiResult<Record<string, unknown>>>
   | Response<'SUBMIT_LIMIT_MAIL_RESULT', { stopped: boolean; results: Array<{ procId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string; to?: string; cc?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE_RESULT', { stopped: boolean; results: Array<{ fileId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES_RESULT', ApiResult<{ names: string[] }>>
@@ -915,6 +925,20 @@ export function isMessage(value: unknown): value is AppMessage {
       return keys.every(key => key === 'query' || key === 'timeoutMs') &&
         (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs)
     }
+    case MessageType.SearchFee: {
+      if (!isRecord(value.payload) || !isFeeSearchQuery(value.payload.query)) return false
+      const keys = Object.keys(value.payload)
+      if (!keys.includes('query')) return false
+      return keys.every(key => key === 'query' || key === 'timeoutMs' || key === 'batch') &&
+        (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs) &&
+        (value.payload.batch === undefined || value.payload.batch === true)
+    }
+    case MessageType.SearchFeeAmount: {
+      if (!isRecord(value.payload) || !isFeeSearchQuery(value.payload.query)) return false
+      const keys = Object.keys(value.payload)
+      if (!keys.includes('query')) return false
+      return keys.every(key => key === 'query' || key === 'timeoutMs')
+    }
     case MessageType.SearchFiling: {
       if (!isRecord(value.payload) || !isFilingSearchQuery(value.payload.query)) return false
       const keys = Object.keys(value.payload)
@@ -1044,6 +1068,10 @@ export function isMessage(value: unknown): value is AppMessage {
       return isLimitMonitorApiResult(value.payload)
     case MessageType.SearchFilingResult:
       return isFilingSearchApiResult(value.payload)
+    case MessageType.SearchFeeResult:
+      return isFeeSearchApiResult(value.payload)
+    case MessageType.SearchFeeAmountResult:
+      return isRecord(value.payload)
     case MessageType.ExportCaseContactsResult:
       return isCaseContactResult(value.payload)
     case MessageType.ListMailProcessesResult:
@@ -1180,7 +1208,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.CheckSession || value.type === MessageType.CancelSessionCheck ||
     value.type === MessageType.SearchFiles || value.type === MessageType.CancelFileSearch ||
     value.type === MessageType.CancelLimitMonitor ||
-    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.ListMailProcesses ||
+    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.SearchFee || value.type === MessageType.SearchFeeAmount || value.type === MessageType.ListMailProcesses ||
     value.type === MessageType.SubmitLimitMail ||
     value.type === MessageType.SubmitFileManage ||
     value.type === MessageType.ResolveDownloadNames ||

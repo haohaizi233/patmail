@@ -10,6 +10,8 @@ import type { LimitMonitorResult, LimitMonitorRow } from './limit-monitor-types'
 import { filingSearchValueLimit, isFilingSearchInputField, type FilingSearchQuery } from './filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from './filing-search-types'
 import type { FilingFlowRow, FilingUser } from './filing-export'
+import type { FeeSearchResult } from './fee-search-types'
+export { isFeeSearchQuery } from './fee-search-params'
 import { isProcessKind, isProcessOpenTarget, PROCESS_SPECS, type ProcessListQuery, type ProcessListResult, type ProcessListRow } from './mail-process'
 import type { SessionSummary } from './session'
 import type { CaseContactExport } from '../case-contact/query'
@@ -351,4 +353,12 @@ function isCaseContactExport(value: unknown): value is CaseContactExport {
 
 export function isCaseContactResult(value: unknown): value is ApiResult<CaseContactExport> {
   return isApiResult(value, isCaseContactExport)
+}
+
+function isFeeSearchResult(value: unknown): value is FeeSearchResult {
+  return isRecord(value) && Array.isArray(value.rows) && typeof value.total === 'number'
+}
+
+export function isFeeSearchApiResult(value: unknown): value is ApiResult<FeeSearchResult> {
+  return isApiResult(value, isFeeSearchResult)
 }

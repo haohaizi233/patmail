@@ -186,6 +186,12 @@ const bridge: MessageBridge = {
       case MessageType.SearchFiling:
         return { type: MessageType.SearchFilingResult,
           payload: await easyRuntime.searchFiling(message.payload.query, message.payload.timeoutMs, message.payload.batch === true) }
+      case MessageType.SearchFee:
+        return { type: MessageType.SearchFeeResult,
+          payload: await easyRuntime.searchFees(message.payload.query, message.payload.timeoutMs, message.payload.batch === true) }
+      case MessageType.SearchFeeAmount:
+        return { type: MessageType.SearchFeeAmountResult,
+          payload: await easyRuntime.searchFeesAmount(message.payload.query, message.payload.timeoutMs) }
       case MessageType.SubmitLimitMail:
         return { type: MessageType.SubmitLimitMailResult,
           payload: await easyRuntime.submitLimitMails(message.payload.userId, message.payload.items) }
