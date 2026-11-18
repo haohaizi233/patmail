@@ -15,6 +15,7 @@ export interface FeeSearchQuery {
 
   // Row 1
   case_type?: string
+  Case_direction?: string
   case_status?: string
   country?: string
 
@@ -26,11 +27,13 @@ export interface FeeSearchQuery {
 
   // Row 3
   fee_class?: string
+  fee_type?: string
   request_no?: string
   pay_type?: string
 
   // Row 4
   notice_status?: string
+  request_status?: string
   receive_status?: string
   pay_status?: string
   pay_status_is_agent_fee?: boolean
@@ -51,13 +54,21 @@ export interface FeeSearchQuery {
   pay_date_is_agent_fee?: boolean
 
   // Row 6
-  invoice_time_from?: string
-  invoice_time_to?: string
-  invoice_time_isnull?: boolean
+  create_date_from?: string
+  create_date_to?: string
+  create_date_isnull?: boolean
 
   app_date_from?: string
   app_date_to?: string
   app_date_isnull?: boolean
+
+  createtime_from?: string
+  createtime_to?: string
+  createtime_isnull?: boolean
+
+  invoice_time_from?: string
+  invoice_time_to?: string
+  invoice_time_isnull?: boolean
 
   pay_due_date_from?: string
   pay_due_date_to?: string
@@ -65,10 +76,6 @@ export interface FeeSearchQuery {
   pay_due_date_is_agent_fee?: boolean
 
   // Row 7
-  create_date_from?: string
-  create_date_to?: string
-  create_date_isnull?: boolean
-
   ctrl_proc?: string
   proc_pic_id?: string
 
@@ -80,34 +87,56 @@ export interface FeeSearchQuery {
   issue_no?: string
   is_fuzzy_query_issue_no?: boolean
   case_volume_customer?: string
+  business_type?: string
+  is_close?: string
   is_ahead_pub?: string
+  sale_id?: string
+  sale_dept_id?: string
   charge_date_from?: string
   charge_date_to?: string
   charge_date_isnull?: boolean
   charge_dept_id?: string
+  flow_user?: string
   case_name?: string
   sale_help_id?: string
+  hearing_the_case?: string
+  apply_type?: string
+  case_agency_precorditem?: string
+  case_agency?: string
   is_vip?: string
   generation_status?: string
   contract_code?: string
   product_name?: string
+  authorize_date_from?: string
+  authorize_date_to?: string
+  authorize_date_isnull?: boolean
   sourcetype?: string
   introducer?: string
   inside_introducer?: string
   asst_office_case_no?: string
   apply_tags?: string
   technical_field?: string
+  applicant_name?: string
+  inventor_name?: string
+  pic_id?: string
+  pic_dept?: string
+  accurate_customer?: string
   case_pic_id?: string
   customer_status?: string
+  nickname?: string
   customer_no?: string
   customer_code?: string
   customer_sale_id?: string
   ruleOutcustomer_id?: string
   contact?: string
+  contact_type?: string
   proc_create_time_from?: string
   proc_create_time_to?: string
   proc_create_time_isnull?: boolean
   proc_pic_dept_id?: string
+  doc_date_from?: string
+  doc_date_to?: string
+  doc_date_isnull?: boolean
   legal_due_date_from?: string
   legal_due_date_to?: string
   int_doc_date_from?: string
@@ -119,6 +148,12 @@ export interface FeeSearchQuery {
   check_time_from?: string
   check_time_to?: string
   check_time_isnull?: boolean
+  receive_date_update_user?: string
+  receive_date_update_time_from?: string
+  receive_date_update_time_to?: string
+  receive_date_update_time_isnull?: boolean
+  office_no?: string
+  office_no_is_agent_fee?: boolean
   request_date_from?: string
   request_date_to?: string
   request_date_isnull?: boolean
@@ -229,14 +264,20 @@ export function buildFeeSearchParams(query: FeeSearchQuery, columns?: string[]):
         params.set(key, String(value))
       }
     } else if (typeof value === 'string' && value.trim()) {
-      params.set(key, value.trim())
+      const normalized = key === 'applicant_id' ? value.trim().replace(/,/g, ';') : value.trim()
+      params.set(key, normalized)
     }
   }
 
   for (const [key, value] of Object.entries(bag)) {
     if (value && typeof value === 'string' && !params.has(key)) {
-      params.set(key, value.trim())
+      const normalized = key === 'applicant_id' ? value.trim().replace(/,/g, ';') : value.trim()
+      params.set(key, normalized)
     }
+  }
+
+  if (!params.has('first_applicant')) {
+    params.set('first_applicant', '0')
   }
 
   return { ok: true, data: params }

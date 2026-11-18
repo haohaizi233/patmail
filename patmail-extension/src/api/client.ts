@@ -18,7 +18,7 @@ import { normalizeFilingSearch } from './filing-search-normalizer'
 import type { FilingSearchResult } from './filing-search-types'
 import { buildFeeSearchParams, buildFeeSearchAmountParams, type FeeSearchQuery } from './fee-search-params'
 import { normalizeFeeSearch } from './fee-search-normalizer'
-import type { FeeSearchResult } from './fee-search-types'
+import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeTypeItem } from './fee-search-types'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
 import { buildMailProcessParams, buildProcessListParams, filingNeedsCpcFlag, normalizeMailProcess, normalizeProcessList, processFormPath, type ProcessKind, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from './mail-process'
 import { isRecord } from './response-guards'
@@ -905,6 +905,196 @@ export class EasyRuntime {
     this.feeSequence++
     this.feeController?.abort()
     this.feeController = null
+  }
+
+  /** 费用查询页完整初始化字典（对齐 FeeSearch.js 的 FeeSearchInit + GetAencyList + ContactInit + GetProducts + LoadTechnical + GetFieldColumn）。 */
+  async loadFeeInit(): Promise<ApiResult<FeeInitData>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const post = (op: Parameters<EasyTransport['post']>[0], extra: Record<string, string>) => {
+      const p = new URLSearchParams(extra)
+      p.set('log_pagename', 'FeeSearch.aspx')
+      return this.transport.post(op, p)
+    }
+    const [initRes, agencyRes, contactRes, prodRes, techRes, colRes] = await Promise.all([
+      post('feeSearchInit', { Call: 'FeeSearchInit' }),
+      post('feeAgencyList', { Call: 'GetAencyList' }),
+      post('feeContactInit', { Call: 'ContactInit' }),
+      post('feeProducts', { Call: 'GetProducts' }),
+      post('feeTechnical', { Call: 'LoadTechnical', Key: '' }),
+      post('fieldColumn', { Call: 'GetFieldColumn' })
+    ])
+    if (!initRes.ok) return initRes
+
+    const body = isRecord(initRes.data) ? initRes.data : {}
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const arr = (obj: unknown, key: string): Record<string, unknown>[] => {
+      if (!isRecord(obj)) return []
+      const raw = obj[key]
+      return Array.isArray(raw) ? raw.filter(isRecord) : []
+    }
+    const dictItems = (rows: Record<string, unknown>[], valueKey = 'value', labelKey = 'text_zh_cn'): FeeOptionItem[] =>
+      rows
+        .map(row => {
+          const value = str(row[valueKey] ?? row.id)
+          const label = str(row[labelKey] ?? row.text ?? row.name)
+          const caseTypeId = str(row.case_type_id ?? row.case_type)
+          const countryId = str(row.country_id)
+          if (!value || !label) return null
+          return {
+            value,
+            label,
+            ...(caseTypeId ? { caseTypeId } : {}),
+            ...(countryId ? { countryId } : {})
+          }
+        })
+        .filter((x): x is FeeOptionItem => x !== null)
+
+    const treeItems = (rows: Record<string, unknown>[]): FeeOptionItem[] =>
+      rows
+        .map(row => {
+          const value = str(row.id ?? row.value)
+          const label = str(row.name ?? row.text_zh_cn ?? row.text ?? row.value)
+          const rawParent = str(row.pid ?? row.pId ?? row.parent_id)
+          const parent = rawParent && rawParent !== '0' && rawParent !== 'root' ? rawParent : ''
+          if (!value || !label) return null
+          return { value, label, ...(parent ? { parent } : {}) }
+        })
+        .filter((x): x is FeeOptionItem => x !== null)
+
+    // FeeSearch.js L542: 排除科技服务 (882D9F78-7656-468E-BE98-68FE5E334A9B)
+    const caseTypes = dictItems(arr(body, 'CaseType')).filter(
+      item => item.value.toUpperCase() !== '882D9F78-7656-468E-BE98-68FE5E334A9B'
+    )
+    const directions = dictItems(arr(body, 'Case_direction'))
+    const receiveStatuses = dictItems(arr(body, 'receive_status'))
+    const payTypes = dictItems(arr(body, 'PayType'))
+    const applyTypes = dictItems(arr(body, 'ApplyType'))
+    const bussTypes = dictItems(arr(body, 'BussType'))
+    const caseStatuses = dictItems(
+      arr(body, 'case_status').filter(r => {
+        const sc = str(r.status_class)
+        return sc === '' || sc === 'ALL' || sc === 'CASE'
+      })
+    )
+    const customerStatuses = dictItems(arr(body, 'customerStatus'))
+    const reviewStages = dictItems(arr(body, 'review_stage'))
+    const currencies = dictItems(arr(body, 'FeeCurrency'), 'currency_id', 'currency_name_zh_cn')
+    const sourceTypes = dictItems(arr(body, 'sourcetype'))
+    const bankList = dictItems(arr(body, 'bank_list'), 'bank_id', 'account_name')
+
+    const feeTypes: FeeTypeItem[] = arr(body, 'FeeType')
+      .map(row => ({
+        id: str(row.fee_type_id),
+        name: str(row.fee_type_zh_cn ?? row.fee_type_en_us),
+        caseTypeId: str(row.case_type_id),
+        countryId: str(row.country_id),
+        applyTypeId: str(row.apply_type_id),
+        feeClass: str(row.fee_class),
+        caseTypeName: str(row.case_type_zh_cn),
+        applyTypeName: str(row.apply_type_zh_ch),
+        countryName: str(row.country_zh_cn),
+        currencyName: str(row.currency_name_zh_cn)
+      }))
+      .filter(item => Boolean(item.id && item.name))
+
+    const agencies = agencyRes.ok ? dictItems(arr(agencyRes.data, 'AgencyList'), 'agency_id', 'agency_name_cn') : []
+    const contactTypes = contactRes.ok ? dictItems(arr(contactRes.data, 'contacttype')) : []
+    const products = prodRes.ok ? treeItems(arr(prodRes.data, 'Products')) : []
+    const technicals = techRes.ok ? treeItems(arr(techRes.data, 'Technical')) : []
+
+    const fieldColumns: Record<string, string> = {}
+    if (colRes.ok) {
+      for (const row of arr(colRes.data, 'fieldColumn')) {
+        const colId = str(row.column_id)
+        const colName = str(row.column_name)
+        if (colId && colName) fieldColumns[colId] = colName
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        caseTypes,
+        directions,
+        receiveStatuses,
+        payTypes,
+        feeTypes,
+        applyTypes,
+        bussTypes,
+        caseStatuses,
+        customerStatuses,
+        reviewStages,
+        currencies,
+        sourceTypes,
+        bankList,
+        agencies,
+        contactTypes,
+        products,
+        technicals,
+        fieldColumns
+      }
+    }
+  }
+
+  /** 费用查询二级客户选择弹窗搜索（对齐 ShowIhgSelect -> Report.ashx?Call=GetCustomerTreeData）。 */
+  async searchFeeCustomers(searchKey: string): Promise<ApiResult<FeeCustomerItem[]>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const p = new URLSearchParams()
+    p.set('Call', 'GetCustomerTreeData')
+    p.set('searchKey', searchKey.trim().replace(/'/g, "''"))
+    p.set('log_pagename', 'FeeSearch.aspx')
+    const response = await this.transport.post('feeCustomerTree', p)
+    if (!response.ok) return response
+    const rawList = isRecord(response.data) && Array.isArray(response.data.CustList) ? response.data.CustList : []
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const items: FeeCustomerItem[] = rawList
+      .filter(isRecord)
+      .map(row => ({
+        id: str(row.id),
+        name: str(row.name),
+        tel: str(row.tel),
+        email: str(row.email)
+      }))
+      .filter(item => Boolean(item.id && item.name))
+    return { ok: true, data: items }
+  }
+
+  /** 费用查询申请人树联动（对齐 FeeSearch.LoadTreeApplicant -> Report.ashx?Call=GetTreeApplicant）。 */
+  async loadFeeApplicants(customerIds: string): Promise<ApiResult<FeeApplicantItem[]>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    if (!customerIds.trim()) return { ok: true, data: [] }
+    const p = new URLSearchParams()
+    p.set('Call', 'GetTreeApplicant')
+    p.set('customer_ids', customerIds.trim())
+    p.set('log_pagename', 'FeeSearch.aspx')
+    const response = await this.transport.post('feeApplicantTree', p)
+    if (!response.ok) return response
+    const rawList = isRecord(response.data) && Array.isArray(response.data.TreeApplicant) ? response.data.TreeApplicant : []
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const items: FeeApplicantItem[] = rawList
+      .filter(isRecord)
+      .map(row => {
+        const value = str(row.id)
+        const label = str(row.name)
+        const rawPid = str(row.pid ?? row.pId)
+        const parent = rawPid && rawPid !== 'root' && rawPid !== '0' ? rawPid : undefined
+        const isGroup = str(row.TreeType) === 'Dept' || row.is_branch === 1 || row.is_branch === true
+        if (!value || !label) return null
+        return {
+          value,
+          label,
+          ...(parent ? { parent } : {}),
+          ...(isGroup ? { selectable: false } : {})
+        }
+      })
+      .filter((x): x is FeeApplicantItem => x !== null)
+    return { ok: true, data: items }
   }
 
   private readonly userInfoCache = new Map<string, FilingUser>()

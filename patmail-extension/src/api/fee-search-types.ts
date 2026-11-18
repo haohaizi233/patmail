@@ -59,3 +59,60 @@ export interface FeeSearchResult {
   rows: FeeSearchRow[]
   summary: FeeSearchAmountSummary
 }
+
+export interface FeeOptionItem {
+  value: string
+  label: string
+  parent?: string
+  caseTypeId?: string
+  countryId?: string
+  selectable?: boolean
+}
+
+export interface FeeTypeItem {
+  id: string
+  name: string
+  caseTypeId: string
+  countryId: string
+  applyTypeId: string
+  feeClass: string
+  caseTypeName: string
+  applyTypeName: string
+  countryName: string
+  currencyName: string
+}
+
+export interface FeeInitData {
+  caseTypes: FeeOptionItem[]
+  directions: FeeOptionItem[]
+  receiveStatuses: FeeOptionItem[]
+  payTypes: FeeOptionItem[]
+  feeTypes: FeeTypeItem[]
+  applyTypes: FeeOptionItem[]
+  bussTypes: FeeOptionItem[]
+  caseStatuses: FeeOptionItem[]
+  customerStatuses: FeeOptionItem[]
+  reviewStages: FeeOptionItem[]
+  currencies: FeeOptionItem[]
+  sourceTypes: FeeOptionItem[]
+  bankList: FeeOptionItem[]
+  agencies: FeeOptionItem[]
+  contactTypes: FeeOptionItem[]
+  products: FeeOptionItem[]
+  technicals: FeeOptionItem[]
+  fieldColumns: Record<string, string>
+}
+
+export interface FeeCustomerItem {
+  id: string
+  name: string
+  tel: string
+  email: string
+}
+
+export interface FeeApplicantItem {
+  value: string
+  label: string
+  parent?: string
+  selectable?: boolean
+}

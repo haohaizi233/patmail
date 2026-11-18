@@ -4,22 +4,24 @@ import type { FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary } from '../../api/dictionaries/picker-catalog'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
-import type { FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
+import type { FeeApplicantItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
 import {
   FEE_COMMON_CELLS,
   FEE_QUICK_CELLS,
   FEE_ADVANCED_BLOCKS,
   FEE_SELECTS,
-  FEE_OPTION_KEYS
+  FEE_STATIC_TREES,
+  FEE_OPTION_KEYS,
+  feeCellKey,
+  type FeeCell
 } from '../../api/fee-form'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
-import { hasOptionTree } from '../../query/option-tree'
-import { isMultiPickerKey } from '../../shared/picker-modes'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import { useWorkspace } from '../composables/useWorkspace'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../../shell/components/WDatePicker.vue'
+import FeeCustomerPickerModal, { type SelectedCustomerEntry } from './FeeCustomerPickerModal.vue'
 
 const props = defineProps<{
   bridge?: MessageBridge
@@ -59,22 +61,47 @@ watch(queryTimeoutMs, value => {
   void writeFilingTimeout(value)
 }, { flush: 'sync' })
 
-// Form Values
+// Form Values (all default empty matching live FeeSearch.aspx)
 const values = ref<Record<string, string>>({
   case_type: '',
-  notice_status: '',
   pay_status: '',
-  fee_class: '',
-  pay_type: '',
-  request_status: '',
-  receive_status: ''
+  is_close: '',
+  is_ahead_pub: '',
+  hearing_the_case: '',
+  sourcetype: '',
+  contact_type: '',
+  notice_status: '',
+  receive_account_id: '',
+  business_coop: '',
+  exists_invoice_no: '',
+  bill_no: '',
+  case_agency_precorditem: '',
+  case_agency: ''
 })
 
-const checkedBoxes = ref<Record<string, boolean>>({
-  is_fuzzy_query_case_volume: true,
-  is_fuzzy_query_app_no: true,
-  is_fuzzy_query_pct_app_no: true
-})
+// Checkboxes: ALL default unchecked (checked: false, verified via CDP on FeeSearch.aspx)
+const checkedBoxes = ref<Record<string, boolean>>({})
+
+// Secondary modal customer selections (ShowIhgSelect -> customer_id / ruleOutcustomer_id)
+const selectedCustomers = ref<SelectedCustomerEntry[]>([])
+const selectedRuleOutCustomers = ref<SelectedCustomerEntry[]>([])
+const customerModalOpen = ref(false)
+const customerModalTarget = ref<'customer_id' | 'ruleOutcustomer_id'>('customer_id')
+
+// Applicant tree loaded dynamically via Report.ashx?Call=GetTreeApplicant
+const applicantOptions = ref<FeeApplicantItem[]>([])
+const loadingApplicants = ref(false)
+
+// Tip when clicking fee_type / apply_type without selecting case_type (FeeSearch.js L939-960)
+const cascadeTip = ref('')
+let cascadeTipTimer: ReturnType<typeof setTimeout> | null = null
+function showCascadeTip(text: string): void {
+  cascadeTip.value = text
+  if (cascadeTipTimer) clearTimeout(cascadeTipTimer)
+  cascadeTipTimer = setTimeout(() => {
+    cascadeTip.value = ''
+  }, 3000)
+}
 
 function valueOf(key: string): string {
   return values.value[key] ?? ''
@@ -82,6 +109,29 @@ function valueOf(key: string): string {
 
 function setValue(key: string, val: string): void {
   values.value[key] = val
+
+  // 联动逻辑严格对齐 FeeSearch.js
+  if (key === 'case_type') {
+    values.value['apply_type'] = ''
+    values.value['fee_type'] = ''
+    values.value['ctrl_proc'] = ''
+    values.value['case_status'] = ''
+    values.value['customer_status'] = ''
+    values.value['review_stage'] = ''
+    values.value['business_type'] = ''
+    if (cascadeTip.value) cascadeTip.value = ''
+    void refreshCtrlProc()
+  } else if (key === 'country') {
+    values.value['fee_type'] = ''
+    values.value['ctrl_proc'] = ''
+    void refreshCtrlProc()
+  } else if (key === 'fee_class' || key === 'apply_type') {
+    values.value['fee_type'] = ''
+  } else if (key === 'applicant_id') {
+    if (!val.trim()) {
+      checkedBoxes.value['first_applicant'] = false
+    }
+  }
 }
 
 function isChecked(key: string): boolean {
@@ -90,48 +140,152 @@ function isChecked(key: string): boolean {
 
 function toggleCheck(key: string, checked: boolean): void {
   checkedBoxes.value[key] = checked
+
+  // 日期“为空”(_isnull)联动：勾选时清空对应日期起止并禁用输入框（FeeSearch.js L752-762）
+  if (key.endsWith('_isnull')) {
+    const baseKey = key.replace('_isnull', '')
+    if (checked) {
+      values.value[`${baseKey}_from`] = ''
+      values.value[`${baseKey}_to`] = ''
+    }
+  }
 }
 
 function onTextInput(key: string, e: Event): void {
-  values.value[key] = (e.target as HTMLInputElement | HTMLTextAreaElement).value
+  setValue(key, (e.target as HTMLInputElement | HTMLTextAreaElement).value)
 }
 
-// Show/hide advanced search
+// Secondary modal handlers (客户名称 / 排除客户名称)
+function openCustomerModal(target: 'customer_id' | 'ruleOutcustomer_id'): void {
+  customerModalTarget.value = target
+  customerModalOpen.value = true
+}
+
+function customerDisplayText(key: 'customer_id' | 'ruleOutcustomer_id'): string {
+  const list = key === 'customer_id' ? selectedCustomers.value : selectedRuleOutCustomers.value
+  if (!list.length) return ''
+  return list.map(item => item.name).join(';') + ';'
+}
+
+function clearCustomerField(key: 'customer_id' | 'ruleOutcustomer_id'): void {
+  if (key === 'customer_id') {
+    selectedCustomers.value = []
+    values.value['customer_id'] = ''
+    void loadApplicantsForCustomers('')
+  } else {
+    selectedRuleOutCustomers.value = []
+    values.value['ruleOutcustomer_id'] = ''
+  }
+}
+
+function onConfirmCustomers(items: SelectedCustomerEntry[]): void {
+  customerModalOpen.value = false
+  const ids = items.map(item => item.id).join(';')
+  if (customerModalTarget.value === 'customer_id') {
+    selectedCustomers.value = items
+    values.value['customer_id'] = ids
+    void loadApplicantsForCustomers(ids)
+  } else {
+    selectedRuleOutCustomers.value = items
+    values.value['ruleOutcustomer_id'] = ids
+  }
+}
+
+async function loadApplicantsForCustomers(customerIds: string): Promise<void> {
+  // 对齐 FeeSearch.LoadTreeApplicant (L1188-1203)
+  values.value['applicant_id'] = ''
+  checkedBoxes.value['first_applicant'] = false
+  applicantOptions.value = []
+  if (!customerIds.trim()) return
+  const b = activeBridge()
+  if (!b) return
+  loadingApplicants.value = true
+  try {
+    const resp = await b.request({
+      type: MessageType.LoadFeeApplicants,
+      payload: { customerIds }
+    })
+    if (resp.type === MessageType.LoadFeeApplicantsResult && resp.payload.ok) {
+      applicantOptions.value = resp.payload.data
+    }
+  } finally {
+    loadingApplicants.value = false
+  }
+}
+
+// Show/hide advanced search & individual advanced section collapse
 const showAdvanced = ref(false)
+const collapsedBlocks = ref<Record<string, boolean>>({})
 
-// Radio filter (ALL, 仅显示客户付, 仅显示官费, 仅收代理费)
-const feeFilterMode = ref<'all' | 'customer' | 'official' | 'agent'>('all')
+function toggleBlock(id: string): void {
+  collapsedBlocks.value[id] = !collapsedBlocks.value[id]
+}
 
-// Pickers & Dictionaries
+// Result display & selection radios (对齐 FeeSearch.js L637-671)
+const showTypeMode = ref<'all' | 'selected'>('all')
+const quickFeeSelectMode = ref<'' | 'O' | 'A'>('')
+
+// Pickers, Dictionaries & FeeSearchInit Data
 const loadingPickers = ref(false)
 const pickersReady = ref(false)
 const pickerMessage = ref('')
 const dictionaries = ref<Record<string, NormalizedDictionary>>({})
+const feeInit = ref<FeeInitData | null>(null)
 
 async function loadPickers(force = false): Promise<void> {
   const b = activeBridge()
   if (!b) return
   loadingPickers.value = true
-  pickerMessage.value = '正在加载下拉选项...'
+  pickerMessage.value = '正在向原网站读取费用查询字典…'
+  try {
+    const [dictResp, initResp] = await Promise.all([
+      b.request({
+        type: MessageType.LoadDictionary,
+        payload: {
+          kind: 'picker',
+          force: Boolean(force),
+          caseTypeId: valueOf('case_type'),
+          country: valueOf('country')
+        }
+      }),
+      b.request({
+        type: MessageType.LoadFeeInit
+      })
+    ])
+    if (dictResp.type === MessageType.DictionaryResult && dictResp.payload.ok && dictResp.payload.data.kind === 'picker') {
+      dictionaries.value = dictResp.payload.data.dictionaries
+      pickersReady.value = true
+    }
+    if (initResp.type === MessageType.LoadFeeInitResult && initResp.payload.ok) {
+      feeInit.value = initResp.payload.data
+      pickersReady.value = true
+    }
+    pickerMessage.value = pickersReady.value ? '' : '读取原网站下拉字典失败，部分字段已使用本地兜底选项'
+  } catch (e: unknown) {
+    pickerMessage.value = e instanceof Error ? e.message : '读取下拉字典失败'
+  } finally {
+    loadingPickers.value = false
+  }
+}
+
+async function refreshCtrlProc(): Promise<void> {
+  const b = activeBridge()
+  if (!b) return
   try {
     const resp = await b.request({
       type: MessageType.LoadDictionary,
       payload: {
         kind: 'picker',
-        force: Boolean(force)
+        force: false,
+        caseTypeId: valueOf('case_type'),
+        country: valueOf('country')
       }
     })
     if (resp.type === MessageType.DictionaryResult && resp.payload.ok && resp.payload.data.kind === 'picker') {
       dictionaries.value = resp.payload.data.dictionaries
-      pickersReady.value = true
-      pickerMessage.value = ''
-    } else {
-      pickerMessage.value = '读取下拉字典失败'
     }
-  } catch (e: any) {
-    pickerMessage.value = e?.message || '读取下拉字典失败'
-  } finally {
-    loadingPickers.value = false
+  } catch {
+    // Non-fatal refresh
   }
 }
 
@@ -139,16 +293,189 @@ onMounted(() => {
   void loadPickers()
 })
 
-function choices(key: string): Array<{ value: string; label: string; parent?: string }> {
-  const dictKey = FEE_OPTION_KEYS[key]
-  if (!dictKey) return []
-  const dict = dictionaries.value[dictKey]
-  return choicesFromDictionary(dict)
+watch(() => props.canSearch, ready => {
+  if (ready && !pickersReady.value && !loadingPickers.value) {
+    void loadPickers()
+  }
+})
+
+// Dynamic label for custom columns (column_1..5 from GetFieldColumn)
+function labelOf(cell: FeeCell): string {
+  if (cell.kind === 'text' && cell.key.startsWith('column_') && feeInit.value?.fieldColumns[cell.key]) {
+    return feeInit.value.fieldColumns[cell.key]
+  }
+  return cell.label
 }
 
-function hasTree(key: string): boolean {
-  const options = choices(key)
-  return hasOptionTree(options)
+// Select options (live FeeSearchInit + fallback)
+function selectOptions(key: string): Array<{ value: string; label: string }> {
+  const init = feeInit.value
+  if (key === 'case_type' && init?.caseTypes.length) {
+    return [{ value: '', label: 'ALL' }, ...init.caseTypes.map(i => ({ value: i.value, label: i.label }))]
+  }
+  if (key === 'sourcetype' && init?.sourceTypes.length) {
+    return [{ value: '', label: '--请选择--' }, ...init.sourceTypes.map(i => ({ value: i.value, label: i.label }))]
+  }
+  if (key === 'contact_type' && init?.contactTypes.length) {
+    return [{ value: '', label: '--请选择--' }, ...init.contactTypes.map(i => ({ value: i.value, label: i.label }))]
+  }
+  if (key === 'receive_account_id' && init?.bankList.length) {
+    return [{ value: '', label: '--请选择--' }, ...init.bankList.map(i => ({ value: i.value, label: i.label }))]
+  }
+  if (key === 'business_coop') {
+    const dict = dictionaries.value['filingContract']
+    const live = choicesFromDictionary(dict)
+    if (live.length) return [{ value: '', label: '--请选择--' }, ...live.map(i => ({ value: i.value, label: i.label }))]
+  }
+  if ((key === 'case_agency_precorditem' || key === 'case_agency') && init?.agencies.length) {
+    return [{ value: '', label: 'ALL' }, ...init.agencies.map(i => ({ value: i.value, label: i.label }))]
+  }
+  return FEE_SELECTS[key] ?? []
+}
+
+// FeeType cascading & duplicate disambiguation (exact port of FeeSearch.js L1305-1393)
+function computeFeeTypeChoices(): FeeOptionItem[] {
+  const init = feeInit.value
+  if (!init?.feeTypes.length) return []
+  const caseType = valueOf('case_type')
+  const country = valueOf('country')
+  const applyType = valueOf('apply_type')
+  const feeClass = valueOf('fee_class')
+
+  const filtered = init.feeTypes
+    .filter(row => {
+      if (feeClass && !feeClass.split(',').includes(row.feeClass)) return false
+      const matchCase = !caseType || row.caseTypeId === caseType || row.caseTypeId === 'ALL'
+      const matchCountry = !country || country.split(',').includes(row.countryId) || row.countryId === 'ALL'
+      const matchApply = !applyType || applyType.split(',').includes(row.applyTypeId) || row.applyTypeId === 'ALL'
+      return matchCase && matchCountry && matchApply
+    })
+    .map(row => ({
+      id: row.id,
+      name: row.name,
+      countryName: row.countryName,
+      applyTypeName: row.applyTypeName,
+      caseTypeName: row.caseTypeName,
+      feeClassName: row.feeClass === 'O' ? '官费' : row.feeClass === 'A' ? '代理费' : row.feeClass === 'T' ? '第三方费用' : '',
+      currencyName: row.currencyName
+    }))
+
+  for (let i = 0; i < filtered.length; i++) {
+    for (let j = i + 1; j < filtered.length; j++) {
+      if (filtered[i].name === filtered[j].name) {
+        if (filtered[i].countryName !== filtered[j].countryName) {
+          if (filtered[i].countryName) filtered[i].name += `(${filtered[i].countryName})`
+          if (filtered[j].countryName) filtered[j].name += `(${filtered[j].countryName})`
+        }
+        if (filtered[i].applyTypeName !== filtered[j].applyTypeName) {
+          if (filtered[i].applyTypeName) filtered[i].name += `(${filtered[i].applyTypeName})`
+          if (filtered[j].applyTypeName) filtered[j].name += `(${filtered[j].applyTypeName})`
+        }
+        if (filtered[i].caseTypeName !== filtered[j].caseTypeName) {
+          if (filtered[i].caseTypeName) filtered[i].name += `(${filtered[i].caseTypeName})`
+          if (filtered[j].caseTypeName) filtered[j].name += `(${filtered[j].caseTypeName})`
+        }
+        if (filtered[i].feeClassName !== filtered[j].feeClassName) {
+          if (filtered[i].feeClassName) filtered[i].name += `(${filtered[i].feeClassName})`
+          if (filtered[j].feeClassName) filtered[j].name += `(${filtered[j].feeClassName})`
+        }
+        if (filtered[i].currencyName !== filtered[j].currencyName) {
+          if (filtered[i].currencyName) filtered[i].name += `(${filtered[i].currencyName})`
+          if (filtered[j].currencyName) filtered[j].name += `(${filtered[j].currencyName})`
+        }
+      }
+    }
+  }
+  return filtered.map(item => ({ value: item.id, label: item.name }))
+}
+
+// TreeOptionSelect choices for all named fields (exact alignment with FeeSearch.js)
+function treeChoices(key: string): FeeOptionItem[] {
+  const init = feeInit.value
+  const caseType = valueOf('case_type')
+  const country = valueOf('country')
+
+  if (key === 'Case_direction') {
+    return init?.directions.length ? init.directions : FEE_STATIC_TREES.Case_direction
+  }
+  if (key === 'fee_class') {
+    return FEE_STATIC_TREES.fee_class
+  }
+  if (key === 'request_status') {
+    return FEE_STATIC_TREES.request_status
+  }
+  if (key === 'receive_status') {
+    return init?.receiveStatuses.length ? init.receiveStatuses : FEE_STATIC_TREES.receive_status
+  }
+  if (key === 'pay_type') {
+    return init?.payTypes.length ? init.payTypes : FEE_STATIC_TREES.pay_type
+  }
+  if (key === 'fee_type') {
+    if (!caseType) return []
+    return computeFeeTypeChoices()
+  }
+  if (key === 'apply_type') {
+    if (!caseType) return []
+    if (init?.applyTypes.length) {
+      return init.applyTypes.filter(i => !i.caseTypeId || i.caseTypeId === 'ALL' || i.caseTypeId === caseType)
+    }
+    return choicesFromDictionary(dictionaries.value['limitApplyType'], caseType, country)
+  }
+  if (key === 'case_status') {
+    if (!caseType) return []
+    if (init?.caseStatuses.length) {
+      return init.caseStatuses.filter(i => i.caseTypeId === caseType)
+    }
+    return choicesFromDictionary(dictionaries.value['limitCaseStatus'], caseType, country)
+  }
+  if (key === 'customer_status') {
+    if (!caseType) return []
+    if (init?.customerStatuses.length) {
+      return init.customerStatuses.filter(i => i.caseTypeId === caseType)
+    }
+    return choicesFromDictionary(dictionaries.value['limitCustomerStatus'], caseType, country)
+  }
+  if (key === 'review_stage') {
+    const targetCaseType = caseType || '31D1A147-2931-43B5-94AE-B72B1525BA8A'
+    if (init?.reviewStages.length) {
+      return init.reviewStages.filter(i => !i.caseTypeId || i.caseTypeId === targetCaseType)
+    }
+    return []
+  }
+  if (key === 'business_type') {
+    if (init?.bussTypes.length) {
+      return caseType
+        ? init.bussTypes.filter(i => !i.caseTypeId || i.caseTypeId === caseType)
+        : init.bussTypes
+    }
+    return choicesFromDictionary(dictionaries.value['limitBussType'], caseType, country)
+  }
+  if (key === 'currency_id') {
+    return init?.currencies ?? []
+  }
+  if (key === 'product_name') {
+    return init?.products ?? []
+  }
+  if (key === 'technical_field') {
+    return init?.technicals ?? []
+  }
+
+  const dictKey = FEE_OPTION_KEYS[key]
+  if (!dictKey) return []
+  return choicesFromDictionary(dictionaries.value[dictKey], caseType, country)
+}
+
+function emptyTextOf(cell: Extract<FeeCell, { kind: 'named' }>): string {
+  if ((cell.requiresCaseType || cell.key === 'case_status' || cell.key === 'customer_status') && !valueOf('case_type')) {
+    return '请先选择案件类型'
+  }
+  return `暂无${cell.label}可选项`
+}
+
+function onNamedTriggerClick(cell: Extract<FeeCell, { kind: 'named' }>): void {
+  if ((cell.requiresCaseType || cell.key === 'case_status') && !valueOf('case_type')) {
+    showCascadeTip(`请先选择「案件类型」，再选择「${cell.label}」！`)
+  }
 }
 
 // Search State & Pagination
@@ -166,7 +493,7 @@ const pageSizeOptions = [
   { value: 100, label: '100 条/页' }
 ]
 
-// Selection
+// Row Selection
 const selectedIds = ref<Record<string, boolean>>({})
 const selectedCount = computed(() => Object.values(selectedIds.value).filter(Boolean).length)
 
@@ -187,6 +514,18 @@ function selectCurrentPage(select: boolean): void {
 
 function clearAllSelected(): void {
   selectedIds.value = {}
+  quickFeeSelectMode.value = ''
+}
+
+// 对齐 FeeSearch.js L653-671: "只选官费" / "只选代理费" 按当前页 fee_class_name 批量勾选
+function applyQuickFeeSelect(mode: 'O' | 'A'): void {
+  quickFeeSelectMode.value = mode
+  if (!result.value) return
+  const targetLabel = mode === 'O' ? '官费' : '代理费'
+  for (const row of result.value.rows) {
+    const matched = row.feeClass === mode || row.feeClassName === targetLabel
+    selectedIds.value[row.feeId] = matched
+  }
 }
 
 // Amount totals
@@ -210,21 +549,12 @@ function buildCurrentQuery(page = pageIndex.value, size = pageSize.value): FeeSe
     fields: { ...values.value }
   }
 
-  // Assign known fields
   for (const [k, v] of Object.entries(values.value)) {
-    if (v) (q as any)[k] = v
+    if (v) (q as unknown as Record<string, unknown>)[k] = v
   }
   for (const [k, v] of Object.entries(checkedBoxes.value)) {
-    (q as any)[k] = v
+    (q as unknown as Record<string, unknown>)[k] = v
   }
-
-  // Filter mode adjustments
-  if (feeFilterMode.value === 'official') {
-    q.fee_class = 'O'
-  } else if (feeFilterMode.value === 'agent') {
-    q.fee_class = 'A'
-  }
-
   return q
 }
 
@@ -240,6 +570,7 @@ async function doSearch(page = 1): Promise<void> {
   pageIndex.value = page
   searchState.value = 'loading'
   searchMessage.value = ''
+  quickFeeSelectMode.value = ''
 
   const q = buildCurrentQuery(page, pageSize.value)
 
@@ -274,13 +605,11 @@ async function doSearch(page = 1): Promise<void> {
       }
 
       emit('searched', q)
-
-      // Also fetch total condition amounts asynchronously
       void fetchTotalAmounts(q)
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     searchState.value = 'error'
-    searchMessage.value = e?.message || '查询异常中断'
+    searchMessage.value = e instanceof Error ? e.message : '查询异常中断'
   }
 }
 
@@ -296,13 +625,13 @@ async function fetchTotalAmounts(q: FeeSearchQuery): Promise<void> {
       }
     })
     if (resp.type === MessageType.SearchFeeAmountResult && resp.payload.ok) {
-      const data = resp.payload.data as any
+      const data = resp.payload.data as Record<string, unknown>
       if (Array.isArray(data.FeeList)) {
         let origA = 0
         let discA = 0
         let offO = 0
         let thirdT = 0
-        for (const item of data.FeeList) {
+        for (const item of data.FeeList as Array<Record<string, unknown>>) {
           const fc = String(item.fee_class || '').toUpperCase()
           const amt = Number(item.amount) || 0
           if (fc === 'A') {
@@ -323,35 +652,42 @@ async function fetchTotalAmounts(q: FeeSearchQuery): Promise<void> {
       }
     }
   } catch {
-    // Total amount fetch failure is non-fatal
+    // Non-fatal
   }
 }
 
 function resetForm(): void {
   values.value = {
     case_type: '',
-    notice_status: '',
     pay_status: '',
-    fee_class: '',
-    pay_type: '',
-    request_status: '',
-    receive_status: ''
+    is_close: '',
+    is_ahead_pub: '',
+    hearing_the_case: '',
+    sourcetype: '',
+    contact_type: '',
+    notice_status: '',
+    receive_account_id: '',
+    business_coop: '',
+    exists_invoice_no: '',
+    bill_no: '',
+    case_agency_precorditem: '',
+    case_agency: ''
   }
-  checkedBoxes.value = {
-    is_fuzzy_query_case_volume: true,
-    is_fuzzy_query_app_no: true,
-    is_fuzzy_query_pct_app_no: true
-  }
-  feeFilterMode.value = 'all'
+  checkedBoxes.value = {}
+  selectedCustomers.value = []
+  selectedRuleOutCustomers.value = []
+  applicantOptions.value = []
+  showTypeMode.value = 'all'
+  quickFeeSelectMode.value = ''
   result.value = null
   selectedIds.value = {}
   searchState.value = 'idle'
+  cascadeTip.value = ''
 }
 
 function changePage(delta: number): void {
-  const totalPages = result.value ? Math.ceil(result.value.total / pageSize.value) : 1
   const nextPage = pageIndex.value + delta
-  if (nextPage >= 1 && nextPage <= totalPages) {
+  if (nextPage >= 1 && nextPage <= totalPages.value) {
     void doSearch(nextPage)
   }
 }
@@ -360,7 +696,6 @@ function onPageSizeChange(): void {
   void doSearch(1)
 }
 
-// Columns definition for the results table
 const columns = [
   { key: 'caseVolume', label: '我方文号' },
   { key: 'caseVolumeCustomer', label: '客户文号' },
@@ -385,20 +720,18 @@ const columns = [
   { key: 'applicant', label: '申请人' }
 ]
 
-// Export Excel/CSV
 function exportCurrentRows(): void {
   if (!result.value || !result.value.rows.length) return
   const rowsToExport = result.value.rows.filter(r => selectedCount.value === 0 || isRowSelected(r))
   if (!rowsToExport.length) return
 
-  // Build CSV content with BOM
   const headers = ['序号', ...columns.map(c => c.label)]
   const lines = [headers.join(',')]
   rowsToExport.forEach((row, idx) => {
     const vals = [
       String(idx + 1),
       ...columns.map(c => {
-        const raw = (row as any)[c.key] ?? ''
+        const raw = (row as unknown as Record<string, unknown>)[c.key] ?? ''
         const escaped = String(raw).replace(/"/g, '""')
         return `"${escaped}"`
       })
@@ -415,13 +748,12 @@ function exportCurrentRows(): void {
   URL.revokeObjectURL(url)
 }
 
-// Filtered rows
+// 对齐 FeeSearch.js L637-650: 显示全部 vs 仅显示选中项
 const displayRows = computed(() => {
   if (!result.value) return []
-  if (feeFilterMode.value === 'all') return result.value.rows
-  if (feeFilterMode.value === 'official') return result.value.rows.filter(r => r.feeClass === 'O')
-  if (feeFilterMode.value === 'agent') return result.value.rows.filter(r => r.feeClass === 'A')
-  if (feeFilterMode.value === 'customer') return result.value.rows.filter(r => r.feeClass === 'T' || r.feeClass === 'A')
+  if (showTypeMode.value === 'selected') {
+    return result.value.rows.filter(isRowSelected)
+  }
   return result.value.rows
 })
 
@@ -433,22 +765,6 @@ const totalPages = computed(() => {
 
 <template>
   <div class="fee-search-query">
-    <!-- Top Action Badges / Bar (Matching original site) -->
-    <div class="action-badges-bar">
-      <span class="badge-btn">+ 新增通知客户</span>
-      <span class="badge-btn">+ 新增请款单</span>
-      <span class="badge-btn">+ 新增付款单</span>
-      <span class="badge-btn">+ 新增官费缴纳</span>
-      <span class="badge-btn">+ 修改费用核查</span>
-      <span class="badge-btn">+ 修改通知客户状态</span>
-      <span class="badge-btn">+ 修改请款状态</span>
-      <span class="badge-btn">+ 修改收款状态</span>
-      <span class="badge-btn">+ 修改缴费状态</span>
-      <span class="badge-btn">+ 修改费用</span>
-      <span class="badge-btn">+ 修改缴费类型</span>
-      <span class="badge-btn ghost">导出付款单</span>
-    </div>
-
     <!-- Query Conditions Card -->
     <section class="card query-conditions" aria-label="费用查询条件">
       <div class="section-heading">
@@ -463,230 +779,330 @@ const totalPages = computed(() => {
         </span>
       </div>
 
-      <p v-if="loadingPickers && !pickersReady" class="hint">正在向原网站读取下拉字典...</p>
+      <p v-if="loadingPickers && !pickersReady" class="hint">正在向原网站读取下拉字典…</p>
       <p v-else-if="pickerMessage" class="hint">{{ pickerMessage }}</p>
+      <p v-if="cascadeTip" class="cascade-tip" role="status">{{ cascadeTip }}</p>
 
-      <!-- Quick Textarea Row (我方文号, 申请号, PCT申请号) -->
-      <div class="quick-inputs-grid">
-        <div v-for="cell in FEE_QUICK_CELLS" :key="cell.key" class="quick-cell">
-          <div class="cell-label-row">
-            <span>{{ cell.label }}：</span>
-            <div v-if="cell.checks" class="checks-row">
-              <label v-for="chk in cell.checks" :key="chk.key" class="check-item">
+      <!-- Row 0: Quick Textarea Row (我方文号, 申请号, PCT申请号) -->
+      <div class="query-grid fee-form-grid quick-row">
+        <div v-for="cell in FEE_QUICK_CELLS" :key="cell.key" class="query-cell quick-cell">
+          <span class="cell-title">{{ cell.label }}</span>
+          <div class="cell-stack">
+            <textarea
+              :id="cell.key"
+              :value="valueOf(cell.key)"
+              rows="2"
+              :placeholder="cell.placeholder"
+              :title="cell.placeholder"
+              @input="onTextInput(cell.key, $event)"
+            />
+            <div v-if="cell.checks?.length" class="check-row">
+              <label v-for="chk in cell.checks" :key="chk.key" class="empty-check">
                 <input
                   type="checkbox"
                   :checked="isChecked(chk.key)"
                   @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
                 />
-                {{ chk.label }}
+                <span>{{ chk.label }}</span>
               </label>
             </div>
           </div>
-          <input
-            v-if="cell.kind === 'text'"
-            :value="valueOf(cell.key)"
-            type="text"
-            :placeholder="cell.placeholder"
-            class="text-input"
-            @input="onTextInput(cell.key, $event)"
-          />
         </div>
       </div>
 
-      <!-- Main 7 Rows Form Grid (3 columns each) -->
+      <!-- Rows 1–7: Main Common Form Grid (exact 3 columns × 7 rows from FeeSearch.aspx) -->
       <div class="query-grid fee-form-grid">
-        <template v-for="cell in FEE_COMMON_CELLS" :key="cell.label">
+        <template v-for="cell in FEE_COMMON_CELLS" :key="feeCellKey(cell)">
           <!-- Text Cell -->
-          <label v-if="cell.kind === 'text'" class="query-cell">
-            <span class="cell-title">
-              {{ cell.label }}
-              <template v-if="cell.checks">
-                <label v-for="chk in cell.checks" :key="chk.key" class="check-inline">
-                  <input
-                    type="checkbox"
-                    :checked="isChecked(chk.key)"
-                    @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
-                  />
-                  {{ chk.label }}
-                </label>
-              </template>
-            </span>
-            <span class="cell-body">
+          <div v-if="cell.kind === 'text'" class="query-cell">
+            <span class="cell-title">{{ labelOf(cell) }}</span>
+            <div class="cell-body">
               <input
                 :value="valueOf(cell.key)"
                 type="text"
-                :placeholder="cell.placeholder || `请输入${cell.label}`"
+                :placeholder="cell.placeholder || `请输入${labelOf(cell)}`"
                 @input="onTextInput(cell.key, $event)"
               />
-            </span>
-          </label>
+              <label v-for="chk in cell.checks ?? []" :key="chk.key" class="empty-check">
+                <input
+                  type="checkbox"
+                  :checked="isChecked(chk.key)"
+                  @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ chk.label }}</span>
+              </label>
+            </div>
+          </div>
 
-          <!-- Named Tree Cell -->
-          <label v-else-if="cell.kind === 'named'" class="query-cell">
+          <!-- Secondary Customer Modal Cell (客户名称 -> ShowIhgSelect 二级弹窗) -->
+          <div v-else-if="cell.kind === 'customer-modal'" class="query-cell">
+            <span class="cell-title">{{ cell.label }}</span>
+            <div class="cell-body">
+              <button
+                type="button"
+                class="modal-picker-trigger"
+                :class="{ 'is-empty': !customerDisplayText(cell.key) }"
+                :title="customerDisplayText(cell.key) || cell.placeholder"
+                @click="openCustomerModal(cell.key)"
+              >
+                <span class="modal-picker-text">{{ customerDisplayText(cell.key) || cell.placeholder || '选择客户' }}</span>
+                <span class="modal-picker-badge">弹窗选择</span>
+              </button>
+              <button
+                v-if="customerDisplayText(cell.key)"
+                type="button"
+                class="modal-clear-btn"
+                title="清空已选客户"
+                @click="clearCustomerField(cell.key)"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+
+          <!-- Applicant Linked Tree Cell (申请人 -> 客户联动多选树 + 限第一申请人) -->
+          <div v-else-if="cell.kind === 'applicant-tree'" class="query-cell">
+            <span class="cell-title">{{ cell.label }}</span>
+            <div class="cell-body">
+              <TreeOptionSelect
+                :model-value="valueOf(cell.key)"
+                :options="applicantOptions"
+                :multiple="true"
+                :status="loadingApplicants ? 'loading' : applicantOptions.length ? 'ready' : 'empty'"
+                :empty-text="selectedCustomers.length ? '所选客户下暂无申请人' : '请先在左侧「客户名称」选择客户'"
+                @update:model-value="setValue(cell.key, String($event))"
+              />
+              <label
+                v-for="chk in cell.checks ?? []"
+                :key="chk.key"
+                class="empty-check"
+                :class="{ 'is-disabled': chk.key === 'first_applicant' && !valueOf('applicant_id').trim() }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="isChecked(chk.key)"
+                  :disabled="chk.key === 'first_applicant' && !valueOf('applicant_id').trim()"
+                  @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ chk.label }}</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Named Tree Cell (TreeUser) -->
+          <div v-else-if="cell.kind === 'named'" class="query-cell" @click="onNamedTriggerClick(cell)">
             <span class="cell-title">{{ cell.label }}</span>
             <TreeOptionSelect
-              v-if="hasTree(cell.key) || choices(cell.key).length"
               :model-value="valueOf(cell.key)"
-              :options="choices(cell.key)"
-              :multiple="isMultiPickerKey(cell.key)"
-              :empty-text="`暂未配置${cell.label}`"
+              :options="treeChoices(cell.key)"
+              :multiple="cell.multiple !== false"
+              :empty-text="emptyTextOf(cell)"
               @update:model-value="setValue(cell.key, String($event))"
             />
-            <input
-              v-else
-              :value="valueOf(cell.key)"
-              type="text"
-              :placeholder="`选择${cell.label}`"
-              @input="onTextInput(cell.key, $event)"
-            />
-          </label>
+          </div>
 
           <!-- Select Cell -->
-          <label v-else-if="cell.kind === 'select'" class="query-cell">
-            <span class="cell-title">
-              {{ cell.label }}
-              <template v-if="cell.checks">
-                <label v-for="chk in cell.checks" :key="chk.key" class="check-inline">
-                  <input
-                    type="checkbox"
-                    :checked="isChecked(chk.key)"
-                    @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
-                  />
-                  {{ chk.label }}
-                </label>
-              </template>
-            </span>
-            <ThemeSelect
-              :model-value="valueOf(cell.key)"
-              :options="FEE_SELECTS[cell.key] || []"
-              @update:model-value="setValue(cell.key, String($event))"
-            />
-          </label>
+          <div v-else-if="cell.kind === 'select'" class="query-cell">
+            <span class="cell-title">{{ cell.label }}</span>
+            <div class="cell-body">
+              <ThemeSelect
+                :model-value="valueOf(cell.key)"
+                :options="selectOptions(cell.key)"
+                @update:model-value="setValue(cell.key, String($event))"
+              />
+              <label v-for="chk in cell.checks ?? []" :key="chk.key" class="empty-check">
+                <input
+                  type="checkbox"
+                  :checked="isChecked(chk.key)"
+                  @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ chk.label }}</span>
+              </label>
+            </div>
+          </div>
 
           <!-- Dates Cell -->
           <div v-else-if="cell.kind === 'dates'" class="query-cell">
-            <span class="cell-title">
-              {{ cell.label }}
-              <label v-if="cell.empty" class="check-inline">
-                <input
-                  type="checkbox"
-                  :checked="isChecked(cell.empty)"
-                  @change="toggleCheck(cell.empty, ($event.target as HTMLInputElement).checked)"
+            <span class="cell-title">{{ cell.label }}</span>
+            <div class="cell-stack">
+              <span class="date-pair">
+                <WDatePicker
+                  :id="cell.start"
+                  :model-value="valueOf(cell.start)"
+                  :max="valueOf(cell.end)"
+                  :disabled="Boolean(cell.empty && isChecked(cell.empty))"
+                  placeholder="起"
+                  @update:model-value="setValue(cell.start, String($event))"
                 />
-                为空
-              </label>
-              <template v-if="cell.checks">
-                <label v-for="chk in cell.checks" :key="chk.key" class="check-inline">
+                <em>到</em>
+                <WDatePicker
+                  :id="cell.end"
+                  :model-value="valueOf(cell.end)"
+                  :min="valueOf(cell.start)"
+                  :disabled="Boolean(cell.empty && isChecked(cell.empty))"
+                  placeholder="止"
+                  @update:model-value="setValue(cell.end, String($event))"
+                />
+                <label v-if="cell.empty" class="empty-check">
+                  <input
+                    type="checkbox"
+                    :checked="isChecked(cell.empty)"
+                    @change="toggleCheck(cell.empty, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>为空</span>
+                </label>
+                <label
+                  v-for="chk in (cell.checks ?? []).filter(c => c.label.length <= 6)"
+                  :key="chk.key"
+                  class="empty-check"
+                >
                   <input
                     type="checkbox"
                     :checked="isChecked(chk.key)"
                     @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
                   />
-                  {{ chk.label }}
+                  <span>{{ chk.label }}</span>
                 </label>
-              </template>
-            </span>
-            <span class="date-pair">
-              <WDatePicker
-                :id="cell.start"
-                :model-value="valueOf(cell.start)"
-                :max="valueOf(cell.end)"
-                placeholder="起"
-                @update:model-value="setValue(cell.start, String($event))"
-              />
-              <em>到</em>
-              <WDatePicker
-                :id="cell.end"
-                :model-value="valueOf(cell.end)"
-                :min="valueOf(cell.start)"
-                placeholder="止"
-                @update:model-value="setValue(cell.end, String($event))"
-              />
-            </span>
+              </span>
+              <div v-if="(cell.checks ?? []).some(c => c.label.length > 6)" class="check-row">
+                <label
+                  v-for="chk in (cell.checks ?? []).filter(c => c.label.length > 6)"
+                  :key="chk.key"
+                  class="empty-check"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="isChecked(chk.key)"
+                    @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ chk.label }}</span>
+                </label>
+              </div>
+            </div>
           </div>
         </template>
       </div>
 
       <!-- Advanced Search Expand / Collapse -->
       <div class="advanced-toggle-row">
-        <button type="button" class="text-button toggle-btn" @click="showAdvanced = !showAdvanced">
-          {{ showAdvanced ? '收起高级查询 ▲' : '显示高级查询 ▼' }}
+        <button type="button" class="text-button toggle-btn" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">
+          {{ showAdvanced ? '隐藏高级查询 ▲' : '显示高级查询 ▼' }}
         </button>
       </div>
 
-      <!-- Advanced Sections -->
+      <!-- Advanced 7 Sections -->
       <div v-if="showAdvanced" class="advanced-sections">
-        <section v-for="block in FEE_ADVANCED_BLOCKS" :key="block.title" class="advanced-block">
-          <h4 class="block-title">{{ block.title }}</h4>
-          <div class="query-grid fee-form-grid">
-            <template v-for="cell in block.cells" :key="cell.label">
-              <label v-if="cell.kind === 'text'" class="query-cell">
-                <span class="cell-title">
-                  {{ cell.label }}
-                  <template v-if="cell.checks">
-                    <label v-for="chk in cell.checks" :key="chk.key" class="check-inline">
+        <section v-for="block in FEE_ADVANCED_BLOCKS" :key="block.id" class="advanced-block">
+          <div class="block-head">
+            <h4 class="block-title">{{ block.title }}</h4>
+            <button type="button" class="text-button" @click="toggleBlock(block.id)">
+              {{ collapsedBlocks[block.id] ? '展开' : '收起' }}
+            </button>
+          </div>
+          <div v-show="!collapsedBlocks[block.id]" class="query-grid fee-form-grid">
+            <template v-for="cell in block.cells" :key="feeCellKey(cell)">
+              <!-- Textarea Cell (e.g., 注册号) -->
+              <div v-if="cell.kind === 'textarea'" class="query-cell" :class="{ 'span-all': cell.spanAll }">
+                <span class="cell-title">{{ cell.label }}</span>
+                <div class="cell-stack">
+                  <textarea
+                    :id="cell.key"
+                    :value="valueOf(cell.key)"
+                    rows="2"
+                    :placeholder="cell.placeholder"
+                    @input="onTextInput(cell.key, $event)"
+                  />
+                  <div v-if="cell.checks?.length" class="check-row">
+                    <label v-for="chk in cell.checks" :key="chk.key" class="empty-check">
                       <input
                         type="checkbox"
                         :checked="isChecked(chk.key)"
                         @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
                       />
-                      {{ chk.label }}
+                      <span>{{ chk.label }}</span>
                     </label>
-                  </template>
-                </span>
-                <input
-                  :value="valueOf(cell.key)"
-                  type="text"
-                  :placeholder="`请输入${cell.label}`"
-                  @input="onTextInput(cell.key, $event)"
-                />
-              </label>
+                  </div>
+                </div>
+              </div>
 
-              <label v-else-if="cell.kind === 'named'" class="query-cell">
+              <!-- Text Cell -->
+              <div v-else-if="cell.kind === 'text'" class="query-cell">
+                <span class="cell-title" :title="labelOf(cell)">{{ labelOf(cell) }}</span>
+                <div class="cell-body">
+                  <input
+                    :value="valueOf(cell.key)"
+                    type="text"
+                    :placeholder="cell.placeholder || `请输入${labelOf(cell)}`"
+                    @input="onTextInput(cell.key, $event)"
+                  />
+                  <label v-for="chk in cell.checks ?? []" :key="chk.key" class="empty-check">
+                    <input
+                      type="checkbox"
+                      :checked="isChecked(chk.key)"
+                      @change="toggleCheck(chk.key, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>{{ chk.label }}</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Secondary Customer Modal Cell (排除客户名称) -->
+              <div v-else-if="cell.kind === 'customer-modal'" class="query-cell">
+                <span class="cell-title">{{ cell.label }}</span>
+                <div class="cell-body">
+                  <button
+                    type="button"
+                    class="modal-picker-trigger"
+                    :class="{ 'is-empty': !customerDisplayText(cell.key) }"
+                    :title="customerDisplayText(cell.key) || cell.placeholder"
+                    @click="openCustomerModal(cell.key)"
+                  >
+                    <span class="modal-picker-text">{{ customerDisplayText(cell.key) || cell.placeholder || '选择客户' }}</span>
+                    <span class="modal-picker-badge">弹窗选择</span>
+                  </button>
+                  <button
+                    v-if="customerDisplayText(cell.key)"
+                    type="button"
+                    class="modal-clear-btn"
+                    title="清空"
+                    @click="clearCustomerField(cell.key)"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+
+              <!-- Named Tree Cell -->
+              <div v-else-if="cell.kind === 'named'" class="query-cell" @click="onNamedTriggerClick(cell)">
                 <span class="cell-title">{{ cell.label }}</span>
                 <TreeOptionSelect
-                  v-if="hasTree(cell.key) || choices(cell.key).length"
                   :model-value="valueOf(cell.key)"
-                  :options="choices(cell.key)"
-                  :multiple="isMultiPickerKey(cell.key)"
-                  :empty-text="`暂未配置${cell.label}`"
+                  :options="treeChoices(cell.key)"
+                  :multiple="cell.multiple !== false"
+                  :empty-text="emptyTextOf(cell)"
                   @update:model-value="setValue(cell.key, String($event))"
                 />
-                <input
-                  v-else
-                  :value="valueOf(cell.key)"
-                  type="text"
-                  :placeholder="`选择${cell.label}`"
-                  @input="onTextInput(cell.key, $event)"
-                />
-              </label>
+              </div>
 
-              <label v-else-if="cell.kind === 'select'" class="query-cell">
+              <!-- Select Cell -->
+              <div v-else-if="cell.kind === 'select'" class="query-cell">
                 <span class="cell-title">{{ cell.label }}</span>
                 <ThemeSelect
                   :model-value="valueOf(cell.key)"
-                  :options="FEE_SELECTS[cell.key] || []"
+                  :options="selectOptions(cell.key)"
                   @update:model-value="setValue(cell.key, String($event))"
                 />
-              </label>
+              </div>
 
+              <!-- Dates Cell -->
               <div v-else-if="cell.kind === 'dates'" class="query-cell">
-                <span class="cell-title">
-                  {{ cell.label }}
-                  <label v-if="cell.empty" class="check-inline">
-                    <input
-                      type="checkbox"
-                      :checked="isChecked(cell.empty)"
-                      @change="toggleCheck(cell.empty, ($event.target as HTMLInputElement).checked)"
-                    />
-                    为空
-                  </label>
-                </span>
+                <span class="cell-title">{{ cell.label }}</span>
                 <span class="date-pair">
                   <WDatePicker
                     :id="cell.start"
                     :model-value="valueOf(cell.start)"
                     :max="valueOf(cell.end)"
+                    :disabled="Boolean(cell.empty && isChecked(cell.empty))"
                     placeholder="起"
                     @update:model-value="setValue(cell.start, String($event))"
                   />
@@ -695,9 +1111,18 @@ const totalPages = computed(() => {
                     :id="cell.end"
                     :model-value="valueOf(cell.end)"
                     :min="valueOf(cell.start)"
+                    :disabled="Boolean(cell.empty && isChecked(cell.empty))"
                     placeholder="止"
                     @update:model-value="setValue(cell.end, String($event))"
                   />
+                  <label v-if="cell.empty" class="empty-check">
+                    <input
+                      type="checkbox"
+                      :checked="isChecked(cell.empty)"
+                      @change="toggleCheck(cell.empty, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>为空</span>
+                  </label>
                 </span>
               </div>
             </template>
@@ -707,48 +1132,61 @@ const totalPages = computed(() => {
 
       <!-- Action Buttons Row -->
       <div class="form-actions fee-actions">
-        <button class="solid primary-search" type="button" :disabled="!canSearch || searchState === 'loading'" @click="doSearch(1)">
-          {{ searchState === 'loading' ? '正在查询...' : '查询' }}
-        </button>
         <button class="ghost" type="button" @click="resetForm">重置</button>
         <button class="ghost" type="button" :disabled="!result || !result.rows.length" @click="exportCurrentRows">
-          导出信息
+          导出清单
+        </button>
+        <button class="solid primary-search" type="button" :disabled="!canSearch || searchState === 'loading'" @click="doSearch(1)">
+          {{ searchState === 'loading' ? '正在查询…' : '查询' }}
         </button>
       </div>
     </section>
 
     <!-- Results Section -->
     <section class="card fee-results-section" aria-label="费用查询结果">
-      <!-- Filter Radios Bar -->
+      <div class="section-heading"><strong>查询结果</strong></div>
+      <!-- Filter Radios Bar (exact alignment with FeeSearch.aspx: 显示全部 / 仅显示选中项 / 只选官费 / 只选代理费) -->
       <div class="filter-radios-bar">
-        <label class="radio-label">
-          <input v-model="feeFilterMode" type="radio" value="all" />
-          显示全部
+        <label class="empty-check">
+          <input v-model="showTypeMode" type="radio" name="fee_show_type" value="all" />
+          <span>显示全部</span>
         </label>
-        <label class="radio-label">
-          <input v-model="feeFilterMode" type="radio" value="customer" />
-          仅显示客户付
+        <label class="empty-check">
+          <input v-model="showTypeMode" type="radio" name="fee_show_type" value="selected" />
+          <span>仅显示选中项</span>
         </label>
-        <label class="radio-label">
-          <input v-model="feeFilterMode" type="radio" value="official" />
-          仅显示官费
+        <label class="empty-check">
+          <input
+            type="radio"
+            name="fee_show_fee"
+            value="O"
+            :checked="quickFeeSelectMode === 'O'"
+            @change="applyQuickFeeSelect('O')"
+          />
+          <span>只选官费</span>
         </label>
-        <label class="radio-label">
-          <input v-model="feeFilterMode" type="radio" value="agent" />
-          仅收代理费
+        <label class="empty-check">
+          <input
+            type="radio"
+            name="fee_show_fee"
+            value="A"
+            :checked="quickFeeSelectMode === 'A'"
+            @change="applyQuickFeeSelect('A')"
+          />
+          <span>只选代理费</span>
         </label>
       </div>
 
-      <!-- Amount Stats Summary (Exact match with original site) -->
+      <!-- Amount Stats Summary -->
       <div v-if="result" class="amount-summary-box">
         <div class="summary-line">
-          <strong>当前页金额：</strong>
+          <strong>当前页总额：</strong>
           <span class="stat-item">折后代理费: <em>{{ result.summary.pageAgentFee.toLocaleString() }} CNY</em></span>
           <span class="stat-item">官费: <em>{{ result.summary.pageOfficialFee.toLocaleString() }} CNY</em></span>
           <span class="stat-item">第三方费: <em>{{ result.summary.pageThirdPartyFee.toLocaleString() }} CNY</em></span>
         </div>
         <div class="summary-line total-line">
-          <strong>查询条件总金额：</strong>
+          <strong>查询条件总额：</strong>
           <span class="stat-item">原始代理费: <em>{{ totalAmountInfo.originalAgentFee.toLocaleString() }} CNY</em></span>
           <span class="stat-item">折后代理费: <em>{{ totalAmountInfo.discountAgentFee.toLocaleString() }} CNY</em></span>
           <span class="stat-item">官费: <em>{{ totalAmountInfo.officialFee.toLocaleString() }} CNY</em></span>
@@ -772,7 +1210,7 @@ const totalPages = computed(() => {
       </div>
 
       <p v-if="searchState === 'idle'" class="hint">请输入查询条件并点击「查询」。</p>
-      <p v-else-if="searchState === 'loading'" class="hint" role="status">正在向原网站检索费用明细...</p>
+      <p v-else-if="searchState === 'loading'" class="hint" role="status">正在向原网站检索费用明细…</p>
       <p v-else-if="searchState === 'error'" class="error" role="alert">{{ searchMessage }}</p>
       <p v-else-if="searchState === 'empty'" class="hint" role="status">未查到符合条件的费用记录。</p>
 
@@ -805,13 +1243,11 @@ const totalPages = computed(() => {
               </td>
               <td class="seq-col">{{ row.sn }}</td>
               <td class="op-col">
-                <span class="op-icons" title="查看 / 编辑">
-                  📄 ✏️
-                </span>
+                <span class="op-icons" title="查看 / 编辑">📄 ✏️</span>
               </td>
               <td v-for="col in columns" :key="col.key">
-                <span class="cell-text" :title="String((row as any)[col.key] || '')">
-                  {{ (row as any)[col.key] ?? '-' }}
+                <span class="cell-text" :title="String((row as unknown as Record<string, unknown>)[col.key] || '')">
+                  {{ (row as unknown as Record<string, unknown>)[col.key] ?? '-' }}
                 </span>
               </td>
             </tr>
@@ -826,300 +1262,278 @@ const totalPages = computed(() => {
         </nav>
       </div>
     </section>
+
+    <!-- Secondary Modal: 选择客户 / 排除客户名称（1:1 复刻原站 ShowIhgSelect） -->
+    <FeeCustomerPickerModal
+      :open="customerModalOpen"
+      :title="customerModalTarget === 'customer_id' ? '请选择客户' : '请选择排除客户'"
+      :bridge="activeBridge()"
+      :selected="customerModalTarget === 'customer_id' ? selectedCustomers : selectedRuleOutCustomers"
+      @close="customerModalOpen = false"
+      @confirm="onConfirmCustomers"
+    />
   </div>
 </template>
 
 <style scoped>
-.fee-search-query {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.action-badges-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.badge-btn {
-  padding: 4px 10px;
+.fee-search-query { display: grid; gap: 12px; min-width: 0; }
+.cascade-tip {
+  margin: 0 0 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #fff0f6;
+  border: 1px solid #ffc6dc;
+  color: #c43b78;
   font-size: 12px;
-  background: var(--bg-card, #f4f7fb);
-  border: 1px solid var(--border-color, #d2dcf0);
-  border-radius: 4px;
-  color: var(--text-color, #234);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.2s;
 }
 
-.badge-btn:hover {
-  background: var(--primary-light, #e8f0fe);
-  border-color: var(--primary, #1976d2);
-}
-
-.badge-btn.ghost {
-  background: transparent;
-}
-
-.quick-inputs-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-bottom: 16px;
-  padding: 12px;
-  background: var(--bg-hover, #f8faff);
-  border-radius: 6px;
-  border: 1px solid var(--border-color, #e0e8f5);
-}
-
-.quick-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.cell-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-color, #333);
-}
-
-.checks-row, .check-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  font-weight: normal;
-  color: var(--text-muted, #666);
+/* 严格复用 PatMail 全局原生粉色 checkbox / radio（与 LimitQuerySection / QueryTemplateSection / TreeOptionSelect 保持 100% 一致） */
+.fee-search-query input[type="checkbox"],
+.fee-search-query input[type="radio"] {
+  accent-color: var(--pink, #ff4f93);
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  min-height: 15px;
+  margin: 0;
+  padding: 0;
+  flex: none;
   cursor: pointer;
 }
+.fee-search-query input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 
-.check-inline {
+.empty-check {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  flex: none;
   font-size: 12px;
-  font-weight: normal;
-  color: var(--text-muted, #666);
-  margin-left: 8px;
+  color: #65536d;
+  white-space: nowrap;
   cursor: pointer;
+  user-select: none;
+}
+.empty-check.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
-.text-input {
-  width: 100%;
-  padding: 6px 10px;
-  font-size: 13px;
-  border: 1px solid var(--border-color, #cbd5e1);
-  border-radius: 4px;
-  background: var(--bg-input, #fff);
-  color: var(--text-color, #111);
-  box-sizing: border-box;
-}
-
+/* 3 列主表单网格（与原站 #tbCommon 3 列排布 1:1 对齐） */
 .fee-form-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+.quick-row {
+  margin: 10px 0 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #f0e1eb;
 }
 
 .query-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 7.4em minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.query-cell.quick-cell {
+  align-items: start;
+}
+.query-cell.quick-cell .cell-title {
+  padding-top: 6px;
+}
+.query-cell.span-all {
+  grid-column: 1 / -1;
 }
 
 .cell-title {
+  color: #8a7290;
+  font-size: 12px;
+  text-align: right;
+  line-height: 1.35;
+  word-break: keep-all;
+}
+
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.cell-stack textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+  padding: 5px 8px;
+  border: 1px solid #e9d9e9;
+  border-radius: 8px;
+  background: #fff;
+  color: #4e4056;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
+}
+.cell-stack textarea:focus-visible {
+  outline: 2px solid #ffc0da;
+  outline-offset: 1px;
+}
+
+.check-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.cell-body {
   display: flex;
   align-items: center;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-color, #333);
+  gap: 6px;
+  min-width: 0;
+}
+.cell-body input:not([type="checkbox"]) {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 31px;
+  padding: 5px 8px;
+  border: 1px solid #e9d9e9;
+  border-radius: 8px;
+  background: #fff;
+  color: #4e4056;
+  font: inherit;
+  font-size: 12px;
+}
+.cell-body :deep(.theme-select),
+.query-cell :deep(.theme-select) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cell-body :deep(.theme-select-trigger),
+.query-cell :deep(.theme-select-trigger) {
+  height: 31px;
+  min-width: 0;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+/* 二级弹窗触发器（客户名称 / 排除客户名称） */
+.modal-picker-trigger {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 31px;
+  padding: 0 8px;
+  border: 1px solid #eadff0;
+  border-radius: 8px;
+  background: #fff;
+  color: #4e4056;
+  font: inherit;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+.modal-picker-trigger:hover {
+  border-color: #ffb3d0;
+}
+.modal-picker-trigger.is-empty .modal-picker-text {
+  color: var(--sub, #8d97b0);
+}
+.modal-picker-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modal-picker-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fff0f6;
+  color: #e44586;
+  font-size: 11px;
+  font-weight: 600;
+}
+.modal-clear-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff0f6;
+  color: #c44b7e;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+.modal-clear-btn:hover {
+  background: #ffe0ee;
+  color: #e11d48;
 }
 
 .date-pair {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
 }
-
+.date-pair :deep(.w-date-picker) {
+  flex: 1 1 70px;
+  min-width: 68px;
+}
 .date-pair em {
   font-style: normal;
-  color: var(--text-muted, #888);
-}
-
-.advanced-toggle-row {
-  display: flex;
-  justify-content: flex-end;
-  margin: 12px 0;
-}
-
-.toggle-btn {
-  font-size: 13px;
-  color: var(--primary, #1976d2);
-  cursor: pointer;
-  padding: 4px 8px;
-}
-
-.advanced-sections {
-  margin-top: 12px;
-  border-top: 1px dashed var(--border-color, #cbd5e1);
-  padding-top: 16px;
-}
-
-.advanced-block {
-  margin-bottom: 20px;
-}
-
-.block-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-heading, #1f2937);
-  margin: 0 0 12px 0;
-  padding-left: 8px;
-  border-left: 3px solid var(--primary, #1976d2);
-}
-
-.fee-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: flex-start;
-  margin-top: 20px;
-}
-
-.primary-search {
-  min-width: 100px;
-}
-
-.filter-radios-bar {
-  display: flex;
-  gap: 20px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
-  margin-bottom: 12px;
-}
-
-.radio-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.amount-summary-box {
-  background: var(--bg-stat, #f0f7ff);
-  border: 1px solid var(--border-stat, #c2dcfc);
-  border-radius: 6px;
-  padding: 10px 14px;
-  margin-bottom: 14px;
-  font-size: 13px;
-}
-
-.summary-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 16px;
-  color: var(--text-color, #1e293b);
-  margin-bottom: 6px;
-}
-
-.summary-line.total-line {
-  margin-bottom: 0;
-  padding-top: 6px;
-  border-top: 1px dashed #c2dcfc;
-}
-
-.stat-item em {
-  font-style: normal;
-  font-weight: 600;
-  color: #0284c7;
-  margin-left: 4px;
-}
-
-.fee-results-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.table-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.page-size-selector {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  color: #a38ca5;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
-.fee-table-container {
-  overflow-x: auto;
-  border: 1px solid var(--border-color, #cbd5e1);
-  border-radius: 6px;
-}
+.advanced-toggle-row { display: flex; justify-content: flex-end; margin: 12px 0 4px; }
+.text-button { border: 0; background: transparent; color: #ba6284; font: inherit; font-size: 12px; padding: 4px 8px; cursor: pointer; }
+.text-button:hover:not(:disabled) { color: #e24b84; background: #fff0f6; border-radius: 6px; }
+.text-button:disabled { opacity: .5; cursor: default; }
 
-.fee-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-  white-space: nowrap;
-}
+.advanced-sections { margin-top: 10px; border-top: 1px dashed #ecdce8; padding-top: 12px; }
+.advanced-block + .advanced-block { margin-top: 16px; }
+.block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.block-title { font-size: 13px; font-weight: 650; color: #c44b7e; margin: 0; padding-left: 8px; border-left: 3px solid #f5a9ca; }
 
-.fee-data-table th,
-.fee-data-table td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-color, #e2e8f0);
-  text-align: left;
-}
+.fee-actions { flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.primary-search { min-width: 76px; }
 
-.fee-data-table th {
-  background: var(--bg-th, #f8fafc);
-  font-weight: 600;
-  color: var(--text-th, #475569);
-  position: sticky;
-  top: 0;
-}
+.fee-results-section { display: grid; gap: 12px; min-width: 0; }
+.filter-radios-bar { display: flex; flex-wrap: wrap; gap: 10px 18px; padding-bottom: 12px; border-bottom: 1px solid #f0e1eb; }
 
-.fee-data-table tbody tr:hover {
-  background: var(--bg-tr-hover, #f1f5f9);
-}
+.amount-summary-box { background: #fff6fa; border: 1px solid #f3d7e5; border-radius: 12px; padding: 12px 14px; font-size: 12px; }
+.summary-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; color: #75657d; }
+.summary-line.total-line { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #edcfdf; }
+.stat-item em { font-style: normal; font-weight: 650; color: #d9578c; margin-left: 4px; }
 
-.check-col {
-  width: 32px;
-  text-align: center;
-}
+.fee-results-section > .section-heading, .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.page-size-selector { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8a7290; }
+.page-size-selector :deep(.theme-select), .query-timeout :deep(.theme-select) { width: 92px; }
 
-.seq-col {
-  width: 44px;
-  text-align: center;
-}
+.fee-table-container { overflow-x: auto; min-width: 0; }
+.fee-data-table { width: 100%; white-space: nowrap; }
+.fee-data-table .check-col { width: 32px; text-align: center; }
+.fee-data-table .seq-col { width: 44px; text-align: center; }
+.fee-data-table .op-col { width: 60px; text-align: center; }
+.op-icons { font-size: 13px; letter-spacing: 4px; }
+.cell-text { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.op-col {
-  width: 60px;
-  text-align: center;
+@media (max-width: 1100px) {
+  .fee-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-
-.op-icons {
-  font-size: 13px;
-  cursor: pointer;
-  letter-spacing: 4px;
-}
-
-.cell-text {
-  display: inline-block;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+@media (max-width: 700px) {
+  .fee-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .table-actions { width: 100%; }
 }
 </style>

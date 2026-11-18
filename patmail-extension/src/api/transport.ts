@@ -16,6 +16,7 @@ export type EasyOperation =
   | 'hagueApplicants' | 'haguePriorities' | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName' | 'fileDownload'
   | 'filingSearch' | 'filingFlowNode' | 'contractInit'
   | 'feeSearch' | 'feeSearchAmount'
+  | 'feeSearchInit' | 'feeCustomerTree' | 'feeApplicantTree' | 'feeAgencyList' | 'feeContactInit' | 'feeProducts' | 'feeTechnical'
 
 export interface TransportOptions {
   fetcher?: typeof fetch
@@ -97,7 +98,14 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   filingFlowNode: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFilingFlowNode' },
   contractInit: { path: '/AjaxServers/Customer.ashx', call: 'InitContractStatus' },
   feeSearch: { path: '/AjaxServers/Report.ashx', call: 'FeeSearch' },
-  feeSearchAmount: { path: '/AjaxServers/Report.ashx', call: 'FeeSearchTotalAmount' }
+  feeSearchAmount: { path: '/AjaxServers/Report.ashx', call: 'FeeSearchTotalAmount' },
+  feeSearchInit: { path: '/AjaxServers/Bill.ashx', call: 'FeeSearchInit' },
+  feeCustomerTree: { path: '/AjaxServers/Report.ashx', call: 'GetCustomerTreeData' },
+  feeApplicantTree: { path: '/AjaxServers/Report.ashx', call: 'GetTreeApplicant' },
+  feeAgencyList: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetAencyList' },
+  feeContactInit: { path: '/AjaxServers/Customer.ashx', call: 'ContactInit' },
+  feeProducts: { path: '/AjaxServers/BaseInfo.ashx', call: 'GetProducts' },
+  feeTechnical: { path: '/AjaxServers/Common.ashx', call: 'LoadTechnical' }
 }
 
 function loginRedirect(response: Response, origin: string): boolean {

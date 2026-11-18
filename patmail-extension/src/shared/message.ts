@@ -24,7 +24,7 @@ import type { MailContactAsset } from '../mail/easy/mail-contacts'
 import type { AccountReviewerList } from '../workflow/contracts'
 import type { LimitMonitorResult } from '../api/limit-monitor-types'
 import type { FilingSearchResult } from '../api/filing-search-types'
-import type { FeeSearchResult } from '../api/fee-search-types'
+import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeSearchResult } from '../api/fee-search-types'
 import type { FilingFlowRow, FilingUser } from '../api/filing-export'
 import type { DictionaryLoadRequest, DictionarySnapshot } from '../api/dictionaries'
 import type { FileSearchQuery } from '../api/file-search-params'
@@ -72,6 +72,12 @@ export const MessageType = {
   SearchFeeResult: 'SEARCH_FEE_RESULT',
   SearchFeeAmount: 'SEARCH_FEE_AMOUNT',
   SearchFeeAmountResult: 'SEARCH_FEE_AMOUNT_RESULT',
+  LoadFeeInit: 'LOAD_FEE_INIT',
+  LoadFeeInitResult: 'LOAD_FEE_INIT_RESULT',
+  SearchFeeCustomers: 'SEARCH_FEE_CUSTOMERS',
+  SearchFeeCustomersResult: 'SEARCH_FEE_CUSTOMERS_RESULT',
+  LoadFeeApplicants: 'LOAD_FEE_APPLICANTS',
+  LoadFeeApplicantsResult: 'LOAD_FEE_APPLICANTS_RESULT',
   SubmitLimitMail: 'SUBMIT_LIMIT_MAIL',
   SubmitLimitMailResult: 'SUBMIT_LIMIT_MAIL_RESULT',
   SubmitFileManage: 'SUBMIT_FILE_MANAGE',
@@ -204,6 +210,9 @@ export type ContentRequest =
   | Response<'SEARCH_FILING', { query: FilingSearchQuery; timeoutMs?: number; batch?: true }>
   | Response<'SEARCH_FEE', { query: FeeSearchQuery; timeoutMs?: number; batch?: true }>
   | Response<'SEARCH_FEE_AMOUNT', { query: FeeSearchQuery; timeoutMs?: number }>
+  | Request<'LOAD_FEE_INIT'>
+  | Response<'SEARCH_FEE_CUSTOMERS', { searchKey: string }>
+  | Response<'LOAD_FEE_APPLICANTS', { customerIds: string }>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; namedBusiness?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string; addresses?: Pick<FileMailConfig, 'to' | 'cc'> }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
@@ -424,6 +433,9 @@ export type ContentResponse =
   | Response<'SEARCH_FILING_RESULT', ApiResult<FilingSearchResult>>
   | Response<'SEARCH_FEE_RESULT', ApiResult<FeeSearchResult>>
   | Response<'SEARCH_FEE_AMOUNT_RESULT', ApiResult<Record<string, unknown>>>
+  | Response<'LOAD_FEE_INIT_RESULT', ApiResult<FeeInitData>>
+  | Response<'SEARCH_FEE_CUSTOMERS_RESULT', ApiResult<FeeCustomerItem[]>>
+  | Response<'LOAD_FEE_APPLICANTS_RESULT', ApiResult<FeeApplicantItem[]>>
   | Response<'SUBMIT_LIMIT_MAIL_RESULT', { stopped: boolean; results: Array<{ procId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string; to?: string; cc?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE_RESULT', { stopped: boolean; results: Array<{ fileId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES_RESULT', ApiResult<{ names: string[] }>>
@@ -939,6 +951,12 @@ export function isMessage(value: unknown): value is AppMessage {
       if (!keys.includes('query')) return false
       return keys.every(key => key === 'query' || key === 'timeoutMs')
     }
+    case MessageType.LoadFeeInit:
+      return value.payload === undefined
+    case MessageType.SearchFeeCustomers:
+      return isRecord(value.payload) && typeof value.payload.searchKey === 'string' && Object.keys(value.payload).length === 1
+    case MessageType.LoadFeeApplicants:
+      return isRecord(value.payload) && typeof value.payload.customerIds === 'string' && Object.keys(value.payload).length === 1
     case MessageType.SearchFiling: {
       if (!isRecord(value.payload) || !isFilingSearchQuery(value.payload.query)) return false
       const keys = Object.keys(value.payload)
@@ -1071,6 +1089,9 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.SearchFeeResult:
       return isFeeSearchApiResult(value.payload)
     case MessageType.SearchFeeAmountResult:
+    case MessageType.LoadFeeInitResult:
+    case MessageType.SearchFeeCustomersResult:
+    case MessageType.LoadFeeApplicantsResult:
       return isRecord(value.payload)
     case MessageType.ExportCaseContactsResult:
       return isCaseContactResult(value.payload)
@@ -1208,7 +1229,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.CheckSession || value.type === MessageType.CancelSessionCheck ||
     value.type === MessageType.SearchFiles || value.type === MessageType.CancelFileSearch ||
     value.type === MessageType.CancelLimitMonitor ||
-    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.SearchFee || value.type === MessageType.SearchFeeAmount || value.type === MessageType.ListMailProcesses ||
+    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.SearchFee || value.type === MessageType.SearchFeeAmount || value.type === MessageType.LoadFeeInit || value.type === MessageType.SearchFeeCustomers || value.type === MessageType.LoadFeeApplicants || value.type === MessageType.ListMailProcesses ||
     value.type === MessageType.SubmitLimitMail ||
     value.type === MessageType.SubmitFileManage ||
     value.type === MessageType.ResolveDownloadNames ||

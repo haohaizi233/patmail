@@ -14,7 +14,7 @@ const ready = computed(() => connection.value.sessionStatus === 'authenticated')
 <template>
   <PageHead
     title="费用查询"
-    desc="完全复刻 EASY 官费管理-费用查询表单，支持常用条件、高级查询、金额统计与明细导出。"
+    desc="按费用条件查询明细，支持高级筛选、金额统计与明细导出。"
     :art="bg('让重复工作变简单.png')"
   />
   <section v-if="!ready" class="card">
