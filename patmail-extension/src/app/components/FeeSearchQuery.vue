@@ -22,7 +22,9 @@ import { useWorkspace } from '../composables/useWorkspace'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../../shell/components/WDatePicker.vue'
+import type { FeeExportMode } from '../../api/fee-export'
 import FeeCustomerPickerModal, { type SelectedCustomerEntry } from './FeeCustomerPickerModal.vue'
+import FeeExportModal from './FeeExportModal.vue'
 
 const props = defineProps<{
   bridge?: MessageBridge
@@ -741,32 +743,39 @@ const columns = [
   { key: 'applicant', label: '申请人' }
 ]
 
-function exportCurrentRows(): void {
-  if (!result.value || !result.value.rows.length) return
-  const rowsToExport = result.value.rows.filter(r => selectedCount.value === 0 || isRowSelected(r))
-  if (!rowsToExport.length) return
+// 原站高级导出弹窗（1:1 对齐 IhgAdvExport.aspx：导出清单 / 导出勾选费用 / 导出汇总数据）
+const exportModalOpen = ref(false)
+const exportModalMode = ref<FeeExportMode>('cond')
+const exportNotice = ref('')
 
-  const headers = ['序号', ...columns.map(c => c.label)]
-  const lines = [headers.join(',')]
-  rowsToExport.forEach((row, idx) => {
-    const vals = [
-      String(idx + 1),
-      ...columns.map(c => {
-        const raw = (row as unknown as Record<string, unknown>)[c.key] ?? ''
-        const escaped = String(raw).replace(/"/g, '""')
-        return `"${escaped}"`
-      })
-    ]
-    lines.push(vals.join(','))
-  })
+const selectedFeeIds = computed(() =>
+  Object.entries(selectedIds.value)
+    .filter(([, checked]) => checked)
+    .map(([id]) => id)
+)
 
-  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `费用查询_${new Date().toISOString().slice(0, 10)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+async function openExportModal(mode: FeeExportMode): Promise<void> {
+  if (!props.canSearch) {
+    await infoDialog({
+      title: '尚未连接 EASY',
+      message: '请先在 EASY 原网站保持登录并连接后，再使用原站模板导出。'
+    })
+    return
+  }
+  if (mode === 'checked' && selectedFeeIds.value.length === 0) {
+    await infoDialog({
+      title: '请选择要处理的费用',
+      message: '请先在下方查询结果中勾选至少一条费用记录，再点击「导出勾选费用」。'
+    })
+    return
+  }
+  exportNotice.value = ''
+  exportModalMode.value = mode
+  exportModalOpen.value = true
+}
+
+function onFeeExported(message: string): void {
+  exportNotice.value = message
 }
 
 // 对齐 FeeSearch.js L637-650: 显示全部 vs 仅显示选中项
@@ -1206,9 +1215,34 @@ const totalPages = computed(() => {
 
       <!-- Action Buttons Row -->
       <div class="form-actions fee-actions">
+        <span v-if="exportNotice" class="export-notice">{{ exportNotice }}</span>
         <button class="ghost" type="button" @click="resetForm">重置</button>
-        <button class="ghost" type="button" :disabled="!result || !result.rows.length" @click="exportCurrentRows">
+        <button
+          class="ghost"
+          type="button"
+          :disabled="!canSearch"
+          v-hint="'按当前查询条件导出全部费用 Excel（支持原站模板与栏位排序）'"
+          @click="openExportModal('cond')"
+        >
           导出清单
+        </button>
+        <button
+          class="ghost"
+          type="button"
+          :disabled="!canSearch"
+          v-hint="'导出下方已勾选费用记录的 Excel（支持原站模板）'"
+          @click="openExportModal('checked')"
+        >
+          导出勾选费用
+        </button>
+        <button
+          class="ghost"
+          type="button"
+          :disabled="!canSearch"
+          v-hint="'按案件汇总官费/代理费/第三方费并导出 Excel（支持原站模板）'"
+          @click="openExportModal('count')"
+        >
+          导出汇总数据
         </button>
         <button class="solid primary-search" type="button" :disabled="!canSearch || searchState === 'loading'" @click="doSearch(1)">
           {{ searchState === 'loading' ? '正在查询…' : '查询' }}
@@ -1345,6 +1379,20 @@ const totalPages = computed(() => {
       :selected="customerModalTarget === 'customer_id' ? selectedCustomers : selectedRuleOutCustomers"
       @close="customerModalOpen = false"
       @confirm="onConfirmCustomers"
+    />
+
+    <!-- Secondary Modal: 导出清单 / 导出勾选费用 / 导出汇总数据（1:1 复刻原站 IhgAdvExport.aspx） -->
+    <FeeExportModal
+      :open="exportModalOpen"
+      :mode="exportModalMode"
+      :bridge="activeBridge()"
+      :query="buildCurrentQuery()"
+      :fee-ids="selectedFeeIds"
+      :case-type="valueOf('case_type')"
+      :field-columns="feeInit?.fieldColumns ?? {}"
+      :timeout-ms="queryTimeoutMs"
+      @close="exportModalOpen = false"
+      @exported="onFeeExported"
     />
   </div>
 </template>
@@ -1606,7 +1654,8 @@ const totalPages = computed(() => {
 .block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .block-title { font-size: 13px; font-weight: 650; color: #c44b7e; margin: 0; padding-left: 8px; border-left: 3px solid #f5a9ca; }
 
-.fee-actions { flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.fee-actions { flex-wrap: wrap; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.export-notice { margin-right: auto; font-size: 12px; color: #b93d74; }
 .primary-search { min-width: 76px; }
 
 .fee-results-section { display: grid; gap: 12px; min-width: 0; }
