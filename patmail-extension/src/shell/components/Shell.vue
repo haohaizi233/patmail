@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import Avatar from './Avatar.vue'
 import { bg, icon } from '../assets'
 import { nav } from '../data'
@@ -19,6 +19,8 @@ const props = defineProps({
 })
 const emit = defineEmits(['navigate', 'settings', 'preview', 'mode'])
 const menu = computed(() => props.items || nav)
+const expanded = ref(false)
+const isQueryPage = computed(() => menu.value.some(item => item.children?.some(child => child.name === props.page)))
 </script>
 
 <template>
@@ -42,8 +44,10 @@ const menu = computed(() => props.items || nav)
     <div class="frame">
       <aside class="sidebar">
         <nav>
-          <button v-for="item in menu" :key="item.name" :class="{ active: page === item.name }" @click="emit('navigate', item.name)">
-            <img v-if="item.icon" class="nav-icon" :src="icon(item.icon)" alt="" />
+          <div v-for="item in menu" :key="item.name" class="nav-entry">
+          <button :class="{ active: page === item.name || (item.children && isQueryPage) }" :aria-expanded="item.children ? expanded : undefined" @click="item.children ? expanded = !expanded : emit('navigate', item.name)">
+            <svg v-if="item.icon === 44 || item.icon === 45" class="nav-icon" :viewBox="item.icon === 44 ? '259 282 670 670' : '167 148 910 910'" aria-hidden="true"><image :href="icon(item.icon)" width="1254" height="1254" /></svg>
+            <img v-else-if="item.icon" class="nav-icon" :src="icon(item.icon)" alt="" />
             <svg v-else-if="item.path === 'home'" viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
             <svg v-else-if="item.path === 'task'" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 9h8M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
             <svg v-else-if="item.path === 'rule'" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -54,7 +58,16 @@ const menu = computed(() => props.items || nav)
             <svg v-else-if="item.path === 'contact'" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m5 8 7 5 7-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
             <svg v-else viewBox="0 0 24 24"><path d="M5 19V10M10 19V5M15 19v-7M20 19V8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             <span>{{ item.name }}</span>
+            <span v-if="item.children" class="nav-chevron" aria-hidden="true">{{ expanded ? '⌄' : '›' }}</span>
           </button>
+          <div v-if="item.children && expanded" class="nav-children" :aria-label="item.name">
+            <button v-for="child in item.children" :key="child.name" :class="{ active: page === child.name }" :aria-current="page === child.name ? 'page' : undefined" @click="emit('navigate', child.name)">
+              <svg v-if="child.icon === 44 || child.icon === 45" class="nav-icon" :viewBox="child.icon === 44 ? '259 282 670 670' : '167 148 910 910'" aria-hidden="true"><image :href="icon(child.icon)" width="1254" height="1254" /></svg>
+              <img v-else class="nav-icon" :src="icon(child.icon)" alt="" />
+              <span>{{ child.name }}</span>
+            </button>
+          </div>
+          </div>
         </nav>
         <img class="mascot" :src="bg('专业细节，守护创新.png')" alt="专注细节 守护创新 让知识更有力量" />
         <button v-if="showSettings" class="settings" :class="{ active: page === '系统设置' }" @click="emit('settings', '系统设置')">

@@ -104,7 +104,7 @@ img { max-width: 100%; }
 .sidebar nav svg,
 .sidebar .settings svg { width: 18px; height: 18px; flex: none; }
 .sidebar nav .nav-icon,
-.sidebar .settings .nav-icon { width: 24px; height: 24px; flex: none; object-fit: contain; }
+.sidebar .settings .nav-icon { width: 28px; height: 28px; flex: none; object-fit: contain; overflow: hidden; }
 .sidebar nav button:hover,
 .sidebar .settings:hover { background: #ffd6e8; color: #e24b84; }
 .sidebar nav button:focus,
@@ -562,3 +562,7 @@ img { max-width: 100%; }
     scroll-behavior: auto !important;
   }
 }
+
+.sidebar .nav-children { display: grid; gap: 3px; margin: 4px 0 4px 14px; padding-left: 8px; border-left: 1px solid #ffc0da; }
+.sidebar nav .nav-children button { font-size: 13px; height: 38px; padding: 0 8px; }
+.sidebar .nav-chevron { margin-left: auto; font-size: 18px; }
