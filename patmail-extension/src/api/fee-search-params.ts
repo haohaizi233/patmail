@@ -84,6 +84,7 @@ export interface FeeSearchQuery {
   finish_date_isnull?: boolean
 
   // Advanced fields
+  app_date_month?: string
   issue_no?: string
   is_fuzzy_query_issue_no?: boolean
   case_volume_customer?: string
@@ -116,6 +117,8 @@ export interface FeeSearchQuery {
   asst_office_case_no?: string
   apply_tags?: string
   technical_field?: string
+  filing_date_start?: string
+  filing_date_end?: string
   applicant_name?: string
   inventor_name?: string
   pic_id?: string

@@ -17,6 +17,7 @@ export interface FeeTextCell {
   key: string
   label: string
   placeholder?: string
+  help?: string
   checks?: FeeCheckItem[]
 }
 
@@ -25,6 +26,7 @@ export interface FeeNamedCell {
   key: string
   label: string
   placeholder?: string
+  help?: string
   multiple?: boolean
   requiresCaseType?: boolean
   checks?: FeeCheckItem[]
@@ -35,6 +37,7 @@ export interface FeeCustomerModalCell {
   key: 'customer_id' | 'ruleOutcustomer_id'
   label: string
   placeholder?: string
+  help?: string
 }
 
 export interface FeeApplicantTreeCell {
@@ -42,6 +45,7 @@ export interface FeeApplicantTreeCell {
   key: 'applicant_id'
   label: string
   placeholder?: string
+  help?: string
   checks?: FeeCheckItem[]
 }
 
@@ -49,6 +53,7 @@ export interface FeeSelectCell {
   kind: 'select'
   key: string
   label: string
+  help?: string
   searchable?: boolean
   checks?: FeeCheckItem[]
 }
@@ -59,7 +64,13 @@ export interface FeeDateCell {
   start: string
   end: string
   empty?: string
+  help?: string
   checks?: FeeCheckItem[]
+}
+
+export interface FeeSpacerCell {
+  kind: 'spacer'
+  id: string
 }
 
 export type FeeCell =
@@ -70,6 +81,7 @@ export type FeeCell =
   | FeeApplicantTreeCell
   | FeeSelectCell
   | FeeDateCell
+  | FeeSpacerCell
 
 export interface FeeBlock {
   title: string
@@ -178,7 +190,11 @@ export const FEE_STATIC_TREES: Record<string, { value: string; label: string }[]
     { value: '1', label: '客户自缴' },
     { value: '2', label: '客户放弃' },
     { value: '3', label: '其他' }
-  ]
+  ],
+  app_date_month: Array.from({ length: 12 }, (_, idx) => ({
+    value: String(idx + 1),
+    label: `${idx + 1}`
+  }))
 }
 
 /** 复用 PatMail 通用 picker 字典的字段映射 */
@@ -210,15 +226,19 @@ const dates = (
   start: string,
   end: string,
   empty?: string,
-  checks?: FeeCheckItem[]
+  checks?: FeeCheckItem[],
+  help?: string
 ): FeeDateCell => ({
   kind: 'dates',
   label,
   start,
   end,
   empty,
-  checks
+  checks,
+  ...(help ? { help } : {})
 })
+
+const spacer = (id: string): FeeSpacerCell => ({ kind: 'spacer', id })
 
 const MULTI_HINT = '多个中间用分；空格或者换行隔开,默认小于10条模糊查询，大于10条精确查询'
 
@@ -310,12 +330,17 @@ export const FEE_COMMON_CELLS: FeeCell[] = [
   dates('处理事项完成日', 'finish_date_from', 'finish_date_to', 'finish_date_isnull')
 ]
 
-/** 高级查询 7 大分组（与原站 FeeSearch.aspx #tbCommon 行列与字段名 1:1 完全一致） */
+/** 高级查询 7 大分组（与原站 d.hiseeip.com FeeSearch.aspx #tbCommon 每一行、每一列 1:1 严格对齐） */
 export const FEE_ADVANCED_BLOCKS: FeeBlock[] = [
   {
     id: 'is_base',
     title: '基本信息条件',
     cells: [
+      // TR[10]
+      { kind: 'named', key: 'app_date_month', label: '申请日月份', placeholder: '请选择' },
+      spacer('base-tr10-c2'),
+      spacer('base-tr10-c3'),
+      // TR[11]
       {
         kind: 'textarea',
         key: 'issue_no',
@@ -324,133 +349,153 @@ export const FEE_ADVANCED_BLOCKS: FeeBlock[] = [
         spanAll: true,
         checks: [{ key: 'is_fuzzy_query_issue_no', label: '是否模糊查询' }]
       },
+      // TR[12]
       { kind: 'text', key: 'case_volume_customer', label: '客户文号', placeholder: '多个中间用分；空格或者换行隔开' },
       { kind: 'named', key: 'business_type', label: '业务类型' },
       { kind: 'select', key: 'is_close', label: '包含结案' },
-
+      // TR[13]
       { kind: 'select', key: 'is_ahead_pub', label: '提前公布' },
       { kind: 'named', key: 'sale_id', label: '业务人员' },
       { kind: 'named', key: 'sale_dept_id', label: '业务人员部门' },
-
+      // TR[14]
       dates('委案日期', 'charge_date_from', 'charge_date_to', 'charge_date_isnull'),
       { kind: 'named', key: 'charge_dept_id', label: '案件承办部门', placeholder: '请选择' },
       { kind: 'named', key: 'flow_user', label: '流程人员' },
-
+      // TR[15]
       { kind: 'text', key: 'case_name', label: '案件名称' },
       { kind: 'named', key: 'sale_help_id', label: '业务助理' },
       { kind: 'named', key: 'case_status', label: '案件状态', placeholder: '请先选择案件类型，再选择案件状态' },
-
+      // TR[16]
       { kind: 'select', key: 'hearing_the_case', label: '是否预审' },
       { kind: 'named', key: 'apply_type', label: '申请类型', requiresCaseType: true },
-      { kind: 'select', key: 'case_agency_precorditem', label: '代理机构(案件)', searchable: true }
+      { kind: 'select', key: 'case_agency_precorditem', label: '代理机构(案件)', searchable: true, help: '案件代理机构的费用' }
     ]
   },
   {
     id: 'is_adv',
     title: '扩展信息条件',
     cells: [
+      // TR[19]
       { kind: 'text', key: 'contract_code', label: '合同编号' },
       { kind: 'named', key: 'product_name', label: '产品类别', placeholder: '请选择' },
       dates('授权发文日', 'authorize_date_from', 'authorize_date_to', 'authorize_date_isnull'),
-
+      // TR[20]
       { kind: 'select', key: 'sourcetype', label: '案源类型' },
       { kind: 'text', key: 'introducer', label: '外部案源人' },
       { kind: 'text', key: 'inside_introducer', label: '内部案源人' },
-
+      // TR[21]
       { kind: 'text', key: 'asst_office_case_no', label: '协办所案号' },
       { kind: 'named', key: 'apply_tags', label: '专利标签', placeholder: '请选择' },
-      { kind: 'named', key: 'technical_field', label: '技术领域', placeholder: '请选择' }
+      { kind: 'named', key: 'technical_field', label: '技术领域', placeholder: '请选择' },
+      // TR[24]（专业领域已隐藏，仅展示新申请递交日）
+      dates('新申请递交日', 'filing_date_start', 'filing_date_end'),
+      spacer('adv-tr24-c2'),
+      spacer('adv-tr24-c3')
     ]
   },
   {
     id: 'is_cust',
     title: '客户信息条件',
     cells: [
-      { kind: 'text', key: 'applicant_name', label: '申请人名称' },
+      // TR[26]
+      { kind: 'text', key: 'applicant_name', label: '申请人名称', help: '案件申请人的中英文名称（模糊匹配）' },
       { kind: 'text', key: 'inventor_name', label: '发明人' },
-      { kind: 'select', key: 'case_agency', label: '代理机构(费用)', searchable: true },
-
+      { kind: 'select', key: 'case_agency', label: '代理机构(费用)', searchable: true, help: '案件为该代理机构的费用' },
+      // TR[27]
       { kind: 'named', key: 'pic_id', label: '案件处理人' },
       { kind: 'named', key: 'pic_dept', label: '案件处理人部门', multiple: false },
-      { kind: 'text', key: 'accurate_customer', label: '客户名称(模糊)' },
-
+      { kind: 'text', key: 'accurate_customer', label: '客户名称(模糊)', help: '输入关键字模糊查询' },
+      // TR[28]（是否大客户已隐藏）
       { kind: 'named', key: 'customer_status', label: '客户状态' },
-      { kind: 'text', key: 'nickname', label: '昵称' }
+      { kind: 'text', key: 'nickname', label: '昵称' },
+      spacer('cust-tr28-c3')
     ]
   },
   {
     id: 'is_agent',
     title: '著录项目信息条件',
     cells: [
+      // TR[32]
       { kind: 'text', key: 'customer_code', label: '客户代码' },
-      { kind: 'customer-modal', key: 'ruleOutcustomer_id', label: '排除客户名称', placeholder: '点击选择排除客户' },
+      { kind: 'customer-modal', key: 'ruleOutcustomer_id', label: '排除客户名称', placeholder: '点击选择排除客户', help: '没有案件的客户' },
       { kind: 'named', key: 'customer_sale_id', label: '客户业务员' },
-
+      // TR[33]
       { kind: 'text', key: 'contact', label: '客户联系人', placeholder: '多个中间用分；空格或者换行隔开' },
-      { kind: 'select', key: 'contact_type', label: '联系人类别' }
+      { kind: 'select', key: 'contact_type', label: '联系人类别', help: '如果客户联系人填写了数据,该栏位会和联系人结合使用，如果客户联系人没有填写，该栏位单独使用！' },
+      spacer('agent-tr33-c3')
     ]
   },
   {
     id: 'is_proc',
     title: '处理事项条件',
     cells: [
+      // TR[35]
       dates('创建日期', 'proc_create_time_from', 'proc_create_time_to', 'proc_create_time_isnull'),
       { kind: 'named', key: 'proc_pic_dept_id', label: '处理人部门', multiple: false },
       dates('官方发文日', 'doc_date_from', 'doc_date_to', 'doc_date_isnull'),
-
+      // TR[36]
       dates('处理事项官方期限', 'legal_due_date_from', 'legal_due_date_to'),
       dates('处理事项内部期限', 'int_doc_date_from', 'int_doc_date_to'),
       dates('处理事项客户期限', 'cus_due_date_from', 'cus_due_date_to'),
-
+      // TR[37]
       { kind: 'named', key: 'review_stage', label: '处理事项阶段' },
-      { kind: 'text', key: 'proc_remark', label: '处理事项备注' }
+      { kind: 'text', key: 'proc_remark', label: '处理事项备注' },
+      spacer('proc-tr37-c3')
     ]
   },
   {
     id: 'is_fee',
     title: '费用信息条件',
     cells: [
-      dates('费用核查日期', 'check_time_from', 'check_time_to', 'check_time_isnull'),
+      // TR[39]
+      dates('费用核查日期', 'check_time_from', 'check_time_to', 'check_time_isnull', undefined, '案件费用设置核查的日期'),
       dates('请款日期', 'request_date_from', 'request_date_to', 'request_date_isnull'),
       { kind: 'text', key: 'request_no', label: '请款单号', placeholder: '多个中间用分；空格或者换行隔开' },
-
+      // TR[40]
       { kind: 'select', key: 'notice_status', label: '通知状态' },
-      { kind: 'named', key: 'receive_date_update_user', label: '实收日输机人员', multiple: false },
-      dates('实收日输机日期', 'receive_date_update_time_from', 'receive_date_update_time_to', 'receive_date_update_time_isnull'),
-
+      { kind: 'named', key: 'receive_date_update_user', label: '实收日输机人员', multiple: false, help: '费用实收日期填写时的人员' },
+      dates('实收日输机日期', 'receive_date_update_time_from', 'receive_date_update_time_to', 'receive_date_update_time_isnull', undefined, '费用实收日期填写时的时间'),
+      // TR[41]
       { kind: 'select', key: 'receive_account_id', label: '收款公司账户' },
       { kind: 'select', key: 'business_coop', label: '乙方签约公司' },
       { kind: 'named', key: 'pay_type', label: '缴费类型' },
-
+      // TR[42]
       dates('销账日期', 'cancellation_date_from', 'cancellation_date_to'),
       { kind: 'select', key: 'exists_invoice_no', label: '开具发票' },
       dates('开票时间', 'invoice_time_from', 'invoice_time_to', 'invoice_time_isnull'),
-
+      // TR[43]
       { kind: 'text', key: 'receiptno', label: '发票号' },
       { kind: 'text', key: 'out_bill_no', label: '外方账单号' },
       dates('外方账单日期', 'out_bill_date_from', 'out_bill_date_to', 'out_bill_date_isnull'),
-
+      // TR[44]（销账审核完成日已隐藏）
       dates('账单收文日', 'zt_receipt_bill_date_from', 'zt_receipt_bill_date_to', 'zt_receipt_bill_date_isnull'),
       dates('付款期限', 'zt_payment_delivery_date_from', 'zt_payment_delivery_date_to', 'zt_payment_delivery_date_isnull'),
+      spacer('fee-tr44-c3'),
+      // TR[45]
       { kind: 'text', key: 'amount', label: '金额' },
-
       { kind: 'select', key: 'bill_no', label: '缴费单号' },
       { kind: 'named', key: 'fee_create_user_id', label: '费用创建人' },
+      // TR[47]（付款状态已隐藏）
       { kind: 'named', key: 'currency_id', label: '费用币别' },
-
       { kind: 'text', key: 'fee_remark', label: '费用备注' },
-      { kind: 'text', key: 'fee_customer', label: '缴费抬头' }
+      spacer('fee-tr47-c3'),
+      // TR[51]
+      { kind: 'text', key: 'fee_customer', label: '缴费抬头' },
+      spacer('fee-tr51-c2'),
+      spacer('fee-tr51-c3')
     ]
   },
   {
     id: 'is_ohter',
     title: '其他信息条件',
     cells: [
-      { kind: 'text', key: 'column_1', label: '立案流程编号' },
-      { kind: 'text', key: 'column_2', label: '签约主体' },
-      { kind: 'text', key: 'column_3', label: '月结 特批单号' },
-      { kind: 'text', key: 'column_4', label: '收款账户' },
-      { kind: 'text', key: 'column_5', label: '收款日期' },
+      // TR[54]（动态标题来自 PatentAction.ashx?Call=GetFieldColumn）
+      { kind: 'text', key: 'column_1', label: '自定义栏位1' },
+      { kind: 'text', key: 'column_2', label: '自定义栏位2' },
+      { kind: 'text', key: 'column_3', label: '自定义栏位3' },
+      // TR[55]
+      { kind: 'text', key: 'column_4', label: '自定义栏位4' },
+      { kind: 'text', key: 'column_5', label: '自定义栏位5' },
       {
         kind: 'text',
         key: 'office_no',
@@ -462,5 +507,6 @@ export const FEE_ADVANCED_BLOCKS: FeeBlock[] = [
 ]
 
 export function feeCellKey(cell: FeeCell): string {
+  if (cell.kind === 'spacer') return cell.id
   return cell.kind === 'dates' ? `${cell.start}-${cell.end}` : cell.key
 }

@@ -189,4 +189,14 @@ describe('message validation', () => {
     expect(isMessage({ type: 'AGENT_CHAT', payload: { action: 'create', title: '   ' } })).toBe(false)
     expect(isMessage({ type: 'AGENT_CHAT', payload: { action: 'rename', id: 'short', title: '客户甲' } })).toBe(false)
   })
+
+  it('forwards fee search, init, customer modal, and applicant tree requests through workspace', () => {
+    const forward = (message: unknown) => ({ type: 'WORKSPACE', payload: { action: 'forward', message } })
+    expect(isMessage(forward({ type: 'LOAD_FEE_INIT' }))).toBe(true)
+    expect(isMessage(forward({ type: 'SEARCH_FEE_CUSTOMERS', payload: { searchKey: '华为' } }))).toBe(true)
+    expect(isMessage(forward({ type: 'LOAD_FEE_APPLICANTS', payload: { customerIds: 'id-1;id-2' } }))).toBe(true)
+    expect(isMessage(forward({ type: 'SEARCH_FEE', payload: { query: { pageIndex: 1, pageSize: 10 } } }))).toBe(true)
+    expect(isMessage(forward({ type: 'SEARCH_FEE_AMOUNT', payload: { query: { pageIndex: 1, pageSize: 10 } } }))).toBe(true)
+    expect(isMessage(forward({ type: 'LOAD_DICTIONARY', payload: { kind: 'picker', force: false } }))).toBe(true)
+  })
 })

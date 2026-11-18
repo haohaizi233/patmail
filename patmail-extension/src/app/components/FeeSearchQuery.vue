@@ -17,6 +17,7 @@ import {
 } from '../../api/fee-form'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
 import { MessageType, type MessageBridge } from '../../shared/message'
+import { infoDialog } from '../dialog'
 import { useWorkspace } from '../composables/useWorkspace'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
@@ -92,17 +93,6 @@ const customerModalTarget = ref<'customer_id' | 'ruleOutcustomer_id'>('customer_
 const applicantOptions = ref<FeeApplicantItem[]>([])
 const loadingApplicants = ref(false)
 
-// Tip when clicking fee_type / apply_type without selecting case_type (FeeSearch.js L939-960)
-const cascadeTip = ref('')
-let cascadeTipTimer: ReturnType<typeof setTimeout> | null = null
-function showCascadeTip(text: string): void {
-  cascadeTip.value = text
-  if (cascadeTipTimer) clearTimeout(cascadeTipTimer)
-  cascadeTipTimer = setTimeout(() => {
-    cascadeTip.value = ''
-  }, 3000)
-}
-
 function valueOf(key: string): string {
   return values.value[key] ?? ''
 }
@@ -119,7 +109,6 @@ function setValue(key: string, val: string): void {
     values.value['customer_status'] = ''
     values.value['review_stage'] = ''
     values.value['business_type'] = ''
-    if (cascadeTip.value) cascadeTip.value = ''
     void refreshCtrlProc()
   } else if (key === 'country') {
     values.value['fee_type'] = ''
@@ -232,6 +221,17 @@ const pickerMessage = ref('')
 const dictionaries = ref<Record<string, NormalizedDictionary>>({})
 const feeInit = ref<FeeInitData | null>(null)
 
+function buildPickerPayload(force: boolean): { kind: 'picker'; force: boolean; caseTypeId?: string; country?: string } {
+  const caseTypeId = valueOf('case_type').trim()
+  const country = valueOf('country').trim()
+  return {
+    kind: 'picker',
+    force: Boolean(force),
+    ...(caseTypeId ? { caseTypeId } : {}),
+    ...(country ? { country } : {})
+  }
+}
+
 async function loadPickers(force = false): Promise<void> {
   const b = activeBridge()
   if (!b) return
@@ -241,26 +241,32 @@ async function loadPickers(force = false): Promise<void> {
     const [dictResp, initResp] = await Promise.all([
       b.request({
         type: MessageType.LoadDictionary,
-        payload: {
-          kind: 'picker',
-          force: Boolean(force),
-          caseTypeId: valueOf('case_type'),
-          country: valueOf('country')
-        }
+        payload: buildPickerPayload(force)
       }),
       b.request({
         type: MessageType.LoadFeeInit
       })
     ])
+    const errors: string[] = []
     if (dictResp.type === MessageType.DictionaryResult && dictResp.payload.ok && dictResp.payload.data.kind === 'picker') {
       dictionaries.value = dictResp.payload.data.dictionaries
       pickersReady.value = true
+    } else if (dictResp.type === MessageType.Error) {
+      errors.push(dictResp.payload.message)
+    } else if (dictResp.type === MessageType.DictionaryResult && !dictResp.payload.ok) {
+      errors.push(dictResp.payload.error.message)
     }
     if (initResp.type === MessageType.LoadFeeInitResult && initResp.payload.ok) {
       feeInit.value = initResp.payload.data
       pickersReady.value = true
+    } else if (initResp.type === MessageType.Error) {
+      errors.push(initResp.payload.message)
+    } else if (initResp.type === MessageType.LoadFeeInitResult && !initResp.payload.ok) {
+      errors.push(initResp.payload.error.message)
     }
-    pickerMessage.value = pickersReady.value ? '' : '读取原网站下拉字典失败，部分字段已使用本地兜底选项'
+    pickerMessage.value = errors.length
+      ? `字典读取未完全成功：${errors[0]}`
+      : ''
   } catch (e: unknown) {
     pickerMessage.value = e instanceof Error ? e.message : '读取下拉字典失败'
   } finally {
@@ -274,12 +280,7 @@ async function refreshCtrlProc(): Promise<void> {
   try {
     const resp = await b.request({
       type: MessageType.LoadDictionary,
-      payload: {
-        kind: 'picker',
-        force: false,
-        caseTypeId: valueOf('case_type'),
-        country: valueOf('country')
-      }
+      payload: buildPickerPayload(false)
     })
     if (resp.type === MessageType.DictionaryResult && resp.payload.ok && resp.payload.data.kind === 'picker') {
       dictionaries.value = resp.payload.data.dictionaries
@@ -301,6 +302,7 @@ watch(() => props.canSearch, ready => {
 
 // Dynamic label for custom columns (column_1..5 from GetFieldColumn)
 function labelOf(cell: FeeCell): string {
+  if (cell.kind === 'spacer') return ''
   if (cell.kind === 'text' && cell.key.startsWith('column_') && feeInit.value?.fieldColumns[cell.key]) {
     return feeInit.value.fieldColumns[cell.key]
   }
@@ -410,6 +412,12 @@ function treeChoices(key: string): FeeOptionItem[] {
   if (key === 'pay_type') {
     return init?.payTypes.length ? init.payTypes : FEE_STATIC_TREES.pay_type
   }
+  if (key === 'app_date_month') {
+    return FEE_STATIC_TREES.app_date_month
+  }
+  if (key === 'case_agency_precorditem' || key === 'case_agency') {
+    return init?.agencies ?? []
+  }
   if (key === 'fee_type') {
     if (!caseType) return []
     return computeFeeTypeChoices()
@@ -465,17 +473,31 @@ function treeChoices(key: string): FeeOptionItem[] {
   return choicesFromDictionary(dictionaries.value[dictKey], caseType, country)
 }
 
+function needsCaseType(cell: Extract<FeeCell, { kind: 'named' }>): boolean {
+  return Boolean((cell.requiresCaseType || cell.key === 'case_status' || cell.key === 'customer_status') && !valueOf('case_type'))
+}
+
 function emptyTextOf(cell: Extract<FeeCell, { kind: 'named' }>): string {
-  if ((cell.requiresCaseType || cell.key === 'case_status' || cell.key === 'customer_status') && !valueOf('case_type')) {
+  if (needsCaseType(cell)) {
     return '请先选择案件类型'
   }
   return `暂无${cell.label}可选项`
 }
 
 function onNamedTriggerClick(cell: Extract<FeeCell, { kind: 'named' }>): void {
-  if ((cell.requiresCaseType || cell.key === 'case_status') && !valueOf('case_type')) {
-    showCascadeTip(`请先选择「案件类型」，再选择「${cell.label}」！`)
+  if (needsCaseType(cell)) {
+    void infoDialog({
+      title: '请先选择案件类型',
+      message: `请先选择「案件类型」，再选择「${cell.label}」。`
+    })
   }
+}
+
+function onApplicantGuardClick(): void {
+  void infoDialog({
+    title: '请先选择客户',
+    message: '请先在左侧「客户名称」中通过弹窗选择客户，再选择「申请人」。'
+  })
 }
 
 // Search State & Pagination
@@ -682,7 +704,6 @@ function resetForm(): void {
   result.value = null
   selectedIds.value = {}
   searchState.value = 'idle'
-  cascadeTip.value = ''
 }
 
 function changePage(delta: number): void {
@@ -781,7 +802,6 @@ const totalPages = computed(() => {
 
       <p v-if="loadingPickers && !pickersReady" class="hint">正在向原网站读取下拉字典…</p>
       <p v-else-if="pickerMessage" class="hint">{{ pickerMessage }}</p>
-      <p v-if="cascadeTip" class="cascade-tip" role="status">{{ cascadeTip }}</p>
 
       <!-- Row 0: Quick Textarea Row (我方文号, 申请号, PCT申请号) -->
       <div class="query-grid fee-form-grid quick-row">
@@ -793,7 +813,6 @@ const totalPages = computed(() => {
               :value="valueOf(cell.key)"
               rows="2"
               :placeholder="cell.placeholder"
-              :title="cell.placeholder"
               @input="onTextInput(cell.key, $event)"
             />
             <div v-if="cell.checks?.length" class="check-row">
@@ -842,17 +861,16 @@ const totalPages = computed(() => {
                 type="button"
                 class="modal-picker-trigger"
                 :class="{ 'is-empty': !customerDisplayText(cell.key) }"
-                :title="customerDisplayText(cell.key) || cell.placeholder"
                 @click="openCustomerModal(cell.key)"
               >
-                <span class="modal-picker-text">{{ customerDisplayText(cell.key) || cell.placeholder || '选择客户' }}</span>
+                <span class="modal-picker-text" v-hint.clip="customerDisplayText(cell.key)">{{ customerDisplayText(cell.key) || cell.placeholder || '选择客户' }}</span>
                 <span class="modal-picker-badge">弹窗选择</span>
               </button>
               <button
                 v-if="customerDisplayText(cell.key)"
                 type="button"
                 class="modal-clear-btn"
-                title="清空已选客户"
+                v-hint="'清空已选客户'"
                 @click="clearCustomerField(cell.key)"
               >
                 ×
@@ -864,12 +882,22 @@ const totalPages = computed(() => {
           <div v-else-if="cell.kind === 'applicant-tree'" class="query-cell">
             <span class="cell-title">{{ cell.label }}</span>
             <div class="cell-body">
+              <button
+                v-if="!selectedCustomers.length"
+                type="button"
+                class="theme-select-trigger guard-trigger"
+                @click="onApplicantGuardClick"
+              >
+                <span class="theme-select-value is-placeholder">{{ cell.placeholder || '选择申请人' }}</span>
+                <svg class="theme-select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.2 6 8l4-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
               <TreeOptionSelect
+                v-else
                 :model-value="valueOf(cell.key)"
                 :options="applicantOptions"
                 :multiple="true"
                 :status="loadingApplicants ? 'loading' : applicantOptions.length ? 'ready' : 'empty'"
-                :empty-text="selectedCustomers.length ? '所选客户下暂无申请人' : '请先在左侧「客户名称」选择客户'"
+                empty-text="所选客户下暂无申请人"
                 @update:model-value="setValue(cell.key, String($event))"
               />
               <label
@@ -890,9 +918,19 @@ const totalPages = computed(() => {
           </div>
 
           <!-- Named Tree Cell (TreeUser) -->
-          <div v-else-if="cell.kind === 'named'" class="query-cell" @click="onNamedTriggerClick(cell)">
+          <div v-else-if="cell.kind === 'named'" class="query-cell">
             <span class="cell-title">{{ cell.label }}</span>
+            <button
+              v-if="needsCaseType(cell)"
+              type="button"
+              class="theme-select-trigger guard-trigger"
+              @click="onNamedTriggerClick(cell)"
+            >
+              <span class="theme-select-value is-placeholder">{{ cell.placeholder || `选择${cell.label}` }}</span>
+              <svg class="theme-select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.2 6 8l4-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             <TreeOptionSelect
+              v-else
               :model-value="valueOf(cell.key)"
               :options="treeChoices(cell.key)"
               :multiple="cell.multiple !== false"
@@ -1001,8 +1039,11 @@ const totalPages = computed(() => {
           </div>
           <div v-show="!collapsedBlocks[block.id]" class="query-grid fee-form-grid">
             <template v-for="cell in block.cells" :key="feeCellKey(cell)">
+              <!-- Spacer Cell (keeps exact 3-column row alignment with EASY #tbCommon) -->
+              <div v-if="cell.kind === 'spacer'" class="query-spacer" aria-hidden="true" />
+
               <!-- Textarea Cell (e.g., 注册号) -->
-              <div v-if="cell.kind === 'textarea'" class="query-cell" :class="{ 'span-all': cell.spanAll }">
+              <div v-else-if="cell.kind === 'textarea'" class="query-cell" :class="{ 'span-all': cell.spanAll }">
                 <span class="cell-title">{{ cell.label }}</span>
                 <div class="cell-stack">
                   <textarea
@@ -1027,7 +1068,10 @@ const totalPages = computed(() => {
 
               <!-- Text Cell -->
               <div v-else-if="cell.kind === 'text'" class="query-cell">
-                <span class="cell-title" :title="labelOf(cell)">{{ labelOf(cell) }}</span>
+                <span class="cell-title">
+                  {{ labelOf(cell) }}
+                  <span v-if="cell.help" class="help-badge" tabindex="0" v-hint="cell.help" :aria-label="cell.help">?</span>
+                </span>
                 <div class="cell-body">
                   <input
                     :value="valueOf(cell.key)"
@@ -1048,23 +1092,25 @@ const totalPages = computed(() => {
 
               <!-- Secondary Customer Modal Cell (排除客户名称) -->
               <div v-else-if="cell.kind === 'customer-modal'" class="query-cell">
-                <span class="cell-title">{{ cell.label }}</span>
+                <span class="cell-title">
+                  {{ cell.label }}
+                  <span v-if="cell.help" class="help-badge" tabindex="0" v-hint="cell.help" :aria-label="cell.help">?</span>
+                </span>
                 <div class="cell-body">
                   <button
                     type="button"
                     class="modal-picker-trigger"
                     :class="{ 'is-empty': !customerDisplayText(cell.key) }"
-                    :title="customerDisplayText(cell.key) || cell.placeholder"
                     @click="openCustomerModal(cell.key)"
                   >
-                    <span class="modal-picker-text">{{ customerDisplayText(cell.key) || cell.placeholder || '选择客户' }}</span>
+                    <span class="modal-picker-text" v-hint.clip="customerDisplayText(cell.key)">{{ customerDisplayText(cell.key) || cell.placeholder || '选择客户' }}</span>
                     <span class="modal-picker-badge">弹窗选择</span>
                   </button>
                   <button
                     v-if="customerDisplayText(cell.key)"
                     type="button"
                     class="modal-clear-btn"
-                    title="清空"
+                    v-hint="'清空已选客户'"
                     @click="clearCustomerField(cell.key)"
                   >
                     ×
@@ -1073,9 +1119,22 @@ const totalPages = computed(() => {
               </div>
 
               <!-- Named Tree Cell -->
-              <div v-else-if="cell.kind === 'named'" class="query-cell" @click="onNamedTriggerClick(cell)">
-                <span class="cell-title">{{ cell.label }}</span>
+              <div v-else-if="cell.kind === 'named'" class="query-cell">
+                <span class="cell-title">
+                  {{ cell.label }}
+                  <span v-if="cell.help" class="help-badge" tabindex="0" v-hint="cell.help" :aria-label="cell.help">?</span>
+                </span>
+                <button
+                  v-if="needsCaseType(cell)"
+                  type="button"
+                  class="theme-select-trigger guard-trigger"
+                  @click="onNamedTriggerClick(cell)"
+                >
+                  <span class="theme-select-value is-placeholder">{{ cell.placeholder || `选择${cell.label}` }}</span>
+                  <svg class="theme-select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.2 6 8l4-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
                 <TreeOptionSelect
+                  v-else
                   :model-value="valueOf(cell.key)"
                   :options="treeChoices(cell.key)"
                   :multiple="cell.multiple !== false"
@@ -1084,10 +1143,22 @@ const totalPages = computed(() => {
                 />
               </div>
 
-              <!-- Select Cell -->
+              <!-- Select Cell (searchable uses TreeOptionSelect single-select to match EASY select2) -->
               <div v-else-if="cell.kind === 'select'" class="query-cell">
-                <span class="cell-title">{{ cell.label }}</span>
+                <span class="cell-title">
+                  {{ cell.label }}
+                  <span v-if="cell.help" class="help-badge" tabindex="0" v-hint="cell.help" :aria-label="cell.help">?</span>
+                </span>
+                <TreeOptionSelect
+                  v-if="cell.searchable"
+                  :model-value="valueOf(cell.key)"
+                  :options="treeChoices(cell.key)"
+                  :multiple="false"
+                  :empty-text="`暂无${cell.label}可选项`"
+                  @update:model-value="setValue(cell.key, String($event))"
+                />
                 <ThemeSelect
+                  v-else
                   :model-value="valueOf(cell.key)"
                   :options="selectOptions(cell.key)"
                   @update:model-value="setValue(cell.key, String($event))"
@@ -1096,7 +1167,10 @@ const totalPages = computed(() => {
 
               <!-- Dates Cell -->
               <div v-else-if="cell.kind === 'dates'" class="query-cell">
-                <span class="cell-title">{{ cell.label }}</span>
+                <span class="cell-title">
+                  {{ cell.label }}
+                  <span v-if="cell.help" class="help-badge" tabindex="0" v-hint="cell.help" :aria-label="cell.help">?</span>
+                </span>
                 <span class="date-pair">
                   <WDatePicker
                     :id="cell.start"
@@ -1243,10 +1317,10 @@ const totalPages = computed(() => {
               </td>
               <td class="seq-col">{{ row.sn }}</td>
               <td class="op-col">
-                <span class="op-icons" title="查看 / 编辑">📄 ✏️</span>
+                <span class="op-icons" v-hint="'查看 / 编辑'">📄 ✏️</span>
               </td>
               <td v-for="col in columns" :key="col.key">
-                <span class="cell-text" :title="String((row as unknown as Record<string, unknown>)[col.key] || '')">
+                <span class="cell-text" v-hint.clip="String((row as unknown as Record<string, unknown>)[col.key] || '')">
                   {{ (row as unknown as Record<string, unknown>)[col.key] ?? '-' }}
                 </span>
               </td>
@@ -1277,13 +1351,11 @@ const totalPages = computed(() => {
 
 <style scoped>
 .fee-search-query { display: grid; gap: 12px; min-width: 0; }
-.cascade-tip {
-  margin: 0 0 8px;
-  padding: 6px 12px;
+.guard-trigger {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 31px;
   border-radius: 8px;
-  background: #fff0f6;
-  border: 1px solid #ffc6dc;
-  color: #c43b78;
   font-size: 12px;
 }
 
@@ -1349,6 +1421,9 @@ const totalPages = computed(() => {
 .query-cell.span-all {
   grid-column: 1 / -1;
 }
+.query-spacer {
+  min-width: 0;
+}
 
 .cell-title {
   color: #8a7290;
@@ -1356,6 +1431,31 @@ const totalPages = computed(() => {
   text-align: right;
   line-height: 1.35;
   word-break: keep-all;
+}
+.help-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 3px;
+  border: 1px solid #f6c5d8;
+  border-radius: 50%;
+  background: #fff0f6;
+  color: #e44586;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: help;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.help-badge:hover,
+.help-badge:focus-visible {
+  background: var(--pink, #ff4f93);
+  border-color: var(--pink, #ff4f93);
+  color: #fff;
+  outline: none;
 }
 
 .cell-stack {
@@ -1531,6 +1631,7 @@ const totalPages = computed(() => {
 
 @media (max-width: 1100px) {
   .fee-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .query-spacer { display: none; }
 }
 @media (max-width: 700px) {
   .fee-form-grid { grid-template-columns: minmax(0, 1fr); }
