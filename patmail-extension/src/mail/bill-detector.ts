@@ -7,42 +7,56 @@ export interface BillRecognitionResult {
   caseNo?: string
   matter?: string
   date?: string
+  versionSuffix?: string
   ext?: string
   reason?: string
 }
 
 /**
- * 解析文件名是否符合账单四段式命名规则：
- * 【账单号】+【我方案号】+【事项】+【账单日期】
+ * 解析文件名是否符合账单命名规则：
+ * 标准四段式：【账单号】+【我方案号】+【事项】+【账单日期】
+ * 变异容错：
+ * 1. 兼容日期后带有版本/修饰符（如 `（更新）`、`(更新)`、`(1)`、`(2)`、`_v2` 等）
+ * 2. 兼容日期间隔符（如 `2026-11-10`、`2026.11.10` 或 `20261110`）
+ * 3. 兼容不间断空格（\u00A0）等特殊空白符
+ * 4. 兼容案号前置变体（若缺少账单号，但事项中明确包含“账单”或“退款/Credit Memo”且带日期，亦予识别；通知书等其他文件坚决排除）
  *
  * @param fileName 文件名（含扩展名）
  * @param caseVolumeHint 可选的我方案号提示（例如行中的 caseVolume）
  */
 export function parseBillFileName(fileName: string, caseVolumeHint?: string): BillRecognitionResult {
-  const trimmed = (fileName || '').trim()
-  const dotIndex = trimmed.lastIndexOf('.')
+  const rawTrimmed = (fileName || '').replace(/[\u00A0\u3000]/g, ' ').trim()
+  const dotIndex = rawTrimmed.lastIndexOf('.')
   if (dotIndex <= 0) {
     return { isBill: false, reason: '缺少文件扩展名' }
   }
 
-  const ext = trimmed.slice(dotIndex + 1).toLowerCase()
-  const baseName = trimmed.slice(0, dotIndex).trim()
+  const ext = rawTrimmed.slice(dotIndex + 1).toLowerCase()
+  let baseName = rawTrimmed.slice(0, dotIndex).trim()
 
-  // 1. 检查结尾是否为日期（8位数字 YYYYMMDD，如 20261110，兼容前缀空格、下划线或连字符）
-  const dateMatch = baseName.match(/[\s_-]?(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])$/)
-  if (!dateMatch) {
-    return { isBill: false, reason: '文件名末尾未找到合法的8位账单日期' }
+  // 1. 识别并提取可选的末尾版本修饰符（如 （更新）、(更新)、(1)、(2)、_v2、- 副本 等）
+  let versionSuffix = ''
+  const versionMatch = baseName.match(/[\s_-]*(?:[(（][^()（）]+[)）]|[-_](?:v\d+|副本|更新|改))$/i)
+  if (versionMatch) {
+    versionSuffix = versionMatch[0].trim()
+    baseName = baseName.slice(0, baseName.length - versionMatch[0].length).trim()
   }
 
-  const dateStr = dateMatch[0].trim().replace(/^[\s_-]/, '')
+  // 2. 检查结尾是否为日期（支持 8 位纯数字 YYYYMMDD，或 YYYY-MM-DD / YYYY.MM.DD）
+  const dateMatch = baseName.match(/[\s_-]?((?:19|20)\d{2})[-.]?(0[1-9]|1[0-2])[-.]?(0[1-9]|[12]\d|3[01])$/)
+  if (!dateMatch) {
+    return { isBill: false, reason: '文件名末尾未找到合法的账单日期' }
+  }
+
+  const dateStr = `${dateMatch[1]}${dateMatch[2]}${dateMatch[3]}`
   const beforeDate = baseName.slice(0, baseName.length - dateMatch[0].length).trim()
 
-  // 2. 定位我方案号
+  // 3. 定位我方案号
   let caseNo = ''
   let caseIndex = -1
   let caseLength = 0
 
-  const hint = (caseVolumeHint || '').trim()
+  const hint = (caseVolumeHint || '').replace(/[\u00A0\u3000]/g, ' ').trim()
   if (hint) {
     // 兼容我方案号末尾可能带有连接符或空白的情况，如 PA2631884CN-US-
     const cleanHint = hint.replace(/[-_\s]+$/, '')
@@ -72,26 +86,43 @@ export function parseBillFileName(fileName: string, caseVolumeHint?: string): Bi
     return { isBill: false, reason: '未找到我方案号' }
   }
 
-  // 3. 检查账单号（我方案号前面必须有非空的账单号）
+  // 4. 提取账单号（我方案号前面部分）与事项（我方案号与日期之间部分）
   const billNoPart = beforeDate.slice(0, caseIndex).trim()
-  if (!billNoPart) {
-    return { isBill: false, reason: '我方案号前缺少账单号' }
-  }
-
-  // 4. 检查事项（我方案号与日期之间必须有非空业务事项）
   const matterPart = beforeDate.slice(caseIndex + caseLength).trim()
+
   if (!matterPart) {
     return { isBill: false, reason: '我方案号与日期之间缺少业务事项' }
   }
 
-  return {
-    isBill: true,
-    billNo: billNoPart,
-    caseNo,
-    matter: matterPart,
-    date: dateStr,
-    ext
+  // 5. 账单合法性判定：
+  // 标准四段式：案号前面有明确账单号
+  if (billNoPart) {
+    return {
+      isBill: true,
+      billNo: billNoPart,
+      caseNo,
+      matter: matterPart,
+      date: dateStr,
+      versionSuffix,
+      ext
+    }
   }
+
+  // 变异情况：案号开头（前面没有账单号）
+  // 必须满足事项中明确包含“账单”或“退款/Credit Memo”关键词，避免误把“通知书”等非账单当成账单
+  if (/(?:账单|退款|Credit\s*Memo)/i.test(matterPart)) {
+    return {
+      isBill: true,
+      billNo: '',
+      caseNo,
+      matter: matterPart,
+      date: dateStr,
+      versionSuffix,
+      ext
+    }
+  }
+
+  return { isBill: false, reason: '我方案号前缺少账单号且事项中未标注为账单' }
 }
 
 /**

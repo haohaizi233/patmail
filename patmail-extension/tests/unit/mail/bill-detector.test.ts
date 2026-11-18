@@ -85,5 +85,41 @@ describe('账单识别算法 (bill-detector)', () => {
       expect(res.matter).toBe('审查意见答复账单')
       expect(res.date).toBe('20261108')
     })
+
+    it('兼容日期后带有（更新）或版本括号修饰符的真实样本', () => {
+      const v1 = parseBillFileName('INVSG260800245 PA2511528CN-ID 实审账单 20260811（更新）.pdf', 'PA2511528CN-ID')
+      expect(v1.isBill).toBe(true)
+      expect(v1.billNo).toBe('INVSG260800245')
+      expect(v1.date).toBe('20260811')
+      expect(v1.versionSuffix).toBe('（更新）')
+
+      const v2 = parseBillFileName('INVSG260800247 PA2511527CN-TH 新申请和翻译账单 20260811（更新）.pdf', 'PA2511527CN-TH')
+      expect(v2.isBill).toBe(true)
+      expect(v2.date).toBe('20260811')
+
+      const v3 = parseBillFileName('BILL123 PA2511526CN-MY 事项 20260811 (2).pdf', 'PA2511526CN-MY')
+      expect(v3.isBill).toBe(true)
+      expect(v3.date).toBe('20260811')
+      expect(v3.versionSuffix).toBe('(2)')
+    })
+
+    it('兼容案号开头但事项中明确标有账单且带日期的真实样本', () => {
+      const res = parseBillFileName('PA2532001CN-HAGUE （海牙报告函）美国拟授权通知书 账单 20260718.pdf', 'PA2532001CN-HAGUE')
+      expect(res.isBill).toBe(true)
+      expect(res.caseNo).toBe('PA2532001CN-HAGUE')
+      expect(res.date).toBe('20260718')
+      expect(res.matter).toBe('（海牙报告函）美国拟授权通知书 账单')
+    })
+
+    it('案号开头且事项中无账单/退款字样者仍准确排除', () => {
+      const res = parseBillFileName('PA2532001CN-HAGUE （海牙报告函）美国拟授权通知书 20260718.pdf', 'PA2532001CN-HAGUE')
+      expect(res.isBill).toBe(false)
+    })
+
+    it('兼容日期中带有破折号或点号分隔的日期', () => {
+      const res = parseBillFileName('123456 PA2511000CN 授权账单 2026-11-05.pdf', 'PA2511000CN')
+      expect(res.isBill).toBe(true)
+      expect(res.date).toBe('20261105')
+    })
   })
 })
