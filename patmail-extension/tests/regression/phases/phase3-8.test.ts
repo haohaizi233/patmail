@@ -135,7 +135,7 @@ describe('Phase 3.8 恢复与证据时间', () => {
     if (!saved.ok) throw new Error(saved.reason)
     const raw = disk.records.get(saved.session.querySessionId)
     if (!raw) throw new Error('missing')
-    const legacy = { ...raw } as FileQuerySession
+    const legacy = { ...raw }
     delete (legacy as { persistence?: string }).persistence
     delete (legacy as { recoveryState?: string }).recoveryState
     useQuerySessionDisk({

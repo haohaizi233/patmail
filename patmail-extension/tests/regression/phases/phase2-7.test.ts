@@ -89,6 +89,7 @@ function node(id: string, people: Array<{ user_id: string; cn_name: string }>) {
 }
 function flowFetcher(options: { token?: () => string; nodes?: unknown[] } = {}): typeof fetch {
   return async (_url, init) => {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     const call = new URLSearchParams(String(init?.body)).get('Call')
     if (call === 'GetFlowInfo') return json({ ...client, Result: flowRow(options.token?.() ?? '') })
     if (call === 'GetFlowHistory') return json({
@@ -207,6 +208,7 @@ describe('Dry-run', () => {
   it('merges one customer and description, splits the rest, and never calls fetch', () => {
     const calls: string[] = []
     const transport = new EasyTransport(origin, { fetcher: async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       calls.push(new URLSearchParams(String(init?.body)).get('Call') ?? '')
       return json(client)
     } })
@@ -243,7 +245,7 @@ describe('Dry-run', () => {
     const forged = { ...task, taskFingerprint: 'caller-supplied' }
     expect(validateTask(forged, current).status).toBe('STALE')
     const renamed = input([file(fileA, 'profile-a', '专利证书', '另一份')])
-    renamed.files[0] = { ...renamed.files[0]!, fileName: '另一份' }
+    renamed.files[0] = { ...renamed.files[0], fileName: '另一份' }
     const lied = { ...task, taskFingerprint: taskFingerprint(renamed) }
     expect(validateTask(lied, renamed).status).toBe('STALE')
     expect(validateTask(lied, renamed).issues.some(item => item.code === 'STALE_TASK')).toBe(true)
@@ -363,6 +365,7 @@ describe('接口契约与写开关', () => {
     const calls: string[] = []
     const runtime = new EasyRuntime(origin, {
       fetcher: async (_url, init) => {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         const call = new URLSearchParams(String(init?.body)).get('Call') ?? ''
         calls.push(call)
         if (call === 'GetUserModel') return json({ ...client, UserModel: { user_id: user, user_name: 'tester', Name: '测试员' } })

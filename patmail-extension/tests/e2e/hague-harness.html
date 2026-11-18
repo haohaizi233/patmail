@@ -4,6 +4,7 @@ import '../../src/shell/style.css'
 import '../../src/app/styles/workspace.css'
 import HaguePage from '../../src/app/pages/HaguePage.vue'
 import CheckRainbow from '../../src/app/components/CheckRainbow.vue'
+import AppDialog from '../../src/app/components/AppDialog.vue'
 import { hintDirective } from '../../src/shell/components/hint'
-createApp({ render: () => h('div', [h('header', { class: 'topbar test-top-actions' }, [h(CheckRainbow)]), h(HaguePage)]) }).directive('hint', hintDirective).mount('#app')
+createApp({ render: () => h('div', [h('header', { class: 'topbar test-top-actions' }, [h(CheckRainbow)]), h(HaguePage), h(AppDialog)]) }).directive('hint', hintDirective).mount('#app')
 </script></body></html>

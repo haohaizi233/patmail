@@ -542,7 +542,9 @@ export function readArbitrationDecisions(text: string): ArbitrationDecision[] {
       decisions.push({ volume, ...(procLabel ? { procLabel } : {}), recipient: '', role: '', cc: '', ccRole: '', reason, unsure: true })
       continue
     }
+    // eslint-disable-next-line no-useless-escape -- 存量豁免：保留正则转义写法
     const recipientRaw = fieldOf(parts, '收件人') || line.match(/收件人\s*[：:\-]?\s*([^，,；;｜|\n]+)/)?.[1]?.trim() || ''
+    // eslint-disable-next-line no-useless-escape -- 存量豁免：保留正则转义写法
     const ccRaw = fieldOf(parts, '抄送') || line.match(/抄送\s*[：:\-]?\s*([^，,；;｜|\n]+)/)?.[1]?.trim() || ''
     const keptTo = partySlots(partyText(recipientRaw), roleText(fieldOf(parts, '身份'), recipientRaw), reason)
     const keptCc = partySlots(partyText(ccRaw), roleText(fieldOf(parts, '抄送身份'), ccRaw), reason)

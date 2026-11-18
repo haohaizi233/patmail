@@ -6,6 +6,8 @@
 
 ## 目录
 
+技术知识入口：[逆向与算法](patmail-extension/docs/engineering/README.md)。插件内打开“文档 → 逆向与算法”可离线阅读；治理结果见[审计报告](patmail-extension/docs/governance/audit-report.md)。
+
 | 路径 | 内容 |
 |---|---|
 | `API/` | 原站接口记录。入口、参数、响应和字段。发文、期限监控、流程和案件查询在 07–13 |

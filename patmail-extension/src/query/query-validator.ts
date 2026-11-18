@@ -14,7 +14,7 @@ function stringRecord(value: unknown, accept: (key: string) => boolean): Record<
   if (value === undefined) return {}
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const output = Object.create(null) as Record<string, string>
-  for (const key of Object.keys(value as object)) {
+  for (const key of Object.keys(value)) {
     const raw = (value as Record<string, unknown>)[key]
     if (isForbiddenFieldName(key) || typeof raw !== 'string' || !accept(key)) return null
     output[key] = raw

@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { emptyConnection, sameConnectionSnapshot, type ConnectionSnapshot, type EasyConnectionContext, type EasyTabCandidate } from '../../shared/connection'
-import { customerMode, modeOrigin } from '../../settings/customer-mode'
+import { customerMode, modeOrigin,originsForMode } from '../../settings/customer-mode'
 import { MessageType, type WorkspaceAction, type WorkspaceResultPayload } from '../../shared/message'
 import { sendToBackground } from '../../utils/runtime'
 
@@ -26,6 +26,7 @@ let accountKey = ''
 let storagePending: 'data' | 'session' | null = null
 
 export interface WorkspaceCommitCheck {
+  discoveryOrigins?:readonly string[]
   requestId: number
   latestRequestId: number
   expectedOrigin: string
@@ -51,7 +52,8 @@ export function canCommitWorkspaceResponse(input: WorkspaceCommitCheck): boolean
   if (input.kind === 'mutation') {
     if (input.expectedEpoch !== undefined && input.connectionEpoch !== undefined && input.expectedEpoch !== input.connectionEpoch) return false
   } else if (input.requestId !== input.latestRequestId) return false
-  if (input.expectedOrigin && input.responseOrigin && input.responseOrigin !== input.expectedOrigin) return false
+  if(input.discoveryOrigins&&input.responseOrigin&&!input.discoveryOrigins.includes(input.responseOrigin))return false
+  if (input.expectedOrigin && input.responseOrigin && input.responseOrigin !== input.expectedOrigin && !(input.kind!=='mutation'&&input.discoveryOrigins?.includes(input.expectedOrigin)&&input.discoveryOrigins.includes(input.responseOrigin))) return false
   if (input.responseAuthenticated && (!input.responseOrigin || !input.responseOperatorId)) return false
   return true
 }
@@ -146,7 +148,7 @@ export function useWorkspace() {
     const epoch = connectionEpoch
     const requestId = kind === 'mutation' ? ++mutationSerial : ++requestSerial
     const expectedOrigin = expectedWorkspaceOrigin({
-      switchesSystem,
+      switchesSystem:switchesSystem||action.action==='bind',
       sessionStatus: connection.value.sessionStatus,
       easyOrigin: connection.value.easyOrigin,
       modeOrigin: modeOrigin(customerMode())
@@ -172,7 +174,8 @@ export function useWorkspace() {
         expectedOrigin,
         responseOrigin: next.easyOrigin,
         responseOperatorId: next.operatorId,
-        responseAuthenticated: next.sessionStatus === 'authenticated'
+        responseAuthenticated: next.sessionStatus === 'authenticated',
+        ...((connection.value.sessionStatus!=='authenticated'||switchesSystem||action.action==='bind')&&kind!=='mutation'?{discoveryOrigins:originsForMode(customerMode())}:{})
       })) return null
       if (kind !== 'mutation' || requestId === mutationSerial) applyPayload(action, response.payload)
       return response.payload

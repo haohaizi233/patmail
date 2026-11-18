@@ -71,4 +71,4 @@ jobs:
             patmail-extension/test-results/patmail-delivery.zip
             patmail-extension/test-results/ci
             patmail-extension/test-results/coverage
-          retention-days: 30
+          retention-days: 7

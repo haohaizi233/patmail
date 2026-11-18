@@ -29,7 +29,7 @@ export function browserLock(): LockProvider | null {
   if (!locks) return null
   return {
     exclusive(name, run) {
-      return locks.request(`patmail:${name}`, () => run()) as ReturnType<typeof run>
+      return locks.request(`patmail:${name}`, () => run())
     }
   }
 }

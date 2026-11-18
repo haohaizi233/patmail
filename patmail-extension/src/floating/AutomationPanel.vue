@@ -248,6 +248,7 @@ async function diagnose(): Promise<void> {
         <li v-if="checked.issues.length === 0" class="hint">没有阻塞项。</li>
       </ul>
       <ul v-if="blockedPlans.length">
+        <!-- eslint-disable-next-line vue/no-template-shadow -- 存量豁免：保留模板变量名与外层语义一致 -->
         <li v-for="plan in blockedPlans" :key="plan.stage + plan.itemId" class="hint">{{ plan.stage }} · {{ plan.contractStatus }} · {{ plan.blockers[0] }}</li>
       </ul>
       <p v-if="recovery" class="hint">恢复：{{ recovery.reason }}</p>

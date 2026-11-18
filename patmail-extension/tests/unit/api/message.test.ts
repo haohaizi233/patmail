@@ -189,4 +189,28 @@ describe('message validation', () => {
     expect(isMessage({ type: 'AGENT_CHAT', payload: { action: 'create', title: '   ' } })).toBe(false)
     expect(isMessage({ type: 'AGENT_CHAT', payload: { action: 'rename', id: 'short', title: '客户甲' } })).toBe(false)
   })
+
+  it('forwards fee search, init, customer modal, and applicant tree requests through workspace', () => {
+    const forward = (message: unknown) => ({ type: 'WORKSPACE', payload: { action: 'forward', message } })
+    expect(isMessage(forward({ type: 'LOAD_FEE_INIT' }))).toBe(true)
+    expect(isMessage(forward({ type: 'SEARCH_FEE_CUSTOMERS', payload: { searchKey: '华为' } }))).toBe(true)
+    expect(isMessage(forward({ type: 'LOAD_FEE_APPLICANTS', payload: { customerIds: 'id-1;id-2' } }))).toBe(true)
+    expect(isMessage(forward({ type: 'SEARCH_FEE', payload: { query: { pageIndex: 1, pageSize: 10 } } }))).toBe(true)
+    expect(isMessage(forward({ type: 'SEARCH_FEE_AMOUNT', payload: { query: { pageIndex: 1, pageSize: 10 } } }))).toBe(true)
+    expect(isMessage(forward({ type: 'FEE_EXPORT_CONFIG', payload: { action: 'list', belongKey: 'FeeSearch_ExportByCond' } }))).toBe(true)
+    expect(isMessage(forward({
+      type: 'EXPORT_FEE',
+      payload: {
+        mode: 'cond',
+        query: { pageIndex: 1, pageSize: 10 },
+        columns: [{ value: 'case_volume', text: '我方文号' }],
+        timeoutMs: 600_000
+      }
+    }))).toBe(true)
+    expect(isMessage({
+      type: 'SAVE_DOWNLOAD',
+      payload: { url: 'http://d.hiseeip.com:88/AjaxServers/FileHandler.ashx?guid=11111111-2222-3333-4444-555555555555&file_size=1234', fileName: '' }
+    })).toBe(true)
+    expect(isMessage(forward({ type: 'LOAD_DICTIONARY', payload: { kind: 'picker', force: false } }))).toBe(true)
+  })
 })

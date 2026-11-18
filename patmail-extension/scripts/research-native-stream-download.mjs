@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import assert from 'node:assert/strict'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -54,7 +55,7 @@ try {
   await app.goto(`${origin}/app.html`)
   report.fetch = await app.evaluate(async () => {
     try {
-      const response = await fetch(chrome.runtime.getURL('generated-stream.bin?mode=fetch'))
+      const response = await fetch(globalThis.chrome.runtime.getURL('generated-stream.bin?mode=fetch'))
       const data = await response.arrayBuffer()
       return { status: response.status, bytes: data.byteLength }
     } catch (error) {
@@ -63,8 +64,8 @@ try {
   })
   try {
     const id = await worker.evaluate(() =>
-      chrome.downloads.download({
-        url: chrome.runtime.getURL('generated-stream.bin?mode=native'),
+      globalThis.chrome.downloads.download({
+        url: globalThis.chrome.runtime.getURL('generated-stream.bin?mode=native'),
         filename: 'native-stream-research.bin',
         saveAs: false,
       }),
@@ -72,7 +73,7 @@ try {
     for (let index = 0; index < 40; index++) {
       const item = await worker.evaluate(
         id =>
-          chrome.downloads
+          globalThis.chrome.downloads
             .search({ id })
             .then(
               items =>

@@ -123,10 +123,10 @@ describe('下载名称', () => {
     expect(progress).toEqual([[0, 265], [40, 265], [80, 265], [120, 265], [160, 265], [200, 265], [240, 265], [265, 265]])
   })
 
-  it.each([
-    { label: '单批网络失败', response: { ok: false, error: { code: 'NETWORK_ERROR', message: '无法连接 EASY。' } } as ApiResult<unknown>, code: 'NETWORK_ERROR' },
-    { label: '单批登录失效', response: { ok: true, data: { ClientInfo: { IsLogin: false, Status: true }, file_names: GENERATED.slice(0, 20).join(';') } } as ApiResult<unknown>, code: 'SESSION_EXPIRED' },
-    { label: '单批名称数量不足', response: { ok: true, data: { ClientInfo: { IsLogin: true, Status: true }, file_names: '只有一个.pdf' } } as ApiResult<unknown>, code: 'INVALID_RESPONSE' }
+  it.each<{ label: string; response: ApiResult<unknown>; code: string }>([
+    { label: '单批网络失败', response: { ok: false, error: { code: 'NETWORK_ERROR', message: '无法连接 EASY。' } }, code: 'NETWORK_ERROR' },
+    { label: '单批登录失效', response: { ok: true, data: { ClientInfo: { IsLogin: false, Status: true }, file_names: GENERATED.slice(0, 20).join(';') } }, code: 'SESSION_EXPIRED' },
+    { label: '单批名称数量不足', response: { ok: true, data: { ClientInfo: { IsLogin: true, Status: true }, file_names: '只有一个.pdf' } }, code: 'INVALID_RESPONSE' }
   ])('$label 后停止派发并取消其余请求，不返回残缺名称', async ({ response, code }) => {
     const { transport, pending } = controlledNames()
     const progress: number[][] = []

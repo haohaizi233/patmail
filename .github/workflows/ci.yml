@@ -37,6 +37,8 @@ jobs:
       - uses: ./.github/actions/setup-patmail
       - name: Typecheck / Lint / Format
         run: node scripts/ci-check.mjs --steps typecheck,lint,format
+      - name: Offline documentation gate
+        run: pnpm docs:check
       - name: 上传静态检查报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -45,7 +47,7 @@ jobs:
           name: report-static
           path: |
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   unit-integration:
     name: Unit & Integration Tests
@@ -64,7 +66,7 @@ jobs:
           path: |
             patmail-extension/test-results/ci
             patmail-extension/test-results/junit
-          retention-days: 14
+          retention-days: 3
 
   regression:
     name: Regression Tests
@@ -83,7 +85,7 @@ jobs:
           path: |
             patmail-extension/test-results/ci
             patmail-extension/test-results/junit
-          retention-days: 14
+          retention-days: 3
 
   security:
     name: Security (Secrets / Licenses)
@@ -101,7 +103,7 @@ jobs:
           name: report-security
           path: |
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   build:
     name: Build & Artifact Verification
@@ -128,7 +130,7 @@ jobs:
           name: report-build
           path: |
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   e2e-smoke:
     name: E2E Smoke
@@ -167,7 +169,7 @@ jobs:
             patmail-extension/test-results/*.png
             patmail-extension/test-results/*.txt
             patmail-extension/test-results/*.json
-          retention-days: 14
+          retention-days: 3
 
   ci-gate:
     name: CI Gate
@@ -205,4 +207,4 @@ jobs:
           path: |
             patmail-extension/test-results/ci/summary.json
             patmail-extension/test-results/ci/summary.md
-          retention-days: 30
+          retention-days: 7

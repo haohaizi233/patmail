@@ -1,6 +1,6 @@
 import { DOCUMENT_EXPORT_CHANNEL } from '../shared/document-export'
 import { handleDocumentExport } from './document-export'
-import { handleHagueSessionMessage } from './hague-session'
+import { handleHagueSessionMessage, keepHagueSessionAlive } from './hague-session'
 import { handleHagueDraftMessage } from './hague-draft'
 import { HAGUE_DRAFT_CHANNEL } from '../hague/draft-contract'
 import { HAGUE_HTTP_CHANNEL, handleHagueHttp } from './hague-http'
@@ -18,7 +18,7 @@ import { prepareForwardedSearch } from '../api/message-guards'
 import { downloadFilesRequestIssue, isMessage, MessageType, type AppMessage, type BackgroundResponse } from '../shared/message'
 import { prepareApiDocs } from '../agent/rag-store'
 import { hydrateWriteSwitch, watchWriteSwitch } from '../settings/write-switch'
-import { customerMode, hydrateCustomerMode, modeOrigin, originMatchesMode, watchCustomerMode } from '../settings/customer-mode'
+import { customerMode, hydrateCustomerMode, preferredModeOrigin, originMatchesMode, watchCustomerMode } from '../settings/customer-mode'
 import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL } from '../shared/download-progress'
 import { LocalStreamDownloads } from './stream-download'
 import { trustedOrigin } from '../api/config'
@@ -50,6 +50,7 @@ const workerScope = globalThis as unknown as {
 }
 workerScope.addEventListener('fetch', event => { nativeTarget.handleFetch(event) })
 workerScope.addEventListener('activate', event => { event.waitUntil(workerScope.clients.claim()) })
+// eslint-disable-next-line @typescript-eslint/unbound-method -- 存量豁免：保留原型方法引用
 const browserDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), nativeTarget.host, nativeTarget.status)
 const documentDownloads = new BrowserStreamDownloads(createBrowserDownloadStore(), request => nativeTarget.host(request), targetId => nativeTarget.status(targetId))
 
@@ -91,23 +92,26 @@ function persistConnection(): void {
 let warming: Promise<void> | null = null
 let warmedAt = 0
 
-const reinjected = new Set<number>()
+const reinjected = new Map<number,Promise<void>>()
 
 async function sendToTab(tabId: number, message: AppMessage): Promise<unknown> {
+  const version=connection.context.connectionVersion
   try {
     return await chrome.tabs.sendMessage(tabId, message)
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error)
-    if (reinjected.has(tabId) || !/Receiving end does not exist|Could not establish connection/i.test(text) || !chrome.scripting?.executeScript) throw error
-    reinjected.add(tabId)
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] })
+    if (!/Receiving end does not exist|Could not establish connection/i.test(text) || !chrome.scripting?.executeScript) throw error
+    let injection=reinjected.get(tabId)
+    if(!injection){injection=chrome.scripting.executeScript({target:{tabId},files:['content.js']}).then(()=>{});reinjected.set(tabId,injection)}
+    try{await injection}finally{if(reinjected.get(tabId)===injection)reinjected.delete(tabId)}
+    if(connection.context.connectionVersion!==version)throw new Error('重连期间账号或页面已变化，请按当前账号重新发起操作。')
     return chrome.tabs.sendMessage(tabId, message)
   }
 }
 
 const host: WorkspaceHost = {
   connection,
-  area: chrome.storage.local as unknown as WorkspaceHost['area'],
+  area: chrome.storage.local,
   tasks,
   evidence,
   queryTabs: () => chrome.tabs.query({}),
@@ -120,6 +124,7 @@ const host: WorkspaceHost = {
   openApp: async () => {
     const appUrl = chrome.runtime.getURL('app.html')
     const tabs = await chrome.tabs.query({})
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- 存量豁免：保留原型方法引用
     return openWorkspaceTab(tabs, appUrl, host.focusTab, async () => {
       const created = await chrome.tabs.create({ url: appUrl, active: true })
       if (created.id == null) throw new Error('没有打开工作台。')
@@ -131,7 +136,7 @@ const host: WorkspaceHost = {
 }
 
 function alignToMode(): void {
-  connection.retarget(modeOrigin(customerMode()))
+  connection.retarget(preferredModeOrigin(customerMode(),connection.context.easyOrigin))
   const tabId = connection.context.easyTabId
   if (tabId != null && !originMatchesMode(connection.context.easyOrigin)) connection.detach(tabId)
 }
@@ -168,8 +173,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   persistConnection()
 })
 // tabs.loading也会因EASY内部mframe加载而出现；只有真正顶层导航才销毁来源文档。
-chrome.webNavigation?.onBeforeNavigate.addListener(({ tabId, frameId }) => {
-  if (frameId === 0) { streamDownloads.cancelTab(tabId); browserDownloads.cancelTab(tabId); documentDownloads.cancelTab(tabId) }
+chrome.webNavigation?.onBeforeNavigate.addListener(({ tabId, frameId,url }) => {
+  if (frameId === 0) {
+    streamDownloads.cancelTab(tabId); browserDownloads.cancelTab(tabId); documentDownloads.cancelTab(tabId)
+    reinjected.delete(tabId)
+    connection.observeNavigation(tabId,url)
+    if(connection.context.easyTabId===tabId&&!originMatchesMode(connection.context.easyOrigin))connection.detach(tabId)
+    persistConnection()
+  }
 })
 let sessionReadTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -183,7 +194,7 @@ function scheduleSessionRead(tabId: number): void {
 }
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-  if (info.url || info.status === 'loading') {
+  if (info.url && tabOrigin(info.url)!==connection.context.easyOrigin) {
     connection.observeNavigation(tabId, info.url ?? tab.url)
     if (connection.context.easyTabId === tabId && !originMatchesMode(connection.context.easyOrigin)) {
       connection.detach(tabId)
@@ -229,6 +240,7 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
     const type = message && typeof message === 'object' && 'type' in message ? String((message as { type?: unknown }).type) : '未知'
     const inner = message && typeof message === 'object' && 'payload' in message
       && (message as { payload?: { action?: unknown; message?: { type?: unknown } } }).payload?.action === 'forward'
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       ? String((message as { payload?: { message?: { type?: unknown } } }).payload?.message?.type ?? '')
       : ''
     const envelope = isRecord(message) && isRecord(message.payload) ? message.payload : undefined
@@ -268,7 +280,10 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       return { type: MessageType.Error, payload: { message: '扩展缺「下载」权限：到 chrome://extensions 给 PatMail 点一次「重新加载」后再试。' } }
     }
     try {
-      const downloadId = await downloads.download({ url: message.payload.url, filename: message.payload.fileName, saveAs: false })
+      const options: chrome.downloads.DownloadOptions = message.payload.fileName
+        ? { url: message.payload.url, filename: message.payload.fileName, saveAs: false }
+        : { url: message.payload.url, saveAs: false }
+      const downloadId = await downloads.download(options)
       return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: message.payload.fileName, downloadId } }
     } catch (error: unknown) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有接住这次下载。' } }
@@ -381,11 +396,13 @@ function beat(): void {
   void chrome.runtime.getPlatformInfo()
 }
 beat()
+void keepHagueSessionAlive()
 setInterval(beat, HEARTBEAT_MS)
 if (chrome.alarms) {
   chrome.alarms.onAlarm.addListener(alarm => {
     if (alarm.name !== 'patmail-keepalive') return
     beat()
+    void keepHagueSessionAlive()
     if (connection.context.sessionStatus === 'authenticated') void recheckBoundSession(host).finally(() => persistConnection())
     else void warmEasySession()
   })

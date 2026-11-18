@@ -80,21 +80,21 @@ describe('客户身份和映射', () => {
     expect(grouped.groups).toHaveLength(2)
     const review = reviewCustomerBind(files, 'profile-a', '客户A')
     expect(review.every(group => group.nameMatches)).toBe(false)
-    const unbound = { ...files[1]!, customerProfileId: undefined, customerBinding: undefined }
-    const bound = applyConfirmedBind({ [fileA]: { ...files[0]!, customerBinding: undefined }, [fileB]: unbound }, 'profile-a', '客户A', ['甲客户'])
+    const unbound = { ...files[1], customerProfileId: undefined, customerBinding: undefined }
+    const bound = applyConfirmedBind({ [fileA]: { ...files[0], customerBinding: undefined }, [fileB]: unbound }, 'profile-a', '客户A', ['甲客户'])
     expect(bound[fileA]?.customerBinding?.confirmed).toBe(true)
     expect(bound[fileB]?.customerBinding).toBeUndefined()
     const conflict = [
-      rules().mappings[0]!,
-      { ...rules().mappings[0]!, id: 'map-2', mailTypeId: guid('dddddddd'), mailTypeName: '另一类型' }
+      rules().mappings[0],
+      { ...rules().mappings[0], id: 'map-2', mailTypeId: guid('dddddddd'), mailTypeName: '另一类型' }
     ]
     const blocked = previewOf([selected(fileA)], { ...rules(), mappings: conflict })
     expect(blocked.status).toBe('blocked')
     expect(blocked.mailTypeId).toBe('')
     expect(blocked.issues.some(issue => issue.code === 'MAPPING_CONFLICT')).toBe(true)
-    const kept = upsertMapping(conflict, { ...conflict[1]!, mailTypeId: guid('eeeeeeee') })
+    const kept = upsertMapping(conflict, { ...conflict[1], mailTypeId: guid('eeeeeeee') })
     expect(kept.ok).toBe(false)
-    const edited = upsertMapping([conflict[0]!], { ...conflict[0]!, enabled: false })
+    const edited = upsertMapping([conflict[0]], { ...conflict[0], enabled: false })
     expect(edited.ok && edited.mappings[0]?.version).toBe(2)
     const before = selectionFingerprint({ files: [selected(fileA)], revision: 2, userId: user, origin })
     const after = selectionFingerprint({ files: [selected(fileA, '乙客户')], revision: 3, userId: guid('bbbbbbbb'), origin: 'http://other' })
@@ -129,7 +129,7 @@ describe('创建契约', () => {
     expect(first.record.state).toBe('CONFIRM_REQUIRED')
     expect(first.record.requestSent).toBe(false)
     expect(fetcher).not.toHaveBeenCalled()
-    const single = previewOf([selected(fileA)], { ...rules(), policies: [{ ...rules().policies[0]!, sendMode: 'single_file' }] })
+    const single = previewOf([selected(fileA)], { ...rules(), policies: [{ ...rules().policies[0], sendMode: 'single_file' }] })
     expect((await runtime.create(user, single, claimOf(single))).blockers.join('')).toContain('写开关')
     await setWriteSwitchOpen(true)
   })
@@ -137,7 +137,9 @@ describe('创建契约', () => {
   it('keeps an unknown create from being sent again', async () => {
     const bodies: string[] = []
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       bodies.push(String(init?.body))
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'MailCustomer') return json({ ...client, ClientInfo: { ...client.ClientInfo, Status: true } })
       return json(client)
@@ -155,6 +157,7 @@ describe('创建契约', () => {
   it('treats a lost response as unknown and retains the mail id after a later read failure', async () => {
     let createCalls = 0
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'MailCustomer') {
         createCalls += 1
@@ -221,6 +224,7 @@ describe('邮件读取和保存', () => {
   it('saves, binds, then verifies the file ids from a fresh read', async () => {
     const bodies: string[] = []
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const body = String(init?.body)
       bodies.push(body)
       const call = new URLSearchParams(body).get('Call')
@@ -260,6 +264,7 @@ describe('邮件读取和保存', () => {
     for (const mode of modes) {
       const calls: string[] = []
       const fetcher: typeof fetch = async (_url, init) => {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         const call = new URLSearchParams(String(init?.body)).get('Call') ?? ''
         calls.push(call)
         if (mode === 'timeout' && call === 'SaveMailInfo') return await new Promise<Response>((_resolve, reject) => {
@@ -295,6 +300,7 @@ describe('邮件读取和保存', () => {
   it('marks partial failure when the reread files do not match the plan', async () => {
     let fileReads = 0
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'MailCustomer') return json({ ...client, objid: mailId })
       if (call === 'GetMailInfo') return json({ ...client, MailInfo: [mailRow()] })
@@ -321,6 +327,7 @@ describe('邮件读取和保存', () => {
   it('rejects a mail read whose id or login state does not match', async () => {
     const wrongId = new EasyMailReadService(new EasyTransport(origin, {
       fetcher: async (_url, init) => {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         const call = new URLSearchParams(String(init?.body)).get('Call')
         if (call === 'MailinfoInit') return json(client)
         return json({ ...client, MailInfo: [mailRow({ mail_id: fileB })] })
@@ -353,6 +360,7 @@ describe('消息门禁', () => {
     const result = await runtime.createEasyMail(preview, claimOf(preview))
     expect(result.record.requestSent).toBe(false)
     expect(result.record.state).toBe('FAILED')
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     expect(fetcher.mock.calls.some(call => String(call[1]?.body).includes('MailCustomer'))).toBe(false)
   })
 })

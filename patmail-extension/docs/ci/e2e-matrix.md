@@ -9,6 +9,8 @@ CI 的 `e2e-full` 使用两片 matrix，在独立 runner 上并行，片内仍�
 - `full-lifetime`：仅 `native-stream-lifetime`，保留跨五分钟边界的真实下载验证。
 - `full-functional`：`full` 中其余全部场景，直接从完整列表派生，新增场景自动归入此片。
 
+生命周期夹具在打开下载导航前等待本扩展的 Service Worker 实际控制页面，连接期限使用生产默认的 15 秒。夹具在导航与重载测试页前后显式调用 `clients.claim()`，并在 `openNavigation` 派发下载 iframe 前再次执行接管，消除无头浏览器启动时 Service Worker 激活早于页面创建导致页面未受控的偶发超时。下载事件等待立即观察拒绝，清理浏览器时的次生异常不会掩盖原始失败；原 Promise 仍须成功完成，失败照常使场景退出非零。原始错误、阶段、控制状态及导航失败类型写入 `test-results/ci/native-stream-lifetime.json`，由现有 CI 产物路径上传。仍保留 72 个分块、每块间隔 5 秒、总时长超过五分钟及全部下载字节校验，未缩短或跳过长测。
+
 `fail-fast: false` 保证其中一片失败后另一片仍完成取证。每片上传独立的 `report-e2e-<group>`，JSON 文件名也包含分组名，合并报告时互不覆盖；`ci-report.mjs` 汇总两片，Full Gate 要求整个 matrix 成功。旧桥接组继续独立运行，不参与分片。
 本地 `pnpm test:e2e:full` 保持原来的完整串行入口；也可用 `node scripts/run-e2e.mjs full-functional` 或 `full-lifetime` 单跑一片。
 

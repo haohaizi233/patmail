@@ -23,11 +23,11 @@ describe('IndexedDB commit boundary', () => {
     const operation = db.store.appendFrame({ seq: 1, slot: 'file-query', scope: 'a', payload: '{}', at: '' }).then(() => { acknowledged = true })
     const rejection = expect(operation).rejects.toThrow('disk failure')
     await settle()
-    db.requests[0]!.onsuccess?.()
+    db.requests[0].onsuccess?.()
     await settle()
     expect(acknowledged).toBe(false)
-    db.transactions[0]!.error = new Error('disk failure')
-    db.transactions[0]!.onabort?.()
+    db.transactions[0].error = new Error('disk failure')
+    db.transactions[0].onabort?.()
     await rejection
   })
   it('commits checkpoint and frame deletion in the same transaction, ACKs only oncomplete', async () => {
@@ -36,11 +36,11 @@ describe('IndexedDB commit boundary', () => {
     const operation = db.store.commitCheckpoint!(new Uint8Array([1]), 5).then(() => { acknowledged = true })
     await settle()
     expect(db.transactions).toHaveLength(1)
-    expect(db.transactions[0]!.names).toEqual(['checkpoint', 'wal'])
+    expect(db.transactions[0].names).toEqual(['checkpoint', 'wal'])
     db.requests.forEach(request => request.onsuccess?.())
     await settle()
     expect(acknowledged).toBe(false)
-    db.transactions[0]!.oncomplete?.()
+    db.transactions[0].oncomplete?.()
     await operation
     expect(acknowledged).toBe(true)
   })

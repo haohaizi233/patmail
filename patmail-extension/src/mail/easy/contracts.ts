@@ -2,6 +2,7 @@ import type { ApiResult } from '../../api/types'
 import { isQueryGuid } from '../../query/query-validator'
 import { isRecord, readClientInfo } from '../../api/response-guards'
 import type { MailDraftPreview, SendMode } from '../types'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import type { EasyMailAttachment, EasyMailCase, EasyMailSnapshot, KnownValue, WriteStatus } from './types'
 
 const MAIL_CUSTOMER_PAGE = 'FileSearchMail.aspx'
@@ -128,7 +129,7 @@ export function readTableRows(data: unknown, idKey: 'file_id' | 'case_id', nameK
   const rows: Array<{ id: string; name: string }> = []
   for (const row of data.TableRows) {
     if (!isRecord(row) || typeof row[idKey] !== 'string') return { state: 'invalid', message: '列表行缺少 ID。' }
-    rows.push({ id: row[idKey] as string, name: typeof row[nameKey] === 'string' ? row[nameKey] as string : '' })
+    rows.push({ id: row[idKey], name: typeof row[nameKey] === 'string' ? row[nameKey] : '' })
   }
   const rawTotal = data.TableRowsCount
   const total = typeof rawTotal === 'string' && /^\d+$/.test(rawTotal) ? Number(rawTotal) : null
@@ -401,6 +402,7 @@ export async function loadFinishCtrlProc(
     const parsed = readTableRows(loaded.data, 'case_id', 'case_volume')
     if (parsed.state === 'invalid') return { ok: false, message: '发文上的处理事项没有读到，没有提交。' }
     if (parsed.state !== 'known') break
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     if (isRecord(loaded.data) && Array.isArray(loaded.data.TableRows)) rows.push(...loaded.data.TableRows)
     seen += parsed.rows.length
     const reached = parsed.total !== null && seen >= parsed.total

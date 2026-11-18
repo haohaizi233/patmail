@@ -177,14 +177,14 @@ describe('Phase 3.2 写入入口、账号隔离与只读契约', () => {
 
     const task = buildTask({ origin, operatorId: userA, files: [file()], rules: rules(), profiles: [profile()], queryTemplateVersion: 1, now: '2026-09-26T00:00:00.000Z' })
     const forged = await handleAuthorityMessage(
-      { type: MessageType.SaveTask, payload: { task: { ...task, status: 'COMPLETED' } as unknown as Record<string, unknown> } },
+      { type: MessageType.SaveTask, payload: { task: { ...task, status: 'COMPLETED' } } },
       { ledger: new ExecutionLedger(memoryTransactionStore(), 'owner'), tasks: runtime.tasks ?? new SerialTaskStore(null), evidence: runtime.evidence }
     )
     if (forged?.type !== MessageType.TaskResult) throw new Error('forged')
     expect(forged.payload.ok).toBe(false)
     expect(forged.payload.message).toContain('不能由页面声明')
     const wrong = await handleAuthorityMessage(
-      { type: MessageType.SaveTask, payload: { task: { ...task, taskFingerprint: 'not-the-fingerprint' } as unknown as Record<string, unknown> } },
+      { type: MessageType.SaveTask, payload: { task: { ...task, taskFingerprint: 'not-the-fingerprint' } } },
       { ledger: new ExecutionLedger(memoryTransactionStore(), 'owner'), tasks: runtime.tasks ?? new SerialTaskStore(null), evidence: runtime.evidence }
     )
     if (wrong?.type !== MessageType.TaskResult) throw new Error('wrong')

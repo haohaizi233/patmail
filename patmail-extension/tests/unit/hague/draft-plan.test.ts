@@ -14,6 +14,16 @@ it('makes a source-specific draft with numeric image order and semantic legends'
   expect(plan.creators[0].address).toEqual(plan.applicants[0])
   expect(plan.reference).toBe('PO1HAGUE')
 })
+it('allows an absent optional postal code while retaining validation for malformed values',()=>{
+ const r=row();r.decision!.applicant.postalCode=''
+ expect(buildDraftPlan(r).applicants[0].postalCode).toBe('')
+ r.decision!.applicant.postalCode='/'
+ expect(()=>buildDraftPlan(r)).toThrow(/邮编/)
+})
+it('supports source Singapore legal applicants without inventing a province',()=>{
+ const r=row();Object.assign(r.decision!.applicant,{country:'SG',city:'Singapore',region:'',postalCode:'018956'})
+ expect(buildDraftPlan(r).applicants[0]).toMatchObject({country:'SG',region:'',postalCode:'018956'})
+})
 it('retains the second applicant and resolves municipality address before any site write', () => {
   const r=row()
   r.source=JSON.stringify({GetCaseApplicant:[{TableRows:[{applicant_name_en:'Example Ltd.',contact_address_en:'No. 1, Nanshan District',city:'深圳市',province:'广东省',postcode:'518000',country_zh_cn:'中国'},{applicant_name_en:'Second Ltd.',contact_address_en:'No. 2, Xuhui District, Shanghai',city:'徐汇区',province:'上海市',postcode:'200233',country_zh_cn:'中国'}]}]})

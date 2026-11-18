@@ -38,11 +38,13 @@ import { isMultiPickerKey } from '../shared/picker-modes'
 import { CURRENT_ENVIRONMENT } from '../api/config'
 
 const props = withDefaults(defineProps<{
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   bridge?: MessageBridge
   canSearch: boolean
   userId: string
   mode: 'history' | 'customer'
   pageSize: number
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   origin?: string
   /** 模板页负责新建和修改。文件管理只选用模板并查询。 */
   manage?: boolean
@@ -1657,6 +1659,7 @@ watch(selectedCustomerId, () => {
               <span class="download-name-row">
                 <ThemeSelect class="download-template-select" aria-label="下载名称模板" :model-value="formValue('filetemp')" :options="downloadChoices('filetemp')" @update:model-value="chooseDownloadTemplate(String($event))" />
                 <span class="download-name-parts">
+                  <!-- eslint-disable-next-line vue/no-template-shadow -- 存量豁免：保留模板变量名与外层语义一致 -->
                   <span v-for="(part, index) in nameParts" :key="index" class="download-name-part">
                     <span v-if="index" class="download-part-plus" aria-hidden="true">+</span>
                     <ThemeSelect :aria-label="`下载名称第${index + 1}段`" :model-value="part.column" :options="namePartChoices(part.column)" @update:model-value="editNamePart(index, { column: String($event) })" />
@@ -1685,7 +1688,7 @@ watch(selectedCustomerId, () => {
       <p v-if="checkMessage" class="hint">{{ checkMessage }}</p>
       <p v-if="resolved.warnings.length" class="hint">{{ resolved.warnings[0] }}</p>
     </div>
-    <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" :title="submitHint" @click="search">查询文件</button>
+    <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" v-hint="submitHint" @click="search">查询文件</button>
     <p v-if="canSearch && !canSubmit" class="hint" role="status">{{ submitHint }}</p>
   </section>
 </template>

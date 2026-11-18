@@ -144,7 +144,7 @@ describe('模板合并', () => {
     expect(params.get('case_type')).toBe('31D1A147-2931-43B5-94AE-B72B1525BA8A')
     expect(codeOf(buildGetSearchFilesFromFields({}, { pageIndex: 1, pageSize: 20 }))).toBe('INVALID_QUERY')
     expect(codeOf(buildGetSearchFilesFromFields({ case_type: '31D1A147-2931-43B5-94AE-B72B1525BA8A', fileclass: 'general' }, { pageIndex: 1, pageSize: 20 }))).toBe('INVALID_QUERY')
-    expect(codeOf(buildGetSearchFilesFromFields({ Call: 'MailCustomer' } as Record<string, string>, { pageIndex: 1, pageSize: 20 }))).toBe('INVALID_QUERY')
+    expect(codeOf(buildGetSearchFilesFromFields({ Call: 'MailCustomer' }, { pageIndex: 1, pageSize: 20 }))).toBe('INVALID_QUERY')
   })
 
   it('submits vip and specialty, and leaves download-name controls out of the request', () => {

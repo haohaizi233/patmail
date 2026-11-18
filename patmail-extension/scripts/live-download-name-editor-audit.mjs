@@ -20,7 +20,7 @@ try {
   await app.goto(`chrome-extension://${new URL(worker.url()).host}/app.html#/files`)
   await app.waitForFunction(
     async () => {
-      const loaded = await chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
+      const loaded = await globalThis.chrome.runtime.sendMessage({ type: 'WORKSPACE', payload: { action: 'load' } })
       return Boolean(loaded.payload?.connection?.operatorId)
     },
     undefined,
@@ -46,7 +46,7 @@ try {
   await option.click()
   const parts = row.locator('.download-name-part')
   await app.waitForFunction(
-    expected => document.querySelectorAll('.download-name-part').length === expected,
+    expected => globalThis.document.querySelectorAll('.download-name-part').length === expected,
     selected.types.split(';').length,
   )
   const shown = await parts.locator('.theme-select-label').allTextContents()
@@ -72,7 +72,7 @@ try {
   await row.screenshot({ path: resultPath('download-editor-live.png') })
   const report = {
     passed: true,
-    version: await app.evaluate(() => chrome.runtime.getManifest().version),
+    version: await app.evaluate(() => globalThis.chrome.runtime.getManifest().version),
     parts: shown.length,
     labels: shown,
     fixedText: fixed,

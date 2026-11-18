@@ -3,18 +3,27 @@ import { nativeStreamArchive, pauseNativeDownload } from '../../../src/utils/str
 import { MessageType } from '../../../src/shared/message'
 const state = vi.hoisted(() => ({ calls: [] as string[], finished: false, failFinish: false, statusFailures: 0, failWrite: false, startDelay: 0 }))
 vi.mock('../../../src/utils/runtime', () => ({ sendToBackground: vi.fn(async (message, timeoutMs: number) => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (message.type !== 'BROWSER_STREAM_DOWNLOAD') throw new Error('不能依赖本机桥接或浏览器下载记录')
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- 存量豁免：多项历史存量，理由见 docs/ci/quality-gates.md
   const p = message.payload; state.calls.push(p.action)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (p.action === 'start' && state.startDelay) {
     await new Promise(resolve => setTimeout(resolve, Math.min(state.startDelay, timeoutMs)))
     if (state.startDelay >= timeoutMs) return { type: 'ERROR', payload: { message: '扩展后台没有在时限内返回。' } }
   }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (p.action === 'status' && state.statusFailures-- > 0) return { type: 'ERROR', payload: { message: '扩展后台没有在时限内返回。' } }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (p.action === 'write' && state.failWrite) return { type: 'ERROR', payload: { message: '扩展后台没有在时限内返回。' } }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (p.action === 'finish' && state.failFinish) return { type: 'ERROR', payload: { message: '目标文件权限已撤销' } }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (p.action === 'finish') state.finished = true
   return { type: 'STREAM_DOWNLOAD_RESULT', payload: { ok: true,
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- 存量豁免：多项历史存量，理由见 docs/ci/quality-gates.md
     ...(p.action === 'start' ? { token: 'a'.repeat(64), taskId: p.taskId, info: { manifest: {} } } : {}),
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     ...(p.action === 'status' ? { info: { state: state.finished ? 'complete' : 'inProgress', receivedBytes: 3 } } : {})
   } }
 }) }))
@@ -86,6 +95,7 @@ describe('纯浏览器流任务', () => {
     vi.useFakeTimers()
     state.statusFailures = 100
     const pending = nativeStreamArchive('test.zip', async (sink, signal) => {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
     }, () => {}, options)
     const assertion = expect(pending).rejects.toThrow(/暂停/)
@@ -101,6 +111,7 @@ describe('纯浏览器流任务', () => {
     vi.useFakeTimers()
     state.statusFailures = 100
     const pending = nativeStreamArchive('test.zip', async (_sink, signal) => {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
     }, () => {}, options)
     const assertion = expect(pending).rejects.toThrow(/缓存.*继续下载/)

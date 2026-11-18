@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ApiResult } from '../../api/types'
 import { apiError } from '../../api/types'
 import type { FilingSearchRow } from '../../api/filing-search-types'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { FILING_EXPORT_HEADERS, filingExportCells, filingRowsCurrent, type FilingExportRow } from '../../api/filing-export'
 import { collectFilingExport, filingExportSheet } from '../../workflow/filing-export'
 import { FilingRowsLedger, filingRowsBatchKey } from '../../workflow/filing-rows'

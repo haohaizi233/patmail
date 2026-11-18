@@ -77,6 +77,6 @@
 | 2 | 历史硬编码 LLM API Key（`sk-…`）曾在 `src/agent/config.ts` | 指纹 c9bd17c6f3c35fe1 | 已改 `VITE_*` 环境注入；建议服务商侧吊销（本地人工操作）；同上登记 |
 | 3 | 抓包证据目录含 Cookie/PII（`HAR/2026-10-28/cookies.txt` 等） | 工作树扫描 warn 记录 | 差异化策略：凭据 error、PII warn 登记；脱敏需授权，不删证据 |
 | 4 | 业务 Origin 全部是明文 HTTP（`http://183.36.43.66:88` 等）+ 本地调试面 `127.0.0.1/localhost` | `pnpm verify:manifest` 审计记录 | 登记在案；无迁移方案不强制 https（约束 4/5） |
-| 5 | ESLint 历史存量 681 errors / 25 warnings（63 文件） | `ci/eslint-baseline.json` | 棘轮冻结：新代码不得增加；危险规则（浮空 Promise 等）0 容忍 |
+| 5 | ESLint 历史存量 681 errors / 25 warnings（63 文件）；2026-11-14 已清零为 0/0 | `ci/eslint-baseline.json` | 棘轮冻结：新代码不得增加；危险规则（浮空 Promise 等）0 容忍；清零与豁免说明见 `docs/ci/quality-gates.md` |
 | 6 | E2E 基线与未提交业务数据不同步（118 vs 116、404） | baseline/rerun e2e 日志 | 属业务改动范畴，见 acceptance-report“阻断项”；CI 门禁会如实拦下 |
 | 7 | 覆盖率此前无基线 | 本次采集 | 防退化基线 `ci/coverage-baseline.json`（首次 `--coverage-gate` 自动落盘） |

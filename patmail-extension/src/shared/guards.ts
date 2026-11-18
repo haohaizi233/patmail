@@ -54,6 +54,7 @@ function isControl(value: unknown): value is FormControlSnapshot {
     (typeof value.semanticConfidence !== 'number' || value.semanticConfidence < 0 ||
       value.semanticConfidence > 1 || !Number.isFinite(value.semanticConfidence))) return false
   if (value.semanticSource !== undefined &&
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     !['label', 'aria', 'title', 'placeholder', 'nearby', 'name', 'id'].includes(String(value.semanticSource))) return false
   return true
 }

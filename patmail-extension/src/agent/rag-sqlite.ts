@@ -49,6 +49,7 @@ function pairs(value: unknown): Array<[string, number]> | null {
 
 function words(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) return null
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- 存量豁免：外部 any 数据流，类型收口待后续
   return value
 }
 

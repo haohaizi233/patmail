@@ -37,7 +37,7 @@ export function redactRecord(value: unknown): unknown {
 function shapeOf(value: unknown): string {
   if (value == null || value === '') return 'empty'
   if (Array.isArray(value)) return `array(${value.length})`
-  if (typeof value === 'object') return `object(${Object.keys(value as object).sort().join(',')})`
+  if (typeof value === 'object') return `object(${Object.keys(value).sort().join(',')})`
   return typeof value
 }
 

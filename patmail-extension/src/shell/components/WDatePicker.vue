@@ -5,7 +5,9 @@ import { menuBoxStyle, placeMenu } from './theme-select'
 /** 复刻原站 My97 `WdatePicker` 的日期框：文本输入加日历弹层，起止用 min / max 互限，值是 `yyyy-MM-dd`。 */
 const props = withDefaults(defineProps<{
   modelValue?: string
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   min?: string
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   max?: string
   /** 原站的 `dateFmt`。申请日(月日) 一格是 `MM-dd`，其余日期都是 `yyyy-MM-dd`。 */
   format?: 'yyyy-MM-dd' | 'MM-dd'
@@ -250,11 +252,11 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div v-if="opened" ref="panel" class="wdate-panel" :style="panelStyle" @mousedown.prevent>
         <div class="wdate-head">
-          <a class="wdate-btn" title="上一年" @click="shiftYear(-1)">«</a>
-          <a class="wdate-btn" title="上一月" @click="shiftMonth(-1)">‹</a>
+          <a class="wdate-btn" v-hint="'上一年'" @click="shiftYear(-1)">«</a>
+          <a class="wdate-btn" v-hint="'上一月'" @click="shiftMonth(-1)">‹</a>
           <span class="wdate-title">{{ monthTitle }}</span>
-          <a class="wdate-btn" title="下一月" @click="shiftMonth(1)">›</a>
-          <a class="wdate-btn" title="下一年" @click="shiftYear(1)">»</a>
+          <a class="wdate-btn" v-hint="'下一月'" @click="shiftMonth(1)">›</a>
+          <a class="wdate-btn" v-hint="'下一年'" @click="shiftYear(1)">»</a>
         </div>
         <table class="wdate-grid">
           <thead>

@@ -85,7 +85,7 @@ export function normalizeFileDescriptionValue(
       continue
     }
     const matched = byName.get(part) ?? []
-    if (matched.length === 1) ids.push(matched[0]!)
+    if (matched.length === 1) ids.push(matched[0])
     else dropped.push(part)
   }
   return { value: ids.join(','), dropped }

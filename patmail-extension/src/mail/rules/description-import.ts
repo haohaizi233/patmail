@@ -32,6 +32,7 @@ export type MergeImportedMappingsResult =
   | { ok: false; message: string }
 
 function clean(value: string): string {
+  // eslint-disable-next-line no-misleading-character-class -- 存量豁免：有意匹配控制字符范围
   return value.normalize('NFKC').replace(/[\u200b\u200c\u200d\ufeff]/g, '').trim()
 }
 

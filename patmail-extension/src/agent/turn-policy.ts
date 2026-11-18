@@ -32,7 +32,7 @@ export function canonicalArgs(raw: string): string {
     const parsed = JSON.parse(trimmed) as unknown
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return trimmed
     const sorted: Record<string, unknown> = {}
-    for (const key of Object.keys(parsed as Record<string, unknown>).sort()) sorted[key] = (parsed as Record<string, unknown>)[key]
+    for (const key of Object.keys(parsed).sort()) sorted[key] = (parsed as Record<string, unknown>)[key]
     return JSON.stringify(sorted)
   } catch {
     return trimmed

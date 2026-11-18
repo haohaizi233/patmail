@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+// eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright'
 import { build } from 'vite'
@@ -55,6 +56,7 @@ try {
   const receipts = await page.evaluate(async () => {
     const { downloadDocuments } = await import(chrome.runtime.getURL('document-export-fixture.js'))
     const bytes = new TextEncoder().encode('%PDF-1.7\nNative export regression\n%%EOF')
+    // eslint-disable-next-line require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     const source = name => ({ name, open: async () => bytes })
     const pdf = await downloadDocuments('pdf', [source('Summary.pdf')], 'Summary.pdf')
     const zip = await downloadDocuments('zip', [source('First.pdf'), source('Second.pdf')], 'Summaries.zip')

@@ -42,7 +42,7 @@ jobs:
         with:
           name: report-secret-scan
           path: patmail-extension/test-results/ci
-          retention-days: 30
+          retention-days: 7
 
   dependency-audit:
     name: Dependency Audit
@@ -63,4 +63,4 @@ jobs:
         with:
           name: report-dependency-audit
           path: patmail-extension/test-results/ci
-          retention-days: 30
+          retention-days: 7

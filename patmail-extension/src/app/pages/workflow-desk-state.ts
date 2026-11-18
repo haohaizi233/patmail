@@ -1,0 +1,29 @@
+export interface WorkflowDeskState<T> {
+  screen: 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague'
+  hagueView: 'guide' | 'use'
+  jihuaView: 'guide' | 'use'
+  draft: T | null
+  selectedId: string
+  dirty: boolean
+  picked: string[]
+  newName: string
+}
+
+export function sanitizeWorkflowDeskState<T>(value: unknown, isValidDraft: (draft: unknown) => draft is T): WorkflowDeskState<T> | null {
+  if (!value || typeof value !== 'object') return null
+  const state = value as Partial<WorkflowDeskState<T>>
+  const screens = ['sea', 'ocean', 'flow', 'jihua', 'hague']
+  if (!screens.includes(String(state.screen))) return null
+  const draft = isValidDraft(state.draft) ? state.draft : null
+  const screen = state.screen === 'flow' && !draft ? 'sea' : state.screen as WorkflowDeskState<T>['screen']
+  return {
+    screen,
+    hagueView: state.hagueView === 'guide' ? 'guide' : 'use',
+    jihuaView: state.jihuaView === 'guide' ? 'guide' : 'use',
+    draft,
+    selectedId: typeof state.selectedId === 'string' ? state.selectedId : '',
+    dirty: state.dirty === true,
+    picked: Array.isArray(state.picked) ? state.picked.filter((id): id is string => typeof id === 'string') : [],
+    newName: typeof state.newName === 'string' ? state.newName.slice(0, 40) : ''
+  }
+}

@@ -83,6 +83,7 @@ export function downloadArchiveName(now: Date = new Date()): string {
 
 /** 包名来自查询时的搜索模板；不把路径、设备名或重复.zip后缀带给浏览器。 */
 export function templateArchiveName(templateName = ''): string {
+  // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
   let name = templateName.trim().replace(/\.zip$/i, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[. ]+|[. ]+$/g, '')
   name = Array.from(name).slice(0, 100).join('')
   while (name.length > 115) name = Array.from(name).slice(0, -1).join('')

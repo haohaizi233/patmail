@@ -128,7 +128,7 @@ describe('Phase 3.1 连接、规则与任务来源', () => {
     const bound = await handleWorkspaceMessage({ type: MessageType.Workspace, payload: { action: 'bind', tabId: 3 } }, runtime)
     if (bound.type !== MessageType.WorkspaceResult) throw new Error('bind')
     const task = buildTask({ origin, operatorId: userA, files: [file()], rules: rules(), profiles: [profile()], queryTemplateVersion: 1, now: '2026-09-26T00:00:00.000Z' })
-    const rejected = scopeExtensionPageMessage({ type: MessageType.SaveTask, payload: { task: { ...task, origin: 'chrome-extension://abc' } as unknown as Record<string, unknown> } }, runtime.connection.context)
+    const rejected = scopeExtensionPageMessage({ type: MessageType.SaveTask, payload: { task: { ...task, origin: 'chrome-extension://abc' } } }, runtime.connection.context)
     expect(rejected).toEqual({ error: '任务账号与当前绑定会话不一致。' })
     const scoped = scopeExtensionPageMessage({ type: MessageType.SaveTask, payload: { task: task as unknown as Record<string, unknown> } }, runtime.connection.context)
     expect('error' in scoped).toBe(false)

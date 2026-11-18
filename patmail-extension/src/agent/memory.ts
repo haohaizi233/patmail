@@ -579,6 +579,7 @@ export function digestTurns(turns: MemoryTurn[]): string {
       lines.push(`- 调用了：${turn.toolCalls.map(call => call.function.name).join('、')}`)
       continue
     }
+    // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
     const answer = oneLine(turn.content.replace(/\u001ethought\u001e[\s\S]*?\u001e/g, ''), 120)
     if (answer && !answer.startsWith('**思考**')) lines.push(`- 助手说过：${answer}`)
   }

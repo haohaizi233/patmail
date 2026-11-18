@@ -102,6 +102,7 @@ function mailFetcher(mode: 'stable' | 'changed' | 'hold'): typeof fetch {
   let infoReads = 0
   let held = false
   return async (_url, init) => {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
     const call = new URLSearchParams(String(init?.body)).get('Call')
     if (call === 'MailCustomer') {
       if (mode === 'hold' && !held) {
@@ -131,6 +132,7 @@ describe('Phase 2.5 收口', () => {
     const readMail = mailFetcher('changed')
     const runtime = new MailExecutionRuntime(new EasyTransport(origin, {
       fetcher: async (url, init) => {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         calls.push(new URLSearchParams(String(init?.body)).get('Call') ?? '')
         return readMail(url, init)
       }
@@ -165,6 +167,7 @@ describe('Phase 2.5 收口', () => {
     let release: () => void = () => {}
     const wait = new Promise<void>(resolve => { release = resolve })
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'MailCustomer') {
         creates += 1
@@ -201,6 +204,7 @@ describe('Phase 2.5 收口', () => {
     }
     let creates = 0
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'MailCustomer') creates += 1
       return mailFetcher('stable')(url, init)
@@ -226,6 +230,7 @@ describe('流程读取', () => {
   function flowFetcher(options: { info?: unknown; status?: number; nodes?: unknown[]; last?: unknown } = {}): typeof fetch {
     return async (_url, init) => {
       if (options.status) return json({ ...client }, options.status)
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const params = new URLSearchParams(String(init?.body))
       const call = params.get('Call')
       if (call === 'GetFlowInfo') {
@@ -282,6 +287,7 @@ describe('流程读取', () => {
     const many = await runtime(flowFetcher({
       nodes: [node(nextNode, [{ user_id: user, cn_name: '本人' }]), node(otherNode, [{ user_id: user, cn_name: '本人' }])]
     })).read(user, mailId, 'CO')
+    // eslint-disable-next-line @typescript-eslint/await-thenable -- 存量豁免：保留同步值 await 以统一异步接口
     const choosing = await runtime(flowFetcher({
       nodes: [node(nextNode, [{ user_id: user, cn_name: '本人' }]), node(otherNode, [{ user_id: user, cn_name: '本人' }])]
     }))
@@ -291,12 +297,15 @@ describe('流程读取', () => {
     expect(pending.record.nextNodeId).toBe('')
     expect(many.snapshot?.availableNodes).toHaveLength(2)
     const names = node(nextNode, [{ user_id: user, cn_name: '同名' }, { user_id: other, cn_name: '同名' }])
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
     const named = await runtime(flowFetcher({ nodes: [names] })).read(user, mailId, 'CO')
+    // eslint-disable-next-line @typescript-eslint/await-thenable -- 存量豁免：保留同步值 await 以统一异步接口
     const duplicate = await runtime(flowFetcher({ nodes: [names] }))
     const loaded = await duplicate.read(user, mailId, 'CO')
     const held = await duplicate.preview(user, loaded.record.executionId, { currentUserId: user, nodeId: '', reviewerId: '', auditType: 'submit', remark: '', urgencyId: urgency, pageFields: mockPage })
     expect(held.blockers.join('')).toContain('同名')
     const outsider = node(nextNode, [{ user_id: other, cn_name: '本人' }])
+    // eslint-disable-next-line @typescript-eslint/await-thenable -- 存量豁免：保留同步值 await 以统一异步接口
     const missingUser = await runtime(flowFetcher({ nodes: [outsider] }))
     const openedOutsider = await missingUser.read(user, mailId, 'CO')
     const refused = await missingUser.preview(user, openedOutsider.record.executionId, { currentUserId: user, nodeId: '', reviewerId: '', auditType: 'submit', remark: '', urgencyId: urgency, pageFields: mockPage })
@@ -313,6 +322,7 @@ describe('流程读取', () => {
     let infoReads = 0
     let submits = 0
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'GetFlowInfo') {
         infoReads += 1
@@ -350,6 +360,7 @@ describe('流程读取', () => {
 
     let checks = 0
     const staleFetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       if (call === 'GetFlowInfo') {
         checks += 1

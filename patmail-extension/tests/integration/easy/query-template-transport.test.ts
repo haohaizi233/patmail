@@ -50,6 +50,7 @@ describe('历史模板传输', () => {
   it('uses the cached title when the detail payload omits Options', async () => {
     const xml = '<xmlRoot><app_no>2026.1</app_no></xmlRoot>'
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const id = new URLSearchParams(String(init?.body)).get('query_id')
       const body = id
         ? { ...client, Options: null, QueryXml: [{ query_xml: xml }] }
@@ -81,6 +82,7 @@ describe('历史模板传输', () => {
     let body = ''
     const service = new HistoryQueryService(new EasyTransport('http://183.36.43.66:88', {
       fetcher: async (_url, init) => {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         body = String(init?.body)
         return new Response(JSON.stringify({ ClientInfo: { IsLogin: true, Status: true, Result: true } }), { status: 200 })
       }
@@ -101,6 +103,7 @@ describe('历史模板传输', () => {
     let deletedBody = ''
     const deleting = new HistoryQueryService(new EasyTransport('http://183.36.43.66:88', {
       fetcher: async (_url, init) => {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
         deletedBody = String(init?.body)
         return new Response(JSON.stringify({ ...client, Ret: true }), { status: 200 })
       }

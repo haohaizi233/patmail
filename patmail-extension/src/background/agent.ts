@@ -596,7 +596,7 @@ async function createTaskFromSearch(
 
 /** 工作台的助手请求。probe 只测连通；turn 走工具循环并写入记忆。 */
 export async function handleAgentChat(payload: { action?: unknown; message?: unknown; id?: unknown; title?: unknown; plain?: unknown; skill?: unknown }, host: WorkspaceHost): Promise<ApiResult<AgentTurnView>> {
-  const area = host.area as LocalArea
+  const area = host.area
   const config = await loadAgentConfig(area)
   const action = payload.action
   if (action === 'create') {

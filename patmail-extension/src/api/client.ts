@@ -16,6 +16,18 @@ import { buildLimitMonitorParams, type LimitMonitorQuery } from './limit-monitor
 import { buildFilingSearchParams, type FilingSearchQuery } from './filing-search-params'
 import { normalizeFilingSearch } from './filing-search-normalizer'
 import type { FilingSearchResult } from './filing-search-types'
+import { buildFeeSearchParams, buildFeeSearchAmountParams, type FeeSearchQuery } from './fee-search-params'
+import {
+  buildExportColumnsXml,
+  buildTemplateElementXml,
+  type FeeExportConfigRequest,
+  type FeeExportConfigResponse,
+  type FeeExportRequest,
+  type FeeExportTemplate,
+  type FeeExportTemplateColumn
+} from './fee-export'
+import { normalizeFeeSearch } from './fee-search-normalizer'
+import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeTypeItem } from './fee-search-types'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
 import { buildMailProcessParams, buildProcessListParams, filingNeedsCpcFlag, normalizeMailProcess, normalizeProcessList, processFormPath, type ProcessKind, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from './mail-process'
 import { isRecord } from './response-guards'
@@ -148,6 +160,8 @@ export class EasyRuntime {
   private limitSequence = 0
   private filingController: AbortController | null = null
   private filingSequence = 0
+  private feeController: AbortController | null = null
+  private feeSequence = 0
   private activeSearch: { signature: string; promise: Promise<ApiResult<FileSearchResult>> } | null = null
   private readonly history: HistoryQueryService
   private readonly dictionaries: DictionaryService
@@ -189,10 +203,12 @@ export class EasyRuntime {
       if (result.ok && result.data.status !== 'authenticated') {
         this.cancelFileSearch()
         this.cancelLimitMonitor()
+        this.cancelFeeSearch()
       }
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
         this.cancelFileSearch()
         this.cancelLimitMonitor()
+        this.cancelFeeSearch()
       }
       const nextKey = result.ok && result.data.status === 'authenticated' ? result.data.userId ?? '' : ''
       if (nextKey !== this.historyUserKey) {
@@ -856,6 +872,440 @@ export class EasyRuntime {
     this.filingSequence++
     this.filingController?.abort()
     this.filingController = null
+  }
+
+  searchFees(query: FeeSearchQuery, timeoutMs?: number, batch = false): Promise<ApiResult<FeeSearchResult>> {
+    const controller = new AbortController()
+    if (!batch) {
+      this.cancelFeeSearch()
+      this.feeController = controller
+    }
+    const requestNumber = batch ? 0 : ++this.feeSequence
+    return (async (): Promise<ApiResult<FeeSearchResult>> => {
+      if (!(await this.confirmAccountRead())) {
+        return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      }
+      const params = buildFeeSearchParams(query)
+      const response = await this.transport.post('feeSearch', params.data, controller.signal, timeoutMs)
+      if (!batch && requestNumber !== this.feeSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
+      const result = response.ok ? normalizeFeeSearch(response.data, query) : response
+      if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
+        this.session.expire()
+        this.cancelFeeSearch()
+      }
+      return result
+    })()
+  }
+
+  searchFeesAmount(query: FeeSearchQuery, timeoutMs?: number): Promise<ApiResult<Record<string, unknown>>> {
+    const controller = new AbortController()
+    return (async (): Promise<ApiResult<Record<string, unknown>>> => {
+      if (!(await this.confirmAccountRead())) {
+        return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      }
+      const params = buildFeeSearchAmountParams(query)
+      const response = await this.transport.post('feeSearchAmount', params.data, controller.signal, timeoutMs)
+      if (!response.ok) return response
+      return { ok: true, data: isRecord(response.data) ? response.data : {} }
+    })()
+  }
+
+  cancelFeeSearch(): void {
+    this.feeSequence++
+    this.feeController?.abort()
+    this.feeController = null
+  }
+
+  /** 费用查询页完整初始化字典（对齐 FeeSearch.js 的 FeeSearchInit + GetAencyList + ContactInit + GetProducts + LoadTechnical + GetFieldColumn）。 */
+  async loadFeeInit(): Promise<ApiResult<FeeInitData>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const post = (op: Parameters<EasyTransport['post']>[0], extra: Record<string, string>) => {
+      const p = new URLSearchParams(extra)
+      p.set('log_pagename', 'FeeSearch.aspx')
+      return this.transport.post(op, p)
+    }
+    const [initRes, agencyRes, contactRes, prodRes, techRes, colRes] = await Promise.all([
+      post('feeSearchInit', { Call: 'FeeSearchInit' }),
+      post('feeAgencyList', { Call: 'GetAencyList' }),
+      post('feeContactInit', { Call: 'ContactInit' }),
+      post('feeProducts', { Call: 'GetProducts' }),
+      post('feeTechnical', { Call: 'LoadTechnical', Key: '' }),
+      post('fieldColumn', { Call: 'GetFieldColumn' })
+    ])
+    if (!initRes.ok) return initRes
+
+    const body = isRecord(initRes.data) ? initRes.data : {}
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const arr = (obj: unknown, key: string): Record<string, unknown>[] => {
+      if (!isRecord(obj)) return []
+      const raw = obj[key]
+      return Array.isArray(raw) ? raw.filter(isRecord) : []
+    }
+    const dictItems = (rows: Record<string, unknown>[], valueKey = 'value', labelKey = 'text_zh_cn'): FeeOptionItem[] =>
+      rows
+        .map(row => {
+          const value = str(row[valueKey] ?? row.id)
+          const label = str(row[labelKey] ?? row.text ?? row.name)
+          const caseTypeId = str(row.case_type_id ?? row.case_type)
+          const countryId = str(row.country_id)
+          if (!value || !label) return null
+          return {
+            value,
+            label,
+            ...(caseTypeId ? { caseTypeId } : {}),
+            ...(countryId ? { countryId } : {})
+          }
+        })
+        .filter((x): x is FeeOptionItem => x !== null)
+
+    const treeItems = (rows: Record<string, unknown>[]): FeeOptionItem[] =>
+      rows
+        .map(row => {
+          const value = str(row.id ?? row.value)
+          const label = str(row.name ?? row.text_zh_cn ?? row.text ?? row.value)
+          const rawParent = str(row.pid ?? row.pId ?? row.parent_id)
+          const parent = rawParent && rawParent !== '0' && rawParent !== 'root' ? rawParent : ''
+          if (!value || !label) return null
+          return { value, label, ...(parent ? { parent } : {}) }
+        })
+        .filter((x): x is FeeOptionItem => x !== null)
+
+    // FeeSearch.js L542: 排除科技服务 (882D9F78-7656-468E-BE98-68FE5E334A9B)
+    const caseTypes = dictItems(arr(body, 'CaseType')).filter(
+      item => item.value.toUpperCase() !== '882D9F78-7656-468E-BE98-68FE5E334A9B'
+    )
+    const directions = dictItems(arr(body, 'Case_direction'))
+    const receiveStatuses = dictItems(arr(body, 'receive_status'))
+    const payTypes = dictItems(arr(body, 'PayType'))
+    const applyTypes = dictItems(arr(body, 'ApplyType'))
+    const bussTypes = dictItems(arr(body, 'BussType'))
+    const caseStatuses = dictItems(
+      arr(body, 'case_status').filter(r => {
+        const sc = str(r.status_class)
+        return sc === '' || sc === 'ALL' || sc === 'CASE'
+      })
+    )
+    const customerStatuses = dictItems(arr(body, 'customerStatus'))
+    const reviewStages = dictItems(arr(body, 'review_stage'))
+    const currencies = dictItems(arr(body, 'FeeCurrency'), 'currency_id', 'currency_name_zh_cn')
+    const sourceTypes = dictItems(arr(body, 'sourcetype'))
+    const bankList = dictItems(arr(body, 'bank_list'), 'bank_id', 'account_name')
+
+    const feeTypes: FeeTypeItem[] = arr(body, 'FeeType')
+      .map(row => ({
+        id: str(row.fee_type_id),
+        name: str(row.fee_type_zh_cn ?? row.fee_type_en_us),
+        caseTypeId: str(row.case_type_id),
+        countryId: str(row.country_id),
+        applyTypeId: str(row.apply_type_id),
+        feeClass: str(row.fee_class),
+        caseTypeName: str(row.case_type_zh_cn),
+        applyTypeName: str(row.apply_type_zh_ch),
+        countryName: str(row.country_zh_cn),
+        currencyName: str(row.currency_name_zh_cn)
+      }))
+      .filter(item => Boolean(item.id && item.name))
+
+    const agencies = agencyRes.ok ? dictItems(arr(agencyRes.data, 'AgencyList'), 'agency_id', 'agency_name_cn') : []
+    const contactTypes = contactRes.ok ? dictItems(arr(contactRes.data, 'contacttype')) : []
+    const products = prodRes.ok ? treeItems(arr(prodRes.data, 'Products')) : []
+    const technicals = techRes.ok ? treeItems(arr(techRes.data, 'Technical')) : []
+
+    const fieldColumns: Record<string, string> = {}
+    if (colRes.ok) {
+      for (const row of arr(colRes.data, 'fieldColumn')) {
+        const colId = str(row.column_id)
+        const colName = str(row.column_name)
+        if (colId && colName) fieldColumns[colId] = colName
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        caseTypes,
+        directions,
+        receiveStatuses,
+        payTypes,
+        feeTypes,
+        applyTypes,
+        bussTypes,
+        caseStatuses,
+        customerStatuses,
+        reviewStages,
+        currencies,
+        sourceTypes,
+        bankList,
+        agencies,
+        contactTypes,
+        products,
+        technicals,
+        fieldColumns
+      }
+    }
+  }
+
+  /** 费用查询二级客户选择弹窗搜索（对齐 ShowIhgSelect -> Report.ashx?Call=GetCustomerTreeData）。 */
+  async searchFeeCustomers(searchKey: string): Promise<ApiResult<FeeCustomerItem[]>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const p = new URLSearchParams()
+    p.set('Call', 'GetCustomerTreeData')
+    p.set('searchKey', searchKey.trim().replace(/'/g, "''"))
+    p.set('log_pagename', 'FeeSearch.aspx')
+    const response = await this.transport.post('feeCustomerTree', p)
+    if (!response.ok) return response
+    const rawList = isRecord(response.data) && Array.isArray(response.data.CustList) ? response.data.CustList : []
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const items: FeeCustomerItem[] = rawList
+      .filter(isRecord)
+      .map(row => ({
+        id: str(row.id),
+        name: str(row.name),
+        tel: str(row.tel),
+        email: str(row.email)
+      }))
+      .filter(item => Boolean(item.id && item.name))
+    return { ok: true, data: items }
+  }
+
+  /** 费用查询申请人树联动（对齐 FeeSearch.LoadTreeApplicant -> Report.ashx?Call=GetTreeApplicant）。 */
+  async loadFeeApplicants(customerIds: string): Promise<ApiResult<FeeApplicantItem[]>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    if (!customerIds.trim()) return { ok: true, data: [] }
+    const p = new URLSearchParams()
+    p.set('Call', 'GetTreeApplicant')
+    p.set('customer_ids', customerIds.trim())
+    p.set('log_pagename', 'FeeSearch.aspx')
+    const response = await this.transport.post('feeApplicantTree', p)
+    if (!response.ok) return response
+    const rawList = isRecord(response.data) && Array.isArray(response.data.TreeApplicant) ? response.data.TreeApplicant : []
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const items: FeeApplicantItem[] = rawList
+      .filter(isRecord)
+      .map(row => {
+        const value = str(row.id)
+        const label = str(row.name)
+        const rawPid = str(row.pid ?? row.pId)
+        const parent = rawPid && rawPid !== 'root' && rawPid !== '0' ? rawPid : undefined
+        const isGroup = str(row.TreeType) === 'Dept' || row.is_branch === 1 || row.is_branch === true
+        if (!value || !label) return null
+        return {
+          value,
+          label,
+          ...(parent ? { parent } : {}),
+          ...(isGroup ? { selectable: false } : {})
+        }
+      })
+      .filter((x): x is FeeApplicantItem => x !== null)
+    return { ok: true, data: items }
+  }
+
+  /** 费用导出模板管理（对齐 IhgAdvExport.js：Common.ashx GetQueryOutConfig / UpdateQueryOutConfig / UpdateQueryOutConfigNew）。 */
+  async manageFeeExportConfig(request: FeeExportConfigRequest): Promise<ApiResult<FeeExportConfigResponse>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const readTemplates = (body: Record<string, unknown>): FeeExportTemplate[] => {
+      const list = Array.isArray(body.out_model) ? body.out_model : []
+      return list
+        .filter(isRecord)
+        .map(row => ({ typeId: str(row.type_id), typeText: str(row.type_text) }))
+        .filter(item => Boolean(item.typeId && item.typeText))
+    }
+
+    if (request.action === 'list') {
+      const p = new URLSearchParams({ Call: 'GetQueryOutConfig', belong_key: request.belongKey, log_pagename: 'IhgAdvExport.aspx' })
+      const response = await this.transport.post('feeExportConfig', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      return { ok: true, data: { templates: readTemplates(body) } }
+    }
+
+    if (request.action === 'detail') {
+      const typeId = (request.typeId ?? '').trim()
+      if (!typeId) return apiError('INVALID_QUERY', '请选择导出模板。')
+      const p = new URLSearchParams({ Call: 'GetQueryOutConfig', type_id: typeId, log_pagename: 'IhgAdvExport.aspx' })
+      const response = await this.transport.post('feeExportConfig', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.IsLogin === false) {
+        this.session.expire()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请重新登录。')
+      }
+      if (!Array.isArray(body.out_columns)) {
+        return apiError('BUSINESS_ERROR', str(info?.Message) || '未能读取模板栏位配置。')
+      }
+      const columns: FeeExportTemplateColumn[] = body.out_columns
+        .filter(isRecord)
+        .map((row, idx) => ({
+          seq: Number(row.seq) || idx + 1,
+          value: str(row.item_value),
+          text: str(row.item_text)
+        }))
+        .filter(item => Boolean(item.value && item.text))
+        .sort((a, b) => a.seq - b.seq)
+      return { ok: true, data: { columns } }
+    }
+
+    if (!isWriteSwitchOpen()) {
+      return apiError('BUSINESS_ERROR', '写开关已关闭，无法保存、更新或删除原站导出模板。')
+    }
+
+    if (request.action === 'del') {
+      const typeId = (request.typeId ?? '').trim()
+      if (!typeId) return apiError('INVALID_QUERY', '请选择要删除的模板。')
+      const p = new URLSearchParams({
+        Call: 'UpdateQueryOutConfig',
+        ud_type: 'del',
+        belong_key: request.belongKey,
+        out_type_id: typeId,
+        log_pagename: 'IhgAdvExport.aspx'
+      })
+      const response = await this.transport.post('feeExportConfigSave', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.Result === false) {
+        return apiError('BUSINESS_ERROR', str(info.Message) || '删除模板失败。')
+      }
+      return { ok: true, data: { templates: readTemplates(body), message: '模板已删除。' } }
+    }
+
+    const modelName = (request.modelName ?? '').trim()
+    const cols = request.columns ?? []
+    if (!cols.length) return apiError('INVALID_QUERY', '请至少选择一个导出栏位。')
+    if (!modelName) return apiError('INVALID_QUERY', '请输入模板名称。')
+    const element = buildTemplateElementXml(cols)
+
+    if (request.action === 'add') {
+      const p = new URLSearchParams({
+        Call: 'UpdateQueryOutConfig',
+        ud_type: 'add',
+        belong_key: request.belongKey,
+        model_name: modelName,
+        element,
+        log_pagename: 'IhgAdvExport.aspx'
+      })
+      const response = await this.transport.post('feeExportConfigSave', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.Result === false) {
+        return apiError('BUSINESS_ERROR', str(info.Message) || '保存模板失败。')
+      }
+      return { ok: true, data: { templates: readTemplates(body), message: '模板保存成功。' } }
+    }
+
+    // action === 'up'
+    const typeId = (request.typeId ?? '').trim()
+    if (!typeId) return apiError('INVALID_QUERY', '请先选择要更新的模板。')
+    const p = new URLSearchParams({
+      Call: 'UpdateQueryOutConfigNew',
+      ud_type: 'up',
+      belong_key: request.belongKey,
+      out_type_id: typeId,
+      model_name: modelName,
+      element,
+      log_pagename: 'IhgAdvExport.aspx'
+    })
+    const response = await this.transport.post('feeExportConfigUpdate', p)
+    if (!response.ok) return response
+    const body = isRecord(response.data) ? response.data : {}
+    const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+    if (info && info.Result === false) {
+      return apiError('BUSINESS_ERROR', str(info.Message) || '更新模板失败。')
+    }
+    return { ok: true, data: { templates: readTemplates(body), message: '模板更新成功。' } }
+  }
+
+  /** 执行原站费用 Excel 导出（对齐 Report.ashx ExcelFeeListByCond / ExcelFeeListByChecked / ExcelFeeListCountByCond）。 */
+  async exportFees(request: FeeExportRequest): Promise<ApiResult<{ async: boolean; downloadUrl?: string; fileGuid?: string; fileSize?: number | null; message: string }>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const xml = buildExportColumnsXml(request.columns)
+    if (!xml) {
+      return apiError('INVALID_QUERY', '请至少选择一个导出栏位。')
+    }
+
+    let op: 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
+    let callName: string
+    let p: URLSearchParams
+
+    if (request.mode === 'checked') {
+      const feeIds = (request.feeIds ?? []).map(id => id.trim()).filter(Boolean)
+      if (!feeIds.length) {
+        return apiError('INVALID_QUERY', '请先勾选要导出的费用记录。')
+      }
+      op = 'feeExportByChecked'
+      callName = 'ExcelFeeListByChecked'
+      p = new URLSearchParams()
+      p.set('Call', callName)
+      p.set('fee_ids', feeIds.join(';'))
+    } else {
+      op = request.mode === 'count' ? 'feeExportCountByCond' : 'feeExportByCond'
+      callName = request.mode === 'count' ? 'ExcelFeeListCountByCond' : 'ExcelFeeListByCond'
+      const built = buildFeeSearchParams(request.query ?? { pageIndex: 1, pageSize: 10 })
+      p = built.data
+      p.delete('colsel')
+      p.set('Call', callName)
+      p.set('fee_page_type', '')
+      p.set('PageIndex', String(request.query?.pageIndex ?? 1))
+      p.set('PageSize', String(request.query?.pageSize ?? 10))
+    }
+
+    p.set('e_coulums', xml)
+    p.set('log_pagename', 'IhgAdvExport.aspx')
+
+    const response = await this.transport.post(op, p, undefined, request.timeoutMs)
+    if (!response.ok) {
+      if (response.error.code === 'SESSION_EXPIRED') this.session.expire()
+      return response
+    }
+    const body = isRecord(response.data) ? response.data : {}
+    const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+    if (info && info.IsLogin === false) {
+      this.session.expire()
+      return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请重新登录。')
+    }
+    if (info && info.Result === false) {
+      const msg = typeof info.Message === 'string' && info.Message.trim() ? info.Message.trim() : '原站导出失败。'
+      return apiError('BUSINESS_ERROR', msg)
+    }
+    if (info && info.Asyn === true) {
+      return {
+        ok: true,
+        data: {
+          async: true,
+          message: '数据量较大，原站已转为后台异步生成，请前往 EASY「下载清单」页面下载。'
+        }
+      }
+    }
+    const fileGuid = typeof body.file_guid === 'string' ? body.file_guid.trim() : ''
+    const rawSize = typeof body.file_size === 'number' ? body.file_size : typeof body.file_size === 'string' && /^\d+$/.test(body.file_size.trim()) ? Number(body.file_size.trim()) : null
+    const downloadUrl = fileGuid ? this.transport.fileDownloadUrl(fileGuid, rawSize) : null
+    if (!downloadUrl) {
+      const msg = typeof info?.Message === 'string' && info.Message.trim() ? info.Message.trim() : '原站未返回有效的导出文件地址（可能当前条件下无可导出数据）。'
+      return apiError('BUSINESS_ERROR', msg)
+    }
+    return {
+      ok: true,
+      data: {
+        async: false,
+        downloadUrl,
+        fileGuid,
+        fileSize: rawSize,
+        message: '原站 Excel 清单已生成，正在通过浏览器下载。'
+      }
+    }
   }
 
   private readonly userInfoCache = new Map<string, FilingUser>()

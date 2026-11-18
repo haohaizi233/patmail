@@ -32,3 +32,21 @@ it('reads the protected portfolio without treating a login page or bare viewstat
     expect(await probeHagueLogin()).toMatchObject({ authenticated: false })
   } finally { vi.unstubAllGlobals() }
 })
+
+it('distinguishes an unavailable login probe from a confirmed login redirect',async()=>{
+ vi.stubGlobal('location',{origin:'https://hague.wipo.int'})
+ const response=(status:number,url:string)=>{const r=new Response('',{status});Object.defineProperty(r,'url',{value:url});return r}
+ const fetcher=vi.fn(()=>Promise.resolve(response(503,'https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml')))
+ vi.stubGlobal('fetch',fetcher)
+ try{
+  expect(await probeHagueLogin()).toMatchObject({authenticated:false,reason:'unavailable'})
+  fetcher.mockResolvedValue(response(200,'https://hague.wipo.int/HagueEFilingWeb/login'))
+  expect(await probeHagueLogin()).toMatchObject({authenticated:false,reason:'unauthenticated'})
+ }finally{vi.unstubAllGlobals()}
+})
+it('recognizes a manual authentication redirect instead of hiding it behind a CORS network error',async()=>{
+ vi.stubGlobal('location',{origin:'https://hague.wipo.int'})
+ const response=new Response('');Object.defineProperty(response,'type',{value:'opaqueredirect'})
+ const fetcher=vi.fn(async(_url:string,_init?:RequestInit)=>response);vi.stubGlobal('fetch',fetcher)
+ try{expect(await probeHagueLogin()).toMatchObject({authenticated:false,reason:'unauthenticated'});expect(fetcher.mock.calls[0]?.[1]).toMatchObject({redirect:'manual'})}finally{vi.unstubAllGlobals()}
+})

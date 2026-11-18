@@ -9,6 +9,14 @@ async function choose(page, label, value) {
   await page.getByRole('option', { name: value, exact: true }).click()
 }
 
+async function openQueryNav(page, name) {
+  const group = page.getByRole('button', { name: '综合查询' })
+  if ((await group.getAttribute('aria-expanded')) !== 'true') {
+    await group.click()
+  }
+  await page.getByRole('button', { name, exact: true }).click()
+}
+
 async function saveCustomerProfile(page, name) {
   await choose(page, '客户名称', name)
   await choose(page, '查询入口', '文件查询')
@@ -18,9 +26,11 @@ async function saveCustomerProfile(page, name) {
 }
 
 export async function runWorkspaceFlow(ctx) {
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const { report, context, worker, extensionId, page, panel, host, url, easyUrl, apiCalls, visible, tabFor, showPanel } = ctx
   let workspace
   const check = (name, action) => report.check(name, action)
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const note = (line) => report.note(line)
   await check('icon action opens one full-page workspace and the next call focuses it', async () => {
     const manifest = JSON.parse(await readFile(path.join(dist, 'manifest.json'), 'utf8'))
@@ -101,17 +111,24 @@ export async function runWorkspaceFlow(ctx) {
     await app.bringToFront()
     await app.reload()
     await app.getByText('测试员').waitFor()
-    await app.getByRole('button', { name: '文件管理' }).click()
+    await openQueryNav(app, '文件管理')
     await app.getByText('EASY 已连接', { exact: true }).waitFor()
     await app.getByLabel('我方文号').fill('A+123')
     await app.getByRole('button', { name: '查询文件' }).click()
     await app.getByText('通知书-1.pdf').waitFor()
     await app.getByRole('button', { name: '系统设置' }).click()
     const writeSwitch = app.getByRole('checkbox', { name: '写开关' })
+    // 设置页 mount 后才异步读取写开关：hydrate 完成前 checkbox 是 disabled 且呈现关闭态。
+    // 前端打包时序变化（例如 mermaid 12 让首屏更慢）会让断言读到这个中间态，先等就绪。
+    await waitForPageCondition(app, () => {
+      const label = [...document.querySelectorAll('label')].find(item => item.textContent?.includes('写开关'))
+      const box = label?.querySelector('input[type="checkbox"]')
+      return Boolean(box && !box.disabled)
+    })
     assert.equal(await writeSwitch.isChecked(), true)
     await writeSwitch.uncheck()
-    assert.equal(await writeSwitch.isChecked(), false)
     await app.getByText('已关闭。不会写回查询模板，也不会创建邮件、保存草稿或提交流程。', { exact: true }).waitFor()
+    assert.equal(await writeSwitch.isChecked(), false)
     await easyPage.close()
     workspace = app
   })
@@ -154,7 +171,7 @@ export async function runWorkspaceFlow(ctx) {
     await app.getByText('客户已保存。查询条件要到对应的查询页里填写，再绑定回来。', { exact: true }).waitFor()
     await other.close()
     console.log('[workspace] customer save, edit, reload, and cross-tab synchronization passed')
-    await app.getByRole('button', { name: '文件管理' }).click()
+    await openQueryNav(app, '文件管理')
     await app.getByRole('combobox', { name: '每页数量' }).click()
     await app.getByRole('option', { name: '20', exact: true }).click()
     await app.getByLabel('我方文号').fill('A+123')
@@ -283,6 +300,7 @@ export async function runWorkspaceFlow(ctx) {
         request.onerror = () => reject(request.error)
         request.onsuccess = () => resolve(request.result)
       })
+      // eslint-disable-next-line no-return-await -- 存量豁免：保留 await 以维持 try/finally 语义
       return await new Promise((resolve, reject) => {
         const tx = database.transaction('bundles', 'readwrite')
         const store = tx.objectStore('bundles')

@@ -64,6 +64,7 @@ export function normalizeHistoryDetail(data: unknown, queryId: string): ApiResul
   if (!Array.isArray(data.QueryXml) || data.QueryXml.length === 0) {
     return apiError('INVALID_QUERY', '未找到该历史模板。')
   }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const row = data.QueryXml[0]
   if (!isRecord(row) || typeof row.query_xml !== 'string' || !row.query_xml.trim()) {
     return apiError('INVALID_QUERY', '未找到该历史模板。')

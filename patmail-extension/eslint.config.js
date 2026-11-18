@@ -45,7 +45,8 @@ export default tseslint.config(
     },
   },
 
-  // ---- E2E 脚本内的浏览器上下文代码（page.evaluate 回调运行在页面/扩展环境） ----
+  // ---- 浏览器上下文代码（page.evaluate / worker.evaluate 回调运行在页面或扩展环境） ----
+  // Node 现场脚本在注入回调内显式使用 globalThis，不扩大宿主环境。
   {
     files: ['tests/**/*.mjs'],
     languageOptions: {

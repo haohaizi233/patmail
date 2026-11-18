@@ -124,9 +124,9 @@ export function treeMenuWidth(options: readonly { value: string; label: string; 
 }
 
 /** 菜单用视口坐标，靠近底部时向上展开，并避开左右边缘。宽度不窄于最长选项。 */
-export function placeMenu(anchor: MenuAnchor, viewport: { width: number; height: number }, preferredHeight = 240, contentWidth = 0): MenuPlacement {
+export function placeMenu(anchor: MenuAnchor, viewport: { width: number; height: number }, preferredHeight = 240, contentWidth = 0, minimumWidth = 160): MenuPlacement {
   const limit = Math.max(160, viewport.width - EDGE * 2)
-  const width = Math.min(Math.max(anchor.width, contentWidth, 160), limit)
+  const width = Math.min(Math.max(anchor.width, contentWidth, minimumWidth), limit)
   let left = anchor.left
   if (left + width > viewport.width - EDGE) left = viewport.width - EDGE - width
   if (left < EDGE) left = EDGE

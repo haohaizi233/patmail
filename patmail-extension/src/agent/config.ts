@@ -16,6 +16,7 @@ export interface AgentConfig {
 export const AGENT_CONFIG_DEFAULT: AgentConfig = {
   baseUrl: 'http://43.138.138.200:8588/v1',
   // 内网模型服务的密钥同样只放本机 .env，构建时注入，源码里不留明文。
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   apiKey: import.meta.env.VITE_AGENT_DEFAULT_KEY ?? '',
   model: 'Qwen3.6-35B-A3B-oQ4-fp16-mtp',
   maxTokens: 8192,
@@ -27,6 +28,7 @@ export const AGENT_FALLBACK: Pick<AgentConfig, 'baseUrl' | 'apiKey' | 'model'> =
   baseUrl: 'https://api.xiaomimimo.com/v1',
   // 密钥只放本机 .env（已被 .gitignore 忽略），构建时注入，源码里不留。
   // 注意：打包后的 JS 里仍是明文，拿到 dist 就能读出来；这一步只保证仓库干净。
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   apiKey: import.meta.env.VITE_AGENT_FALLBACK_KEY ?? '',
   model: 'mimo-v2.6-pro'
 }

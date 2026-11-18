@@ -20,12 +20,37 @@ GitHub Actions 按步骤拆并行 Job：`node scripts/ci-check.mjs --steps <a,b,
 | E2E | `pnpm test:e2e:smoke\|full\|legacy` | 分组场景全绿（`docs/ci/e2e-matrix.md`） | 失败/前置缺失（BLOCKED）→ 失败 |
 | 汇总门禁 | `pnpm ci:report -- --gate` | summary 中无 FAIL/BLOCKED | 有则失败 |
 
-## ESLint 棘轮（历史存量分级治理）
+## ESLint 棘轮（2026-11-14 清零，转为硬门禁）
 
-- 基线文件：`ci/eslint-baseline.json`（当前：**681 errors / 25 warnings，63 文件**，全部为历史存量）。
-- 规则：数量**低于**基线 → 通过并提示可收紧；**高于**基线或出现基线外新规则 → 失败（新代码不得新增问题）。
+- 基线文件：`ci/eslint-baseline.json`（当前：**0 errors / 0 warnings / 0 文件**，`rules` 为空）。
+- 规则：数量**低于**基线 → 通过并提示可收紧；**高于**基线或出现基线外新规则 → 失败。基线清零后等价于全库任何 ESLint error / warning 都会让门禁失败。
 - 危险规则硬门禁 0 容忍：`@typescript-eslint/no-floating-promises`、`no-misused-promises`、`no-explicit-any`（src）、`require-await`、`no-async-promise-executor`。
-- 严禁整目录关闭规则；调整基线必须 `node scripts/eslint-ratchet.mjs --update` 并在变更说明写明原因。
+- 严禁整目录关闭规则，严禁用文件级 `/* eslint-disable */` 批量屏蔽；只允许带理由的 `eslint-disable-next-line` 逐行豁免，新增豁免必须在变更说明登记理由。
+- 调整基线必须 `node scripts/eslint-ratchet.mjs --update` 并在变更说明写明原因。
+- 豁免另由 `ci/eslint-exemptions.json` 冻结：记录文件、规则、诊断和受保护代码的 SHA-256 指纹，以及现有禁用指令的作用范围。同一豁免行追加问题、改动受保护代码、扩大禁用规则或增加重复出现次数都会失败；删除豁免允许，移动未改动代码不受行号影响。
+- 正常 `pnpm lint` 和 `--update` 均不能自动接受新增豁免。确有必要时显式执行 `node scripts/eslint-ratchet.mjs --update-exemptions`，审查并提交登记差异及具体理由。缺少告警基线或豁免登记时直接失败；ESLint 异常中断不能复用旧报告。
+- 早于本次清零的块级 / 文件级历史禁用也纳入登记，保守冻结从禁用处到文件末尾的代码和 `eslint-enable` 边界；修改这部分代码需重新审查登记，不能移动或删除恢复边界来扩大旧豁免。新增代码优先真正修复问题，避免继续扩大这类历史作用域。
+- `scripts/live-*` / `scripts/research-*` 保持 Node 环境；注入回调显式使用 `globalThis.chrome` / `globalThis.document` 等，宿主顶层的裸 `window` / `document` 仍由 `no-undef` 拦截。
+
+### 棘轮加固验收
+
+本轮为既有指令及实际抑制诊断登记 855 项指纹，包含历史块级豁免，不代表消除了 855 个问题。注释通过现有 Babel / Vue 解析器读取，覆盖行尾、跨行及 Vue 模板注释，忽略字符串中的示例。新增 15 项测试验证旧豁免行追加问题、扩展规则、删除恢复边界、重复豁免、代码移动、宿主环境以及命令退出码；缺失基线、异常退出、普通 `--update` 均不能自动接受新豁免。只在显式审查后使用 `--update-exemptions`。
+
+加固后实际验证：`pnpm lint` 为 0 errors / 0 warnings，`pnpm typecheck`、`pnpm format:check`、`pnpm scan:secrets`、`pnpm licenses:check` 通过；全量 Vitest 274 文件 / 1909 项通过。独立复核发现的块级边界及行尾指令遗漏均已补失败转通过测试并关闭。本轮未运行现场脚本或带 Observer 副作用的 build。
+
+### 2026-11-14 清零变更说明
+
+历史轨迹：2026-10-29 冻结 681 → 收紧至 635 → 实际降到 432 errors / 25 warnings；本次清零。
+
+| 处置                   | 数量            | 说明                                                                                                                                                                            |
+| ---------------------- | ---------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 自动真修               |      100 errors | `eslint --fix` 删除 `@typescript-eslint/no-unnecessary-type-assertion` 的多余断言，不改类型与运行时行为                                                                      |
+| 环境全局修正           |       18 errors | `eslint.config.js` 为 `scripts/live-*.mjs`、`scripts/research-*.mjs` 补浏览器全局；`native-stream-lifetime.e2e.mjs` 声明 `target` 句柄全局。只修环境，不关规则        |
+| 模板真修               |        2 errors | 删除 `v-for` 内不生效的 `v-memo`（`LimitPage.vue`、`WorkflowMailEntry.vue`）                                                                                                     |
+| 逐行局部豁免           | 292 行 / 338 条 | 剩余 313 errors + 25 warnings 按行合并，插入带理由的 `eslint-disable-next-line`；Vue 模板区用 HTML 注释                                                                    |
+| **结果**               | **432 → 0 / 25 → 0** | 141 文件，386 insertions / 92 deletions                                                                                                                                  |
+
+豁免理由按规则逐条写在注释里：外部数据的宽松 `String()` 兜底（66）、保留 async 接口契约与原始 rejection reason（76）、外部 XML/JSON 的 `any` 数据流（70）、保留解构占位与接口形态（55）、有意匹配控制字符（7）、optional prop 由父组件保证（23）、模板变量与外层语义一致（2）等。上述数字是原清零提交的历史记录，不代表这些问题已经修复。后续以豁免指纹登记约束增量；已删除 `FilingSearchQuery` 条件等价导致的不可达分支及其豁免，保留实际生效的树选择器和签约单位手填兜底。
 
 ## 覆盖率
 

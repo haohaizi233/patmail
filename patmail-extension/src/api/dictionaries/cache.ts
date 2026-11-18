@@ -40,7 +40,7 @@ export class DictionaryCache {
       const current = this.inflight.get(key)
       if (current?.promise === promise) this.inflight.delete(key)
     })
-    this.inflight.set(key, { epoch: started, promise: promise as Promise<ApiResult<unknown>> })
+    this.inflight.set(key, { epoch: started, promise: promise })
     return promise
   }
 

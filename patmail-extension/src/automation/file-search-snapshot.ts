@@ -690,7 +690,7 @@ export async function resolveSelectedFiles(requested: SelectedPatentFile[], scop
     const session = sessionId ? await readSession(sessionId, now) : null
     const executable = Boolean(session && currentEvidence(session) && session.status !== 'STALE' && session.status !== 'EXPIRED' && sameScope(session, scope))
     const copies = executable && session ? liveCopies(session, request.fileId, now) : []
-    const disagreed = copies.some(item => item.conflict) || copies.some(item => !sameBusiness(item, copies[0]!))
+    const disagreed = copies.some(item => item.conflict) || copies.some(item => !sameBusiness(item, copies[0]))
     if (disagreed) conflict = true
     const source = !disagreed ? copies[0] : undefined
     if (!session || !source) {

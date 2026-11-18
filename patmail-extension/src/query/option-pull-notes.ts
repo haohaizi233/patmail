@@ -24,7 +24,7 @@ export function describeOptionPull(summary: OptionPullSummary): string {
   const parts: string[] = []
   const updated = describeOptionUpdate(summary.updatedLabels)
   if (updated) parts.push(updated)
-  if (summary.failures.length) parts.push(summary.hasLedger ? OPTION_PULL_FALLBACK : summary.failures[0]!)
+  if (summary.failures.length) parts.push(summary.hasLedger ? OPTION_PULL_FALLBACK : summary.failures[0])
   for (const line of summary.extra ?? []) {
     if (line) parts.push(line)
   }

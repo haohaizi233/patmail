@@ -32,8 +32,8 @@ export function createFullPageBridge(): MessageBridge {
         || message.type === MessageType.ReadCustomerDirectory
         || message.type === MessageType.ReadMailContacts
         || message.type === MessageType.DiagnoseExistingMail
-        || message.type === MessageType.LoadDictionary || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm
-      const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor || message.type === MessageType.SearchFiling
+        || message.type === MessageType.LoadDictionary || message.type === MessageType.LoadFeeInit || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm
+      const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor || message.type === MessageType.SearchFiling || message.type === MessageType.SearchFee || message.type === MessageType.SearchFeeAmount || message.type === MessageType.ExportFee
         ? fileSearchTimeoutMs(message.payload.timeoutMs) + 15_000 : 0
       const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, message.type === MessageType.ReadHagueCase || message.type === MessageType.ResolveDownloadNames ? 300_000 : lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || downloadWait || searchWait || (slow ? 70_000 : 30_000))
       if (response?.type === MessageType.Error) return response

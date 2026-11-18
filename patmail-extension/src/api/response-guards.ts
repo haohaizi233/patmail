@@ -25,7 +25,7 @@ export function readClientInfo(value: unknown): ApiResult<EasyClientInfo> {
       return apiError('INVALID_RESPONSE', `ClientInfo.${key} 类型无效。`)
     }
   }
-  return { ok: true, data: value as EasyClientInfo }
+  return { ok: true, data: value }
 }
 
 export function safeResponseKeys(value: Record<string, unknown>): string[] {

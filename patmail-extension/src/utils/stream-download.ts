@@ -47,11 +47,14 @@ export async function nativeStreamArchive(
     activeProducers.set(options.taskId, controller)
   }
   const untilAbort = <T>(promise: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
     const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
     if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true })
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
     promise.then(value => { signal.removeEventListener('abort', abort); resolve(value) }, error => { signal.removeEventListener('abort', abort); reject(error) })
   })
   const retryDelay = (ms: number) => new Promise<void>((resolve, reject) => {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
     const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason) }
     const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, ms)
     if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true })

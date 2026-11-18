@@ -94,6 +94,7 @@ export function operatorSignatureHtml(value: string): string {
 /** GetSignature 里指定那一条的 signature_content。 */
 export function readSignatureHtml(data: unknown, signatureId: string): string {
   if (!isRecord(data) || !Array.isArray(data.Signature) || !isQueryGuid(signatureId)) return ''
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const row = data.Signature.find(item => isRecord(item) && typeof item.signature_id === 'string' && item.signature_id.toLowerCase() === signatureId.toLowerCase())
   if (!isRecord(row) || typeof row.signature_content !== 'string') return ''
   return signatureHtml(row.signature_content)

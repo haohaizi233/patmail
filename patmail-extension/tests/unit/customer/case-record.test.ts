@@ -80,6 +80,7 @@ describe('核对时带上的客户要求和著录项目', () => {
       'caseRecordContact:aaaaaaaa-1111-4111-8111-111111111111',
       'caseManageInfo:aaaaaaaa-1111-4111-8111-111111111111'
     ])
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     expect(loaded).toMatchObject({ customerInfo: expect.stringContaining('发给发明人'), recordInfo: expect.stringContaining('艾桥') })
     if (loaded !== 'login') {
       expect(loaded.recordInfo).toContain('申请人：旗滨玻璃')

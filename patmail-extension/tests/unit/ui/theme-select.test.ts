@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { filterSelectOptions, highlightAfterKey, isOpaqueSelectValue, menuWidthForLabels, placeMenu, sameOptionValue, selectNeedsSearch, selectTriggerText, showsGroup, textOptions, treeMenuWidth } from '../../../src/shell/components/theme-select'
 
 describe('theme select', () => {
+  it('allows compact non-search menus while retaining the searchable default minimum',()=>{
+    const anchor={top:100,bottom:132,left:20,width:116},viewport={width:800,height:600}
+    expect(placeMenu(anchor,viewport,240,124,0).width).toBe(124)
+    expect(placeMenu(anchor,viewport,240,90,0).width).toBe(116)
+    expect(placeMenu(anchor,viewport,240,124).width).toBe(160)
+  })
   it('opens downward and flips upward when the lower space is tight', () => {
     const down = placeMenu({ top: 100, bottom: 136, left: 20, width: 220 }, { width: 800, height: 600 })
     expect(down.edge).toBe('top')

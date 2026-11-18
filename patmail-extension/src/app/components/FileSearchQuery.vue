@@ -5,7 +5,7 @@ import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-se
 import { assessQueryScope, fileSearchValueLimit, isFileSearchBusinessField } from '../../api/file-search-params'
 import { coerceFileSearchQuery } from '../../api/message-guards'
 import type { FileSearchResult, PatentFile } from '../../api/file-search-types'
-import { selectPage, toSelectedFile, type SelectedPatentFile } from '../../mail'
+import { isBillPatentFile, selectPage, toSelectedFile, type SelectedPatentFile } from '../../mail'
 import { caseScope, deduplicateNamedFiles, newestFirstSelected } from '../../mail/deduplicate'
 import { createDownloadNamePreview, type DownloadNamePreviewState } from '../services/download-name-preview'
 import { createFileSearchPageCache } from '../services/file-search-page-cache'
@@ -653,8 +653,9 @@ function toggleFile(file: PatentFile): void {
 }
 
 /** 全选所有进行中把「预计几点完成」也写在按钮旁，翻页快时彩虹条一闪而过也看得到。 */
+const selectingBillsOnly = ref(false)
 const pagingHint = computed(() => selectingAll.value
-  ? (taskCheckProgress.eta ? `（全选所有进行中，预计 ${taskCheckProgress.eta} 完成）` : '（全选所有进行中…）')
+  ? (taskCheckProgress.eta ? `（${selectingBillsOnly.value ? '勾选所有账单' : '全选所有'}进行中，预计 ${taskCheckProgress.eta} 完成）` : `（${selectingBillsOnly.value ? '勾选所有账单' : '全选所有'}进行中…）`)
   : '')
 
 /** 全选所有翻页的进度：彩虹条动词换成「翻页」。并发拉页时哪页先回不一定，按读回的页数计。 */
@@ -685,6 +686,7 @@ interface BulkRead {
   reason: string
   completed: Set<number>
   selection: Record<string, SelectedPatentFile>
+  billsOnly?: boolean
 }
 let activeBulk: BulkRead | null = null
 let retryBulk: BulkRead | null = null
@@ -696,6 +698,7 @@ function stopBulk(): void {
   activeBulk = null
   retryBulk = null
   selectingAll.value = false
+  selectingBillsOnly.value = false
   failedPages.value = []
   if (taskCheckProgress.label === '翻页') resetTaskCheckProgress()
 }
@@ -754,7 +757,8 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
     onPage: (page, rows) => {
       if (!bulkCurrent(bulk)) return
       // defineModel 的受控 prop 要等父组件渲染后才回流；同一轮并发响应不能各自基于旧 prop 覆盖。
-      bulk.selection = selectPage({ ...bulk.selection, ...candidateSelection.value }, rows, true)
+      const targetRows = bulk.billsOnly ? rows.filter(isBillPatentFile) : rows
+      bulk.selection = selectPage({ ...bulk.selection, ...candidateSelection.value }, targetRows, true)
       candidateSelection.value = bulk.selection
       bulk.completed.add(page)
       readPages.value = [...new Set([...readPages.value, page])]
@@ -768,7 +772,7 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
  * 有漏的自动兜一轮，再不行留按钮补。 */
 const selectingAll = ref(false)
 const failedPages = ref<number[]>([])
-async function selectAllPages(): Promise<void> {
+async function selectAllPages(billsOnly = false): Promise<void> {
   if (needsRevalidation.value || !props.canSearch) return
   const summary = result.value
   if (!bridge || !lastQuery.value || !summary || selectingAll.value || downloading.value) return
@@ -776,11 +780,13 @@ async function selectAllPages(): Promise<void> {
     generation, query: { ...lastQuery.value, ...(lastQuery.value.resolvedFields ? { resolvedFields: { ...lastQuery.value.resolvedFields } } : {}), pageSize: BULK_PAGE_SIZE },
     querySessionId: summary.pageSize === BULK_PAGE_SIZE ? querySessionId.value : '',
     totalPages: Math.max(1, Math.ceil(summary.total / BULK_PAGE_SIZE)), timeoutMs: searchTimeoutMs.value,
-    controller: new AbortController(), interrupted: false, reason: '', completed: new Set(), selection: { ...candidateSelection.value }
+    controller: new AbortController(), interrupted: false, reason: '', completed: new Set(), selection: { ...candidateSelection.value },
+    billsOnly
   }
   activeBulk = bulk
   retryBulk = null
   selectingAll.value = true
+  selectingBillsOnly.value = billsOnly
   failedPages.value = []
   toolbarNotice.value = ''
   try {
@@ -793,7 +799,7 @@ async function selectAllPages(): Promise<void> {
       const loaded = await readBulkPage(bulk, 1, true)
       if (!bulkCurrent(bulk)) return
       if (!loaded.ok) {
-        toolbarNotice.value = bulk.reason || '没有读到100条分页的第一页，请重试全选。'
+        toolbarNotice.value = bulk.reason || (billsOnly ? '没有读到100条分页的第一页，请重试勾选账单。' : '没有读到100条分页的第一页，请重试全选。')
         paintPaging('fail')
         return
       }
@@ -814,7 +820,8 @@ async function selectAllPages(): Promise<void> {
     }
     // 新布局改变查询来源时 watcher 会清缓存，采用来源后再保留它的第一页。
     pageCache.set(first)
-    bulk.selection = selectPage(bulk.selection, first.items.map(file => toSelectedFile(file, undefined, bulk.querySessionId)), true)
+    const firstItems = billsOnly ? first.items.filter(isBillPatentFile) : first.items
+    bulk.selection = selectPage(bulk.selection, firstItems.map(file => toSelectedFile(file, undefined, bulk.querySessionId)), true)
     candidateSelection.value = bulk.selection
     bulk.completed.add(first.pageIndex)
     tickPage()
@@ -826,15 +833,21 @@ async function selectAllPages(): Promise<void> {
     failedPages.value = missed
     retryBulk = missed.length ? bulk : null
     paintPaging(missed.length ? 'fail' : 'done')
+    const actionLabel = billsOnly ? '勾选账单' : '全选所有'
     toolbarNotice.value = bulk.interrupted ? `${bulk.reason} 还有 ${missed.length} 页未读完。` : missed.length
-      ? `全选所有有 ${missed.length} 页没读到（${describeMissed(missed)}）。已勾上的不受影响，点「重试没读到的页」补齐。`
-      : `已全选 ${Object.keys(bulk.selection).length} 个文件。`
+      ? `${actionLabel}有 ${missed.length} 页没读到（${describeMissed(missed)}）。已勾上的不受影响，点「重试没读到的页」补齐。`
+      : billsOnly
+        ? `已勾选 ${Object.keys(bulk.selection).length} 个账单文件。`
+        : `已全选 ${Object.keys(bulk.selection).length} 个文件。`
   } catch {
     if (!bulkCurrent(bulk)) return
     paintPaging('fail')
-    toolbarNotice.value = '翻页取行失败，没有全选。'
+    toolbarNotice.value = billsOnly ? '翻页取行失败，没有勾选账单。' : '翻页取行失败，没有全选。'
   } finally {
-    if (activeBulk === bulk) selectingAll.value = false
+    if (activeBulk === bulk) {
+      selectingAll.value = false
+      selectingBillsOnly.value = false
+    }
   }
 }
 
@@ -993,8 +1006,8 @@ onBeforeUnmount(() => {
       </div>
       <section v-if="selectable && (result || activeTask)" class="file-export" aria-label="文件导出">
         <div class="file-export-actions">
-          <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" :disabled="Boolean(activeTask && activeTask.status !== 'done') || choosingTarget" />申请号去点</label>
-          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '导出中…' : '下载已选' }}</button>
+          <label class="download-opt" v-hint="'勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动'"><input v-model="stripAppNoDot" type="checkbox" :disabled="Boolean(activeTask && activeTask.status !== 'done') || choosingTarget" />申请号去点</label>
+          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" v-hint="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '导出中…' : '下载已选' }}</button>
           <template v-if="activeTask && activeTask.status !== 'done'">
             <button v-if="activeTask.status === 'running'" type="button" class="ghost" @click="pauseDownload">暂停下载</button>
             <button v-else type="button" class="ghost" :disabled="!canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || pauseBlocked" @click="downloadSelected(true)">继续下载</button>
@@ -1014,10 +1027,11 @@ onBeforeUnmount(() => {
       <template v-else-if="result">
         <p v-if="sourceNotice" class="hint" role="status">{{ sourceNotice }}</p>
         <div v-if="selectable" class="result-toolbar">
-          <label class="deduplicate-opt" title="同一案件内按最终下载名称合并重复版本，doc/docx 视为同类，保留上传时间最新的文件"><input v-model="deduplicate" type="checkbox" :disabled="needsRevalidation || !canSearch || downloading || choosingTarget || selectingAll" @change="changeDeduplicate" />同名文件仅保留最新</label>
+          <label class="deduplicate-opt" v-hint="'同一案件内按最终下载名称合并重复版本，doc/docx 视为同类，保留上传时间最新的文件'"><input v-model="deduplicate" type="checkbox" :disabled="needsRevalidation || !canSearch || downloading || choosingTarget || selectingAll" @change="changeDeduplicate" />同名文件仅保留最新</label>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
-          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages(false)">{{ selectingAll && !selectingBillsOnly ? '正在全选…' : '全选所有' }}</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" v-hint="'按「账单号+我方案号+事项+账单日期」识别并一键勾选所有账单文件'" @click="selectAllPages(true)">{{ selectingAll && selectingBillsOnly ? '正在勾选账单…' : '勾选所有账单' }}</button>
           <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
           <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('review')">查看已选</button>
           <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('plan')">生成发文计划</button>
