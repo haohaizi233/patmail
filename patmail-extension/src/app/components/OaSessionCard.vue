@@ -7,7 +7,7 @@ const options = computed(() => [{ value: -1, label: props.tabs.length ? '请选�
 const captions: Record<string, string> = { checking: '正在验证', verified: '已验证', expired: '已过期', error: '未通过', idle: '未验证' }
 </script>
 <template>
-  <section class="card tone-pink oa-session-card" :aria-label="`${platform} 登录会话`" :title="message">
+  <section class="card tone-pink oa-session-card" :aria-label="`${platform} 登录会话`">
     <div class="oa-session-tag-group">
       <b class="oa-platform-name">{{ platform }}</b>
       <span class="theme-select-badge" :class="state === 'verified' ? 'tone-green' : 'tone-orange'">{{ captions[state] || '未验证' }}</span>
@@ -17,8 +17,8 @@ const captions: Record<string, string> = { checking: '正在验证', verified: '
     </div>
     <div class="toolbar oa-session-actions">
       <button type="button" class="solid" :disabled="disabled || checking || selected < 0" @click="emit('verify')">{{ checking ? '正在检测…' : automatic ? '重新检测' : '连接并检测登录' }}</button>
-      <button type="button" class="ghost" :disabled="disabled || checking || listing" title="查找已打开的平台标签页" @click="emit('refresh')">查找标签页</button>
-      <button type="button" class="ghost" :disabled="disabled || checking" title="在浏览器打开平台页面" @click="emit('open')">打开平台</button>
+      <button type="button" class="ghost" :disabled="disabled || checking || listing" v-hint="'查找已打开的平台标签页'" @click="emit('refresh')">查找标签页</button>
+      <button type="button" class="ghost" :disabled="disabled || checking" v-hint="'在浏览器打开平台页面'" @click="emit('open')">打开平台</button>
     </div>
   </section>
 </template>

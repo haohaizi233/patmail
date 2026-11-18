@@ -1688,7 +1688,7 @@ watch(selectedCustomerId, () => {
       <p v-if="checkMessage" class="hint">{{ checkMessage }}</p>
       <p v-if="resolved.warnings.length" class="hint">{{ resolved.warnings[0] }}</p>
     </div>
-    <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" :title="submitHint" @click="search">查询文件</button>
+    <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" v-hint="submitHint" @click="search">查询文件</button>
     <p v-if="canSearch && !canSubmit" class="hint" role="status">{{ submitHint }}</p>
   </section>
 </template>

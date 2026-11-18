@@ -252,11 +252,11 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div v-if="opened" ref="panel" class="wdate-panel" :style="panelStyle" @mousedown.prevent>
         <div class="wdate-head">
-          <a class="wdate-btn" title="上一年" @click="shiftYear(-1)">«</a>
-          <a class="wdate-btn" title="上一月" @click="shiftMonth(-1)">‹</a>
+          <a class="wdate-btn" v-hint="'上一年'" @click="shiftYear(-1)">«</a>
+          <a class="wdate-btn" v-hint="'上一月'" @click="shiftMonth(-1)">‹</a>
           <span class="wdate-title">{{ monthTitle }}</span>
-          <a class="wdate-btn" title="下一月" @click="shiftMonth(1)">›</a>
-          <a class="wdate-btn" title="下一年" @click="shiftYear(1)">»</a>
+          <a class="wdate-btn" v-hint="'下一月'" @click="shiftMonth(1)">›</a>
+          <a class="wdate-btn" v-hint="'下一年'" @click="shiftYear(1)">»</a>
         </div>
         <table class="wdate-grid">
           <thead>

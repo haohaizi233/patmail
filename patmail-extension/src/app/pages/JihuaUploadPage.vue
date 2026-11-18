@@ -1219,14 +1219,14 @@ onUnmounted(() => {
                   <td><input type="checkbox" :checked="isSelected(row)" :disabled="!canSelectRow(row)" :aria-label="`选择 ${row.fileName}`" @change="editSelection([row], ($event.target as HTMLInputElement).checked)" /></td>
                   <td class="mono">{{ row.applicationNo || '未识别' }}</td>
                   <td>
-                    <span class="jh-badge theme-select-badge" :class="statusClass(row)" :data-status="displayStatus(row)" :title="rowDetail(row)">{{ statusLabel(row) }}</span>
+                    <span class="jh-badge theme-select-badge" :class="statusClass(row)" :data-status="displayStatus(row)" v-hint="rowDetail(row)">{{ statusLabel(row) }}</span>
                     <button v-if="retryableRow(row)" type="button" class="ghost jh-row-requeue" :disabled="!canRequeue" @click="requeueRows([row])">重新入队</button>
                     <button v-if="row.intent?.sent && !row.receipt" type="button" class="ghost jh-row-recovery" :disabled="!canEdit" @click="confirmUnknownUpload(row)">核实后重试</button>
                     <small v-if="retryHint(row)" class="jh-retry-hint">{{ retryHint(row) }}</small>
                   </td>
                   <td>{{ row.caseName || '—' }}</td>
                   <td>{{ row.description || '—' }}</td>
-                  <td class="jh-path" :title="row.relativePath">{{ row.relativePath }}</td>
+                  <td class="jh-path" v-hint.clip="row.relativePath">{{ row.relativePath }}</td>
                   <td>
                     <label class="jh-material-select">
                       <span class="sr-only">{{ row.fileName }} 的材料类型</span>
@@ -1234,7 +1234,7 @@ onUnmounted(() => {
                         :model-value="materialForRow(row)"
                         :options="materialChoiceOptions(row)"
                         :disabled="!canEditRowMaterial(row)"
-                        :title="materialLocked(row) ? '上传请求已发送或收到回执，材料类型已锁定。' : ''"
+                        v-hint="materialLocked(row) ? '上传请求已发送或收到回执，材料类型已锁定。' : ''"
                         @update:model-value="editMaterial(row, String($event))"
                       />
                     </label>

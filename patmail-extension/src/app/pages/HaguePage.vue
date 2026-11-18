@@ -513,7 +513,7 @@ function exportData(): void {
         <button type="button" class="solid" :disabled="!actions.process" @click="process(pendingRows)">{{ progress?.phase === 'stopped' ? '继续处理剩余案件' : '读取知易通并批量仲裁' }}</button>
         <button type="button" class="ghost" v-if="busy" :disabled="!actions.stop" @click="requestStop">{{ stopping ? '等待当前操作结束…' : draftRunning ? '停止后续写入' : '停止后续处理' }}</button>
         <button type="button" class="ghost" :disabled="busy || !rows.length" @click="exportData">导出核对结果</button>
-        <button type="button" class="hague-export-toggle" :class="draftExportReproductions ? 'solid' : 'ghost'" :aria-pressed="draftExportReproductions" :disabled="!actions.configure" title="在 Summary 前导出原站图纸 PDF" @click="draftExportReproductions = !draftExportReproductions">
+        <button type="button" class="hague-export-toggle" :class="draftExportReproductions ? 'solid' : 'ghost'" :aria-pressed="draftExportReproductions" :disabled="!actions.configure" v-hint="'在 Summary 前导出原站图纸 PDF'" @click="draftExportReproductions = !draftExportReproductions">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="15" height="15" rx="4" :fill="draftExportReproductions ? 'currentColor' : 'none'" :fill-opacity="draftExportReproductions ? '.18' : '1'" stroke="currentColor" stroke-width="1.5"/><path v-if="draftExportReproductions" d="m6 10 2.6 2.7L14 7.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>导出图纸</span>
         </button>

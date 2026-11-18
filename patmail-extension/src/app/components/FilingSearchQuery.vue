@@ -879,7 +879,7 @@ onBeforeUnmount(() => {
       </div>
       <ul v-if="templateCards.length" class="template-picks" aria-label="递交查询模板">
         <li v-for="item in templateCards" :key="item.id">
-          <button type="button" :class="{ on: selectedTemplateId === item.id }" :title="item.name" @click="toggleTemplate(item.id)">
+          <button type="button" :class="{ on: selectedTemplateId === item.id }" v-hint.clip="item.name" @click="toggleTemplate(item.id)">
             <b v-hint.clip="item.name">{{ item.name }}</b>
             <small>{{ item.builtin ? '内置' : '本地' }}</small>
           </button>

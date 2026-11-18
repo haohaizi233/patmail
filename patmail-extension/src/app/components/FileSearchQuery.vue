@@ -993,8 +993,8 @@ onBeforeUnmount(() => {
       </div>
       <section v-if="selectable && (result || activeTask)" class="file-export" aria-label="文件导出">
         <div class="file-export-actions">
-          <label class="download-opt" title="勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动"><input v-model="stripAppNoDot" type="checkbox" :disabled="Boolean(activeTask && activeTask.status !== 'done') || choosingTarget" />申请号去点</label>
-          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" :title="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '导出中…' : '下载已选' }}</button>
+          <label class="download-opt" v-hint="'勾上后文件名里的申请号去掉校验点：202610026334.9 变 2026100263349，扩展名不动'"><input v-model="stripAppNoDot" type="checkbox" :disabled="Boolean(activeTask && activeTask.status !== 'done') || choosingTarget" />申请号去点</label>
+          <button type="button" class="solid tiny" :disabled="Object.keys(selected).length === 0 || !canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || Boolean(activeTask && activeTask.status !== 'done')" v-hint="downloadTitle" @click="downloadSelected(false)">{{ choosingTarget ? '请选择保存位置…' : downloading ? '导出中…' : '下载已选' }}</button>
           <template v-if="activeTask && activeTask.status !== 'done'">
             <button v-if="activeTask.status === 'running'" type="button" class="ghost" @click="pauseDownload">暂停下载</button>
             <button v-else type="button" class="ghost" :disabled="!canSearch || needsRevalidation || downloading || choosingTarget || selectingAll || pauseBlocked" @click="downloadSelected(true)">继续下载</button>
@@ -1014,7 +1014,7 @@ onBeforeUnmount(() => {
       <template v-else-if="result">
         <p v-if="sourceNotice" class="hint" role="status">{{ sourceNotice }}</p>
         <div v-if="selectable" class="result-toolbar">
-          <label class="deduplicate-opt" title="同一案件内按最终下载名称合并重复版本，doc/docx 视为同类，保留上传时间最新的文件"><input v-model="deduplicate" type="checkbox" :disabled="needsRevalidation || !canSearch || downloading || choosingTarget || selectingAll" @change="changeDeduplicate" />同名文件仅保留最新</label>
+          <label class="deduplicate-opt" v-hint="'同一案件内按最终下载名称合并重复版本，doc/docx 视为同类，保留上传时间最新的文件'"><input v-model="deduplicate" type="checkbox" :disabled="needsRevalidation || !canSearch || downloading || choosingTarget || selectingAll" @change="changeDeduplicate" />同名文件仅保留最新</label>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>

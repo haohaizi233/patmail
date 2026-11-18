@@ -35,7 +35,7 @@ const caption = computed(() => `${percent.value} ${summary.value} ${detail.value
       <div class="check-rainbow-track"><span :style="{ width: view.percent + '%' }"></span></div>
       <b class="check-rainbow-percent">{{ percent }}</b>
     </div>
-    <p :title="summary">{{ summary }}</p>
-    <p :title="detail">{{ detail }}</p>
+    <p v-hint.clip="summary">{{ summary }}</p>
+    <p v-hint.clip="detail">{{ detail }}</p>
   </div>
 </template>
