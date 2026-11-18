@@ -17,6 +17,15 @@ import { buildFilingSearchParams, type FilingSearchQuery } from './filing-search
 import { normalizeFilingSearch } from './filing-search-normalizer'
 import type { FilingSearchResult } from './filing-search-types'
 import { buildFeeSearchParams, buildFeeSearchAmountParams, type FeeSearchQuery } from './fee-search-params'
+import {
+  buildExportColumnsXml,
+  buildTemplateElementXml,
+  type FeeExportConfigRequest,
+  type FeeExportConfigResponse,
+  type FeeExportRequest,
+  type FeeExportTemplate,
+  type FeeExportTemplateColumn
+} from './fee-export'
 import { normalizeFeeSearch } from './fee-search-normalizer'
 import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeTypeItem } from './fee-search-types'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
@@ -1095,6 +1104,208 @@ export class EasyRuntime {
       })
       .filter((x): x is FeeApplicantItem => x !== null)
     return { ok: true, data: items }
+  }
+
+  /** 费用导出模板管理（对齐 IhgAdvExport.js：Common.ashx GetQueryOutConfig / UpdateQueryOutConfig / UpdateQueryOutConfigNew）。 */
+  async manageFeeExportConfig(request: FeeExportConfigRequest): Promise<ApiResult<FeeExportConfigResponse>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const readTemplates = (body: Record<string, unknown>): FeeExportTemplate[] => {
+      const list = Array.isArray(body.out_model) ? body.out_model : []
+      return list
+        .filter(isRecord)
+        .map(row => ({ typeId: str(row.type_id), typeText: str(row.type_text) }))
+        .filter(item => Boolean(item.typeId && item.typeText))
+    }
+
+    if (request.action === 'list') {
+      const p = new URLSearchParams({ Call: 'GetQueryOutConfig', belong_key: request.belongKey, log_pagename: 'IhgAdvExport.aspx' })
+      const response = await this.transport.post('feeExportConfig', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      return { ok: true, data: { templates: readTemplates(body) } }
+    }
+
+    if (request.action === 'detail') {
+      const typeId = (request.typeId ?? '').trim()
+      if (!typeId) return apiError('INVALID_QUERY', '请选择导出模板。')
+      const p = new URLSearchParams({ Call: 'GetQueryOutConfig', type_id: typeId, log_pagename: 'IhgAdvExport.aspx' })
+      const response = await this.transport.post('feeExportConfig', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.IsLogin === false) {
+        this.session.expire()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请重新登录。')
+      }
+      if (!Array.isArray(body.out_columns)) {
+        return apiError('BUSINESS_ERROR', str(info?.Message) || '未能读取模板栏位配置。')
+      }
+      const columns: FeeExportTemplateColumn[] = body.out_columns
+        .filter(isRecord)
+        .map((row, idx) => ({
+          seq: Number(row.seq) || idx + 1,
+          value: str(row.item_value),
+          text: str(row.item_text)
+        }))
+        .filter(item => Boolean(item.value && item.text))
+        .sort((a, b) => a.seq - b.seq)
+      return { ok: true, data: { columns } }
+    }
+
+    if (!isWriteSwitchOpen()) {
+      return apiError('BUSINESS_ERROR', '写开关已关闭，无法保存、更新或删除原站导出模板。')
+    }
+
+    if (request.action === 'del') {
+      const typeId = (request.typeId ?? '').trim()
+      if (!typeId) return apiError('INVALID_QUERY', '请选择要删除的模板。')
+      const p = new URLSearchParams({
+        Call: 'UpdateQueryOutConfig',
+        ud_type: 'del',
+        belong_key: request.belongKey,
+        out_type_id: typeId,
+        log_pagename: 'IhgAdvExport.aspx'
+      })
+      const response = await this.transport.post('feeExportConfigSave', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.Result === false) {
+        return apiError('BUSINESS_ERROR', str(info.Message) || '删除模板失败。')
+      }
+      return { ok: true, data: { templates: readTemplates(body), message: '模板已删除。' } }
+    }
+
+    const modelName = (request.modelName ?? '').trim()
+    const cols = request.columns ?? []
+    if (!cols.length) return apiError('INVALID_QUERY', '请至少选择一个导出栏位。')
+    if (!modelName) return apiError('INVALID_QUERY', '请输入模板名称。')
+    const element = buildTemplateElementXml(cols)
+
+    if (request.action === 'add') {
+      const p = new URLSearchParams({
+        Call: 'UpdateQueryOutConfig',
+        ud_type: 'add',
+        belong_key: request.belongKey,
+        model_name: modelName,
+        element,
+        log_pagename: 'IhgAdvExport.aspx'
+      })
+      const response = await this.transport.post('feeExportConfigSave', p)
+      if (!response.ok) return response
+      const body = isRecord(response.data) ? response.data : {}
+      const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.Result === false) {
+        return apiError('BUSINESS_ERROR', str(info.Message) || '保存模板失败。')
+      }
+      return { ok: true, data: { templates: readTemplates(body), message: '模板保存成功。' } }
+    }
+
+    // action === 'up'
+    const typeId = (request.typeId ?? '').trim()
+    if (!typeId) return apiError('INVALID_QUERY', '请先选择要更新的模板。')
+    const p = new URLSearchParams({
+      Call: 'UpdateQueryOutConfigNew',
+      ud_type: 'up',
+      belong_key: request.belongKey,
+      out_type_id: typeId,
+      model_name: modelName,
+      element,
+      log_pagename: 'IhgAdvExport.aspx'
+    })
+    const response = await this.transport.post('feeExportConfigUpdate', p)
+    if (!response.ok) return response
+    const body = isRecord(response.data) ? response.data : {}
+    const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+    if (info && info.Result === false) {
+      return apiError('BUSINESS_ERROR', str(info.Message) || '更新模板失败。')
+    }
+    return { ok: true, data: { templates: readTemplates(body), message: '模板更新成功。' } }
+  }
+
+  /** 执行原站费用 Excel 导出（对齐 Report.ashx ExcelFeeListByCond / ExcelFeeListByChecked / ExcelFeeListCountByCond）。 */
+  async exportFees(request: FeeExportRequest): Promise<ApiResult<{ async: boolean; downloadUrl?: string; fileGuid?: string; fileSize?: number | null; message: string }>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const xml = buildExportColumnsXml(request.columns)
+    if (!xml) {
+      return apiError('INVALID_QUERY', '请至少选择一个导出栏位。')
+    }
+
+    let op: 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
+    let callName: string
+    let p: URLSearchParams
+
+    if (request.mode === 'checked') {
+      const feeIds = (request.feeIds ?? []).map(id => id.trim()).filter(Boolean)
+      if (!feeIds.length) {
+        return apiError('INVALID_QUERY', '请先勾选要导出的费用记录。')
+      }
+      op = 'feeExportByChecked'
+      callName = 'ExcelFeeListByChecked'
+      p = new URLSearchParams()
+      p.set('Call', callName)
+      p.set('fee_ids', feeIds.join(';'))
+    } else {
+      op = request.mode === 'count' ? 'feeExportCountByCond' : 'feeExportByCond'
+      callName = request.mode === 'count' ? 'ExcelFeeListCountByCond' : 'ExcelFeeListByCond'
+      const built = buildFeeSearchParams(request.query ?? { pageIndex: 1, pageSize: 10 })
+      p = built.data
+      p.delete('colsel')
+      p.set('Call', callName)
+      p.set('fee_page_type', '')
+      p.set('PageIndex', String(request.query?.pageIndex ?? 1))
+      p.set('PageSize', String(request.query?.pageSize ?? 10))
+    }
+
+    p.set('e_coulums', xml)
+    p.set('log_pagename', 'IhgAdvExport.aspx')
+
+    const response = await this.transport.post(op, p, undefined, request.timeoutMs)
+    if (!response.ok) {
+      if (response.error.code === 'SESSION_EXPIRED') this.session.expire()
+      return response
+    }
+    const body = isRecord(response.data) ? response.data : {}
+    const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+    if (info && info.IsLogin === false) {
+      this.session.expire()
+      return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请重新登录。')
+    }
+    if (info && info.Result === false) {
+      const msg = typeof info.Message === 'string' && info.Message.trim() ? info.Message.trim() : '原站导出失败。'
+      return apiError('BUSINESS_ERROR', msg)
+    }
+    if (info && info.Asyn === true) {
+      return {
+        ok: true,
+        data: {
+          async: true,
+          message: '数据量较大，原站已转为后台异步生成，请前往 EASY「下载清单」页面下载。'
+        }
+      }
+    }
+    const fileGuid = typeof body.file_guid === 'string' ? body.file_guid.trim() : ''
+    const rawSize = typeof body.file_size === 'number' ? body.file_size : typeof body.file_size === 'string' && /^\d+$/.test(body.file_size.trim()) ? Number(body.file_size.trim()) : null
+    const downloadUrl = fileGuid ? this.transport.fileDownloadUrl(fileGuid, rawSize) : null
+    if (!downloadUrl) {
+      const msg = typeof info?.Message === 'string' && info.Message.trim() ? info.Message.trim() : '原站未返回有效的导出文件地址（可能当前条件下无可导出数据）。'
+      return apiError('BUSINESS_ERROR', msg)
+    }
+    return {
+      ok: true,
+      data: {
+        async: false,
+        downloadUrl,
+        fileGuid,
+        fileSize: rawSize,
+        message: '原站 Excel 清单已生成，正在通过浏览器下载。'
+      }
+    }
   }
 
   private readonly userInfoCache = new Map<string, FilingUser>()

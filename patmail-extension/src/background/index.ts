@@ -280,7 +280,10 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
       return { type: MessageType.Error, payload: { message: '扩展缺「下载」权限：到 chrome://extensions 给 PatMail 点一次「重新加载」后再试。' } }
     }
     try {
-      const downloadId = await downloads.download({ url: message.payload.url, filename: message.payload.fileName, saveAs: false })
+      const options: chrome.downloads.DownloadOptions = message.payload.fileName
+        ? { url: message.payload.url, filename: message.payload.fileName, saveAs: false }
+        : { url: message.payload.url, saveAs: false }
+      const downloadId = await downloads.download(options)
       return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: message.payload.fileName, downloadId } }
     } catch (error: unknown) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有接住这次下载。' } }

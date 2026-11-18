@@ -17,6 +17,8 @@ export type EasyOperation =
   | 'filingSearch' | 'filingFlowNode' | 'contractInit'
   | 'feeSearch' | 'feeSearchAmount'
   | 'feeSearchInit' | 'feeCustomerTree' | 'feeApplicantTree' | 'feeAgencyList' | 'feeContactInit' | 'feeProducts' | 'feeTechnical'
+  | 'feeExportConfig' | 'feeExportConfigSave' | 'feeExportConfigUpdate'
+  | 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
 
 export interface TransportOptions {
   fetcher?: typeof fetch
@@ -105,7 +107,13 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   feeAgencyList: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetAencyList' },
   feeContactInit: { path: '/AjaxServers/Customer.ashx', call: 'ContactInit' },
   feeProducts: { path: '/AjaxServers/BaseInfo.ashx', call: 'GetProducts' },
-  feeTechnical: { path: '/AjaxServers/Common.ashx', call: 'LoadTechnical' }
+  feeTechnical: { path: '/AjaxServers/Common.ashx', call: 'LoadTechnical' },
+  feeExportConfig: { path: '/AjaxServers/Common.ashx', call: 'GetQueryOutConfig' },
+  feeExportConfigSave: { path: '/AjaxServers/Common.ashx', call: 'UpdateQueryOutConfig' },
+  feeExportConfigUpdate: { path: '/AjaxServers/Common.ashx', call: 'UpdateQueryOutConfigNew' },
+  feeExportByCond: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListByCond' },
+  feeExportByChecked: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListByChecked' },
+  feeExportCountByCond: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListCountByCond' }
 }
 
 function loginRedirect(response: Response, origin: string): boolean {
@@ -160,7 +168,7 @@ export class EasyTransport {
 
   /** 只读请求遇到网关 502/503 时再试。写请求不重试，避免一次 502 后面又创建出第二封；打包下载也不重试，免得在原站留两份临时包。 */
   async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
-    const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'fileTempSave' && operation !== 'fileTempDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload'
+    const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'fileTempSave' && operation !== 'fileTempDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload' && operation !== 'feeExportConfigSave' && operation !== 'feeExportConfigUpdate' && operation !== 'feeExportByCond' && operation !== 'feeExportByChecked' && operation !== 'feeExportCountByCond'
     let result = await this.postOnce(operation, params, signal, timeoutMs, onBytes, networkPool)
     for (let attempt = 1; retryable && !result.ok && (result.error.status === 502 || result.error.status === 503) && attempt < 3; attempt += 1) {
       if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
@@ -175,7 +183,7 @@ export class EasyTransport {
  * 发文提交这一串（建单、联系人、规则、保存、提交流程）在原站高峰期实测 20 到 30 秒才回，全部放宽到 60 秒， 15 秒会把还 能成功的请求掐成「结果无法确认」。 */
   private waitMs(operation: EasyOperation, timeoutMs?: number): number {
     if (this.timeoutMs < 15_000) return this.timeoutMs
-    if (operation === 'fileSearch' || operation === 'limitMonitor' || operation === 'filingSearch') return fileSearchTimeoutMs(timeoutMs)
+    if (operation === 'fileSearch' || operation === 'limitMonitor' || operation === 'filingSearch' || operation === 'feeSearch' || operation === 'feeSearchAmount' || operation === 'feeExportByCond' || operation === 'feeExportByChecked' || operation === 'feeExportCountByCond') return fileSearchTimeoutMs(timeoutMs)
     // 原站先准备完整压缩包再返回GUID；与原站Ajax一样不设总时长，不能在5分钟主动掐断。
     if (operation === 'fileDownload') return 0
     // 命名一批 40 个实测单批可超过一分钟；与原站 jQuery 一样不设总时长，不能在固定时限主动掐断，显式取消仍然生效。
