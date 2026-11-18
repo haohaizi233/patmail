@@ -1173,10 +1173,28 @@ export class EasyRuntime {
       if (!response.ok) return response
       const body = isRecord(response.data) ? response.data : {}
       const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.IsLogin === false) {
+        this.session.expire()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请重新登录。')
+      }
       if (info && info.Result === false) {
         return apiError('BUSINESS_ERROR', str(info.Message) || '删除模板失败。')
       }
-      return { ok: true, data: { templates: readTemplates(body), message: '模板已删除。' } }
+      let templates = readTemplates(body)
+      if (templates.some(t => t.typeId === typeId)) {
+        return apiError('BUSINESS_ERROR', '原站删除模板未能生效，该模板仍然存在。')
+      }
+      if (!templates.length) {
+        // 若响应未内联最新列表，发起只读回查核实状态
+        const verifyResp = await this.manageFeeExportConfig({ action: 'list', belongKey: request.belongKey })
+        if (verifyResp.ok && verifyResp.data.templates) {
+          templates = verifyResp.data.templates
+          if (templates.some(t => t.typeId === typeId)) {
+            return apiError('BUSINESS_ERROR', '原站回查显示该模板未被成功删除。')
+          }
+        }
+      }
+      return { ok: true, data: { templates, message: '模板已删除。' } }
     }
 
     const modelName = (request.modelName ?? '').trim()
@@ -1198,10 +1216,27 @@ export class EasyRuntime {
       if (!response.ok) return response
       const body = isRecord(response.data) ? response.data : {}
       const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+      if (info && info.IsLogin === false) {
+        this.session.expire()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请重新登录。')
+      }
       if (info && info.Result === false) {
         return apiError('BUSINESS_ERROR', str(info.Message) || '保存模板失败。')
       }
-      return { ok: true, data: { templates: readTemplates(body), message: '模板保存成功。' } }
+      let templates = readTemplates(body)
+      // 若原站未直接回传最新 out_model 或未能匹配，发起只读回查验证目标模板是否存在
+      const foundInBody = templates.some(t => t.typeText === modelName)
+      if (!foundInBody) {
+        const verifyResp = await this.manageFeeExportConfig({ action: 'list', belongKey: request.belongKey })
+        if (verifyResp.ok && verifyResp.data.templates) {
+          templates = verifyResp.data.templates
+        }
+      }
+      const verified = templates.find(t => t.typeText === modelName)
+      if (!verified && info?.Result !== true) {
+        return apiError('BUSINESS_ERROR', '原站未确认模板已保存，回查未能找到新模板。')
+      }
+      return { ok: true, data: { templates, message: '模板保存成功。' } }
     }
 
     // action === 'up'
@@ -1220,10 +1255,21 @@ export class EasyRuntime {
     if (!response.ok) return response
     const body = isRecord(response.data) ? response.data : {}
     const info = isRecord(body.ClientInfo) ? body.ClientInfo : null
+    if (info && info.IsLogin === false) {
+      this.session.expire()
+      return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请重新登录。')
+    }
     if (info && info.Result === false) {
       return apiError('BUSINESS_ERROR', str(info.Message) || '更新模板失败。')
     }
-    return { ok: true, data: { templates: readTemplates(body), message: '模板更新成功。' } }
+    let templates = readTemplates(body)
+    if (!templates.length) {
+      const verifyResp = await this.manageFeeExportConfig({ action: 'list', belongKey: request.belongKey })
+      if (verifyResp.ok && verifyResp.data.templates) {
+        templates = verifyResp.data.templates
+      }
+    }
+    return { ok: true, data: { templates, message: '模板更新成功。' } }
   }
 
   /** 执行原站费用 Excel 导出（对齐 Report.ashx ExcelFeeListByCond / ExcelFeeListByChecked / ExcelFeeListCountByCond）。 */

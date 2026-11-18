@@ -151,5 +151,45 @@ export interface FeeSearchAmountSummary {
 3. **单选模式过滤与快捷全量计算**：
    - 顶部单选条（全部 / 仅显示客户付 / 仅显示官费 / 仅收代理费）在变动时触发即时过滤或重查。
    - 同步发起 `searchFeesAmount` 请求，并实时计算当前页金额与全局总额展示在看板上。
-4. **Excel 导出**：
-   - 支持将当前检索结果一键导出为 CSV/Excel，字段涵盖原站全部 84 列。
+4. **Excel 导出与模板管理可靠性**：
+   - 完整复刻原站 `IhgAdvExport.aspx`，支持「导出清单」（`cond`）、「导出勾选费用」（`checked`）与「导出汇总数据」（`count`）。
+   - 详见第 6 节「费用 Excel 导出与模板管理可靠性规范」。
+
+---
+
+## 6. 费用 Excel 导出与模板管理可靠性规范
+
+### 6.1 导出状态生命周期与状态定义
+
+为避免将浏览器受理工序（返回 `downloadId`）与实际文件保存完成混淆，系统严格定义以下导出状态：
+
+| 状态标识 | 业务含义 | 处理与 UI 表现 |
+|---|---|---|
+| `requested` | 已向原站发送导出请求 | 按钮进入加载态，显示「正在向原站请求生成 Excel 清单…」 |
+| `server_queued` | 原站由于数据量过大转入后台异步队列生成（`ClientInfo.Asyn === true`） | 弹窗明确提示「已转入原站异步导出」，引导用户前往原站「下载清单」页面取件 |
+| `file_ready` | 原站生成完毕并返回可取件 `file_guid` 与下载地址 | 准备交由浏览器后台下载 |
+| `download_started` | 浏览器底层已受理下载请求并分配 `downloadId` | 提示「浏览器已受理下载，正在保存文件…」 |
+| `downloading` | 浏览器正在传输大文件 | 提示「文件较大，正在下载中，请在浏览器下载列表查看进度」 |
+| `download_completed` | 底层下载状态明确确认为 `complete` | 提示「费用 Excel 清单已成功下载保存」 |
+| `download_interrupted` | 底层下载被中断或取消（`state === 'interrupted'`） | 报告明确业务错误（带原站/浏览器错误原因），不伪造完成 |
+| `unknown` | 通信超时或后台回执状态未知 | 提示「原站 Excel 清单已生成，但下载回执未确认；未自动重复下载，请检查浏览器下载记录」 |
+| `failed` | 原站明确拒绝（`Result === false`）或会话失效（`SESSION_EXPIRED`） | 弹出明确错误原因，终止流程 |
+
+### 6.2 Chrome 下载受理与实际完成的区别
+
+- **受理成功**：`chrome.downloads.download()` 返回数字 `downloadId`，仅代表浏览器后台线程接管了下载 URL，文件尚在网络传输或处于临时缓存中，并未真正落盘完毕。
+- **实际完成**：必须通过 `MessageType.DownloadState`（底层 `chrome.downloads.search`）查询，当且仅当 `state === 'complete'` 时才算文件保存完毕。
+- **防止重复触发兜底**：若后台调用 `sendToBackground` 发生网络超时或断开，**严禁**盲目通过隐藏 iframe 再次发起下载，避免用户下载记录中产生双份重复文件；只有在后台明确报告无扩展下载权限（权限缺失）且确认未创建任务时，才允许安全回退。
+
+### 6.3 模板 CRUD 成功判定与只读回查机制
+
+涉及原站 `GetQueryOutConfig` / `UpdateQueryOutConfig` / `UpdateQueryOutConfigNew`：
+
+1. **会话校验**：若响应体 `ClientInfo.IsLogin === false`，坚决失效会话并返回 `SESSION_EXPIRED`。
+2. **拒绝弱判定**：禁止将缺省视为成功。必须检查 `ClientInfo.Result !== false`。
+3. **只读回查验证（Read-After-Write Verification）**：
+   - **新增模板 (`add`)**：写请求返回后，检查返回的模板列表或主动调用 `list` 进行只读回查，必须在模板列表中核实到同名新模板；若回查未找到且原站未显式返回 `Result: true`，拒绝伪成功。
+   - **更新模板 (`up`)**：回查确认模板存在且配置已刷新。
+   - **删除模板 (`del`)**：删除后检查模板列表，若被删 `typeId` 依然存在，坚决报错；若原站未直接返回最新列表，主动执行只读回查确认模板已被移除。
+4. **并发与竞态防护**：弹窗中使用 `templateGeneration` / `detailGeneration`，在快速切换模板或关闭弹窗后，过期回调一律丢弃，杜绝状态覆写。
+

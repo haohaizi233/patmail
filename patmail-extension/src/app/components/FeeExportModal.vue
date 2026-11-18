@@ -94,8 +94,12 @@ function resetToDefaultColumns(): void {
   activeColumnValue.value = ''
 }
 
+let templateGeneration = 0
+let detailGeneration = 0
+
 async function fetchTemplates(selectFirst = false): Promise<void> {
   if (!props.bridge) return
+  const currentGen = ++templateGeneration
   loadingTemplates.value = true
   errorText.value = ''
   try {
@@ -106,6 +110,7 @@ async function fetchTemplates(selectFirst = false): Promise<void> {
         belongKey: belongKey.value
       }
     })
+    if (currentGen !== templateGeneration || !props.open) return
     if (resp.type === MessageType.FeeExportConfigResult && resp.payload.ok) {
       templates.value = resp.payload.data.templates ?? []
       if (selectFirst && templates.value.length) {
@@ -118,9 +123,12 @@ async function fetchTemplates(selectFirst = false): Promise<void> {
       errorText.value = resp.payload.message || '读取原站导出模板失败'
     }
   } catch (e) {
+    if (currentGen !== templateGeneration || !props.open) return
     errorText.value = e instanceof Error ? e.message : '读取原站导出模板失败'
   } finally {
-    loadingTemplates.value = false
+    if (currentGen === templateGeneration) {
+      loadingTemplates.value = false
+    }
   }
 }
 
@@ -128,6 +136,8 @@ watch(
   () => [props.open, props.mode] as const,
   ([opened]) => {
     if (!opened) return
+    templateGeneration++
+    detailGeneration++
     filterKeyword.value = ''
     collapsedGroups.value = {}
     selectedTemplateId.value = ''
@@ -140,6 +150,7 @@ watch(
 )
 
 async function onSelectTemplate(nextId: string): Promise<void> {
+  const currentGen = ++detailGeneration
   selectedTemplateId.value = nextId
   const found = templates.value.find(item => item.typeId === nextId)
   templateName.value = found ? found.typeText : ''
@@ -157,6 +168,7 @@ async function onSelectTemplate(nextId: string): Promise<void> {
         typeId: nextId
       }
     })
+    if (currentGen !== detailGeneration || !props.open) return
     if (resp.type === MessageType.FeeExportConfigResult && resp.payload.ok) {
       const cols = resp.payload.data.columns ?? []
       selectedColumns.value = cols.map(c => ({ value: c.value, text: c.text }))
@@ -168,9 +180,12 @@ async function onSelectTemplate(nextId: string): Promise<void> {
       errorText.value = resp.payload.message || '读取模板栏位失败'
     }
   } catch (e) {
+    if (currentGen !== detailGeneration || !props.open) return
     errorText.value = e instanceof Error ? e.message : '读取模板栏位失败'
   } finally {
-    loadingTemplates.value = false
+    if (currentGen === detailGeneration) {
+      loadingTemplates.value = false
+    }
   }
 }
 
@@ -391,6 +406,7 @@ async function submitExport(): Promise<void> {
     errorText.value = '尚未连接 EASY，无法执行导出。'
     return
   }
+  if (exporting.value) return
 
   exporting.value = true
   errorText.value = ''
@@ -409,9 +425,19 @@ async function submitExport(): Promise<void> {
       const data = resp.payload.data
       emit('exported', data.message)
       emit('close')
-      if (data.async) {
+      if (data.status === 'server_queued' || data.async) {
         await infoDialog({
           title: '已转入原站异步导出',
+          message: data.message
+        })
+      } else if (data.status === 'unknown') {
+        await infoDialog({
+          title: '下载状态待确认',
+          message: data.message
+        })
+      } else if (data.status === 'downloading' || data.status === 'download_started') {
+        await infoDialog({
+          title: '浏览器正在下载',
           message: data.message
         })
       }

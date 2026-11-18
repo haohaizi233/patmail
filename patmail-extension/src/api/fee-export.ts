@@ -50,10 +50,23 @@ export interface FeeExportRequest {
   timeoutMs?: number
 }
 
+export type FeeExportStatus =
+  | 'requested'
+  | 'server_queued'
+  | 'file_ready'
+  | 'download_started'
+  | 'downloading'
+  | 'download_completed'
+  | 'download_interrupted'
+  | 'failed'
+  | 'unknown'
+
 export interface FeeExportResponse {
+  status?: FeeExportStatus
   async: boolean
   fileGuid?: string
   fileSize?: number | null
+  downloadId?: number
   message: string
 }
 
@@ -70,23 +83,45 @@ export function exportTitleForMode(mode: FeeExportMode): string {
 }
 
 function escapeInnerText(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/** 校验是否为合法安全的 XML 元素标签名（且排除原型污染键名） */
+export function isValidXmlElementName(name: string): boolean {
+  if (!name || name.length > 100) return false
+  if (name === '__proto__' || name === 'prototype' || name === 'constructor') return false
+  return /^[a-zA-Z_][a-zA-Z0-9_.-]*$/.test(name)
+}
+
+/** 清理并去重栏位列表 */
+export function sanitizeExportColumns(columns: Array<{ value: string; text: string }>): Array<{ value: string; text: string }> {
+  const result: Array<{ value: string; text: string }> = []
+  const seen = new Set<string>()
+  for (const col of columns || []) {
+    const value = (col.value || '').trim()
+    const text = (col.text || '').trim()
+    if (!value || !text || seen.has(value)) continue
+    if (!isValidXmlElementName(value)) continue
+    seen.add(value)
+    result.push({ value, text })
+  }
+  return result
 }
 
 /** 构造原站 IhgAdvExport.Submit 的 e_coulums 参数（实体编码 XML，绕过 ASP.NET 请求校验） */
 export function buildExportColumnsXml(columns: Array<{ value: string; text: string }>): string {
-  return columns
-    .filter(col => col.value.trim() && col.text.trim())
-    .map(col => `&lt;${col.value.trim()}&gt;${escapeInnerText(col.text.trim())}&lt;/${col.value.trim()}&gt;`)
+  const sanitized = sanitizeExportColumns(columns)
+  return sanitized
+    .map(col => `&lt;${col.value}&gt;${escapeInnerText(col.text)}&lt;/${col.value}&gt;`)
     .join('')
 }
 
 /** 构造原站 IhgAdvExport.SaveOutItemModel / UpOutItemModel 的 element 参数 */
 export function buildTemplateElementXml(columns: Array<{ value: string; text: string }>): string {
-  return columns
-    .filter(col => col.value.trim() && col.text.trim())
+  const sanitized = sanitizeExportColumns(columns)
+  return sanitized
     .map((col, idx) => (
-      `&lt;item&gt;&lt;value&gt;${col.value.trim()}&lt;/value&gt;&lt;text&gt;${escapeInnerText(col.text.trim())}&lt;/text&gt;&lt;sort&gt;${idx + 1}&lt;/sort&gt;&lt;/item&gt;`
+      `&lt;item&gt;&lt;value&gt;${col.value}&lt;/value&gt;&lt;text&gt;${escapeInnerText(col.text)}&lt;/text&gt;&lt;sort&gt;${idx + 1}&lt;/sort&gt;&lt;/item&gt;`
     ))
     .join('')
 }

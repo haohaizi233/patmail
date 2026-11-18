@@ -210,27 +210,113 @@ const bridge: MessageBridge = {
         if (exported.data.async || !exported.data.downloadUrl) {
           return {
             type: MessageType.ExportFeeResult,
-            payload: { ok: true, data: { async: exported.data.async, message: exported.data.message } }
+            payload: {
+              ok: true,
+              data: {
+                status: 'server_queued',
+                async: exported.data.async,
+                message: exported.data.message
+              }
+            }
           }
         }
         // 交由后台 chrome.downloads 下载（不覆盖 filename，严格沿用原站 Content-Disposition 的真实 Excel 文件名与扩展名）
-        const saved = await sendToBackground({
-          type: MessageType.SaveDownload,
-          payload: { url: exported.data.downloadUrl, fileName: '' }
-        }, 30_000)
-        if (saved?.type !== MessageType.SaveDownloadResult) {
-          // 兜底沿用原站 GetFile 隐藏 iframe 触发浏览器原生下载
-          startArchiveDownload(document, exported.data.downloadUrl)
+        let saved: Awaited<ReturnType<typeof sendToBackground>> | null = null
+        try {
+          saved = await sendToBackground({
+            type: MessageType.SaveDownload,
+            payload: { url: exported.data.downloadUrl, fileName: '' }
+          }, 30_000)
+        } catch {
+          saved = null
         }
+
+        // 明确未启动（如权限错误且后台拒绝）：才允许回退到原站隐藏 iframe
+        const explicitlyNotStarted = saved?.type === MessageType.Error && /权限|没有.*权限/.test(saved.payload.message)
+        if (explicitlyNotStarted) {
+          startArchiveDownload(document, exported.data.downloadUrl)
+          return {
+            type: MessageType.ExportFeeResult,
+            payload: {
+              ok: true,
+              data: {
+                status: 'download_started',
+                async: false,
+                fileGuid: exported.data.fileGuid,
+                fileSize: exported.data.fileSize,
+                message: '扩展权限不足，已回退为浏览器网页直接下载。'
+              }
+            }
+          }
+        }
+
+        // 后台受理成功：跟踪真实下载完成状态
+        if (saved?.type === MessageType.SaveDownloadResult && saved.payload.ok) {
+          const downloadId = saved.payload.downloadId
+          let finalStatus: 'download_started' | 'downloading' | 'download_completed' | 'download_interrupted' = 'download_started'
+          let statusMessage = '浏览器已受理下载，正在保存文件…'
+          if (typeof downloadId === 'number') {
+            const startWait = Date.now()
+            while (Date.now() - startWait < 3000) {
+              await new Promise(r => setTimeout(r, 400))
+              const stateResp = await sendToBackground({
+                type: MessageType.DownloadState,
+                payload: { downloadId }
+              }, 5000).catch(() => null)
+              if (stateResp?.type === MessageType.DownloadStateResult && stateResp.payload.ok) {
+                if (stateResp.payload.state === 'complete') {
+                  finalStatus = 'download_completed'
+                  statusMessage = '费用 Excel 清单已成功下载保存。'
+                  break
+                }
+                if (stateResp.payload.state === 'interrupted') {
+                  finalStatus = 'download_interrupted'
+                  statusMessage = `浏览器下载被中断（${stateResp.payload.error || '用户取消或网络中断'}）。`
+                  break
+                }
+                if (stateResp.payload.state === 'inProgress') {
+                  finalStatus = 'downloading'
+                  statusMessage = '正在通过浏览器下载，请在浏览器下载列表查看保存进度。'
+                }
+              }
+            }
+          }
+          if (finalStatus === 'download_interrupted') {
+            return {
+              type: MessageType.ExportFeeResult,
+              payload: {
+                ok: false,
+                error: { code: 'BUSINESS_ERROR', message: statusMessage }
+              }
+            }
+          }
+          return {
+            type: MessageType.ExportFeeResult,
+            payload: {
+              ok: true,
+              data: {
+                status: finalStatus,
+                async: false,
+                downloadId,
+                fileGuid: exported.data.fileGuid,
+                fileSize: exported.data.fileSize,
+                message: statusMessage
+              }
+            }
+          }
+        }
+
+        // 状态不确定（后台超时或未确认）：严禁自动重复触发 iframe，防止重复下载
         return {
           type: MessageType.ExportFeeResult,
           payload: {
             ok: true,
             data: {
+              status: 'unknown',
               async: false,
               fileGuid: exported.data.fileGuid,
               fileSize: exported.data.fileSize,
-              message: exported.data.message
+              message: '原站 Excel 清单已生成，但浏览器下载回执超时未确认；未自动重复下载，请检查浏览器下载记录。'
             }
           }
         }
