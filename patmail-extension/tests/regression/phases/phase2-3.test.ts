@@ -45,6 +45,7 @@ describe('基础字典', () => {
     let calls = 0
     const fetcher: typeof fetch = async (_url, init) => {
       calls += 1
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call')
       const body = call === 'IPGetBasicData'
         ? { ...client, CaseType: [{ case_type_id: guid('bbbbbbbb'), case_type: '专利', case_type_code: 'P' }], Country: null, CaseStatus: null, ApplyType: null, BussType: null, customer_status: null, CtrlProc: null, ProcStatus: null, Case_direction: null, CaseBranchDept: null }
@@ -112,7 +113,7 @@ describe('文件描述树和 Schema', () => {
     expect(optionsForCaseType('caseStatus', options, caseType).map(item => item.label)).toEqual(['发明'])
     expect(optionsForCaseType('applyType', options, '')).toEqual([])
     expect(resolveInternalIdDisplay(guid('eeeeeeee'), options).text).toBe('未识别的历史 ID')
-    const fields = formValuesToFields({ case_volume: 'PA', __proto__: 'x' } as Record<string, string>)
+    const fields = formValuesToFields({ case_volume: 'PA', __proto__: 'x' })
     expect(fields.case_volume).toBe('PA')
     expect(Object.keys(fields)).toEqual(['case_volume'])
   })

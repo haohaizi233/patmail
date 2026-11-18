@@ -117,6 +117,7 @@ export class IndexedEvidenceStore implements EvidenceRepository {
       const request = this.factory.open('patmail-evidence', 1)
       request.onupgradeneeded = () => request.result.createObjectStore('rows')
       request.onsuccess = () => resolve(request.result)
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       request.onerror = () => reject(request.error)
     })
     return this.database
@@ -130,12 +131,15 @@ export class IndexedEvidenceStore implements EvidenceRepository {
       const current = store.get('bundle')
       let bundle: EvidenceBundle = { evidence: [], acceptance: [] }
       current.onsuccess = () => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
         bundle = current.result ?? { evidence: [], acceptance: [] }
         work(bundle)
         store.put(bundle, 'bundle')
       }
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       current.onerror = () => reject(current.error)
       tx.oncomplete = () => resolve(bundle)
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       tx.onerror = () => reject(tx.error)
     })
   }

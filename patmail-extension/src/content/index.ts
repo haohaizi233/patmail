@@ -186,6 +186,55 @@ const bridge: MessageBridge = {
       case MessageType.SearchFiling:
         return { type: MessageType.SearchFilingResult,
           payload: await easyRuntime.searchFiling(message.payload.query, message.payload.timeoutMs, message.payload.batch === true) }
+      case MessageType.SearchFee:
+        return { type: MessageType.SearchFeeResult,
+          payload: await easyRuntime.searchFees(message.payload.query, message.payload.timeoutMs, message.payload.batch === true) }
+      case MessageType.SearchFeeAmount:
+        return { type: MessageType.SearchFeeAmountResult,
+          payload: await easyRuntime.searchFeesAmount(message.payload.query, message.payload.timeoutMs) }
+      case MessageType.LoadFeeInit:
+        return { type: MessageType.LoadFeeInitResult,
+          payload: await easyRuntime.loadFeeInit() }
+      case MessageType.SearchFeeCustomers:
+        return { type: MessageType.SearchFeeCustomersResult,
+          payload: await easyRuntime.searchFeeCustomers(message.payload.searchKey) }
+      case MessageType.LoadFeeApplicants:
+        return { type: MessageType.LoadFeeApplicantsResult,
+          payload: await easyRuntime.loadFeeApplicants(message.payload.customerIds) }
+      case MessageType.FeeExportConfig:
+        return { type: MessageType.FeeExportConfigResult,
+          payload: await easyRuntime.manageFeeExportConfig(message.payload) }
+      case MessageType.ExportFee: {
+        const exported = await easyRuntime.exportFees(message.payload)
+        if (!exported.ok) return { type: MessageType.ExportFeeResult, payload: exported }
+        if (exported.data.async || !exported.data.downloadUrl) {
+          return {
+            type: MessageType.ExportFeeResult,
+            payload: { ok: true, data: { async: exported.data.async, message: exported.data.message } }
+          }
+        }
+        // 交由后台 chrome.downloads 下载（不覆盖 filename，严格沿用原站 Content-Disposition 的真实 Excel 文件名与扩展名）
+        const saved = await sendToBackground({
+          type: MessageType.SaveDownload,
+          payload: { url: exported.data.downloadUrl, fileName: '' }
+        }, 30_000)
+        if (saved?.type !== MessageType.SaveDownloadResult) {
+          // 兜底沿用原站 GetFile 隐藏 iframe 触发浏览器原生下载
+          startArchiveDownload(document, exported.data.downloadUrl)
+        }
+        return {
+          type: MessageType.ExportFeeResult,
+          payload: {
+            ok: true,
+            data: {
+              async: false,
+              fileGuid: exported.data.fileGuid,
+              fileSize: exported.data.fileSize,
+              message: exported.data.message
+            }
+          }
+        }
+      }
       case MessageType.SubmitLimitMail:
         return { type: MessageType.SubmitLimitMailResult,
           payload: await easyRuntime.submitLimitMails(message.payload.userId, message.payload.items) }

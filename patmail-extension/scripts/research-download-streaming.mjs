@@ -14,6 +14,7 @@ const report = { offline: [], source: [], live: [], checkedAt: new Date().toISOS
 if (process.env.PATMAIL_AUDIT_APPEND_REPORT === '1') {
   try {
     report.live.push(...JSON.parse(await readFile(resultPath('download-streaming-research.json'), 'utf8')).live)
+  // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
   } catch {}
 }
 const harFolder = new URL('../../HAR/', import.meta.url)
@@ -40,6 +41,7 @@ for (const path of inputs) {
     let json
     try {
       json = JSON.parse(entry.response.content?.text ?? '')
+    // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
     } catch {}
     const finding = {
       source: String(path).split(/[\\/]/).at(-1),
@@ -143,7 +145,7 @@ try {
         const stop = setTimeout(() => controller.abort(), 240000)
         const heartbeat = setInterval(
           () =>
-            void window.__reportStreamingResearch({
+            void globalThis.window.__reportStreamingResearch({
               stage: 'packing-wait',
               count,
               elapsedMs: Math.round(performance.now() - started),
@@ -187,7 +189,7 @@ try {
               metrics.firstGuidMs = elapsedMs
             const item = { elapsedMs, bytes: chunk.value.byteLength, totalBytes: metrics.bytes }
             metrics.chunks.push(item)
-            void window.__reportStreamingResearch({ stage: 'packing-chunk', count, ...item })
+            void globalThis.window.__reportStreamingResearch({ stage: 'packing-chunk', count, ...item })
             if (metrics.bytes > 2 * 1024 * 1024) throw new Error('Unexpected large preparation response')
           }
           text += decoder.decode()
@@ -346,7 +348,7 @@ try {
         summary.extensionStreaming = await app.evaluate(
           async ({ guid, origin }) => {
             const capabilities = {
-              secureContext: isSecureContext,
+              secureContext: globalThis.isSecureContext,
               filePicker: typeof showSaveFilePicker === 'function',
               readableStream: typeof ReadableStream === 'function',
             }
@@ -358,6 +360,7 @@ try {
                 credentials: 'include',
               }).then(response => response.json())
               login = data.ClientInfo?.IsLogin === true
+            // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
             } catch {}
             const response = await fetch(`${origin}/AjaxServers/FileHandler.ashx?guid=${encodeURIComponent(guid)}`, {
               credentials: 'include',
@@ -548,7 +551,7 @@ try {
                   for (;;) {
                     const chunk = await validationReader.read()
                     if (chunk.done) break
-                    await window.__writeZipForValidation([...chunk.value])
+                    await globalThis.window.__writeZipForValidation([...chunk.value])
                   }
                   return {
                     passed:

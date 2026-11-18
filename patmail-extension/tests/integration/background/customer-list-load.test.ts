@@ -29,7 +29,7 @@ afterEach(async () => {
 describe('中小客户名单不走原站', () => {
   it('页面直接读快照，不把名单请求转给原网站', async () => {
     await setCustomerMode('sme')
-    globalThis.fetch = (async () => snapshotResponse()) as typeof fetch
+    globalThis.fetch = (async () => snapshotResponse())
     let forwarded = false
     const bridge: MessageBridge = {
       async request() {
@@ -47,7 +47,7 @@ describe('中小客户名单不走原站', () => {
 
   it('快照没读到时明确报错，仍然不请求原站', async () => {
     await setCustomerMode('sme')
-    globalThis.fetch = (async () => snapshotResponse(false)) as typeof fetch
+    globalThis.fetch = (async () => snapshotResponse(false))
     let forwarded = false
     const bridge: MessageBridge = {
       async request() {
@@ -63,9 +63,10 @@ describe('中小客户名单不走原站', () => {
 
   it('字典服务在中小客户模式下不调用 GetCustomerlist', async () => {
     await setCustomerMode('sme')
-    globalThis.fetch = (async () => snapshotResponse()) as typeof fetch
+    globalThis.fetch = (async () => snapshotResponse())
     const calls: string[] = []
     const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       calls.push(String(init?.body ?? ''))
       return new Response('{}', { status: 200 })
     }) as typeof fetch
@@ -78,7 +79,7 @@ describe('中小客户名单不走原站', () => {
 
   it('后台转发客户名单时就地读快照，不把请求送到 EASY 标签页', async () => {
     await setCustomerMode('sme')
-    globalThis.fetch = (async () => snapshotResponse()) as typeof fetch
+    globalThis.fetch = (async () => snapshotResponse())
     const seen: number[] = []
     const host: WorkspaceHost = {
       connection: new EasyConnectionController(),

@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it,vi } from 'vitest'
 import { runDraftBatch } from '../../../src/hague/draft-batch'
 import type { HagueRow } from '../../../src/hague/workflow'
 import type { DraftCheckpoint } from '../../../src/hague/draft-contract'
@@ -7,6 +7,36 @@ import type { DraftPlan } from '../../../src/hague/draft-plan'
 const row=(n:number):HagueRow=>({folder:{caseVolume:`PO${n}HAGUE`,path:`case${n}`,documents:[],images:[],issues:[]},state:'review',confirmed:false,error:''})
 const plan=(r:HagueRow)=>({reference:r.folder.caseVolume,applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'',designs:[]}) as DraftPlan
 const checkpoint=(tabId:number,status:DraftCheckpoint['status']='saved'):DraftCheckpoint=>({tabId,status,next:10,total:10,stage:'test'})
+it('starts the longest remaining HTTP case first, preserving ties and per-case plans',async()=>{
+ const rows=[row(1),row(2),row(3),row(4)],started:string[]=[]
+ const plans=rows.map((r,i)=>({...plan(r),creators:Array.from({length:i===1||i===2?8:0},()=>({givenName:'A',familyName:'B',address:{name:'x',address:'x',city:'x',region:'x',postalCode:'1',country:'CN'}}))}))
+ // Case 3 has little remaining work despite a large original plan.
+ rows[2].draft={...checkpoint(9,'stopped'),transport:'http',next:15}
+ await runDraftBatch(rows,1,{transport:'http',plan:r=>plans[rows.indexOf(r)],open:async()=>9,run:async(r,p)=>{expect(p).toBe(plans[rows.indexOf(r)]);started.push(r.folder.caseVolume);return checkpoint(9)},save:async()=>{}})
+ expect(started).toEqual(['PO2HAGUE','PO1HAGUE','PO4HAGUE','PO3HAGUE'])
+})
+it('counts same-generation completed jobs without opening or rerunning them on refresh',async()=>{
+ const saved=row(1);saved.draft={...checkpoint(9),caseRunId:'same'}
+ const run=vi.fn(async()=>checkpoint(9)),open=vi.fn(async()=>9)
+ const result=await runDraftBatch([saved],6,{transport:'http',completed:r=>r.draft?.caseRunId==='same',plan,open,run,save:async()=>{}})
+ expect(result).toMatchObject({succeeded:1,settled:1,skipped:0,active:0})
+ expect(result.done).toBe(result.total);expect(result.total).toBeGreaterThan(0)
+ expect(run).not.toHaveBeenCalled();expect(open).not.toHaveBeenCalled()
+})
+it('allows opted-in HTTP readback but never page-mode retries for uncertain checkpoints',async()=>{
+ for(const transport of ['http','page'] as const){
+  const r=row(1);r.draft={...checkpoint(9,'uncertain'),reference:'123',next:3,transport}
+  let runs=0
+  const result=await runDraftBatch([r],1,{transport,recoverUncertain:true,plan,open:async()=>9,run:async()=>{runs++;return checkpoint(9)},save:async()=>{}})
+  expect(runs).toBe(transport==='http'?1:0);expect(result.skipped).toBe(transport==='http'?0:1)
+ }
+})
+it('blocks two different cases pointing at the same WIPO reference before any HTTP recovery',async()=>{
+ const rows=[row(1),row(2)];for(const r of rows)r.draft={...checkpoint(9,'uncertain'),transport:'http',reference:'123',next:3}
+ let runs=0
+ const result=await runDraftBatch(rows,6,{transport:'http',recoverUncertain:true,plan,open:async()=>9,run:async()=>{runs++;return checkpoint(9)},save:async()=>{}})
+ expect(runs).toBe(0);expect(result.skipped).toBe(2)
+})
 
 it('fills six independent lanes, replaces a finished job immediately and never shares active tabs',async()=>{
  let opened=0,active=0,max=0;const occupied=new Set<number>(),started:number[]=[];const releases:Array<()=>void>=[]

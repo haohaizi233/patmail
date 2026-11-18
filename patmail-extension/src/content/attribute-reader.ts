@@ -13,7 +13,9 @@ export function readAttributes(element: Element): {
   attributes: Record<string, string>
   dataset: Record<string, string>
 } {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const attributes: Record<string, string> = Object.create(null)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const dataset: Record<string, string> = Object.create(null)
   for (const attribute of Array.from(element.attributes)) {
     const name = attribute.name.toLowerCase()

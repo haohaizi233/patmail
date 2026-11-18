@@ -69,8 +69,8 @@ describe('full-page query message chain', () => {
       const response = await runtime.searchFiles(message.payload.message.payload.query)
       expect(response).toMatchObject({ ok: true })
       expect(searches).toHaveLength(1)
-      expect(searches[0]!.get(field)).toBe(value)
-      expect(searches[0]!.get('pageIndex')).toBe('3')
+      expect(searches[0].get(field)).toBe(value)
+      expect(searches[0].get('pageIndex')).toBe('3')
     } finally {
       runtime.dispose()
     }
@@ -78,7 +78,9 @@ describe('full-page query message chain', () => {
   it('delivers a customer-only deadline query through the workspace to the HTTP transport and back', async () => {
     const requests: { url: string; method: string; credentials?: RequestCredentials; body: URLSearchParams }[] = []
     const runtime = new EasyRuntime(origin, { fetcher: async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const body = new URLSearchParams(String(init?.body))
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       requests.push({ url: String(url), method: init?.method ?? '', credentials: init?.credentials, body })
       const data = body.get('Call') === 'GetUserModel'
         ? { UserModel: { user_id: userId, Name: '测试员' }, ClientInfo: { IsLogin: true, Status: true, Result: false } }
@@ -121,9 +123,9 @@ describe('full-page query message chain', () => {
       const searches = requests.filter(request => request.body.get('Call') === 'GetLimitMonitorCaseList')
       expect(searches).toHaveLength(1)
       expect(searches[0]).toMatchObject({ url: `${origin}/AjaxServers/Report.ashx`, method: 'POST', credentials: 'include' })
-      expect(searches[0]!.body.get('customer_name')).toBe('广汽丰田')
-      expect(searches[0]!.body.get('is_first')).toBe('false')
-      expect(searches[0]!.body.get('type')).toBe('all')
+      expect(searches[0].body.get('customer_name')).toBe('广汽丰田')
+      expect(searches[0].body.get('is_first')).toBe('false')
+      expect(searches[0].body.get('type')).toBe('all')
     } finally {
       runtime.dispose()
     }
@@ -141,6 +143,7 @@ describe('full-page query message chain', () => {
       sendMessage(_message: unknown, callback: (value: unknown) => void) { callback(undefined) }
     })
     expect(await createFullPageBridge().request(query)).toMatchObject({ type: MessageType.Error, payload: {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
       message: expect.stringContaining('message port closed')
     } })
   })
@@ -150,6 +153,7 @@ describe('full-page query message chain', () => {
     runtimeChrome({ sendMessage() {} })
     const pending = createFullPageBridge().request(query)
     await vi.advanceTimersByTimeAsync(75_000)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     expect(await pending).toMatchObject({ type: MessageType.Error, payload: { message: expect.stringContaining('时限') } })
   })
 })

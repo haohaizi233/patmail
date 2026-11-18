@@ -1,9 +1,14 @@
+import type {TraceContext,TraceEvent} from './diagnostics/trace'
+import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
+import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
+import {structuralSnapshot,structureDiff,xmlEvidence} from './diagnostics/protocol'
 import { HAGUE_ORIGIN } from './session-contract'
 import { PermitPool } from '../utils/permit-pool'
+import {withNetworkReadRetry} from './read-retry'
 const network=new PermitPool(6)
 
-export interface JsfAction { source:string; form?:string; process?:string; update?:string; event?:string; params?:Record<string,string>; full?:boolean }
-export type HagueFetch=(url:string,init?:RequestInit)=>Promise<Response>
+export interface JsfAction { source:string; form?:string; process?:string; update?:string; event?:string; params?:Record<string,string>; full?:boolean; analysis?:{scriptHash?:string;fingerprint?:string;callType?:string;line?:number;column?:number;confidence?:string} }
+export type HagueFetch=(url:string,init?:RequestInit,trace?:TraceContext,requestId?:string)=>Promise<Response>
 const protectedUrl=(raw:string,base=HAGUE_ORIGIN)=>{
   const url=new URL(raw,base)
   if(url.origin!==HAGUE_ORIGIN||!url.pathname.startsWith('/HagueEFilingWeb/protected/'))throw new Error('接口地址必须是 eHague 官方受保护路径。')
@@ -18,18 +23,35 @@ export class HagueHttpContext {
   reference?:string
   pending=0
   failure?:Error
+  trace?:TraceContext
+  private requestId?:string
+  private observedStatus:number|null=null
+  private observedProtocol='not_observed'
+  diagnosticState(){return{httpStatus:this.observedStatus,protocolStatus:this.observedProtocol,transportStatus:this.observedStatus===null?'not_dispatched':'completed'}}
+  setTrace(trace?:TraceContext):void{this.trace=trace}
   private viewState=''
   private tail:Promise<unknown>=Promise.resolve()
   constructor(readonly id:string,private readonly fetcher:HagueFetch=(url,init)=>fetch(url,init)){}
   private async fetchComplete(url:string,init:RequestInit):Promise<Response>{
     return network.run(async()=>{
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000)
+      const requestId='req-'+crypto.randomUUID(),started=performance.now()
+      this.requestId=requestId;this.observedStatus=null;this.observedProtocol='not_observed'
+      emitTrace(this.trace,'request.dispatched',{requestId,httpMethod:init.method==='POST'?'POST':'GET',urlPath:url,httpStatus:null,transportStatus:'dispatched',businessStatus:'unknown',sideEffectMayHaveOccurred:init.method==='POST'})
       try{
-        const response=await this.fetcher(url,{...init,signal:controller.signal})
-        if(response.url)protectedUrl(response.url,url)
+        const response=await this.fetcher(url,{...init,signal:controller.signal},this.trace,requestId)
+        this.observedStatus=response.status
+        emitTrace(this.trace,'http.response',{requestId,httpMethod:init.method==='POST'?'POST':'GET',urlPath:response.url||url,httpStatus:response.status,transportStatus:'completed',responseType:/xml/i.test(response.headers.get('content-type')??'')?'xml':/html/i.test(response.headers.get('content-type')??'')?'html':/json/i.test(response.headers.get('content-type')??'')?'json':'unknown',businessStatus:'unknown',durationMs:performance.now()-started,evidenceCodes:['HTTP_RESPONSE_OBSERVED']})
+        if(response.url)try{protectedUrl(response.url,url)}catch{throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http',httpStatus:response.status,traceId:this.trace?.traceId})}
         const text=await response.text(),buffered=new Response(text,{status:response.status,headers:response.headers})
         Object.defineProperty(buffered,'url',{value:response.url})
+        emitTrace(this.trace,'request.finished',{requestId,httpStatus:response.status,transportStatus:'completed',businessStatus:'unknown',durationMs:performance.now()-started})
         return buffered
+      }catch(error){
+        const timeout=controller.signal.aborted,aborted=error instanceof DOMException&&error.name==='AbortError'
+        const failure=normalizeDiagnosticError(error,{errorCode:timeout?'NETWORK_TIMEOUT':aborted?'NETWORK_ABORTED':'NETWORK_FAILED',errorStage:'transport',httpStatus:this.observedStatus,transportStatus:timeout?'timeout':aborted?'aborted':'network_error',sideEffectMayHaveOccurred:init.method==='POST'},this.trace)
+        emitTrace(this.trace,'step.uncertain',{...failure.diagnostic,requestId,durationMs:performance.now()-started})
+        throw failure
       }finally{clearTimeout(timer)}
     })
   }
@@ -48,30 +70,68 @@ export class HagueHttpContext {
     if(!field)throw new Error(`接口控件缺失：${id}`)
     field.value=value
   }
-  private async read(response:Response):Promise<void> {
-    if(!response.ok)throw new Error(`eHague HTTP ${response.status}`)
+  private async read(response:Response,submittedForm?:string):Promise<void> {
+    if(!response.ok)throw new HagueDiagnosticError({errorCode:`HTTP_${response.status}`,errorStage:'http',httpStatus:response.status,traceId:this.trace?.traceId})
     if(response.url)protectedUrl(response.url,this.url)
     const text=await response.text()
-    if(!/<partial-response[\s>]/.test(text)){this.load(text,response.url||this.url);return}
+    if(!text.trim())throw new HagueDiagnosticError({errorCode:'EMPTY_RESPONSE',errorStage:'protocol',httpStatus:response.status,protocolStatus:'empty',traceId:this.trace?.traceId})
+    const mime=response.headers.get('content-type')??''
+    if(mime&&!/html|xml|text\/plain/i.test(mime))throw new HagueDiagnosticError({errorCode:'INVALID_MIME',errorStage:'protocol',httpStatus:response.status,protocolStatus:'invalid_mime',traceId:this.trace?.traceId})
+    const before=isDiagnosticModeEnabled()?structuralSnapshot(this.document,this.location.pathname,!!this.reference):undefined,oldViewState=this.viewState
+    if(!/<partial-response[\s>]/.test(text)){
+      if(/<\?xml|^\s*<partial-response/i.test(text))throw new HagueDiagnosticError({errorCode:'INVALID_XML',errorStage:'protocol',httpStatus:response.status,protocolStatus:'invalid_xml',traceId:this.trace?.traceId})
+      this.observedProtocol='html';this.load(text,response.url||this.url);this.recordDom(before,oldViewState,response.status,'html');return
+    }
     const xml=new DOMParser().parseFromString(text,'application/xml')
-    if(xml.querySelector('parsererror,error'))throw new Error(`JSF 响应错误：${xml.querySelector('error-name')?.textContent??'XML 无效'}`)
+    const evidence=xmlEvidence(xml)
+    this.observedProtocol=evidence.parserError?'invalid_xml':evidence.jsfError?'jsf_error':evidence.validationFailed?'jsf_validation_failed':'valid'
+    emitTrace(this.trace,'jsf.parsed',{...evidence,requestId:this.requestId,httpStatus:response.status,protocolStatus:evidence.parserError?'invalid_xml':evidence.jsfError?'jsf_error':evidence.validationFailed?'jsf_validation_failed':'valid',businessStatus:'unknown'})
+    if(evidence.parserError||evidence.jsfError)throw new HagueDiagnosticError({errorCode:evidence.parserError?'INVALID_XML':'JSF_ERROR',errorStage:'protocol',httpStatus:response.status,protocolStatus:evidence.parserError?'invalid_xml':'jsf_error',traceId:this.trace?.traceId})
+    if(evidence.insertCount||evidence.deleteCount)throw new HagueDiagnosticError({errorCode:'PROTOCOL_UNSUPPORTED',errorStage:'protocol',httpStatus:response.status,protocolStatus:'unsupported',traceId:this.trace?.traceId})
+    let missing=0,inactiveUpdateCount=0
     const redirect=xml.querySelector('redirect')?.getAttribute('url')
     if(redirect){await this.get(redirect);return}
+    const applyUpdate=(id:string,content:string):boolean=>{
+      const existing=this.document.getElementById(id),tableBody=this.document.getElementById(`${id}_data`)
+      if(tableBody?.tagName==='TBODY'&&/^\s*(?:<tr\b|$)/i.test(content))tableBody.innerHTML=content
+      else if(existing){
+        // PrimeFaces renders widget initializers beside the component. Replace
+        // the previous initializer with the same ID as part of this update.
+        if(/<script\b/i.test(content)){
+          const fragment=this.document.createElement('template');fragment.innerHTML=content
+          const scriptIds=new Set([...fragment.content.querySelectorAll('script[id]')].map(script=>script.id))
+          for(const old of this.document.querySelectorAll('script[id]'))if(scriptIds.has(old.id)&&!existing.contains(old))old.remove()
+        }
+        existing.outerHTML=content
+      }
+      else return false
+      return true
+    }
+    let deferred:Array<{id:string;content:string}>=[]
     for(const update of xml.querySelectorAll('update')){
       const id=update.id,content=update.textContent??''
       if(/javax.faces.ViewState/.test(id)){
         this.viewState=content
       }else if(id==='javax.faces.ViewRoot'){this.load(content,this.url)}
       else{
-        const existing=this.document.getElementById(id)
-        if(existing)existing.outerHTML=content
+        if(!applyUpdate(id,content))deferred.push({id,content})
       }
+    }
+    // A later parent fragment can mount a previously absent child. Resolve
+    // those dependencies before classifying a genuinely unmounted section.
+    for(;;){const remaining=deferred.filter(({id,content})=>!applyUpdate(id,content));if(remaining.length===deferred.length){deferred=remaining;break}deferred=remaining}
+    for(const {id,content}of deferred){
+      if(this.inactiveSectionUpdate(id,content,submittedForm)||this.inactiveDesignationOutput(id,content,submittedForm))inactiveUpdateCount++
+      else{missing++;emitTrace(this.trace,'dom.updated',{sourceComponent:id,form:submittedForm,unknownComponentCount:1,businessStatus:'unknown'})}
     }
     for(const form of this.document.forms){
       let input=form.querySelector<HTMLInputElement>('input[name="javax.faces.ViewState"]')
       if(!input){input=this.document.createElement('input');input.type='hidden';input.name='javax.faces.ViewState';form.append(input)}
       input.value=this.viewState
     }
+    this.recordDom(before,oldViewState,response.status,'valid',{unknownComponentCount:missing,inactiveUpdateCount,updatedComponents:evidence.updatedComponents})
+    if(missing)throw new HagueDiagnosticError({errorCode:'DOM_TARGET_MISSING',errorStage:'protocol',httpStatus:response.status,protocolStatus:'unsupported',traceId:this.trace?.traceId})
+    if(evidence.validationFailed)throw new HagueDiagnosticError({errorCode:'JSF_VALIDATION_FAILED',errorStage:'protocol',httpStatus:response.status,protocolStatus:'jsf_validation_failed',businessStatus:'rejected',certainty:'rejected',traceId:this.trace?.traceId})
     // Only statically quoted official navigation is recognized; never eval server scripts.
     for(const script of xml.querySelectorAll('eval')){
       const target=/(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/.exec(script.textContent??'')?.[1]
@@ -83,12 +143,36 @@ export class HagueHttpContext {
     for(const extension of xml.querySelectorAll('extension')){
       let args:unknown
       try{args=JSON.parse(extension.textContent??'')}catch{continue}
-      if(args&&typeof args==='object'&&'validationFailed'in args&&args.validationFailed===true)throw new Error('原站 JSF 校验未通过，未确认保存；请核对本步骤必填字段。')
+      if(args&&typeof args==='object'&&'validationFailed'in args&&args.validationFailed===true)throw new HagueDiagnosticError({errorCode:'JSF_VALIDATION_FAILED',errorStage:'protocol',httpStatus:response.status,protocolStatus:'jsf_validation_failed',businessStatus:'rejected',certainty:'rejected',traceId:this.trace?.traceId})
     }
+  }
+  /** PrimeFaces may refresh a passive output panel in a section not mounted in this view. */
+  private inactiveSectionUpdate(id:string,content:string,submittedForm?:string):boolean {
+    const owner=id.split(':')[0]
+    if(!submittedForm||!['ApplicantForm','Designationform','locarnoClassForm','designForm','refDesForm','DescriptionForm','CreatorForm','UsClaimForm','PriorityForm','ExhibitionForm','DisclosureForm','PublicationForm','signForm'].includes(owner))return false
+    // JSF ignores updates for unmounted tabs. Do not materialize their controls
+    // into the active view; refreshOptionsUI will mount the canonical section.
+    const template=this.document.createElement('template');template.innerHTML=content
+    const root=template.content.firstElementChild
+    const onlyWidgetInitializers=[...template.content.children].slice(1).every(node=>node.tagName==='SCRIPT')
+    return onlyWidgetInitializers&&root?.id===id&&(id===owner?owner!==submittedForm&&root.tagName==='FORM':root.matches('div.ui-outputpanel')&&/:(?:j_idt\d+|creatorIssuesPanel)$/.test(id)||id==='designForm:designsDataTable'&&root.matches('div.ui-datatable'))
+  }
+  private inactiveDesignationOutput(id:string,content:string,submittedForm?:string):boolean {
+    if(!['ApplicantForm','designForm'].includes(submittedForm??'')||!id.startsWith('Designationform:'))return false
+    const template=this.document.createElement('template');template.innerHTML=content
+    const root=template.content.firstElementChild
+    if(template.content.children.length!==1||!root?.matches('div.ui-outputpanel')||root.id!==id)return false
+    if([...template.content.childNodes].some(n=>n.nodeType===3&&n.textContent?.trim()))return false
+    if(root.querySelector('a,form,input,select,textarea,button,script,iframe,object,embed,svg,math,link,style,base,meta'))return false
+    return ![root,...root.querySelectorAll('*')].some(node=>[...node.attributes].some(a=>/^on/i.test(a.name)||a.name==='srcdoc'))
+  }
+  private recordDom(before:ReturnType<typeof structuralSnapshot>|undefined,oldViewState:string,status:number,protocolStatus:string,extra:Partial<TraceEvent>={}):void{
+    if(!before)return
+    try{const after=structuralSnapshot(this.document,this.location.pathname,!!this.reference);emitTrace(this.trace,'dom.updated',{requestId:this.requestId,httpStatus:status,protocolStatus,businessStatus:'unknown',before,after,diff:structureDiff(before,after),viewStateChanged:oldViewState!==this.viewState,viewStateLength:this.viewState.length,viewStatePresent:!!this.viewState,domEvidenceSource:'application_model',domStatus:structureDiff(before,after).length?'model_changed':'model_unchanged',domReplaced:true,...extra})}catch{/* Diagnostics are optional. */}
   }
   async get(path=this.url):Promise<void> {
     const url=protectedUrl(path,this.url)
-    await this.read(await this.fetchComplete(url.href,{method:'GET',credentials:'include',cache:'no-store'}))
+    await this.read(await withNetworkReadRetry(()=>this.fetchComplete(url.href,{method:'GET',credentials:'include',cache:'no-store'})))
     if(!this.document.querySelector('input[name="javax.faces.ViewState"]'))throw new Error('接口未返回有效 JSF ViewState，需重新验证登录。')
   }
   controls(form:HTMLFormElement):URLSearchParams {
@@ -108,6 +192,8 @@ export class HagueHttpContext {
       const source=this.document.getElementById(action.source)
       const form=(action.form?this.document.getElementById(action.form):source?.closest('form')) as HTMLFormElement|null
       if(!form)throw new Error(`接口表单缺失：${action.source}`)
+      emitTrace(this.trace,'request.prepared',{sourceComponent:action.source,form:form.id,process:action.process,update:action.update,event:action.event,parameterNames:Object.keys(action.params??{}),httpMethod:'POST',businessStatus:'pending'})
+      if(action.analysis)emitTrace(this.trace,'protocol.analyzed',{astCallType:action.analysis.callType,protocolFingerprint:action.analysis.fingerprint,astConfidence:action.analysis.confidence,sourceLocation:{scriptHash:action.analysis.scriptHash,line:action.analysis.line,column:action.analysis.column},evidenceCodes:['PROTOCOL_STATIC']})
       const body=this.controls(form)
       if(!action.full){
         body.set('javax.faces.partial.ajax','true');body.set('javax.faces.source',action.source)
@@ -120,7 +206,7 @@ export class HagueHttpContext {
       const url=protectedUrl(form.getAttribute('action')||this.url,this.url)
       let payload:BodyInit=body.toString()
       if(upload){const multipart=new FormData();for(const[k,v]of body)multipart.append(k,v);multipart.append(upload.field,upload.file,upload.file.name);payload=multipart}
-      await this.read(await this.fetchComplete(url.href,{method:'POST',credentials:'include',headers:{...(upload?{}:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}),...(action.full?{}:{'Faces-Request':'partial/ajax','X-Requested-With':'XMLHttpRequest'})},body:payload}))
+      await this.read(await this.fetchComplete(url.href,{method:'POST',credentials:'include',headers:{...(upload?{}:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}),...(action.full?{}:{'Faces-Request':'partial/ajax','X-Requested-With':'XMLHttpRequest'})},body:payload}),form.id)
     }).catch((error:unknown)=>{this.failure=error instanceof Error?error:new Error('接口操作结果待核对');throw this.failure}).finally(()=>{this.pending--})
     this.tail=task.catch(()=>{})
     return task

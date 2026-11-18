@@ -15,6 +15,7 @@ export async function fitAvatarBlob(file: File): Promise<Blob> {
 
 /** 缓存不可用时才把小图收成 data URL。 */
 export async function fitAvatarFile(file: File): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   return fitAvatar(file, async (canvas, quality) => {
     const image = canvas.toDataURL('image/webp', quality)
     return image.length <= MAX_AVATAR_DATA_URL ? image : null

@@ -12,6 +12,7 @@ describe('EASY Runtime 请求生命周期', () => {
   it('blocks file requests until a session is explicitly authenticated', async () => {
     let fileCalls = 0
     const fetcher: typeof fetch = async url => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       if (String(url).endsWith('Login.ashx')) return new Response(JSON.stringify(authenticated))
       fileCalls++
       return new Response(JSON.stringify(fileResponse('文件 A')))
@@ -29,8 +30,10 @@ describe('EASY Runtime 请求生命周期', () => {
     const pending = new Map<string, (response: Response) => void>()
     let fileCalls = 0
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       if (String(_url).endsWith('Login.ashx')) return new Response(JSON.stringify(authenticated))
       fileCalls++
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const key = new URLSearchParams(String(init?.body)).get('case_volume')!
       return new Promise(resolve => pending.set(key, resolve))
     }
@@ -52,6 +55,7 @@ describe('EASY Runtime 请求生命周期', () => {
     let resolveFile: ((response: Response) => void) | undefined
     let expired = false
     const fetcher: typeof fetch = async url => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       if (String(url).endsWith('Login.ashx')) return new Response(JSON.stringify(authenticated))
       if (expired) return new Response(JSON.stringify({
         TableRows: null, TableRowsCount: '0', ClientInfo: { IsLogin: false, Status: false }
@@ -75,7 +79,9 @@ describe('EASY Runtime 请求生命周期', () => {
   it('loads saved queries after confirming the current page session', async () => {
     const calls: string[] = []
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call') ?? ''
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       calls.push(`${String(url).split('/').pop()}:${call}`)
       if (call === 'GetUserModel') return new Response(JSON.stringify(authenticated))
       return new Response(JSON.stringify({
@@ -91,6 +97,7 @@ describe('EASY Runtime 请求生命周期', () => {
   it('returns saved queries from SearchQueryHisList when the local session flag is not authenticated', async () => {
     const calls: string[] = []
     const fetcher: typeof fetch = async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       const call = new URLSearchParams(String(init?.body)).get('Call') ?? ''
       calls.push(call)
       if (call === 'GetUserModel') {

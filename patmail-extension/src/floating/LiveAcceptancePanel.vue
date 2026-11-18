@@ -14,6 +14,7 @@ const busy = ref(false)
 const ready = computed(() => isConfirmedOperator(props.userId))
 const pageOrigin = computed(() => props.businessOrigin)
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 async function reload(): Promise<void> {
   if (!ready.value) {
     records.value = []

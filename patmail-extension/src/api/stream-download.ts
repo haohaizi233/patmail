@@ -24,6 +24,7 @@ export interface StreamDownloadOptions {
 }
 
 function safeEntryName(value: string, used: Set<string>): string {
+  // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
   const clean = value.replace(/[\\/<>:"|?*\x00-\x1f]+/g, '_').replace(/^[. ]+|[. ]+$/g, '') || '文件'
   const dot = clean.lastIndexOf('.')
   const stem = dot > 0 ? clean.slice(0, dot) : clean
@@ -59,10 +60,12 @@ export async function streamDownloadFiles(
   }
   const cancel = () => fail(options.signal?.reason ?? new Error('下载已取消。'))
   const untilAbort = <T>(operation: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
     const aborted = () => { signal.removeEventListener('abort', aborted); reject(signal.reason) }
     if (signal.aborted) aborted()
     else signal.addEventListener('abort', aborted, { once: true })
     operation.then(value => { signal.removeEventListener('abort', aborted); resolve(value) }, error => {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       signal.removeEventListener('abort', aborted); reject(error)
     })
   })

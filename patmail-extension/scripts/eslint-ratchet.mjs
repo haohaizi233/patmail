@@ -17,12 +17,15 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { collectExemptions, compareExemptions } from './eslint-exemptions.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const baselinePath = join(root, 'ci', 'eslint-baseline.json')
+const exemptionsPath = join(root, 'ci', 'eslint-exemptions.json')
 const reportDir = join(root, 'test-results', 'ci')
 const reportPath = join(reportDir, 'eslint.json')
 const update = process.argv.includes('--update')
+const updateExemptions = process.argv.includes('--update-exemptions')
 
 const eslintBin = join(root, 'node_modules', 'eslint', 'bin', 'eslint.js')
 if (!existsSync(eslintBin)) {
@@ -30,6 +33,8 @@ if (!existsSync(eslintBin)) {
   process.exit(1)
 }
 mkdirSync(reportDir, { recursive: true })
+// Never reuse a previous report after an interrupted or failed ESLint process.
+writeFileSync(reportPath, '')
 const run = spawnSync(
   process.execPath,
   [eslintBin, '.', '-f', 'json', '--no-error-on-unmatched-pattern', '-o', reportPath],
@@ -39,9 +44,9 @@ const run = spawnSync(
   },
 )
 // ESLint 退出码：0 无问题，1 有问题，2 运行/配置错误。配置错误必须直接失败。
-if (run.status === 2) {
+if (run.status !== 0 && run.status !== 1) {
   console.error(run.stderr || run.stdout)
-  console.error('ESLint 运行或配置出错（退出码 2）。')
+  console.error(`ESLint 未正常完成（退出码 ${run.status}，信号 ${run.signal ?? '无'}）。`)
   process.exit(2)
 }
 if (!existsSync(reportPath)) {
@@ -49,6 +54,19 @@ if (!existsSync(reportPath)) {
   process.exit(1)
 }
 const files = JSON.parse(readFileSync(reportPath, 'utf8'))
+const exemptions = collectExemptions(files, root)
+if (updateExemptions) {
+  writeFileSync(exemptionsPath, `${JSON.stringify({ version: 1, exemptions }, null, 2)}\n`)
+  console.log(`豁免登记已显式更新：${exemptions.length} 项；请审查并提交登记差异。`)
+}
+const exemptionViolations = compareExemptions(
+  exemptions,
+  existsSync(exemptionsPath) ? JSON.parse(readFileSync(exemptionsPath, 'utf8')).exemptions : undefined,
+)
+if (exemptionViolations.length) {
+  for (const violation of exemptionViolations) console.error(violation)
+  process.exit(1)
+}
 const counts = {}
 let totalErrors = 0
 let totalWarnings = 0
@@ -74,7 +92,11 @@ const current = {
   rules: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))),
 }
 
-if (update || !existsSync(baselinePath)) {
+if (!update && !existsSync(baselinePath)) {
+  console.error('缺少 lint 基线；不会自动接受当前告警。请显式运行 --update。')
+  process.exit(1)
+}
+if (update) {
   mkdirSync(dirname(baselinePath), { recursive: true })
   writeFileSync(baselinePath, `${JSON.stringify(current, null, 2)}\n`)
   console.log(`基线已写入 ${baselinePath}（errors=${totalErrors} warnings=${totalWarnings}）。`)

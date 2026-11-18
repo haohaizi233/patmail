@@ -120,6 +120,7 @@ try {
     tab = (await worker.evaluate(() => chrome.tabs.query({}))).find(item => item.url?.endsWith('/fixture'))
     try {
       if ((await worker.evaluate(id => chrome.tabs.sendMessage(id, { type: 'PING' }), tab.id))?.type === 'PONG') break
+    // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
     } catch {}
     await new Promise(resolve => setTimeout(resolve, 100))
   }
@@ -140,6 +141,7 @@ try {
       { timeout: 60000 },
     )
   }
+  // eslint-disable-next-line require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
   const start = async progressId =>
     worker.evaluate(
       ({ tabId, files, taskId, progressId }) =>

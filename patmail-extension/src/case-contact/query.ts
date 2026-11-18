@@ -87,6 +87,7 @@ export function searchHits(data: unknown): { hits: CaseHit[]; total: number } | 
     if (!volume || !isQueryGuid(caseId)) continue
     hits.push({ volume, caseId })
   }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const first = data.TableRows[0]
   const raw = isRecord(first) ? first.tablerowscount : hits.length
   const total = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : hits.length

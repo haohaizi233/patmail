@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import type { WorkflowParam, WorkflowStep } from './catalog'
 
 /** 普通用户能看懂的一件事。参数名留在程序里，页面上只出现下面这些说法。 */

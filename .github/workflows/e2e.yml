@@ -79,7 +79,7 @@ jobs:
             patmail-extension/test-results/*.png
             patmail-extension/test-results/*.txt
             patmail-extension/test-results/*.json
-          retention-days: 7
+          retention-days: 3
 
   e2e-legacy:
     name: Legacy Compatibility（旧桥接下载协议）
@@ -122,7 +122,7 @@ jobs:
             patmail-extension/test-results/*.png
             patmail-extension/test-results/*.txt
             patmail-extension/test-results/*.json
-          retention-days: 7
+          retention-days: 3
 
   coverage:
     name: Coverage
@@ -144,7 +144,7 @@ jobs:
           path: |
             patmail-extension/test-results/coverage
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   reproducible-build:
     name: Reproducible Build
@@ -162,7 +162,7 @@ jobs:
           name: report-repro
           path: |
             patmail-extension/test-results/ci
-          retention-days: 14
+          retention-days: 3
 
   e2e-gate:
     name: Full Gate
@@ -198,4 +198,4 @@ jobs:
           path: |
             patmail-extension/test-results/ci/summary.json
             patmail-extension/test-results/ci/summary.md
-          retention-days: 30
+          retention-days: 7

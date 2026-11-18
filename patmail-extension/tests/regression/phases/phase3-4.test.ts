@@ -100,7 +100,7 @@ describe('Phase 3.4 任务权威、依赖范围与文件来源', () => {
       checkpoints: [{ stage: 'MAIL_CREATE' as const, itemId: '', requestSent: false, responseReceived: false, verified: true, easyMailId: '', at: '', note: '' }]
     }
     const rejected = await handleAuthorityMessage(
-      { type: MessageType.SaveTask, payload: { task: forged as unknown as Record<string, unknown> } },
+      { type: MessageType.SaveTask, payload: { task: forged } },
       { ledger: new ExecutionLedger(memoryTransactionStore(), 'owner'), tasks: new SerialTaskStore(null), evidence: new MemoryEvidenceStore() }
     )
     if (rejected?.type !== MessageType.TaskResult) throw new Error('save')
@@ -108,7 +108,7 @@ describe('Phase 3.4 任务权威、依赖范围与文件来源', () => {
     expect(rejected.payload.message).toContain('不能由页面声明子任务完成')
     const verifiedOnly = { ...built, status: 'READY' as const, checkpoints: forged.checkpoints }
     const second = await handleAuthorityMessage(
-      { type: MessageType.SaveTask, payload: { task: verifiedOnly as unknown as Record<string, unknown> } },
+      { type: MessageType.SaveTask, payload: { task: verifiedOnly } },
       { ledger: new ExecutionLedger(memoryTransactionStore(), 'owner'), tasks: new SerialTaskStore(null), evidence: new MemoryEvidenceStore() }
     )
     if (second?.type !== MessageType.TaskResult) throw new Error('verified')
@@ -147,13 +147,13 @@ describe('Phase 3.4 任务权威、依赖范围与文件来源', () => {
     const current = input(profiles, templates)
     const built = buildTask(current)
     expect(built.queryDependencies?.map(item => item.customerProfileId)).toEqual(['profile-a'])
-    const otherCustomer = validateTask(built, { ...current, templates: [templates[0]!, { ...templates[1]!, fields: { filetype: '已改' } }] })
+    const otherCustomer = validateTask(built, { ...current, templates: [templates[0], { ...templates[1], fields: { filetype: '已改' } }] })
     expect(otherCustomer.status).not.toBe('STALE')
-    const ownTemplate = validateTask(built, { ...current, templates: [{ ...templates[0]!, fields: { filetype: '已改' } }, templates[1]!] })
+    const ownTemplate = validateTask(built, { ...current, templates: [{ ...templates[0], fields: { filetype: '已改' } }, templates[1]] })
     expect(ownTemplate.status).toBe('STALE')
-    const removed = validateTask(built, { ...current, profiles: [profiles[1]!] })
+    const removed = validateTask(built, { ...current, profiles: [profiles[1]] })
     expect(removed.status).toBe('STALE')
-    const overrides = validateTask(built, { ...current, profiles: [{ ...profiles[0]!, overrides: { case_volume: 'CHANGED' } }, profiles[1]!] })
+    const overrides = validateTask(built, { ...current, profiles: [{ ...profiles[0], overrides: { case_volume: 'CHANGED' } }, profiles[1]] })
     expect(overrides.status).toBe('STALE')
     const legacy = { ...built }
     delete legacy.queryDependencies

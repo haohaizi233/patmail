@@ -919,4 +919,51 @@ describe('file query durable remount', () => {
     button('刷新').click(); await settle(); button('继续下载').click(); await settle()
     expect(document.body.textContent).toContain('下载已暂停')
   })
+
+  it('勾选所有账单：仅勾选符合「账单号+我方案号+事项+账单日期」命名的账单文件', async () => {
+    const mixedFiles = [
+      { fileId: 'b-1', fileName: '202605182 PA2510821PCT-EP 答复欧洲检索报告 20261110.pdf', caseVolume: 'PA2510821PCT-EP', fileNo: 'NO1' },
+      { fileId: 'b-2', fileName: 'Credit Memo PA2310398CN-US RCE退款20261111.pdf', caseVolume: 'PA2310398CN-US', fileNo: 'NO2' },
+      { fileId: 'not-1', fileName: 'PA2631801CN-HAGUE 海牙外观缴费通知书.pdf', caseVolume: 'PA2631801CN-HAGUE', fileNo: 'NO3' },
+      { fileId: 'not-2', fileName: '云图发票.pdf', caseVolume: 'PA2631761CN-US', fileNo: 'NO4' },
+      { fileId: 'not-3', fileName: '案例费用清单-云图.xls', caseVolume: 'PA2631801CN-HAGUE', fileNo: 'NO5' }
+    ]
+    const request: MessageBridge['request'] = async message => {
+      if (message.type === MessageType.SearchFiles) {
+        return {
+          type: MessageType.SearchFilesResult,
+          payload: {
+            ok: true,
+            data: {
+              pageIndex: 1,
+              pageSize: 100,
+              total: 5,
+              totalPages: 1,
+              querySessionId: 'sess-bill-1',
+              items: mixedFiles
+            }
+          }
+        }
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }
+
+    const selected = mount(request)
+    button('测试查询').click()
+    await settle()
+
+    expect(button('勾选所有账单')).toBeDefined()
+    button('勾选所有账单').click()
+    await settle()
+
+    // 只有 b-1 和 b-2 被勾选，not-1/not-2/not-3 不被勾选
+    expect(Object.keys(selected.value)).toHaveLength(2)
+    expect(selected.value['b-1']).toBeDefined()
+    expect(selected.value['b-2']).toBeDefined()
+    expect(selected.value['not-1']).toBeUndefined()
+    expect(selected.value['not-2']).toBeUndefined()
+    expect(selected.value['not-3']).toBeUndefined()
+    expect(document.body.textContent).toContain('已选 2 个文件')
+    expect(document.body.textContent).toContain('已勾选 2 个账单文件')
+  })
 })

@@ -1,0 +1,21 @@
+export class HagueResearchDiagnostics {
+ constructor(deep:any,send:(method:string,params:any,sessionId:string)=>Promise<any>,log:(kind:string,event:any)=>void,options?:{worker?:any;now?:()=>number;baseline?:any})
+ observerStateProvider?:()=>string
+ send:any
+ queue:any[]
+ mode:string
+ requests:Map<string,any>
+ counts:Record<string,number>
+ busy:number
+ bytes:number
+ baseline?:any
+ status():any
+ enable(target:any,mode?:string):Promise<any>
+ disable():Promise<any>
+ emit(phase:string,fields:any):void
+ request(target:any,sessionId:string,params:any):void
+ response(sessionId:string,params:any):void
+ finished(sessionId:string,params:any):Promise<void>
+ forget(sessionId:string,params:any):void
+ bodyCommandAllowed(params:any,sessionId:string):boolean
+}

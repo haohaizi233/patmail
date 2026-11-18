@@ -54,7 +54,7 @@ export const progressDialog = reactive({
   done: 0,
   total: 1,
   finished: false,
-  counts: { success: 0, failed: 0, abnormal: 0, skipped: 0 } as ProgressCounts,
+  counts: { success: 0, failed: 0, abnormal: 0, skipped: 0 },
   notes: [] as ProgressNote[]
 })
 

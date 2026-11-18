@@ -13,6 +13,7 @@ import type { FileDownloadSelection } from '../mail/download-name'
 import { useWorkspace } from '../app/composables/useWorkspace'
 
 const props = withDefaults(defineProps<{
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   pageOrigin?: string
   showSession?: boolean
   seed?: Record<string, string> | null

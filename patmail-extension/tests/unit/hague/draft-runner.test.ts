@@ -1,11 +1,13 @@
+import {beforeSummaryExport} from '../../../src/hague/reproductions'
 import { expect,it,vi } from 'vitest'
-import { draftSteps,runDraftPlan } from '../../../src/hague/draft-runner'
+import { draftSteps,runDraftPlan,draftPlanKey } from '../../../src/hague/draft-runner'
+import {HagueDiagnosticError} from '../../../src/hague/diagnostics/errors'
 import type { DraftPlan } from '../../../src/hague/draft-plan'
 const plan:DraftPlan={reference:'PO1HAGUE',applicants:[],creators:[],parties:['EM'],publicationMonths:6,priorities:[],locarno:'28',description:'text',designs:[]}
 it('stops on an uncertain write, preserving the WIPO reference and never retrying or printing',async()=>{
  const call=vi.fn(async(c:{op:string})=>{if(c.op==='inspect')return {ok:true,page:'application' as const,reference:'123',documentId:'doc'};throw new Error('network lost')})
  const save=vi.fn(async(_value:unknown)=>{})
- await expect(runDraftPlan(plan,7,{call,save},undefined,{tabId:7,reference:'123',documentId:'doc',next:2,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toThrow('network lost')
+ await expect(runDraftPlan(plan,7,{call,save},undefined,{tabId:7,reference:'123',documentId:'doc',next:2,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toMatchObject({diagnostic:{errorCode:'BUSINESS_UNCONFIRMED',httpStatus:null}})
  expect(call.mock.calls.filter(([c])=>c.op!=='inspect')).toHaveLength(1)
  expect(save.mock.calls.at(-1)?.[0]).toMatchObject({reference:'123',next:2,status:'uncertain'})
 })
@@ -26,10 +28,10 @@ it('adds every applicant independently and completes each image group before add
  expect(grouped).toEqual([
   {op:'design',index:0,subclass:'3',product:'First product'},
   {op:'upload',name:'1.1.jpg',base64:'',mime:'image/jpeg',count:0},{op:'legend',name:'1.1.jpg',label:'Front'},
-  {op:'upload',name:'1.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'1.2.jpg',label:'Front'},{op:'closeDesign'},
+  {op:'upload',name:'1.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'1.2.jpg',label:'Front'},{op:'closeDesign',index:0,count:2,subclass:'3',product:'First product'},
   {op:'design',index:1,subclass:'3',product:'Second product'},
   {op:'upload',name:'2.1.jpg',base64:'',mime:'image/jpeg',count:0},{op:'legend',name:'2.1.jpg',label:'Front'},
-  {op:'upload',name:'2.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'2.2.jpg',label:'Front'},{op:'closeDesign'}
+  {op:'upload',name:'2.2.jpg',base64:'',mime:'image/jpeg',count:1},{op:'legend',name:'2.2.jpg',label:'Front'},{op:'closeDesign',index:1,count:2,subclass:'3',product:'Second product'}
  ])
 })
 it('recovers a completed final save using the exact draft-list receipt without another write',async()=>{
@@ -40,6 +42,57 @@ it('recovers a completed final save using the exact draft-list receipt without a
 })
 it('resumes a confirmed running boundary at its recorded next step without skipping it',async()=>{
  const call=vi.fn(async(c:{op:string})=>{if(c.op==='inspect')return {ok:true,page:'application' as const,reference:'123',documentId:'doc'};throw new Error('stop at first write')})
- await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'running',stage:'创建新草稿'})).rejects.toThrow('stop at first write')
+ await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'running',stage:'创建新草稿'})).rejects.toMatchObject({diagnostic:{errorCode:'BUSINESS_UNCONFIRMED',httpStatus:null}})
  expect(call.mock.calls[1]?.[0].op).toBe(draftSteps(plan)[2].command.op)
+})
+
+it.each([0,1])('advances a verified existing allocation after %i prior read attempts without another create',async priorAttempts=>{
+ const controller=new AbortController()
+ const recover=vi.fn(async()=>({outcome:'completed' as const,receipt:{ok:true,reference:'123',page:'application' as const,documentId:'existing'}}))
+ const call=vi.fn(async(_command:{op:string})=>({ok:true,reference:'123',page:'application' as const,documentId:'existing'}))
+ const result=await runDraftPlan(plan,7,{call,recover,save:async state=>{if(state.next===2)controller.abort()}},controller.signal,{tabId:7,reference:'123',next:1,total:draftSteps(plan).length,status:'uncertain',stage:'创建新草稿',planKey:draftPlanKey(plan),recoveryAttempts:{'1':priorAttempts}})
+ expect(recover).toHaveBeenCalledOnce();expect(call.mock.calls.every(([command])=>command.op==='inspect')).toBe(true)
+ expect(result).toMatchObject({reference:'123',next:2,status:'stopped'})
+})
+
+it.each(['completed','retry','missing-count'] as const)('accepts only verified readback of an existing applicant: %s',async kind=>{
+ const a={name:'Example Ltd.',address:'One Road',city:'City',region:'Region',postalCode:'12345',country:'China'}
+ const applicantPlan={...plan,applicants:[a]};const controller=new AbortController()
+ const call=vi.fn(async(_command:{op:string})=>({ok:true,reference:'123',page:'application' as const,applicants:1}))
+ const recover=vi.fn(async()=>({outcome:kind==='retry'?'retry' as const:'completed' as const,receipt:{ok:true,reference:'123',page:'application' as const,...(kind==='missing-count'?{}:{applicants:1})}}))
+ const job=runDraftPlan(applicantPlan,7,{call,recover,save:async state=>{if(state.next===3)controller.abort()}},controller.signal,{tabId:7,reference:'123',next:2,total:draftSteps(applicantPlan).length,status:'uncertain',stage:'申请人1',planKey:draftPlanKey(applicantPlan),recoveryAttempts:{'2':1}})
+ if(kind==='completed')expect(await job).toMatchObject({next:3,status:'stopped'});else await expect(job).rejects.toThrow(/核对/)
+ expect(call.mock.calls.every(([c])=>c.op==='inspect')).toBe(true);expect(recover).toHaveBeenCalledOnce()
+})
+
+it('allows a fresh explicit canonical recovery after a previous run could not confirm its receipt',async()=>{
+ const controller=new AbortController(),recover=vi.fn(async()=>({outcome:'completed' as const,receipt:{ok:true,page:'application' as const,reference:'123'}}))
+ const recoveryPlan={...plan,designs:[{number:'1',subclass:'3',product:'Product',images:[]}]};const locIndex=draftSteps(recoveryPlan).findIndex(s=>s.command.op==='design')
+ await runDraftPlan(recoveryPlan,7,{call:async()=>({ok:true,page:'application',reference:'123'}),recover,save:async value=>{if(value.next===locIndex+1)controller.abort()}},controller.signal,{tabId:7,reference:'123',next:locIndex,total:draftSteps(recoveryPlan).length,status:'uncertain',stage:'Design',planKey:draftPlanKey(recoveryPlan),recoveryAttempts:{[locIndex]:1}})
+ expect(recover).toHaveBeenCalledTimes(1)
+})
+
+
+it('resumes a local PDF export without repeating prior WIPO writes',async()=>{
+ const index=draftSteps(plan).findIndex(s=>s.command.op==='print'),controller=new AbortController(),commands:string[]=[]
+ const result=await runDraftPlan(plan,7,{call:async c=>{commands.push(c.op);if(c.op==='print')controller.abort();return {ok:true,page:'summary',reference:'123',downloadId:42}},save:async()=>{}},controller.signal,{tabId:7,reference:'123',next:index,total:draftSteps(plan).length,status:'uncertain',stage:'Print',planKey:draftPlanKey(plan)})
+ expect(commands).toEqual(['inspect','print']);expect(result.downloadId).toBe(42)
+})
+
+it('checks an already settled HTTP navigation before waiting for a background-tab timer',async()=>{
+ vi.useFakeTimers();const controller=new AbortController();let inspections=0
+ const job=runDraftPlan(plan,7,{transport:'http',call:async c=>{if(c.op==='inspect'){inspections++;if(inspections===2)controller.abort();return{ok:true,page:inspections===1?'portfolio':'application',reference:'123'}}return{ok:true,page:'application',reference:'123'}},save:async()=>{}},controller.signal,{tabId:7,next:1,total:draftSteps(plan).length,status:'stopped',stage:'create'})
+ try{await vi.advanceTimersByTimeAsync(0);expect(inspections).toBe(2)}finally{await vi.advanceTimersByTimeAsync(250);await job;vi.useRealTimers()}
+})
+
+it('keeps the actionable receipt error for the UI while retaining sanitized diagnostics',async()=>{
+ const call=vi.fn(async(c:{op:string})=>c.op==='inspect'?{ok:true,page:'application' as const,reference:'123'}:{ok:false,error:'优先权记录数量尚未确认，请核对回执。',diagnosticError:new HagueDiagnosticError({errorCode:'BUSINESS_UNCONFIRMED',errorStage:'business',httpStatus:null}).diagnostic})
+ await expect(runDraftPlan(plan,7,{call,save:async()=>{}},undefined,{tabId:7,reference:'123',next:2,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toThrow('优先权记录数量尚未确认')
+})
+
+it('does not recover past a failed reproduction export prerequisite or advance the Summary checkpoint',async()=>{
+ const next=draftSteps(plan).findIndex(s=>s.command.op==='summary'),recover=vi.fn(),save=vi.fn(async(_v:unknown)=>{})
+ const call=vi.fn(async(c:{op:string})=>{if(c.op==='inspect')return{ok:true,page:'application' as const,reference:'123',documentId:'doc'};await beforeSummaryExport(async()=>{throw new Error('图纸下载中断')});return{ok:true}})
+ await expect(runDraftPlan(plan,7,{call,save,recover},undefined,{tabId:7,reference:'123',documentId:'doc',next,total:draftSteps(plan).length,status:'stopped',stage:''})).rejects.toMatchObject({diagnostic:{errorCode:'REPRODUCTIONS_EXPORT_FAILED'}})
+ expect(recover).not.toHaveBeenCalled();expect(save.mock.calls.at(-1)?.[0]).toMatchObject({status:'stopped',next});expect(call.mock.calls.filter(([c])=>c.op!=='inspect')).toHaveLength(1)
 })

@@ -120,6 +120,7 @@ async function departmentColumn(transport: EasyTransport): Promise<{ ok: true; c
   const client = readClientInfo(loaded.data.ClientInfo)
   if (!client.ok || client.data.IsLogin === false) return { ok: false, message: '读取所属部门时登录已失效。' }
   if (!Array.isArray(loaded.data.column_field_list)) return { ok: false, message: '所属部门没有读到，发明人列没有加。' }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const hit = loaded.data.column_field_list.find(row => isRecord(row) && textField(row, 'column_name') === DEPT_LABEL && /^column_\d+$/.test(textField(row, 'column_id')))
   if (!isRecord(hit)) return { ok: false, message: '案件上没有名为所属部门的栏位，发明人列没有加。' }
   return { ok: true, columnId: textField(hit, 'column_id') }

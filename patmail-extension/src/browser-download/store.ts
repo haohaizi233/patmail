@@ -17,6 +17,7 @@ function blobKey(blob: BrowserBlob): string {
   return String(blob)
 }
 function request<T>(req: IDBRequest<T>): Promise<T> {
+  // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
   return new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error) })
 }
 /** IDB 的 get/getAll 等签名返回 any；统一在边界收窄成明确记录类型，避免 any 流进业务逻辑。 */
@@ -53,6 +54,7 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
         }
       }
       req.onsuccess = () => { req.result.onversionchange = () => req.result.close(); resolve(req.result) }
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       req.onerror = () => reject(req.error)
       req.onblocked = () => reject(new Error('Download cache database upgrade blocked'))
     })
@@ -64,6 +66,7 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
     let failure: unknown
     const done = new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve()
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       tx.onabort = () => reject(failure ?? tx.error ?? new Error('Cache transaction aborted'))
       tx.onerror = () => { /* onabort is the authoritative failure event */ }
     })
@@ -85,6 +88,7 @@ export function createBrowserDownloadStore(factory: IDBFactory = indexedDB): Bro
     for (const name of ['blobs', 'chunks', 'names']) {
       await new Promise<void>((resolve, reject) => {
         const cursor = tx.objectStore(name).index('taskId').openCursor(IDBKeyRange.only(taskId))
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
         cursor.onerror = () => reject(cursor.error)
         cursor.onsuccess = () => { const row = cursor.result; if (!row) return resolve(); row.delete(); row.continue() }
       })

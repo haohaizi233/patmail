@@ -5,6 +5,7 @@ interface Target { taskId: string; owner: string; frame?: HTMLIFrameElement }
 const targets = new Map<string, Target>()
 let listeningRuntime: unknown
 
+// eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
 export async function registerNativeDownloadTarget(taskId: string, owner: string): Promise<string> {
   releaseNativeDownloadTarget(taskId)
   const runtime = globalThis.chrome?.runtime

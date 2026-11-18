@@ -61,7 +61,7 @@ describe('任务身份', () => {
     expect(sha256Hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
     const files = [file(fileA, 'profile-a', '专利证书'), file(fileB, 'profile-a', '专利证书')]
     const first = buildTask(input(files))
-    const second = buildTask(input([files[1]!, files[0]!]))
+    const second = buildTask(input([files[1], files[0]]))
     expect(first.taskId).not.toBe(second.taskId)
     expect(first.taskId).toMatch(/^[0-9a-f-]{36}$/i)
     expect(first.taskFingerprint).toBe(second.taskFingerprint)
@@ -167,6 +167,7 @@ describe('Dry-run 与契约', () => {
   it('plans stages without calling fetch and does not promote mock or 502 evidence', () => {
     const calls: string[] = []
     const transport = new EasyTransport(origin, { fetcher: async (_url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       calls.push(new URLSearchParams(String(init?.body)).get('Call') ?? 'fetch')
       throw new Error('dry-run 不应访问网络')
     } })

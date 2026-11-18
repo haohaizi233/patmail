@@ -1,3 +1,10 @@
+import {ResearchOutputBudget,safeAnalysisOutput} from './hague-research-output.mjs'
+import { HagueResearchDiagnostics } from './hague-research.mjs'
+import { AnalysisWorker } from './hague-research-broker.mjs'
+import { CdpUiBridge } from './hague-diagnostics-bridge.mjs'
+import { observerEventsToTraces } from '../src/hague/diagnostics/observer-adapter.mjs'
+import { HagueDeepDiagnostics, safeHagueUrl, networkMetadata, correlateRequest, safeHagueSnapshotText, safeDraftTextSummary } from './hague-diagnostics.mjs'
+import { sanitizeTraceEvent } from '../src/hague/diagnostics/schema.mjs'
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -537,11 +544,11 @@ export function safeNetworkUrl(value, postData = '', source = '') {
     return { origin: 'https://oa.jihualab.net', path: safeJihuaPath(url.pathname) }
   }
   if (url.hostname === 'hague.wipo.int' || source === 'hague') {
-    const isWipoHost = url.hostname === 'hague.wipo.int' || url.hostname.endsWith('.wipo.int')
+    const isWipoHost = url.hostname === 'hague.wipo.int'
     if (url.protocol !== 'https:' || !isWipoHost || url.port !== '' || url.username || url.password) {
       return { origin: '', path: '/' }
     }
-    return { origin: url.origin, path: url.pathname.slice(0, 2048) }
+    return safeHagueUrl(url.href) ?? { origin: '', path: '/' }
   }
   let call
   for (const [key, value] of url.searchParams) {
@@ -975,6 +982,10 @@ export function buildAppObserverInstallExpression() {
     if (typeof report !== 'function' || typeof onMessage?.addListener !== 'function') return false
     if (globalThis.__patmailCdpObserverInstalled) return true
     globalThis.__patmailCdpObserverInstalled = true
+    globalThis.addEventListener?.('patmail:hague-diagnostic', event => {
+      try { report(JSON.stringify({ kind: 'hague-trace', event: event.detail })) } catch { /* Diagnostic observers never interrupt the app. */ }
+    })
+
 
     const pick = (values, keys) => {
       for (const value of values) {
@@ -1162,6 +1173,8 @@ export function buildAppSnapshotExpression(startedAt, includeJihuaTask = false) 
     const progress = []
     let topProgress = null
     let exportNotice = ''
+    const draftTexts = []
+    const hagueActive = !!globalThis.document?.querySelector?.('.hague-page')
     try {
       const topBar = globalThis.document.querySelector('.check-rainbow[role="progressbar"]')
       if (topBar) {
@@ -1188,6 +1201,12 @@ export function buildAppSnapshotExpression(startedAt, includeJihuaTask = false) 
       }
       const notice = globalThis.document.querySelector('[aria-label="文件导出"] [role="status"]')
       exportNotice = typeof notice?.textContent === 'string' ? notice.textContent.trim().slice(0, 800) : ''
+      // Hague draft probe: only visible alert/status text of the page, never form data.
+      for (const element of globalThis.document.querySelectorAll('p.errors[role="alert"], p.errors.card, [role="status"] p')) {
+        const text = (element.textContent ?? '').trim()
+        if (text) draftTexts.push(text.slice(0, 400))
+        if (draftTexts.length >= 6) break
+      }
     } catch {
       // A Vue rerender can replace progress elements during a snapshot.
     }
@@ -1217,11 +1236,11 @@ export function buildAppSnapshotExpression(startedAt, includeJihuaTask = false) 
         ...(typeof item.error === 'string' ? { error: item.error.slice(0, 80) } : {}),
         ...(typeof item.paused === 'boolean' ? { paused: item.paused } : {}),
       }))
-      report(JSON.stringify({ kind: 'snapshot', topProgress, progress, exportNotice, downloadsAvailable: true, downloads }))
+      report(JSON.stringify({ kind: 'snapshot', hagueActive, topProgress, progress, exportNotice, draftTexts, downloadsAvailable: true, downloads }))
     }
     const downloadsApi = globalThis.chrome?.downloads
     if (typeof downloadsApi?.search !== 'function') {
-      report(JSON.stringify({ kind: 'snapshot', topProgress, progress, exportNotice, downloadsAvailable: false, downloads: [] }))
+      report(JSON.stringify({ kind: 'snapshot', hagueActive, topProgress, progress, exportNotice, draftTexts, downloadsAvailable: false, downloads: [] }))
       return
     }
     try {
@@ -1568,7 +1587,7 @@ export async function stopObserver(options = {}) {
   return { stopped: false, state: 'stopping', pid: state.pid }
 }
 
-class CdpObserverService {
+export class CdpObserverService {
   constructor(token, options = {}) {
     this.root = options.root ?? WORKSPACE_ROOT
     this.paths = createObserverPaths(this.root)
@@ -1577,6 +1596,20 @@ class CdpObserverService {
     this.endpoint = options.endpoint ?? null
     this.endpointLocked = Boolean(options.endpoint)
     this.logger = new JsonlLogger(this.paths.dataDir)
+    this.outputBudget = new ResearchOutputBudget()
+    this.analysisWorker = new AnalysisWorker()
+    this.deep = new HagueDeepDiagnostics((method, params, session) => this.sendCdp(method, params, session), (kind, fields) => this.recordResearchOutput(kind,fields), this.analysisWorker)
+    this.research = new HagueResearchDiagnostics(this.deep, (method,params,session)=>this.sendCdp(method,params,session), (kind,fields)=>this.recordResearchOutput(kind,fields), {worker:this.analysisWorker})
+    this.autoResearchEnabled = true
+    this.autoResearchPending = null
+    this.autoResearchAttempts = new Map()
+    this.researchReadySessions = new Set()
+    this.hagueTraces = []
+    this.hagueContexts = new Map()
+    this.knownAppTraces = new Map()
+    this.research.observerStateProvider=()=>this.connectionStatus
+    this.research.outputStatusProvider=()=>({dropped:this.outputBudget.dropped,pending:this.outputBudget.pending,peak:this.outputBudget.peakPending})
+    this.bridge = new CdpUiBridge(command => this.sendCdp(command.method, command.params, command.sessionId), () => [...this.sessions.values()].filter(target => target.source === 'app' && target.type === 'page' && this.knownExtensionIds.has(extensionIdFromUrl(target.url))))
     this.controlServer = null
     this.ws = null
     this.connectingSocket = null
@@ -1666,6 +1699,21 @@ class CdpObserverService {
       sendJson(response, 200, this.statusSnapshot())
       return
     }
+    if (path === '/hague-diagnostics') {
+      if (request.method === 'GET') { sendJson(response, 200, this.research.status()); return }
+      if (request.method !== 'POST') { sendJson(response, 405, {error:'method'}); return }
+      const body = await this.readControlBody(request, response)
+      if (!body) return
+      try {
+        if(body.mode!==undefined&&!['deep','research','basic'].includes(body.mode))throw Error('mode')
+        if (body.action === 'disable') { this.autoResearchEnabled=false; sendJson(response, 200, await this.research.disable()); return }
+        const target = [...this.sessions.values()].find(t => t.targetId === body.targetId && t.source === 'hague')
+        if (body.action !== 'enable' || !target || body.mode==='basic') throw Error('target')
+        this.autoResearchEnabled=false
+        sendJson(response, 200, await this.research.enable(target, body.mode === 'research' ? 'research' : 'deep'))
+      } catch { sendJson(response, 400, {error:'invalid_authorized_target'}) }
+      return
+    }
     if (request.method === 'POST' && path === '/configure') {
       const body = await this.readControlBody(request, response)
       if (!body) return
@@ -1718,6 +1766,8 @@ class CdpObserverService {
       endpointHost: this.endpoint ? safeHost(this.endpoint) : null,
       targets: this.sessions.size,
       logWriteFailures: this.logger.failureCount,
+      hagueDeep: this.research.status(),
+      hagueCdpUiBridge: this.bridge.state,
     }
   }
 
@@ -1842,6 +1892,13 @@ class CdpObserverService {
     }
     this.pendingCommands.clear()
     this.selectedTargets.clear()
+    this.autoResearchAttempts.clear()
+    this.researchReadySessions.clear()
+    void this.research.disable()
+    this.bridge.clear()
+    this.hagueContexts.clear()
+    this.hagueTraces = []
+    this.knownAppTraces.clear()
     this.sessions.clear()
     this.pendingTargets.clear()
     this.configuredSessions.clear()
@@ -1874,6 +1931,18 @@ class CdpObserverService {
     const target = this.sessions.get(sessionId)
     if (!target) return
     switch (message.method) {
+      case 'Debugger.scriptParsed':
+        void this.deep.script(target, params)
+        break
+      case 'Runtime.executionContextDestroyed':
+        this.clearHagueSessionEvidence(sessionId)
+        break
+      case 'Runtime.executionContextsCleared':
+        this.clearHagueSessionEvidence(sessionId)
+        this.autoResearchAttempts.delete(sessionId)
+        if (this.deep.target?.sessionId === sessionId) void this.research.disable().then(()=>this.ensureAutomaticResearch())
+        void this.logger.log('runtime.contexts_cleared', {source:target.source})
+        break
       case 'Runtime.bindingCalled':
         this.handleBinding(target, params)
         break
@@ -1884,6 +1953,8 @@ class CdpObserverService {
         this.handleException(target, params)
         break
       case 'Runtime.executionContextCreated':
+        this.handleHagueContext(target, params)
+        if (target.source === 'hague') void this.ensureAutomaticResearch()
         if (target.source === 'app') void this.installRuntimeObserver(sessionId)
         break
       case 'Network.requestWillBeSent':
@@ -1906,6 +1977,7 @@ class CdpObserverService {
   handleTargetEvent(method, params) {
     if (method === 'Target.targetCreated' || method === 'Target.targetInfoChanged') {
       const targetInfo = params.targetInfo
+      if (this.deep.target?.targetId === targetInfo?.targetId && this.deep.target.url !== targetInfo.url) void this.research.disable()
       if (targetInfo) {
         const appId = isPatMailAppTarget(targetInfo, this.knownExtensionIds) ? extensionIdFromUrl(targetInfo.url) : ''
         if (appId) this.knownExtensionIds.add(appId)
@@ -1917,22 +1989,28 @@ class CdpObserverService {
       const selected = this.selectedTargets.get(params.targetId)
       this.selectedTargets.delete(params.targetId)
       if (selected) {
+        if (this.deep.target?.sessionId === selected.sessionId) void this.research.disable()
+        this.clearHagueSessionEvidence(selected.sessionId)
         this.sessions.delete(selected.sessionId)
         this.lastSnapshotByTarget.delete(params.targetId)
         this.lastJihuaTaskSnapshotByTarget.delete(params.targetId)
         this.logger.log('target.detached', { source: selected.source, reason: 'destroyed' })
+        this.scheduleReconcile()
       }
       return
     }
     if (method === 'Target.detachedFromTarget') {
       const target = this.sessions.get(params.sessionId)
       if (target) {
+        if (this.deep.target?.sessionId === params.sessionId) void this.research.disable()
+        this.clearHagueSessionEvidence(params.sessionId)
         this.sessions.delete(params.sessionId)
         this.selectedTargets.delete(target.targetId)
         this.configuredSessions.delete(params.sessionId)
         this.lastSnapshotByTarget.delete(target.targetId)
         this.lastJihuaTaskSnapshotByTarget.delete(target.targetId)
         this.logger.log('target.detached', { source: target.source, reason: 'detached' })
+        this.scheduleReconcile()
       }
       return
     }
@@ -1965,7 +2043,11 @@ class CdpObserverService {
       }, CDP_COMMAND_TIMEOUT_MS)
       this.pendingCommands.set(id, { method, resolve: resolveCommand, reject: rejectCommand, timer })
       try {
-        this.safeTransport(command)
+        if(method === 'Network.getResponseBody') {
+          if(!this.research.bodyCommandAllowed(params,sessionId))throw Error('Blocked body command')
+          if(!this.ws || this.ws.readyState!==WebSocket.OPEN)throw Error('CDP socket is not open')
+          this.ws.send(JSON.stringify(command))
+        } else this.safeTransport(command)
       } catch (error) {
         clearTimeout(timer)
         this.pendingCommands.delete(id)
@@ -1997,7 +2079,9 @@ class CdpObserverService {
         const info = infoById.get(targetId)
         if (!nextSelection || !info) {
           this.selectedTargets.delete(targetId)
-          this.sessions.delete(current.sessionId)
+          if (this.deep.target?.sessionId === current.sessionId) void this.research.disable()
+          this.clearHagueSessionEvidence(current.sessionId)
+        this.sessions.delete(current.sessionId)
           this.configuredSessions.delete(current.sessionId)
           this.lastSnapshotByTarget.delete(targetId)
           this.lastJihuaTaskSnapshotByTarget.delete(targetId)
@@ -2020,6 +2104,7 @@ class CdpObserverService {
         const info = infoById.get(target.targetId)
         void this.attachTarget({ ...info, ...target })
       }
+      await this.ensureAutomaticResearch()
     } catch {
       await this.logger.log('cdp.target_scan_error', { reason: 'target_scan_failed' })
     }
@@ -2047,16 +2132,36 @@ class CdpObserverService {
     this.configuredSessions.add(sessionId)
     this.sessions.set(sessionId, target)
     try {
-      if (target.source === 'app') await this.sendCdp('Runtime.addBinding', { name: OBSERVER_BINDING }, sessionId)
+      if (['app','hague'].includes(target.source)) await this.sendCdp('Runtime.addBinding', { name: OBSERVER_BINDING }, sessionId)
       await this.sendCdp('Runtime.enable', {}, sessionId)
       await this.sendCdp('Network.enable', {}, sessionId)
       if (target.source === 'app') await this.installRuntimeObserver(sessionId)
       await this.logger.log('target.attached', { source: target.source, type: safeIdentifier(target.type, 40) ?? 'unknown' })
+      this.researchReadySessions.add(sessionId)
+      await this.ensureAutomaticResearch()
     } catch {
-      this.sessions.delete(sessionId)
+      this.clearHagueSessionEvidence(sessionId)
+        this.sessions.delete(sessionId)
       this.configuredSessions.delete(sessionId)
       this.selectedTargets.delete(target.targetId)
       await this.logger.log('target.initialize_error', { source: target.source })
+    }
+  }
+
+  async ensureAutomaticResearch() {
+    if (!this.autoResearchEnabled || this.stopRequested || this.deep.target) return
+    if (this.autoResearchPending) return this.autoResearchPending
+    for (const session of this.autoResearchAttempts.keys()) if (!this.sessions.has(session)) this.autoResearchAttempts.delete(session)
+    for (const session of this.researchReadySessions) if (!this.sessions.has(session)) this.researchReadySessions.delete(session)
+    const target = [...this.sessions.values()].filter(t=>t.source==='hague' && t.type==='page' && this.researchReadySessions.has(t.sessionId) && safeHagueUrl(t.url) && this.autoResearchAttempts.get(t.sessionId)!==t.url).sort((a,b)=>a.targetId.localeCompare(b.targetId))[0]
+    if (!target) return
+    this.autoResearchAttempts.set(target.sessionId,target.url)
+    const pending = this.research.enable(target,'research')
+    this.autoResearchPending = pending
+    try { await pending } catch { /* Diagnostic activation must not interrupt session initialization. */ }
+    finally {
+      if (this.autoResearchPending === pending) this.autoResearchPending=null
+      if (this.autoResearchEnabled && !this.deep.target) this.scheduleReconcile()
     }
   }
 
@@ -2074,12 +2179,47 @@ class CdpObserverService {
     }
   }
 
+  clearHagueSessionEvidence(sessionId) {
+    for (const key of this.hagueContexts.keys()) if (key.startsWith(`${sessionId}:`)) this.hagueContexts.delete(key)
+    this.hagueTraces = this.hagueTraces.filter(event => event.sessionId !== sessionId)
+  }
+
+  handleHagueContext(target, params) {
+    const context = params.context
+    const frameId = context?.auxData?.frameId
+    if (target.source !== 'hague' || !Number.isInteger(context?.id) || typeof frameId !== 'string' || !/^[A-Za-z0-9_.:-]{1,120}$/.test(frameId) || context.origin !== 'https://hague.wipo.int') return
+    if (this.hagueContexts.size >= 512) this.hagueContexts.delete(this.hagueContexts.keys().next().value)
+    this.hagueContexts.set(`${target.sessionId}:${context.id}`, frameId)
+  }
+
   handleBinding(target, params) {
-    if (target.source !== 'app' || params.name !== OBSERVER_BINDING || typeof params.payload !== 'string') return
+    if (!['app','hague'].includes(target.source) || params.name !== OBSERVER_BINDING || typeof params.payload !== 'string' || params.payload.length > 16000) return
     let value
     try {
       value = JSON.parse(params.payload)
     } catch {
+      return
+    }
+    if (target.source === 'hague' && value?.kind !== 'hague-trace') return
+    if (value?.kind === 'hague-trace') {
+      let event = sanitizeTraceEvent(value.event)
+      if (event && target.source === 'app' && !event.requestId) { void this.logger.log('hague.trace', event); return }
+      if (event && event.source === 'application' && event.requestId) {
+        const key = `${event.traceId}:${event.requestId}`
+        if (target.source === 'app') {
+          this.knownAppTraces.set(key, event)
+          if (this.knownAppTraces.size > 500) this.knownAppTraces.delete(this.knownAppTraces.keys().next().value)
+        } else {
+          const known = this.knownAppTraces.get(key)
+          const frameId = this.hagueContexts.get(`${target.sessionId}:${params.executionContextId}`)
+          if (!known || !frameId || event.phase !== 'request.dispatched' || ['caseRunId','httpMethod','urlPath'].some(k => !event[k] || event[k] !== known[k])) return
+          event = {...known,phase:'request.dispatched',timestamp:event.timestamp,targetId:target.targetId,sessionId:target.sessionId,frameId,cdpRequestId:undefined,correlationConfidence:'unmatched'}
+        }
+        this.hagueTraces = this.hagueTraces.filter(candidate => candidate.traceId !== event.traceId || candidate.requestId !== event.requestId)
+        this.hagueTraces.push({...event,timestamp:Date.parse(event.timestamp)})
+        if (this.hagueTraces.length > 500) this.hagueTraces.shift()
+        void this.logger.log('hague.trace', event)
+      }
       return
     }
     if (value?.kind === 'jihua-task') {
@@ -2104,19 +2244,23 @@ class CdpObserverService {
       if (finiteNumber(item?.percent)) snapshot.percent = item.percent
       return snapshot
     }) : []
+    const hagueActive = value.hagueActive === true
     const topBar = objectValue(value.topProgress)
+    const topText = hagueActive ? safeHagueSnapshotText(topBar?.text) : sanitizeDiagnosticText(topBar?.text, 600)
     const topProgress = topBar ? {
       ...(finiteNumber(topBar.value) ? { value: topBar.value } : {}),
       ...(finiteNumber(topBar.max) ? { max: topBar.max } : {}),
       ...(finiteNumber(topBar.percent) ? { percent: topBar.percent } : {}),
-      ...(sanitizeDiagnosticText(topBar.text, 600) ? { text: sanitizeDiagnosticText(topBar.text, 600) } : {}),
+      ...(topText ? { text: topText } : {}),
     } : null
-    const exportNotice = sanitizeDiagnosticText(value.exportNotice, 800) ?? ''
+    const exportNotice = hagueActive ? safeHagueSnapshotText(value.exportNotice) : sanitizeDiagnosticText(value.exportNotice, 800) ?? ''
+    const draftTextSummary = safeDraftTextSummary(value.draftTexts)
     const downloads = safeDownloadSnapshot(value.downloads, this.startedAt, extensionIdFromUrl(target.url))
     const event = {
       topProgress,
       progress,
       exportNotice,
+      ...(draftTextSummary.count ? { draftTextSummary } : {}),
       downloadsAvailable: value.downloadsAvailable === true,
       downloads,
     }
@@ -2128,7 +2272,7 @@ class CdpObserverService {
 
   handleConsole(target, params) {
     if (!['warning', 'error', 'assert'].includes(params.type)) return
-    if (target.source === 'jihua') {
+    if (target.source === 'jihua' || target.source === 'hague') {
       const text = (params.args ?? []).filter(argument => argument?.type === 'string' && typeof argument.value === 'string')
         .map(argument => argument.value).join(' ').slice(0, 2000)
       const errorCategory = classifyJihuaErrorCategory(text)
@@ -2145,15 +2289,15 @@ class CdpObserverService {
 
   handleException(target, params) {
     const details = params.exceptionDetails ?? {}
-    const exceptionName = target.source === 'jihua'
+    const exceptionName = ['jihua','hague'].includes(target.source)
       ? (['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'DOMException'].includes(details.exception?.className) ? details.exception.className : undefined)
       : safeIdentifier(details.exception?.className, 60)
     const rawMessage = details.exception?.description?.split(/\r?\n/, 1)[0] ?? details.text
-    const message = target.source === 'jihua' ? undefined : sanitizeDiagnosticText(rawMessage, 500)
+    const message = ['jihua','hague'].includes(target.source) ? undefined : sanitizeDiagnosticText(rawMessage, 500)
     const errorCategory = target.source === 'jihua' ? classifyJihuaErrorCategory(rawMessage) : undefined
     const frames = (details.stackTrace?.callFrames ?? []).slice(0, 8).map(frame => {
       const url = safeNetworkUrl(frame.url, '', target.source)
-      const name = safeIdentifier(frame.functionName, 80)
+      const name = target.source === 'hague' ? undefined : safeIdentifier(frame.functionName, 80)
       const line = Number.isInteger(frame.lineNumber) && frame.lineNumber >= 0 ? frame.lineNumber + 1 : null
       const column = Number.isInteger(frame.columnNumber) && frame.columnNumber >= 0 ? frame.columnNumber + 1 : null
       if (!url.origin || line === null) return null
@@ -2170,33 +2314,88 @@ class CdpObserverService {
     })
   }
 
+  recordResearchOutput(kind, fields) {
+    try{const safe=safeAnalysisOutput(fields);if(safe&&this.outputBudget.submit(kind,safe,(k,event)=>this.logger.log(k,event)))this.bridge?.enqueue(safe)}catch{this.outputBudget.dropped++}
+  }
+
+  logNetwork(kind, event) {
+    void this.logger.log(kind, event)
+    for (const trace of observerEventsToTraces([{ts:nowIso(),kind,...event}])) this.bridge.enqueue(trace)
+  }
+
+  retainedHagueMetadata(request) {
+    if (request.source !== 'hague') return {}
+    const result = {}
+    for (const key of ['targetId','sessionId','frameId','httpMethod','resourceType','correlationConfidence','candidateCount','traceId','caseRunId','stepIndex','operation','transportMode','applicationRequestId','sourceLocation']) if (request[key] !== undefined) result[key] = request[key]
+    return result
+  }
+
+  hagueRequestMetadata(target, sessionId, params) {
+    if (target.source !== 'hague') return {}
+    const safeId = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,120}$/.test(value) ? value : undefined
+    const frame = params.initiator?.stack?.callFrames?.[0]
+    const location = frame && safeHagueUrl(frame.url)
+    return {targetId:safeId(target.targetId),sessionId:safeId(sessionId),frameId:safeId(params.frameId),
+      httpMethod:['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS'].includes(params.request?.method) ? params.request.method : 'OTHER',
+      resourceType:['Document','XHR','Fetch','Script','Stylesheet','Image','Other'].includes(params.type) ? params.type : 'Other',
+      ...correlateRequest({targetId:target.targetId,frameId:params.frameId,httpMethod:params.request?.method,urlPath:safeHagueUrl(params.request?.url)?.path,timestamp:Date.now(),sessionId,cdpRequestId:params.requestId},this.hagueTraces),
+      ...(location && Number.isInteger(frame.lineNumber) && frame.lineNumber >= 0 ? {sourceLocation:{urlPath:location.path,line:frame.lineNumber+1,column:Math.max(0,frame.columnNumber ?? 0)+1}} : {})}
+  }
+
   handleNetworkRequest(target, sessionId, params) {
+    this.research.request(target,sessionId,params)
+    const previous = this.networkRequests.get(`${sessionId}:${params.requestId}`)
+    const redirects = [...(previous?.redirects ?? [])]
+    if (previous && params.redirectResponse) redirects.push({origin:previous.origin,path:previous.path,httpStatus:networkMetadata({status:params.redirectResponse.status}).httpStatus})
+    // Chrome reports redirect responses here, not in responseReceived. Preserve
+    // the allowed hop before discarding an out-of-scope destination; never copy
+    // its Location, headers or destination URL into the diagnostic record.
+    if (previous?.source === 'hague' && Number.isInteger(params.redirectResponse?.status) && params.redirectResponse.status >= 300 && params.redirectResponse.status < 400) {
+      this.logNetwork('network.response', {
+        ...this.retainedHagueMetadata(previous),
+        ...safeNetworkResponseEvent(previous, {response:params.redirectResponse,timestamp:params.timestamp}),
+        ...networkMetadata({status:params.redirectResponse.status}),
+        redirects:redirects.slice(-8),
+      })
+    }
     const postData = target.source === 'jihua' || target.source === 'hague' ? '' : params.request?.postData
     const url = safeNetworkUrl(params.request?.url, postData, target.source)
-    if (!url.origin || url.origin === 'null') return
+    if (!url.origin || url.origin === 'null') {
+      this.networkRequests.delete(`${sessionId}:${params.requestId}`)
+      return
+    }
     const key = `${sessionId}:${params.requestId}`
     const started = finiteNumber(params.timestamp) ? params.timestamp : 0
     const requestId = safeIdentifier(String(params.requestId ?? ''), 120)
-    this.networkRequests.set(key, { source: target.source, requestId, ...url, started })
-    void this.logger.log('network.request', { source: target.source, ...(requestId ? { requestId } : {}), origin: url.origin, path: url.path, ...(url.call ? { call: url.call } : {}) })
+    const metadata = previous?.source === 'hague' && params.redirectResponse
+      ? {...this.retainedHagueMetadata(previous),httpMethod:['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS'].includes(params.request?.method)?params.request.method:'OTHER'}
+      : this.hagueRequestMetadata(target, sessionId, params)
+    if (this.networkRequests.size >= 2048) this.networkRequests.delete(this.networkRequests.keys().next().value)
+    this.networkRequests.set(key, { source: target.source, requestId, ...url, started, status:null, redirects:redirects.slice(-8), ...metadata })
+    this.logNetwork('network.request', { source: target.source, ...metadata, redirects:redirects.slice(-8), httpStatus:null, ...(requestId ? { requestId } : {}), origin: url.origin, path: url.path, ...(url.call ? { call: url.call } : {}) })
   }
 
   handleNetworkResponse(target, sessionId, params) {
+    this.research.response(sessionId,params)
     const request = this.networkRequests.get(`${sessionId}:${params.requestId}`)
     if (!request) return
-    const event = safeNetworkResponseEvent(request, params)
+    const event = {...this.retainedHagueMetadata(request), ...safeNetworkResponseEvent(request, params), ...networkMetadata({status:params.response?.status}), redirects:request.redirects}
     request.status = event.status
     request.mime = event.mime
-    void this.logger.log('network.response', event)
+    this.logNetwork('network.response', event)
   }
 
   handleNetworkFinished(target, sessionId, params) {
+    void this.research.finished(sessionId,params)
     const key = `${sessionId}:${params.requestId}`
     const request = this.networkRequests.get(key)
     if (!request) return
     const elapsedMs = finiteNumber(params.timestamp) && request.started ? Math.max(0, Math.round((params.timestamp - request.started) * 1000)) : undefined
-    void this.logger.log('network.finished', {
+    this.logNetwork('network.finished', {
       source: target.source,
+      ...this.retainedHagueMetadata(request),
+      ...networkMetadata(request, params),
+      redirects:request.redirects,
       ...(request.requestId ? { requestId: request.requestId } : {}),
       origin: request.origin,
       path: request.path,
@@ -2208,12 +2407,16 @@ class CdpObserverService {
   }
 
   handleNetworkFailure(target, sessionId, params) {
+    this.research.forget(sessionId,params)
     const key = `${sessionId}:${params.requestId}`
     const request = this.networkRequests.get(key)
     if (!request) return
     const elapsedMs = finiteNumber(params.timestamp) && request.started ? Math.max(0, Math.round((params.timestamp - request.started) * 1000)) : undefined
-    void this.logger.log('network.failure', {
+    this.logNetwork('network.failure', {
       source: target.source,
+      ...this.retainedHagueMetadata(request),
+      ...networkMetadata(request, params),
+      redirects:request.redirects,
       ...(request.requestId ? { requestId: request.requestId } : {}),
       origin: request.origin,
       path: request.path,
@@ -2224,6 +2427,7 @@ class CdpObserverService {
   }
 
   async pollAppSnapshots() {
+    this.research.emit('research.status',{researchState:this.research.status().state,stats:this.research.status().stats})
     if (this.stopRequested || !this.ws || this.ws.readyState !== WebSocket.OPEN) return
     for (const [sessionId, target] of this.sessions) {
       if (target.source !== 'app' || target.type !== 'page' || this.snapshotBusyTargets.has(target.targetId)) continue
@@ -2254,6 +2458,8 @@ class CdpObserverService {
   async stop(reason) {
     if (this.stopRequested) return
     this.stopRequested = true
+    await this.research.disable()
+    this.bridge.clear()
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     if (this.snapshotTimer) clearInterval(this.snapshotTimer)
     if (this.pruneTimer) clearInterval(this.pruneTimer)
@@ -2280,3 +2486,12 @@ export async function runObserverDaemon(token, options = {}) {
 }
 
 
+
+export async function configureHagueDiagnostics(action, targetId, options = {}) {
+  const paths = createObserverPaths(options.root ?? WORKSPACE_ROOT)
+  const state = await readJson(paths.lockPath)
+  const response = await controlRequest(state, '/hague-diagnostics', action === 'status' ? 'GET' : 'POST', action === 'status' ? undefined : {action,targetId,mode:options.mode}, 30_000)
+  if (!response) throw new Error('Observer unavailable; start the existing service first')
+  if (response.status !== 200) throw new Error('Hague diagnostics control rejected')
+  return response.body
+}

@@ -8,11 +8,13 @@ import type { HistoryQueryOption } from '../api/query-history'
 import { CURRENT_ENVIRONMENT } from '../api/config'
 import { LIMIT_BLOCKS, LIMIT_OPTION_KEYS, LIMIT_SELECTS, buildLimitQueryXml, limitColumnLabels, readLimitQueryXml } from '../api/limit-form'
 import { pageSelectOptions } from '../query/form-page'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { activateOptionFallback, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, savedChoices, scopeSavedChoices, subscribeOptionFallback } from '../query/option-fallback'
 import { describeOptionPull } from '../query/option-pull-notes'
 import type { NormalizedDictionary } from '../api/dictionaries'
 import { choicesFromDictionary, LIMIT_PICKER_FIELDS } from '../api/dictionaries/picker-catalog'
 import { hasOptionTree } from '../query/option-tree'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../api/file-search-params'
 import { readLimitTimeout, writeLimitTimeout } from '../api/query-timeout'
 import { isLimitMonitorInputField, splitCtrlProcIds, type LimitMonitorQuery } from '../api/limit-monitor-params'
@@ -208,6 +210,7 @@ function namedLabel(key: string): string {
   const labels = ids.map(id => choices(key).find(item => item.value === id)?.label ?? '')
   return labels.every(Boolean) ? labels.join('、') : `已选 ${ids.length} 项`
 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 function namedShown(key: string): string {
   const value = valueOf(key)
   if (!value) return ''

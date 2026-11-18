@@ -60,7 +60,7 @@ export async function runBatch(rows: HagueRow[], deps: Dependencies, signal: Abo
     progress.settled++; paint()
   }))
   progress.phase = signal.aborted ? 'stopped' : rows.some(r => r.state === 'waiting-session') ? 'waiting' : 'completed'
-  progress.stage = signal.aborted ? '已停止，可继续处理剩余案件' : progress.phase === 'waiting' ? '材料已就绪，请先连接并验证 eHague 登录态' : `处理结束：成功 ${progress.succeeded}，异常 ${progress.failed}`
+  progress.stage = signal.aborted ? '已停止，可继续处理剩余案件' : progress.phase === 'waiting' ? '材料已就绪，正在等待 eHague 自动验证登录态' : `处理结束：成功 ${progress.succeeded}，异常 ${progress.failed}`
   paint()
   return progress
 }

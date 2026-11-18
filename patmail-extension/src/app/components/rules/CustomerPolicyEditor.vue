@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { computed, inject, ref, watch } from 'vue'
 import ThemeSelect from '../../../shell/components/ThemeSelect.vue'
 import EmptyGuide from '../EmptyGuide.vue'

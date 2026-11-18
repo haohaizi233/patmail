@@ -57,3 +57,46 @@ pnpm cdp:stop
 - 下载恢复后的小 ZIP 验证：Chrome 使用原始 `.zip` 文件名保存至 `D:\MemoryLeak\下载`，下载状态为 `complete`，文件存在且 ZIP 签名正确。
 
 原来一轮 495 个候选附件的日志显示：取名 495/495、入包 493、跳过 2，浏览器下载完成；这轮没有再次触发“后台回执尚未确认”。恢复后的压缩包包含 493 个附件和 1 份下载失败清单。
+
+## 海牙深度诊断（随CDP自动开启研究模式）
+
+复用现有原生 WebSocket 守护进程。先查看 `log/cdp/status.json` 和最近 JSONL；不要为了检查状态重新连接浏览器。修改脚本后下次使用前按原流程停止再启动。服务启动并附着海牙页面后自动开启research；尚未连接或没有海牙页面时等待，不制造业务请求。
+
+在 `patmail-extension` 目录运行：
+
+```powershell
+node scripts/cdp-observer.mjs deep-status
+node scripts/cdp-observer.mjs deep-enable --target <已授权海牙标签页的CDP-targetId>
+node scripts/cdp-observer.mjs deep-disable
+```
+
+自动研究仅针对已附着的 `https://hague.wipo.int` 页面；按初始化就绪顺序启用一个目标，已有目标时保持稳定，多个就绪候选按targetId排序。手动deep/research-enable可用targetId指定目标并接管自动选择。控制接口沿用本机随机端口与认证令牌；令牌禁止粘贴到日志或报告。采集资源和请求租约只驻留内存，断线/导航会销毁；自动模式随后为新Session/页面重新建立采集。手动basic、deep-disable或research-disable关闭自动研究，在本次守护进程运行期间保持关闭；重新启动CDP服务恢复默认自动开启。浏览器提示连接授权时需用户允许，不能绕过。
+
+Debugger 先设置 `skipAllPauses=true` 再 enable；禁止设置、删除或修改断点及断点激活状态；方法不支持时降级关闭。禁用调用 Debugger.disable 并清空脚本状态，原基础观察会话继续使用。仅读取当前目标同源脚本，每会话最多32个，每个128,000字符，总计2,000,000字符，分析后仅输出哈希/静态调用计数/未解析数。deep模式不读取响应正文；research会按准入预算临时读取JSF响应并解析，原文不入日志。请求头及Cookie不落盘，不设置下载行为，不影响独立的离线PDF调试会话。
+
+应用 Trace 通过固定 CustomEvent/binding 入口传给日志并再次按共享Schema过滤。CDP到面板使用固定安全事件实时桥接，发送成功时状态为 `hagueCdpUiBridge=available`，未连接或失败时为 `unavailable`；面板仍可显示应用Trace，离线导入报告可分析CDP证据。无直接证明的请求不能声称精确归因。
+
+### 离线导入观察日志
+
+实时CDP回流缺失时，先在本机将Observer JSONL转换为面板可接受的version1 Trace JSONL，再通过诊断面板离线回放导入：
+
+```powershell
+node scripts/hague-diagnostics-export.mjs ../log/cdp/<日志文件>.jsonl ./test-results/hague-safe-trace.jsonl
+```
+
+导出限32MB输入、20,000条记录；仅转换已知海牙network事件、安全应用Trace和版本化AST元数据，其余丢弃。导出不产生业务网络请求，不给CDP事件补造案件ID，关联默认为unmatched。原始源码、正文、输入值不会进入转换结果。AST只公开经过共享Schema过滤的call类型、组件/表单/process/update、参数名称、安全位置和哈希，明确为静态证据。
+
+原有draftTexts页面探测仍存在，但落盘仅保留条数和类别。海牙页面的topProgress/exportNotice也只保留运行/完成/错误/待核对/提示类别，避免姓名、地址、reference或文件名通过提示文字泄露；其他应用页面仍保留原有脱敏展示逻辑。
+
+应用到CDP的归因补充：当应用诊断模式开启，原有已授权注入请求在发送前调用固定的 `__patmailCdpObserver` binding，仅传脱敏Trace请求元数据，不执行任意脚本。Observer只接受已由应用目标观察到的相同traceId/requestId/caseRunId/method/path，frame来自当前Hague执行上下文的CDP auxData而非页面payload。唯一一致候选为probable；六路同URL候选为ambiguous；没有直接CDP requestId证据不提升为exact。基础Runtime binding不启用深度Debugger，不读取源码。
+
+若应用事件尚未到达守护进程、执行上下文创建事件缺失、目标刷新/断线或请求绕过该固定入口，归因保持unmatched；不会为消除缺失而重发请求。上下文销毁、清除、detach及断线会清除对应归因状态。此桥为应用→Observer证据桥，CDP→UI实时桥仅向已选定PatMail应用页面发送经过过滤的固定事件；离线导出仍可进入面板。
+
+实时回流新增固定 `patmail-hague-cdp-trace` 事件。仅向现有选定、已知扩展ID的 `/app.html` 页面发送；绝不向WIPO目标运行表达式。命令独立校验为固定Runtime.evaluate事件分发器，数据先经共享Schema过滤，最多128条排队、每批16条/64KB、最多6个应用目标，每250ms发送；失败丢弃且不重发业务请求。深度策略仍拒绝任意Runtime.evaluate。连接断开或服务停止清空队列；UI诊断关闭时忽略事件；事件不回流应用Trace，避免回声循环。实时浏览器验证未进行。
+
+
+## 2026-11-14 Research Mode
+
+新增显式 `research-enable --target TARGET_ID`、`research-status`、`research-disable` 和 `basic` 命令（入口仍为 `node scripts/cdp-observer.mjs`）。按用户2026-11-14的新要求，普通start/build随CDP默认启用自动研究，附着到海牙页面后开始采集。正文仅在受控研究准入下短暂读取解析，原始正文不入日志；全局普通方法允许表仍不提供任意getResponseBody转发。详情、预算、生命周期和验收见 [全链路研究诊断](hague-full-chain-diagnostics.md)。旧deep命令继续兼容。
+
+自动研究每个Session/URL只尝试启用一次，不因轮询不断重置预算；导航/重连后以新生命周期重新尝试。失败只影响诊断，不触发业务操作。保留单目标架构，未同时读取所有海牙标签页；页面离开白名单时停止采集。

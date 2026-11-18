@@ -3,7 +3,7 @@ import { readLegacyDocText } from './legacy-doc'
 
 export const VIEW_CODES: Record<string, string> = { '1': 'Perspective', '2': 'Front', '3': 'Back', '4': 'Top', '5': 'Bottom', '6': 'Left', '7': 'Right', '8': 'Unfolded', '9': 'Exploded', '10': 'Cross-Sectional', '11': 'Enlarged', '00': 'Other type of view' }
 export interface View { number: string; code: string; label: string }
-export interface Filing { locarno: string; products: string[][]; description: string; views: View[]; issues: string[] }
+export interface Filing { locarno: string; products: string[][]; description: string; views: View[]; issues: string[]; draftCorrections?:string[]; designNumberCorrection?:{inputKey:string;note:string} }
 export interface CaseFolder { path: string; caseVolume: string; documents: File[]; images: File[]; issues: string[]; notices?: string[] }
 export const natural = (a: string, b: string): number => a.localeCompare(b, 'en', { numeric: true })
 export const validCaseVolume = (s: string): boolean => /^P[A-Z0-9-]*HAGUE$/i.test(s.trim()) && s.trim().length <= 80
@@ -115,9 +115,18 @@ export function validateImages(filing: Filing, images: File[]): string[] {
   for (const f of images) { const n = imageNumber(f); if (seen.has(n)) issues.push(`图片编号重复：${n}`); seen.add(n) }
   for (const v of filing.views) if (!seen.has(v.number)) issues.push(`缺少图片：${v.number}`)
   for (const n of seen) if (!filing.views.some(v => v.number === n)) issues.push(`图片没有对应表格记录：${n}`)
+  const designs=new Set<string>()
+  for(const row of filing.products){
+    if(designs.has(row[0]))issues.push(`产品表设计编号重复：${row[0]}`)
+    designs.add(row[0])
+  }
+  if(designs.size===filing.products.length)for(const row of filing.products){
+    const actual=images.filter(f=>imageNumber(f).split('.')[0]===row[0]).length
+    if(Number(row[1])!==actual)issues.push(`设计 ${row[0]} 的图纸数量不符：Word ${row[1]} / 文件 ${actual}`)
+  }
   const expected = filing.products.reduce((sum, row) => sum + (Number(row[1]) || 0), 0)
   if (expected && expected !== images.length) issues.push(`图片数量不符：Word ${expected} / 文件 ${images.length}`)
-  return issues
+  return [...new Set(issues)]
 }
 export async function readFiling(file: File): Promise<Filing> {
   if (file.size > 20 * 1024 * 1024) throw new Error('Word 超过 20MB，请检查材料')

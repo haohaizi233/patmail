@@ -30,6 +30,7 @@ try {
     await page.getByRole('button', { name: /海牙新申请.*选择总文件夹/ }).click()
   }
   await page.getByLabel('选择海牙申请总文件夹').setInputFiles(path.resolve(sample))
+  await page.getByRole('dialog',{name:'导入海牙申请材料',exact:true}).getByRole('button',{name:'导入材料',exact:true}).click()
   await page.getByRole('status').filter({ hasText: `已识别 ${expectedCount} 件案件` }).waitFor()
   if (expectedCount === 3) {
     assert.equal(await page.locator('.hague-cases button').count(), 3)

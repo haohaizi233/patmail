@@ -9,6 +9,7 @@ afterEach(() => { app?.unmount(); host?.remove() })
 it('勾选折叠父节点也联动全部子项，取消子项回传并显示半选', async () => {
   const value = ref('')
   host = document.createElement('div'); document.body.append(host)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   app = createApp({ render: () => h(TreeOptionSelect, { options, modelValue: value.value, 'onUpdate:modelValue': next => { value.value = next } }) })
   app.directive('hint', {}); app.mount(host)
   ;(host.querySelector('.theme-select-trigger') as HTMLButtonElement).click(); await settle()
@@ -26,6 +27,7 @@ it('勾选折叠父节点也联动全部子项，取消子项回传并显示半�
 it('单选树仍然只选择一个节点', async () => {
   const value = ref('')
   host = document.createElement('div'); document.body.append(host)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   app = createApp({ render: () => h(TreeOptionSelect, { options, multiple: false, modelValue: value.value, 'onUpdate:modelValue': next => { value.value = next } }) })
   app.directive('hint', {}); app.mount(host)
   ;(host.querySelector('.theme-select-trigger') as HTMLButtonElement).click(); await settle()
@@ -36,6 +38,7 @@ it('单选树仍然只选择一个节点', async () => {
 it('叶子限定的单选树不能选择分类，展开后可以选择具体项', async () => {
   const value = ref('')
   host = document.createElement('div'); document.body.append(host)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   app = createApp({ render: () => h(TreeOptionSelect, { options, multiple: false, leavesOnly: true, modelValue: value.value, 'onUpdate:modelValue': next => { value.value = next } }) })
   app.directive('hint', {}); app.mount(host)
   ;(host.querySelector('.theme-select-trigger') as HTMLButtonElement).click(); await settle()

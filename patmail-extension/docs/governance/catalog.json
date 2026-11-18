@@ -1,0 +1,792 @@
+{
+  "documents": [
+    {
+      "path": "patmail-extension/docs/engineering/README.md",
+      "title": "技术知识总览",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/README.md",
+      "title": "海牙技术总览",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/app/pages/HaguePage.vue",
+        "patmail-extension/src/background/hague-session.ts",
+        "patmail-extension/src/hague/draft-batch.ts",
+        "patmail-extension/src/hague/draft-runner.ts",
+        "patmail-extension/src/hague/http-context.ts",
+        "patmail-extension/src/hague/workspace-recovery.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/architecture.md",
+      "title": "技术架构总览",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague-research.mjs",
+        "patmail-extension/src/hague/draft-runner.ts",
+        "patmail-extension/src/hague/http-context.ts",
+        "patmail-extension/src/hague/http-driver.ts",
+        "patmail-extension/tests/unit/hague/jsf-state-machine.test.ts",
+        "patmail-extension/tests/unit/hague/research-evidence.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/cdp-research.md",
+      "title": "CDP 全链路逆向",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague-research.mjs",
+        "patmail-extension/src/hague/diagnostics/correlation/correlator.mjs",
+        "patmail-extension/tests/unit/hague/research-evidence.test.ts",
+        "patmail-extension/tests/unit/hague/research-jsf-parser.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/javascript-ast.md",
+      "title": "JavaScript AST",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/src/hague/diagnostics/ast/analyzer.mjs",
+        "patmail-extension/tests/unit/hague/ast-bcn-security.test.ts",
+        "patmail-extension/tests/unit/hague/ast-scope-analysis.test.ts",
+        "patmail-extension/tests/unit/hague/diagnostics-ast.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/jsf-protocol.md",
+      "title": "JSF / PrimeFaces",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/src/hague/diagnostics/protocol/jsf-semantics.mjs",
+        "patmail-extension/src/hague/http-context.ts",
+        "patmail-extension/tests/unit/hague/jsf-semantics.test.ts",
+        "patmail-extension/tests/unit/hague/research-jsf-parser.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/viewstate-state-machine.md",
+      "title": "ViewState 状态机",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/diagnostics/protocol/jsf-state-machine.mjs",
+        "patmail-extension/tests/unit/hague/jsf-state-machine.test.ts",
+        "patmail-extension/tests/unit/hague/research-evidence.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/protocol-fingerprint.md",
+      "title": "协议指纹与漂移",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/diagnostics/protocol/jsf-diff.mjs",
+        "patmail-extension/tests/unit/hague/jsf-diff.test.ts",
+        "patmail-extension/tests/unit/hague/jsf-request-normalization.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/correlation-evidence.md",
+      "title": "证据关联",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/src/hague/diagnostics/correlation/correlator.mjs",
+        "patmail-extension/src/hague/diagnostics/evidence/evidence-model.mjs",
+        "patmail-extension/tests/unit/hague/diagnostics-protocol.test.ts",
+        "patmail-extension/tests/unit/hague/research-evidence.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/concurrency-and-recovery.md",
+      "title": "并发调度与容灾",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/src/hague/draft-batch.ts",
+        "patmail-extension/src/hague/draft-recovery.ts",
+        "patmail-extension/src/hague/draft-runner.ts",
+        "patmail-extension/src/hague/plan-identity.ts",
+        "patmail-extension/src/hague/summary-download.ts",
+        "patmail-extension/src/hague/workspace-recovery.ts",
+        "patmail-extension/tests/unit/hague/concurrency.test.ts",
+        "patmail-extension/tests/unit/hague/draft-recovery.test.ts",
+        "patmail-extension/tests/unit/hague/draft-runner.test.ts",
+        "patmail-extension/tests/unit/hague/plan-identity.test.ts",
+        "patmail-extension/tests/unit/hague/summary-download.test.ts",
+        "patmail-extension/tests/unit/hague/workspace-recovery.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/engineering/hague/diagnostics-and-maintenance.md",
+      "title": "故障诊断与维护",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/src/background/hague-session.ts",
+        "patmail-extension/src/hague/draft-batch.ts",
+        "patmail-extension/src/hague/draft-runner.ts",
+        "patmail-extension/src/hague/http-client.ts",
+        "patmail-extension/src/hague/session-gate.ts",
+        "patmail-extension/src/hague/summary-download.ts",
+        "patmail-extension/src/hague/workspace-recovery.ts",
+        "patmail-extension/tests/unit/hague/draft-batch.test.ts",
+        "patmail-extension/tests/unit/hague/draft-runner.test.ts",
+        "patmail-extension/tests/unit/hague/http-client.test.ts",
+        "patmail-extension/tests/unit/hague/runner-recovery.test.ts",
+        "patmail-extension/tests/unit/hague/session-gate.test.ts",
+        "patmail-extension/tests/unit/hague/session-refresh.test.ts",
+        "patmail-extension/tests/unit/hague/summary-download.test.ts",
+        "patmail-extension/tests/unit/hague/workspace-recovery.test.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-ast-analysis.md",
+      "title": "hague-ast-analysis",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/javascript-ast.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-cdp-reverse-engineering.md",
+      "title": "hague-cdp-reverse-engineering",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/cdp-research.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-code-audit.md",
+      "title": "hague-code-audit",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-correlation-evidence.md",
+      "title": "hague-correlation-evidence",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-diagnostics-acceptance.md",
+      "title": "hague-diagnostics-acceptance",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-diagnostics-ui-acceptance.md",
+      "title": "hague-diagnostics-ui-acceptance",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-foundation-acceptance.md",
+      "title": "hague-foundation-acceptance",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-foundation-fix-acceptance.md",
+      "title": "hague-foundation-fix-acceptance",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-foundation-gap-analysis.md",
+      "title": "hague-foundation-gap-analysis",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-foundation-integration-gap.md",
+      "title": "hague-foundation-integration-gap",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-full-chain-diagnostics.md",
+      "title": "hague-full-chain-diagnostics",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/diagnostics-and-maintenance.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-incident-2026-11-14-create-save.md",
+      "title": "hague-incident-2026-11-14-create-save",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-incident-applicant-dom-update.md",
+      "title": "hague-incident-applicant-dom-update",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-incident-party-remote.md",
+      "title": "hague-incident-party-remote",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-protocol-drift.md",
+      "title": "hague-protocol-drift",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/protocol-fingerprint.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-protocol-semantics.md",
+      "title": "hague-protocol-semantics",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/jsf-protocol.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-research-p1-hotfix.md",
+      "title": "hague-research-p1-hotfix",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/hague-tracing-and-status.md",
+      "title": "hague-tracing-and-status",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-viewstate-lifecycle.md",
+      "title": "hague-viewstate-lifecycle",
+      "status": "superseded",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ],
+      "canonical_path": "patmail-extension/docs/engineering/hague/viewstate-state-machine.md"
+    },
+    {
+      "path": "patmail-extension/docs/hague-workflow.md",
+      "title": "hague-workflow",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/archive/hague/hague-foundation-fix-acceptance.md",
+      "title": "hague-foundation-fix-acceptance",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/archive/hague/hague-foundation-integration-gap.md",
+      "title": "hague-foundation-integration-gap",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/archive/hague/README.md",
+      "title": "README",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/archive/hague/海牙接口链与容灾算法-2026-11-13.md",
+      "title": "海牙接口链与容灾算法历史版本",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": [
+        "patmail-extension/src/background/hague-offline-pdf.ts",
+        "patmail-extension/src/hague/arbitration.ts",
+        "patmail-extension/src/hague/draft-batch.ts",
+        "patmail-extension/src/hague/draft-plan.ts",
+        "patmail-extension/src/hague/draft-repairs.ts",
+        "patmail-extension/src/hague/draft-runner.ts",
+        "patmail-extension/src/hague/easy.ts",
+        "patmail-extension/src/hague/http-client.ts",
+        "patmail-extension/src/hague/http-context.ts",
+        "patmail-extension/src/hague/legacy-doc.ts",
+        "patmail-extension/src/hague/materials.ts",
+        "patmail-extension/src/hague/source.ts",
+        "patmail-extension/src/hague/summary-css.ts",
+        "patmail-extension/tests/unit/hague/draft-recovery.test.ts",
+        "patmail-extension/tests/unit/hague/draft-repairs.test.ts",
+        "patmail-extension/tests/unit/hague/http-context.test.ts",
+        "patmail-extension/tests/unit/hague/http-driver.test.ts",
+        "patmail-extension/tests/unit/hague/runner-recovery.test.ts",
+        "patmail-extension/tests/unit/hague/summary-css.test.ts"
+      ]
+    },
+    {
+      "path": "API/external-platforms/hague.md",
+      "title": "海牙接口契约",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md",
+      "title": "海牙材料解析与来源算法",
+      "status": "current",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "code_verified",
+      "display": true,
+      "related_sources": [
+        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/src/hague/draft-runner.ts"
+      ]
+    },
+    {
+      "path": "docs/hague-foundation-integration-gap.md",
+      "title": "hague-foundation-integration-gap",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": []
+    },
+    {
+      "path": "docs/hague-foundation-fix-acceptance.md",
+      "title": "hague-foundation-fix-acceptance",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": []
+    },
+    {
+      "path": "docs/superpowers/plans/2026-11-15-hague-resilience.md",
+      "title": "2026-11-15-hague-resilience",
+      "status": "historical",
+      "scope": "hague",
+      "last_verified_commit": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+      "last_reviewed": "2026-11-16",
+      "evidence_level": "design_only",
+      "display": false,
+      "related_sources": []
+    }
+  ],
+  "migrations": [
+    {
+      "old_path": "docs/hague-foundation-integration-gap.md",
+      "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-integration-gap.md",
+      "operation": "REMOVE_DUPLICATE",
+      "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+      "evidence": {
+        "sha256": "317bf620fdb401feafb4b14ca01b7f92e3e57638a59ce878a9d5494977c9349d",
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "archived_sha256": "fb732958de453867f2051302ebcadc9c153fa320bb952ffab7a3ba07993d7543",
+        "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-foundation-integration-gap.md",
+      "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-integration-gap.md",
+      "operation": "ARCHIVE",
+      "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+      "evidence": {
+        "sha256": "317bf620fdb401feafb4b14ca01b7f92e3e57638a59ce878a9d5494977c9349d",
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "archived_sha256": "fb732958de453867f2051302ebcadc9c153fa320bb952ffab7a3ba07993d7543",
+        "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+      }
+    },
+    {
+      "old_path": "docs/hague-foundation-fix-acceptance.md",
+      "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-fix-acceptance.md",
+      "operation": "REMOVE_DUPLICATE",
+      "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+      "evidence": {
+        "sha256": "1e69fb954cd9356c5f4dc43d23cda865c24ca9ff43ee0330ccf32f7107a817cf",
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "archived_sha256": "25f212ac1c00a7436178e02aa6fc1a813d4fcbe3dc0e950893b939e7630b8178",
+        "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-foundation-fix-acceptance.md",
+      "canonical_path": "patmail-extension/docs/archive/hague/hague-foundation-fix-acceptance.md",
+      "operation": "ARCHIVE",
+      "reason": "两份原文字节完全一致；保留单一完整历史原文及旧路径兼容入口",
+      "evidence": {
+        "sha256": "1e69fb954cd9356c5f4dc43d23cda865c24ca9ff43ee0330ccf32f7107a817cf",
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "archived_sha256": "25f212ac1c00a7436178e02aa6fc1a813d4fcbe3dc0e950893b939e7630b8178",
+        "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/concurrency-and-recovery.md",
+      "operation": "SPLIT",
+      "reason": "保留材料解析与来源规则；执行层合并到当前容灾规范，独有历史故障原文完整保留",
+      "evidence": {
+        "historical_copy": "patmail-extension/docs/archive/hague/海牙接口链与容灾算法-2026-11-13.md",
+        "sha256": "39f91a457d9b8efaea0f9fd5b052ce3688c0a6b02d7242ed5dc97a453e76f744",
+        "archived_sha256": "5f9e0d8ff581384d5a53fc5e2d7bf74dff3fe855e376d6157a56acb35999bd98",
+        "archive_note": "原文保留；深层归档只调整相对 Markdown 链接。sha256 为迁移前字节，archived_sha256 为归档字节。"
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-ast-analysis.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/javascript-ast.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-cdp-reverse-engineering.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/cdp-research.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-correlation-evidence.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-full-chain-diagnostics.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/diagnostics-and-maintenance.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-protocol-drift.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/protocol-fingerprint.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-protocol-semantics.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/jsf-protocol.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-tracing-and-status.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    },
+    {
+      "old_path": "patmail-extension/docs/hague-viewstate-lifecycle.md",
+      "canonical_path": "patmail-extension/docs/engineering/hague/viewstate-state-machine.md",
+      "operation": "UPDATE",
+      "reason": "保留历史正文，标记被取代并链接当前权威规范；原有路径不删除",
+      "evidence": {
+        "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
+        "related_sources": [
+          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/src/hague/draft-runner.ts"
+        ]
+      }
+    }
+  ]
+}

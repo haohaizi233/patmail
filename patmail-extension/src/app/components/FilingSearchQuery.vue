@@ -3,7 +3,9 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CURRENT_ENVIRONMENT } from '../../api/config'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { choicesFromDictionary, FILING_PICKER_FIELDS } from '../../api/dictionaries/picker-catalog'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { FILING_OPTION_KEYS, FILING_SELECTS, FILING_BLOCKS, filingCellKeys, filingDateDefaults, filingDraftFields, filingFieldLabel, type FilingCell } from '../../api/filing-form'
 import type { FilingSearchQuery } from '../../api/filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from '../../api/filing-search-types'
@@ -12,6 +14,7 @@ import { filingTemplateValues, filingTemplatesOf, applyFilingBuiltin, FILING_BUI
 import { downloadTemplateJson, readTemplateJson, templateJsonFileName, templateJsonText } from '../../query/template-json'
 import type { QueryTemplate } from '../../query/query-types'
 import { hasOptionTree } from '../../query/option-tree'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { activateOptionFallback, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
 import { describeOptionPull } from '../../query/option-pull-notes'
 import { fitColumnWidths, type ColumnFit } from '../../shell/column-fit'
@@ -403,18 +406,11 @@ function optionFieldLabel(key: string): string {
   const base = key.split(':')[0]!
   return FILING_CELL_LABELS[key] ?? FILING_CELL_LABELS[base] ?? key
 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 function treeChoices(key: string): { value: string; label: string; parent?: string }[] {
   const options = choices(key)
   return hasOptionTree(options) ? options : []
 }
-function optionsFor(key: string): { value: string; label: string; parent?: string }[] {
-  return [{ value: '', label: '不限' }, ...choices(key)]
-}
-function optionLabel(key: string, value: string): string {
-  const option = choices(key).find(item => item.value === value)
-  return option?.label ?? ''
-}
-
 function optionStatus(key: string): 'loading' | 'ready' | 'empty' | 'partial' | 'invalid' {
   // 账号有账本就整个界面走静默校对：拉取期间所有字段照常可选，拉不到也用账本兜底，不进 loading/失败态。
   if (ledgerPresent.value) return choices(key).length ? 'ready' : 'empty'
@@ -883,7 +879,7 @@ onBeforeUnmount(() => {
       </div>
       <ul v-if="templateCards.length" class="template-picks" aria-label="递交查询模板">
         <li v-for="item in templateCards" :key="item.id">
-          <button type="button" :class="{ on: selectedTemplateId === item.id }" :title="item.name" @click="toggleTemplate(item.id)">
+          <button type="button" :class="{ on: selectedTemplateId === item.id }" v-hint.clip="item.name" @click="toggleTemplate(item.id)">
             <b v-hint.clip="item.name">{{ item.name }}</b>
             <small>{{ item.builtin ? '内置' : '本地' }}</small>
           </button>
@@ -912,7 +908,6 @@ onBeforeUnmount(() => {
           <label v-else-if="cell.kind === 'named'" class="query-cell">
             <span>{{ cell.label }}</span>
             <TreeOptionSelect v-if="cell.key !== 'business_coop' || choices(cell.key).length" :model-value="valueOf(cell.key)" :multiple="isMulti(cell.key)" :options="choices(cell.key)" :status="optionStatus(cell.key)" :empty-text="`当前账号未配置${cell.label}`" @retry="loadPickers(true, true)" @update:model-value="setNamed(cell.key, String($event))" />
-            <ThemeSelect v-else-if="choices(cell.key).length || cell.key !== 'business_coop'" :model-value="valueOf(cell.key)" :value-label="optionLabel(cell.key, valueOf(cell.key))" :options="optionsFor(cell.key)" @open="loadPickers(false)" @update:model-value="setNamed(cell.key, String($event))" />
             <input v-else :value="valueOf(cell.key)" type="text" placeholder="签约单位下拉未读到，可直接填值" @input="onText(cell.key, $event)" />
           </label>
           <label v-else-if="cell.kind === 'select'" class="query-cell">

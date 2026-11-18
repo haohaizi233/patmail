@@ -33,7 +33,7 @@ export function isCustomerProfile(value: unknown): value is CustomerQueryProfile
   if (profile.pctTask !== undefined && !isPctTask(profile.pctTask)) return false
   if (profile.skills !== undefined && (!Array.isArray(profile.skills) || profile.skills.length > 4 || !profile.skills.every(isCustomerSkill))) return false
   if (profile.overrides === null || typeof profile.overrides !== 'object' || Array.isArray(profile.overrides)) return false
-  for (const key of Object.keys(profile.overrides as object)) {
+  for (const key of Object.keys(profile.overrides)) {
     const raw = (profile.overrides as Record<string, unknown>)[key]
     if (isForbiddenFieldName(key) || !isFileSearchBusinessField(key) || typeof raw !== 'string') return false
   }

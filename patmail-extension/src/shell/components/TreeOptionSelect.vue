@@ -8,7 +8,9 @@ const props = withDefaults(defineProps<{
   modelValue?: string
   options: TreeOption[]
   disabled?: boolean
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   status?: 'loading' | 'ready' | 'empty' | 'partial' | 'invalid'
+  // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   emptyText?: string
   /** 多选（checkbox，带「全选」）或单选（radio，选中即收起）。对应原站 TreeUser 的 SelectType。 */
   leavesOnly?: boolean

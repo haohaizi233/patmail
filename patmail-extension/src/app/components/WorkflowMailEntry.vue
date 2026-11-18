@@ -718,6 +718,7 @@ function limitReview(row: PctTaskRow): string {
   return limitByKey[icKey(rowVolumeKey(row), row.procLabel)] ?? ''
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 function sheetMemo(row: PctTaskRow): string {
   const status = sheetStatus(row)
   return `${status.found}\n${status.review}\n${row.ourVolume}\n${row.customerVolume}\n${row.ourVolumeCorrected ? 1 : 0}\n${row.customerVolumeCorrected ? 1 : 0}`
@@ -1908,7 +1909,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
         </colgroup>
         <thead><tr><th>我方文号</th><th>客户</th><th>客户文号</th><th>处理事项</th><th>发文类型</th><th>收件人</th><th>抄送</th><th>查询结果</th><th>审核状态</th></tr></thead>
         <tbody>
-          <tr v-for="row in rowsOnSheetPage(n)" :key="row.ourVolume + '\n' + row.customerVolume + '\n' + row.procLabel" v-memo="[row, sheetMemo(row)]" :class="{ 'is-pending': sheetStatus(row).review === MAILED_UNFINISHED_REVIEW }">
+          <tr v-for="row in rowsOnSheetPage(n)" :key="row.ourVolume + '\n' + row.customerVolume + '\n' + row.procLabel" :class="{ 'is-pending': sheetStatus(row).review === MAILED_UNFINISHED_REVIEW }">
             <td :class="{ 'volume-corrected': row.ourVolumeCorrected }"><span class="clip" v-hint.clip="row.ourVolume">{{ row.ourVolume }}</span></td>
             <td><span class="clip" v-hint.clip="row.customerName || '表格里没有'">{{ row.customerName || '表格里没有' }}</span></td>
             <td :class="{ 'volume-corrected': row.customerVolumeCorrected }"><span class="clip" v-hint.clip="row.customerVolume || '无'">{{ row.customerVolume || '无' }}</span></td>

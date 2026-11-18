@@ -28,6 +28,7 @@ describe('交付包私钥检查', () => {
     const directory = mkdtempSync(join(tmpdir(), 'patmail-pack-'))
     writeFileSync(join(directory, 'dist.pem'), 'placeholder\n')
     writeFileSync(join(directory, 'readme.txt'), 'notes\n')
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
     const archive = join(directory, 'sample.zip')
     // tar 参数用相对路径（cwd=临时目录）：MSYS tar 会把带盘符的绝对路径当成远程主机名。
     const packed = spawnSync('tar', ['-a', '-c', '-f', 'sample.zip', 'dist.pem', 'readme.txt'], { cwd: directory, encoding: 'utf8' })

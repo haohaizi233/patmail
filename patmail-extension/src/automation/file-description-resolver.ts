@@ -41,7 +41,7 @@ export function resolveFileDescriptionIdentity(text: string, nodes: FileTypeNode
   if (!name || !isQueryGuid(caseTypeId)) return { verified: false, selectable: 'rejected' }
   const matches = nodes.filter(node => node.name === name && isQueryGuid(node.id))
   if (matches.length !== 1) return { verified: false, selectable: 'rejected' }
-  const node = matches[0]!
+  const node = matches[0]
   if (node.selectable === false) return { verified: false, selectable: 'rejected' }
   if (node.selectable === true && node.childIds.length === 0) return { fileDescriptionId: node.id, verified: true, selectable: 'confirmed' }
   return { fileDescriptionId: node.id, verified: false, selectable: 'pending' }

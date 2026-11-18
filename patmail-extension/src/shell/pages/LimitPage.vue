@@ -319,7 +319,7 @@ function reset() {
           <tr v-if="!rowsFor(n).length">
             <td class="limit-empty" :colspan="selectable ? 10 : 9">{{ loading ? '正在读取期限列表…' : (message ? '查询没有完成，上面有原因。' : '没有可显示的期限记录') }}</td>
           </tr>
-          <tr v-for="row in rowsFor(n)" :key="row.procId" v-memo="[row, gates[row.procId], flowByProc[row.procId], checking, selected.includes(row.procId), allowMailedUnfinished]" :class="{ 'is-pending': gates[row.procId] === 'pending' || flowByProc[row.procId] === '已提交审核' || flowByProc[row.procId] === MAILED_UNFINISHED_REVIEW || checking }">
+          <tr v-for="row in rowsFor(n)" :key="row.procId" :class="{ 'is-pending': gates[row.procId] === 'pending' || flowByProc[row.procId] === '已提交审核' || flowByProc[row.procId] === MAILED_UNFINISHED_REVIEW || checking }">
             <td v-if="selectable" class="check">
               <input type="checkbox" :checked="selected.includes(row.procId)" :disabled="!canPick(row)" @change="toggleRow(row.procId)" />
               <span v-if="gates[row.procId] === 'pending' || flowByProc[row.procId] === '已提交审核'" class="clip" v-hint.clip="'待审核'">待审核</span>

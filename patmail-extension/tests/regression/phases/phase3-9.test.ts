@@ -272,7 +272,7 @@ describe('Phase 3.9 当前来源与证据聚合', () => {
     const evidence = response.payload.currentEvidence as { reason?: string; currentTrust?: boolean } | undefined
     expect(evidence?.reason).toBe('FILE_REMOVED')
     expect(evidence?.currentTrust).toBe(false)
-    const plans = response.payload.stagePlans as Array<{ stage?: string; canExecute?: boolean; sideEffect?: string }> | undefined
+    const plans = response.payload.stagePlans
     expect(plans?.find(item => item.stage === 'MAIL_SAVE')?.canExecute).toBe(false)
     expect(plans?.filter(item => item.sideEffect === 'write').every(item => item.canExecute === false)).toBe(true)
   })

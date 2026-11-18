@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 
 export async function runFileSearch(ctx) {
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const { report, context, worker, extensionId, page, panel, host, url, easyUrl, apiCalls, visible, tabFor, showPanel } = ctx
   const check = (name, action) => report.check(name, action)
+  // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
   const note = (line) => report.note(line)
   await check('file search reuses same-origin browser session and supports pagination, refresh, empty, expiry', async () => {
     const easyPage = await context.newPage()

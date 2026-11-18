@@ -17,6 +17,7 @@ export class IndexedTaskStore implements TaskStore {
       const request = this.factory.open(DB_NAME, 1)
       request.onupgradeneeded = () => request.result.createObjectStore(STORE)
       request.onsuccess = () => resolve(request.result)
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       request.onerror = () => reject(request.error)
     })
     return this.database
@@ -35,8 +36,10 @@ export class IndexedTaskStore implements TaskStore {
         tasks = stored.tasks.filter(item => includeArchived || !item.archived)
         if (stored.changed) store.put({ version: 2, tasks: [...stored.opaque, ...stored.tasks], migrations: stored.migrations }, key)
       }
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       current.onerror = () => reject(current.error)
       tx.oncomplete = () => resolve(tasks)
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       tx.onerror = () => reject(tx.error)
     })
   }
@@ -58,8 +61,10 @@ export class IndexedTaskStore implements TaskStore {
         const tasks = commitTasks(stored.tasks, decided.write)
         store.put({ version: 2, tasks: [...stored.opaque, ...tasks], migrations: stored.migrations }, key)
       }
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       current.onerror = () => reject(current.error)
       tx.oncomplete = () => resolve(outcome)
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       tx.onerror = () => reject(tx.error)
     })
   }
@@ -80,8 +85,10 @@ export class IndexedTaskStore implements TaskStore {
           : { ok: false, code: result.code ?? 'INVALID_TRANSITION', message: result.message, current: result.task ?? undefined }
         if (result.ok) store.put({ version: 2, tasks: [...stored.opaque, ...result.tasks], migrations: stored.migrations }, key)
       }
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       current.onerror = () => reject(current.error)
       tx.oncomplete = () => resolve(outcome)
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       tx.onerror = () => reject(tx.error)
     })
   }
@@ -106,8 +113,10 @@ export class IndexedTaskStore implements TaskStore {
         store.put({ version: 2, tasks: [...stored.opaque, ...tasks], migrations: stored.migrations }, key)
         outcome = { ok: true, message: '' }
       }
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       current.onerror = () => reject(current.error)
       tx.oncomplete = () => resolve(outcome)
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- 存量豁免：保留原始 rejection reason（AbortSignal/DOMException）
       tx.onerror = () => reject(tx.error)
     })
   }
@@ -177,9 +186,13 @@ export function createBrowserTaskStore(): TaskStore {
 
 function emptyStore(): TaskStore {
   return {
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     list: async () => [],
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     save: async () => { throw new Error('当前环境没有任务存储。') },
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     updateTaskAtomically: async () => ({ ok: false as const, code: 'INVALID_TRANSITION' as const, message: '当前环境没有任务存储。' }),
+    // eslint-disable-next-line @typescript-eslint/require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     archive: async () => ({ ok: false, message: '当前环境没有任务存储。' })
   }
 }

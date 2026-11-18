@@ -10,6 +10,8 @@ import type { LimitMonitorResult, LimitMonitorRow } from './limit-monitor-types'
 import { filingSearchValueLimit, isFilingSearchInputField, type FilingSearchQuery } from './filing-search-params'
 import type { FilingSearchResult, FilingSearchRow } from './filing-search-types'
 import type { FilingFlowRow, FilingUser } from './filing-export'
+import type { FeeSearchResult } from './fee-search-types'
+export { isFeeSearchQuery } from './fee-search-params'
 import { isProcessKind, isProcessOpenTarget, PROCESS_SPECS, type ProcessListQuery, type ProcessListResult, type ProcessListRow } from './mail-process'
 import type { SessionSummary } from './session'
 import type { CaseContactExport } from '../case-contact/query'
@@ -324,10 +326,12 @@ export function isDictionaryResult(value: unknown): value is ApiResult<Dictionar
 }
 
 function isBoundedText(value: unknown, limit: number): value is string {
+  // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
   return typeof value === 'string' && value.length <= limit && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)
 }
 
 function isVolumeToken(value: unknown): value is string {
+  // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
   return typeof value === 'string' && value.length >= 1 && value.length <= 80 && !/[\u0000-\u001f<>]/.test(value)
 }
 
@@ -349,4 +353,12 @@ function isCaseContactExport(value: unknown): value is CaseContactExport {
 
 export function isCaseContactResult(value: unknown): value is ApiResult<CaseContactExport> {
   return isApiResult(value, isCaseContactExport)
+}
+
+function isFeeSearchResult(value: unknown): value is FeeSearchResult {
+  return isRecord(value) && Array.isArray(value.rows) && typeof value.total === 'number'
+}
+
+export function isFeeSearchApiResult(value: unknown): value is ApiResult<FeeSearchResult> {
+  return isApiResult(value, isFeeSearchResult)
 }

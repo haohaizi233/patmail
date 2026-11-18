@@ -33,7 +33,7 @@ for (const surface of ['文件', '期限', '递交'] as const) {
         const kind = message.payload.kind
         if (kind === 'picker') {
           if (mode === 'pending') await gate
-          if (mode === 'invalid') return { type: MessageType.DictionaryResult, payload: { ok: false, error: { code: 'INVALID_RESPONSE', message: '失败' } } } as ContentResponse
+          if (mode === 'invalid') return { type: MessageType.DictionaryResult, payload: { ok: false, error: { code: 'INVALID_RESPONSE', message: '失败' } } }
           const rows = mode === 'ready' ? [{ id: NEW, name: '新选项', pid: '' }] : null
           return { type: MessageType.DictionaryResult, payload: { ok: true, data: { kind, ...buildPickerCatalog({ applyTags: { ApplyTags: rows }, user: { TreeUser: rows } }) } } }
         }
@@ -48,6 +48,7 @@ for (const surface of ['文件', '期限', '递交'] as const) {
     // 每个界面用独立账号：选项账本按账号分区，串了会让后面的界面误以为已有账本。
     account.userId = surface === '文件' ? 'empty-file' : surface === '期限' ? 'empty-limit' : 'empty-filing'
     const host = document.body.appendChild(document.createElement('div'))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 存量豁免：外部输入边界保留 any
     app = createApp({ render: () => h(component as any, {
       bridge: { request }, userId: account.userId, canSearch: true, mode: 'history', pageSize: 20,
       seed: { apply_tags_id: OLD, case_volume: 'test' }, seedToken: 1, onSearch: search, onSearched: search
@@ -85,7 +86,9 @@ for (const surface of ['文件', '期限', '递交'] as const) {
     expect(field().textContent).toContain('新选项')
     submit().click(); await settle()
     expect(search).toHaveBeenCalledOnce()
-    const query = search.mock.calls[0]![0]
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
+    const query = search.mock.calls[0][0]
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     expect(surface === '文件' ? query.resolvedFields.apply_tags_id : surface === '期限' ? query.fields.apply_tags_id : query.fields.audit_user_id).toBe(NEW)
   })
 }

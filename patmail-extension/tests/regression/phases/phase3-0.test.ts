@@ -3,6 +3,7 @@ import { projectPath } from '../../helpers/project'
 import { describe, expect, it } from 'vitest'
 import { downgradeClientAcceptance, downgradeClientEvidence } from '../../../src/automation/acceptance-trust'
 import { handleAuthorityMessage } from '../../../src/background/authority'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { loadAccount, refreshStaleTasks, saveCustomerAccount, saveRuleAccount } from '../../../src/background/account-data'
 import { scopeExtensionPageMessage } from '../../../src/background/scope'
 import { handleWorkspaceMessage, openWorkspaceTab, type WorkspaceHost } from '../../../src/background/workspace'

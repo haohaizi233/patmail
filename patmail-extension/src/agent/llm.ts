@@ -169,6 +169,7 @@ function choiceFromPayload(parsed: unknown): ChatChoice {
   if (!Array.isArray(record.choices) || record.choices.length === 0) {
     throw new LlmError('INVALID_RESPONSE', '模型服务响应里没有 choices。')
   }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   const first = record.choices[0]
   const choice = (typeof first === 'object' && first !== null ? first : {}) as Record<string, unknown>
   const message = (typeof choice.message === 'object' && choice.message !== null ? choice.message : {}) as Record<string, unknown>
@@ -193,6 +194,7 @@ async function readChatStream(response: Response, onDelta: (partial: ChatDelta) 
   const applyEvent = (data: string): void => {
     if (!data || data === '[DONE]') return
     const parsed = JSON.parse(data) as Record<string, unknown>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     const first = Array.isArray(parsed.choices) ? parsed.choices[0] : undefined
     const row = (typeof first === 'object' && first !== null ? first : {}) as Record<string, unknown>
     const delta = (typeof row.delta === 'object' && row.delta !== null ? row.delta : {}) as Record<string, unknown>

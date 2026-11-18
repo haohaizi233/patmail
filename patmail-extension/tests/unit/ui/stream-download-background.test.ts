@@ -23,6 +23,7 @@ describe('原生流下载后台', () => {
     const calls: string[] = []
     const download = vi.fn(), resume = vi.fn(async () => {})
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string, @typescript-eslint/restrict-template-expressions -- 存量豁免：多项历史存量，理由见 docs/ci/quality-gates.md
       calls.push(`${init?.method ?? 'GET'} ${url}`)
       return new Response(JSON.stringify({ protocol: 'patmail-stream-v1', version: 2, token, taskId: id, sealed: true, manifest: {} }))
     }
@@ -57,6 +58,7 @@ describe('原生流下载后台', () => {
     let accept!: (id: number) => void
     const download = vi.fn(() => new Promise<number>(resolve => { accept = resolve }))
     const fetcher: typeof fetch = async (url, init) => {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
       calls.push({ path: String(url), init })
       return new Response(JSON.stringify({ protocol: 'patmail-stream-v1', token }), { status: 200 })
     }
@@ -67,6 +69,7 @@ describe('原生流下载后台', () => {
     expect(calls.at(-1)?.init?.body).toEqual(Uint8Array.of(97))
     accept(77)
     expect(await service.command({ action: 'finish', token }, 10)).toEqual({ ok: true, downloadId: 77 })
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
     expect(download).toHaveBeenCalledWith(expect.objectContaining({ filename: '模板.zip', url: expect.stringContaining('/stream/' + token) }))
     expect(calls.filter(call => call.init?.method === 'PUT')).toHaveLength(1)
   })

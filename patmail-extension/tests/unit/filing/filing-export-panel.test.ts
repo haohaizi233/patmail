@@ -147,6 +147,7 @@ describe('递交查询面板的查询按钮', () => {
     const globalUrl = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
     globalUrl.createObjectURL = () => 'blob:patmail-test'
     globalUrl.revokeObjectURL = () => {}
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- 存量豁免：保留原型方法引用
     const anchorClick = HTMLAnchorElement.prototype.click
     HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement): void {
       saved.push(this.download)
@@ -204,12 +205,13 @@ describe('递交查询面板的查询按钮', () => {
     const globalUrl = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
     globalUrl.createObjectURL = () => 'blob:patmail-test'
     globalUrl.revokeObjectURL = () => {}
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- 存量豁免：保留原型方法引用
     const anchorClick = HTMLAnchorElement.prototype.click
     HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement): void {
       saved.push(this.download)
     }
     try {
-      const base = exportBridge(calls as unknown[])
+      const base = exportBridge(calls)
       const bridge: MessageBridge = {
         request: async message => {
           const type = (message as { type?: string }).type

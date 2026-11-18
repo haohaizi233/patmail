@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nativeStreamArchive } from '../../../src/utils/stream-download'
 const state = vi.hoisted(() => ({ status: undefined as undefined | ((value: unknown) => void), completed: false }))
 vi.mock('../../../src/utils/runtime', () => ({ sendToBackground: vi.fn(async message => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (message.type !== 'STREAM_DOWNLOAD') return null
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (message.payload.action === 'start') return { type: 'STREAM_DOWNLOAD_RESULT', payload: { ok: true, token: 'a'.repeat(64), ...(state.completed ? { info: { completed: true, completedBytes: 12345 } } : {}) } }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (message.payload.action === 'status') return new Promise(resolve => { state.status = resolve })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
   if (message.payload.action === 'abort') state.status?.({ type: 'ERROR', payload: { message: '清理后令牌已失效' } })
   return { type: 'STREAM_DOWNLOAD_RESULT', payload: { ok: true } }
 }) }))

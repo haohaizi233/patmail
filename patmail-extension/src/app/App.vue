@@ -24,6 +24,7 @@ import AcceptancePage from './pages/AcceptancePage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 import LimitsPage from './pages/LimitsPage.vue'
 import FilingsPage from './pages/FilingsPage.vue'
+import FeesPage from './pages/FeesPage.vue'
 import CaseContactsPage from './pages/CaseContactsPage.vue'
 import SnapshotProbe from './pages/SnapshotProbe.vue'
 import { CASE_CONTACT_CUSTOMER_NAME } from '../customer/skills'
@@ -32,9 +33,12 @@ import AppDialog from './components/AppDialog.vue'
 
 const nav = [
   { name: '首页', path: 'home', hash: '/', icon: 43 },
+  { name: '综合查询', path: 'query', hash: '/files', icon: 45, children: [
   { name: '文件管理', path: 'file', hash: '/files', icon: 41 },
   { name: '期限监控', path: 'limit', hash: '/limits', icon: 42 },
   { name: '递交管理', path: 'filing', hash: '/filings', icon: 33 },
+  { name: '费用查询', path: 'fee', hash: '/fees', icon: 44 },
+  ] },
   { name: '客户管理', path: 'users', hash: '/customers', icon: 40 },
   { name: '发文映射', path: 'rule', hash: '/rules', icon: 32 },
   { name: '发文任务', path: 'task', hash: '/tasks', icon: 34 },
@@ -43,13 +47,14 @@ const nav = [
   { name: '邮件草稿', path: 'task', hash: '/drafts', icon: 37 },
   { name: '工作流', path: 'rule', hash: '/workflow', icon: 38 }
 ]
+const routeItems = nav.flatMap(item => item.children ?? [item])
 const hiddenRoutes = new Set(['/acceptance', '/settings', '/contacts', '/probe'])
-const pages = { '/': HomePage, '/files': FilesPage, '/limits': LimitsPage, '/filings': FilingsPage, '/customers': CustomersPage, '/contacts': CaseContactsPage, '/templates': TemplatesPage, '/rules': RulesPage, '/tasks': TasksPage, '/drafts': DraftsPage, '/workflow': WorkflowPage, '/records': RecordsPage, '/acceptance': AcceptancePage, '/settings': SettingsPage, '/probe': SnapshotProbe }
+const pages = { '/': HomePage, '/files': FilesPage, '/limits': LimitsPage, '/filings': FilingsPage, '/fees': FeesPage, '/customers': CustomersPage, '/contacts': CaseContactsPage, '/templates': TemplatesPage, '/rules': RulesPage, '/tasks': TasksPage, '/drafts': DraftsPage, '/workflow': WorkflowPage, '/records': RecordsPage, '/acceptance': AcceptancePage, '/settings': SettingsPage, '/probe': SnapshotProbe }
 
 function readRoute(): string {
   const path = location.hash.replace(/^#/, '') || '/'
   if (path === '/probe') return path
-  return nav.some(item => item.hash === path) || hiddenRoutes.has(path) ? path : '/'
+  return routeItems.some(item => item.hash === path) || hiddenRoutes.has(path) ? path : '/'
 }
 
 const route = ref(readRoute())
@@ -59,7 +64,7 @@ const workspace = useWorkspace()
 function workspaceScroller(): HTMLElement | null {
   return document.querySelector('.workspace')
 }
-const pageName = computed(() => route.value === '/settings' ? '系统设置' : route.value === '/contacts' ? CASE_CONTACT_CUSTOMER_NAME : nav.find(item => item.hash === route.value)?.name ?? '首页')
+const pageName = computed(() => route.value === '/settings' ? '系统设置' : route.value === '/contacts' ? CASE_CONTACT_CUSTOMER_NAME : routeItems.find(item => item.hash === route.value)?.name ?? '首页')
 const page = computed(() => pages[route.value as keyof typeof pages] ?? HomePage)
 const profileName = computed(() => workspace.connection.value.displayName || '未登录')
 const mode = ref<CustomerMode>(customerMode())
@@ -69,7 +74,7 @@ watchCustomerMode(() => { mode.value = customerMode() })
 const { src: avatarSrc, zoomed, zoomSrc, openZoom, closeZoom } = useAccountAvatar()
 
 function go(name: string): void {
-  const item = nav.find(entry => entry.name === name)
+  const item = [...nav, ...routeItems].find(entry => entry.name === name)
   if (item) location.hash = item.hash
 }
 
