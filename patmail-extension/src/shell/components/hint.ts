@@ -37,7 +37,20 @@ export function visibleHint(explicit: string, content: string, clipOnly: boolean
 }
 
 export function isTextClipped(el: HTMLElement): boolean {
-  return el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1
+  if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) return true
+  const clipChild = el.querySelector<HTMLElement>('.picked-name, .col-name-clip, .clip, [class*="clip"]')
+  if (clipChild && (clipChild.scrollWidth > clipChild.clientWidth + 1 || clipChild.scrollHeight > clipChild.clientHeight + 1)) {
+    return true
+  }
+  return false
+}
+
+function anchorRectOf(el: HTMLElement): DOMRect {
+  const clipChild = el.querySelector<HTMLElement>('.picked-name, .col-name-clip, .clip, [class*="clip"]')
+  if (clipChild && (clipChild.scrollWidth > clipChild.clientWidth + 1 || clipChild.scrollHeight > clipChild.clientHeight + 1)) {
+    return clipChild.getBoundingClientRect()
+  }
+  return el.getBoundingClientRect()
 }
 
 function remember(el: HintEl, value: unknown): void {

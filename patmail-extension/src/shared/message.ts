@@ -240,10 +240,10 @@ export type ContentRequest =
   | Response<'READ_CUSTOMER_DIRECTORY', { customerId: string }>
   | Response<'READ_MAIL_CONTACTS', { mailId: string; customerId: string }>
   | Response<'READ_MAIL_ADDRESSES', { mailId: string }>
-  | Response<'LIST_HISTORY_QUERIES', { force: boolean; surface?: 'file' | 'limit' }>
-  | Response<'GET_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' }>
-  | Response<'SAVE_HISTORY_QUERY', { title: string; queryId: string; queryXml: string; surface?: 'file' | 'limit' }>
-  | Response<'DELETE_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' }>
+  | Response<'LIST_HISTORY_QUERIES', { force: boolean; surface?: 'file' | 'limit' | 'fee' }>
+  | Response<'GET_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' | 'fee' }>
+  | Response<'SAVE_HISTORY_QUERY', { title: string; queryId: string; queryXml: string; surface?: 'file' | 'limit' | 'fee' }>
+  | Response<'DELETE_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' | 'fee' }>
   | Response<'SAVE_FILE_TEMP_NAME', { tempName: string; newFilename: string; fileNameType: string }>
   | Response<'DELETE_FILE_TEMP_NAME', { tempId: string }>
   | Response<'LOAD_DICTIONARY', DictionaryLoadRequest>
@@ -804,11 +804,11 @@ export function isMessage(value: unknown): value is AppMessage {
       return value.payload === undefined
     case MessageType.ListHistoryQueries:
       return isRecord(value.payload) && (value.payload.force === true || value.payload.force === false) &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
         Object.keys(value.payload).every(key => key === 'force' || key === 'surface')
     case MessageType.GetHistoryQuery:
       return isRecord(value.payload) && typeof value.payload.queryId === 'string' &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
         Object.keys(value.payload).every(key => key === 'queryId' || key === 'surface')
     case MessageType.SaveHistoryQuery:
       return isRecord(value.payload) && typeof value.payload.title === 'string' && value.payload.title.trim().length > 0 &&
@@ -817,11 +817,11 @@ export function isMessage(value: unknown): value is AppMessage {
         typeof value.payload.queryXml === 'string' && value.payload.queryXml.length <= 200_000 &&
         value.payload.queryXml.startsWith('<xmlRoot>') && value.payload.queryXml.endsWith('</xmlRoot>') &&
         !/<!DOCTYPE|<!ENTITY/i.test(value.payload.queryXml) &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
         Object.keys(value.payload).every(key => key === 'title' || key === 'queryId' || key === 'queryXml' || key === 'surface')
     case MessageType.DeleteHistoryQuery:
       return isRecord(value.payload) && typeof value.payload.queryId === 'string' && isQueryGuid(value.payload.queryId) &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
         Object.keys(value.payload).every(key => key === 'queryId' || key === 'surface')
     case MessageType.SaveFileTempName: {
       if (!isRecord(value.payload) || Object.keys(value.payload).length !== 3) return false

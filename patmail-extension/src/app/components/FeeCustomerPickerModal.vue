@@ -74,7 +74,8 @@ watch(
       clearTimeout(debounceTimer)
       debounceTimer = null
     }
-  }
+  },
+  { immediate: true }
 )
 
 function onInputSearch(): void {
@@ -135,7 +136,7 @@ function confirmSelection(): void {
       <div class="ihg-modal">
         <header class="ihg-head">
           <strong>{{ title }}</strong>
-          <button type="button" class="ihg-close" aria-label="关闭" @click="emit('close')">×</button>
+          <button type="button" class="ihg-close" v-hint="'关闭'" aria-label="关闭" @click="emit('close')">×</button>
         </header>
 
         <div class="ihg-search-bar">
@@ -181,7 +182,9 @@ function confirmSelection(): void {
                   <td class="col-check">
                     <input type="checkbox" :checked="isPicked(item.id)" @click.stop="toggleCandidate(item)" />
                   </td>
-                  <td class="col-name" :title="item.name">{{ item.name }}</td>
+                  <td class="col-name">
+                    <span class="col-name-clip" v-hint.clip="item.name">{{ item.name }}</span>
+                  </td>
                   <td class="col-tel">{{ item.tel || '-' }}</td>
                 </tr>
               </tbody>
@@ -192,7 +195,7 @@ function confirmSelection(): void {
           <div class="ihg-right">
             <div class="ihg-right-head">
               <span>结果列表（{{ draft.length }}）</span>
-              <button v-if="draft.length" type="button" class="ihg-clear-btn" @click="clearPicked">清空</button>
+              <button v-if="draft.length" type="button" class="ihg-clear-btn" v-hint="'清空已选客户'" @click="clearPicked">清空</button>
             </div>
             <ul class="ihg-picked-list">
               <li v-if="!draft.length" class="ihg-empty">尚未选择客户</li>
@@ -203,16 +206,42 @@ function confirmSelection(): void {
                 @click="activeSelectedId = entry.id"
                 @dblclick="removePicked(entry.id)"
               >
-                <span class="picked-name" :title="entry.name">{{ entry.name }}</span>
-                <button type="button" class="picked-del" aria-label="移除" @click.stop="removePicked(entry.id)">×</button>
+                <span class="picked-name" v-hint.clip="entry.name">{{ entry.name }}</span>
+                <button
+                  type="button"
+                  class="picked-del"
+                  v-hint="'移除该客户'"
+                  aria-label="移除"
+                  @click.stop="removePicked(entry.id)"
+                >
+                  ×
+                </button>
               </li>
             </ul>
           </div>
 
           <!-- 上下排序按钮（对齐 IhgSelect Up/Down） -->
           <div class="ihg-order-btns">
-            <button type="button" class="ghost tiny" title="上移" :disabled="!activeSelectedId" @click="moveActive(-1)">↑</button>
-            <button type="button" class="ghost tiny" title="下移" :disabled="!activeSelectedId" @click="moveActive(1)">↓</button>
+            <button
+              type="button"
+              class="ghost tiny"
+              v-hint="'向上移动'"
+              aria-label="上移"
+              :disabled="!activeSelectedId"
+              @click="moveActive(-1)"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              class="ghost tiny"
+              v-hint="'向下移动'"
+              aria-label="下移"
+              :disabled="!activeSelectedId"
+              @click="moveActive(1)"
+            >
+              ↓
+            </button>
           </div>
         </div>
 
@@ -304,6 +333,13 @@ function confirmSelection(): void {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  table-layout: fixed;
+}
+.col-name-clip {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ihg-table th {
   position: sticky;

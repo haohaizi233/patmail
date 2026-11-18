@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary } from '../../api/dictionaries/picker-catalog'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
 import type { FeeApplicantItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
+import type { HistoryQueryOption } from '../../api/query-history'
 import {
   FEE_COMMON_CELLS,
   FEE_QUICK_CELLS,
@@ -12,12 +13,21 @@ import {
   FEE_SELECTS,
   FEE_STATIC_TREES,
   FEE_OPTION_KEYS,
+  FEE_ADVANCED_KEYS,
+  FEE_CHECK_KEYS,
+  buildFeeQueryXml,
   feeCellKey,
+  isFeeSearchInputField,
+  readFeeQueryXml,
   type FeeCell
 } from '../../api/fee-form'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
+import { isQueryGuid } from '../../query/query-validator'
+import { TemplateLoadCoordinator } from '../../query/load-coordinator'
+import { historyLabels } from '../../query/history-labels'
+import { downloadTemplateJson, readTemplateJson, templateJsonFileName, templateJsonText } from '../../query/template-json'
 import { MessageType, type MessageBridge } from '../../shared/message'
-import { infoDialog } from '../dialog'
+import { confirmDialog, infoDialog } from '../dialog'
 import { useWorkspace } from '../composables/useWorkspace'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
@@ -30,6 +40,7 @@ const props = defineProps<{
   bridge?: MessageBridge
   userId: string
   canSearch: boolean
+  manage?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -42,6 +53,8 @@ const injectedBridge = inject<MessageBridge>('bridge')
 function activeBridge(): MessageBridge | undefined {
   return props.bridge ?? injectedBridge
 }
+
+const canRead = computed(() => Boolean(activeBridge() && props.userId))
 
 useWorkspace()
 
@@ -182,10 +195,12 @@ function onConfirmCustomers(items: SelectedCustomerEntry[]): void {
   }
 }
 
-async function loadApplicantsForCustomers(customerIds: string): Promise<void> {
+async function loadApplicantsForCustomers(customerIds: string, preserveSelected = false): Promise<void> {
   // 对齐 FeeSearch.LoadTreeApplicant (L1188-1203)
-  values.value['applicant_id'] = ''
-  checkedBoxes.value['first_applicant'] = false
+  if (!preserveSelected) {
+    values.value['applicant_id'] = ''
+    checkedBoxes.value['first_applicant'] = false
+  }
   applicantOptions.value = []
   if (!customerIds.trim()) return
   const b = activeBridge()
@@ -701,6 +716,12 @@ function resetForm(): void {
   selectedCustomers.value = []
   selectedRuleOutCustomers.value = []
   applicantOptions.value = []
+  selectedTemplateId.value = ''
+  saveName.value = ''
+  saveNameDirty.value = false
+  unknownTemplateFields.value = {}
+  templateMessage.value = ''
+  exportNotice.value = ''
   showTypeMode.value = 'all'
   quickFeeSelectMode.value = ''
   result.value = null
@@ -778,6 +799,383 @@ function onFeeExported(message: string): void {
   exportNotice.value = message
 }
 
+// 历史查询条件（查询模板，与文件管理 / 期限监控同口径直连原站 SearchQueryHisList / Save / Delete）
+const templateLoads = new TemplateLoadCoordinator()
+const templates = ref<HistoryQueryOption[]>([])
+const selectedTemplateId = ref('')
+const saveName = ref('')
+const saveNameDirty = ref(false)
+const loadingTemplates = ref(false)
+const savingTemplate = ref(false)
+const deletingTemplate = ref(false)
+const templateMessage = ref('')
+const unknownTemplateFields = ref<Record<string, string>>({})
+const templateJsonInput = ref<HTMLInputElement | null>(null)
+
+const templateLabelMap = computed(() => historyLabels(templates.value))
+function templateLabel(item: HistoryQueryOption): string {
+  return templateLabelMap.value.get(item.id) ?? item.name
+}
+
+const DEFAULT_FEE_VALUES: Record<string, string> = {
+  case_type: '',
+  pay_status: '',
+  is_close: '',
+  is_ahead_pub: '',
+  hearing_the_case: '',
+  sourcetype: '',
+  contact_type: '',
+  notice_status: '',
+  receive_account_id: '',
+  business_coop: '',
+  exists_invoice_no: '',
+  bill_no: '',
+  case_agency_precorditem: '',
+  case_agency: ''
+}
+
+function collectDisplayValues(): Record<string, string> {
+  const labels: Record<string, string> = {}
+  if (selectedCustomers.value.length) {
+    labels.customer_id = customerDisplayText('customer_id')
+  }
+  if (selectedRuleOutCustomers.value.length) {
+    labels.ruleOutcustomer_id = customerDisplayText('ruleOutcustomer_id')
+  }
+  const allCells: FeeCell[] = [
+    ...FEE_COMMON_CELLS,
+    ...FEE_ADVANCED_BLOCKS.flatMap(b => b.cells)
+  ]
+  for (const cell of allCells) {
+    if (cell.kind === 'named') {
+      const raw = valueOf(cell.key).trim()
+      if (!raw) continue
+      const opts = treeChoices(cell.key)
+      const byVal = new Map(opts.map(o => [o.value, o.label]))
+      const names = raw.split(',').map(id => byVal.get(id.trim()) ?? '').filter(Boolean)
+      if (names.length) labels[cell.key] = names.join(',')
+    } else if (cell.kind === 'applicant-tree') {
+      const raw = valueOf(cell.key).trim()
+      if (!raw) continue
+      const byVal = new Map(applicantOptions.value.map(o => [o.value, o.label]))
+      const names = raw.split(/[,;]/).map(id => byVal.get(id.trim()) ?? '').filter(Boolean)
+      if (names.length) labels[cell.key] = names.join(',')
+    } else if (cell.kind === 'select') {
+      const raw = valueOf(cell.key).trim()
+      if (!raw) continue
+      const opts = cell.searchable ? treeChoices(cell.key) : selectOptions(cell.key)
+      const hit = opts.find(o => o.value === raw)
+      if (hit?.label) labels[cell.key] = hit.label
+    }
+  }
+  return labels
+}
+
+function collectDraftFields(): Record<string, string> {
+  const fields: Record<string, string> = {}
+  for (const [k, v] of Object.entries(values.value)) {
+    if (isFeeSearchInputField(k) && v.trim()) fields[k] = v.trim()
+  }
+  for (const [k, checked] of Object.entries(checkedBoxes.value)) {
+    if (FEE_CHECK_KEYS.has(k) && checked) fields[k] = 'on'
+  }
+  return fields
+}
+
+function maybeExpandAdvanced(fields: Record<string, string>, checks: Record<string, boolean>): void {
+  const hasAdv = Object.entries(fields).some(([k, v]) => FEE_ADVANCED_KEYS.has(k) && v.trim())
+    || Object.entries(checks).some(([k, v]) => FEE_ADVANCED_KEYS.has(k) && v)
+  if (hasAdv) showAdvanced.value = true
+}
+
+async function loadTemplates(force: boolean): Promise<void> {
+  const b = activeBridge()
+  if (!canRead.value || !b) {
+    templateMessage.value = '请先确认 EASY 已登录。'
+    return
+  }
+  const ticket = templateLoads.begin()
+  loadingTemplates.value = true
+  templateMessage.value = ''
+  try {
+    const resp = await b.request({ type: MessageType.ListHistoryQueries, payload: { force, surface: 'fee' } }, ticket.signal)
+    if (!templateLoads.isCurrent(ticket.id)) return
+    if (resp.type !== MessageType.HistoryQueriesResult || !resp.payload.ok) {
+      templates.value = []
+      templateMessage.value = resp.type === MessageType.Error
+        ? resp.payload.message
+        : resp.type === MessageType.HistoryQueriesResult && !resp.payload.ok
+          ? resp.payload.error.message
+          : '费用模板没有读到。'
+      return
+    }
+    templates.value = resp.payload.data
+    if (resp.payload.data.length === 0) {
+      templateMessage.value = '当前账号还没有费用查询模板。'
+    }
+  } catch {
+    if (templateLoads.isCurrent(ticket.id)) templateMessage.value = '读取费用模板失败。'
+  } finally {
+    if (templateLoads.isCurrent(ticket.id)) loadingTemplates.value = false
+  }
+}
+
+async function applyTemplate(id: string): Promise<void> {
+  selectedTemplateId.value = id
+  saveNameDirty.value = false
+  if (!id) {
+    values.value = { ...DEFAULT_FEE_VALUES }
+    checkedBoxes.value = {}
+    selectedCustomers.value = []
+    selectedRuleOutCustomers.value = []
+    applicantOptions.value = []
+    unknownTemplateFields.value = {}
+    saveName.value = ''
+    templateMessage.value = ''
+    return
+  }
+  const b = activeBridge()
+  if (!b) return
+  const ticket = templateLoads.begin()
+  templateMessage.value = ''
+  try {
+    const resp = await b.request({ type: MessageType.GetHistoryQuery, payload: { queryId: id, surface: 'fee' } }, ticket.signal)
+    if (!templateLoads.isCurrent(ticket.id)) return
+    if (resp.type !== MessageType.HistoryQueryResult || !resp.payload.ok) {
+      templateMessage.value = resp.type === MessageType.HistoryQueryResult && !resp.payload.ok
+        ? resp.payload.error.message
+        : '这个费用模板没有打开。'
+      return
+    }
+    const parsed = readFeeQueryXml(resp.payload.data.queryXml)
+    if (!parsed.ok) {
+      templateMessage.value = parsed.error.message
+      return
+    }
+    values.value = { ...DEFAULT_FEE_VALUES, ...parsed.data.fields }
+    checkedBoxes.value = { ...parsed.data.checks }
+    selectedCustomers.value = parsed.data.customers
+    selectedRuleOutCustomers.value = parsed.data.ruleOutCustomers
+    unknownTemplateFields.value = { ...parsed.data.unknownFields }
+    maybeExpandAdvanced(parsed.data.fields, parsed.data.checks)
+    if (parsed.data.customers.length) {
+      void loadApplicantsForCustomers(parsed.data.customers.map(c => c.id).join(';'), true)
+    } else {
+      applicantOptions.value = []
+    }
+    if (parsed.data.fields.case_type || parsed.data.fields.country) {
+      void refreshCtrlProc()
+    }
+    const named = templates.value.find(item => item.id === id)
+    if (named && !saveNameDirty.value) saveName.value = named.name
+  } catch {
+    if (templateLoads.isCurrent(ticket.id)) templateMessage.value = '载入费用模板失败。'
+  }
+}
+
+async function saveTemplate(): Promise<void> {
+  const b = activeBridge()
+  if (!b || savingTemplate.value) return
+  const selected = templates.value.find(item => item.id === selectedTemplateId.value)
+  const title = saveName.value.trim() || (selected ? selected.name.trim() : '')
+  if (!title) {
+    templateMessage.value = '先填写模板名称。'
+    return
+  }
+  const nonEmptyFields: Record<string, string> = {}
+  for (const [k, v] of Object.entries(values.value)) {
+    if (isFeeSearchInputField(k) && v.trim()) nonEmptyFields[k] = v.trim()
+  }
+  const activeChecks: Record<string, boolean> = {}
+  for (const [k, checked] of Object.entries(checkedBoxes.value)) {
+    if (FEE_CHECK_KEYS.has(k) && checked) activeChecks[k] = true
+  }
+  if (!Object.keys(nonEmptyFields).length && !Object.keys(activeChecks).length && !selectedCustomers.value.length && !selectedRuleOutCustomers.value.length && !Object.keys(unknownTemplateFields.value).length) {
+    templateMessage.value = '先填写至少一项查询条件，再保存。'
+    return
+  }
+  const queryId = selected && isQueryGuid(selected.id) ? selected.id : ''
+  const before = new Set(templates.value.map(item => item.id))
+  const queryXml = buildFeeQueryXml({
+    fields: nonEmptyFields,
+    checks: activeChecks,
+    displayValues: collectDisplayValues(),
+    customers: selectedCustomers.value,
+    ruleOutCustomers: selectedRuleOutCustomers.value,
+    unknownFields: unknownTemplateFields.value
+  })
+  savingTemplate.value = true
+  templateMessage.value = '正在写入原网站的费用模板…'
+  try {
+    const resp = await b.request({
+      type: MessageType.SaveHistoryQuery,
+      payload: { title, queryId, queryXml, surface: 'fee' }
+    })
+    if (resp.type !== MessageType.HistoryQuerySaved || !resp.payload.ok) {
+      templateMessage.value = resp.type === MessageType.HistoryQuerySaved && !resp.payload.ok
+        ? resp.payload.error.message
+        : resp.type === MessageType.Error ? resp.payload.message : '原网站没有保存这份费用模板。'
+      return
+    }
+    await loadTemplates(true)
+    const created = templates.value.find(item => !before.has(item.id) && item.name === title)
+    const saved = created ?? (queryId ? templates.value.find(item => item.id === queryId) : undefined)
+    if (saved) {
+      selectedTemplateId.value = saved.id
+      saveName.value = saved.name
+      saveNameDirty.value = false
+    }
+    templateMessage.value = created
+      ? '已在原网站另存了这份新的费用模板。'
+      : queryId ? '已更新原网站上的这份费用模板。' : '已在原网站新建这份费用模板。'
+  } catch {
+    templateMessage.value = '保存费用模板失败。'
+  } finally {
+    savingTemplate.value = false
+  }
+}
+
+async function deleteTemplate(): Promise<void> {
+  const b = activeBridge()
+  if (!b || deletingTemplate.value || savingTemplate.value) return
+  const current = templates.value.find(item => item.id === selectedTemplateId.value)
+  if (!current || !isQueryGuid(current.id)) {
+    templateMessage.value = '先选中原网站上的费用模板，再删除。'
+    return
+  }
+  const agreed = await confirmDialog({
+    title: '删除原网站模板',
+    message: `会从原网站删掉「${templateLabel(current)}」。`,
+    confirmLabel: '删除',
+    warn: true
+  })
+  if (!agreed) return
+  deletingTemplate.value = true
+  templateMessage.value = '正在从原网站删除…'
+  try {
+    const resp = await b.request({
+      type: MessageType.DeleteHistoryQuery,
+      payload: { queryId: current.id, surface: 'fee' }
+    })
+    if (resp.type !== MessageType.HistoryQueryDeleted || !resp.payload.ok) {
+      templateMessage.value = resp.type === MessageType.HistoryQueryDeleted && !resp.payload.ok
+        ? resp.payload.error.message
+        : resp.type === MessageType.Error ? resp.payload.message : '原网站没有删除这份费用模板。'
+      return
+    }
+    selectedTemplateId.value = ''
+    saveName.value = ''
+    saveNameDirty.value = false
+    await loadTemplates(true)
+    templateMessage.value = '已从原网站删除这份费用模板。'
+  } catch {
+    templateMessage.value = '删除费用模板失败。'
+  } finally {
+    deletingTemplate.value = false
+  }
+}
+
+function exportTemplateJson(): void {
+  const fields = collectDraftFields()
+  const extras = Object.entries(unknownTemplateFields.value).filter(([, v]) => v.trim()).length
+  if (!Object.keys(fields).length && !extras) {
+    templateMessage.value = '先填写至少一项查询条件，再导出。'
+    return
+  }
+  const selected = templates.value.find(item => item.id === selectedTemplateId.value)
+  const from = saveName.value.trim() || (selected ? selected.name.trim() : '')
+  downloadTemplateJson(
+    templateJsonText('FeeSearch', {
+      fields,
+      displayValues: collectDisplayValues(),
+      unknownFields: unknownTemplateFields.value
+    }),
+    templateJsonFileName('FeeSearch', from)
+  )
+  templateMessage.value = `已导出当前条件的 JSON。${from ? `文件名带模板名「${from}」和时间戳` : '文件名只带查询面和时间戳；在「模板名称」里填上名字再导出，文件名就会带上'}，文件内容不含模板名，导入后自己命名保存。`
+}
+
+async function importTemplateJson(event: Event): Promise<void> {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  let text = ''
+  try {
+    text = await file.text()
+  } catch {
+    templateMessage.value = '这份 JSON 文件没有读开。'
+    return
+  }
+  const read = readTemplateJson(text, 'FeeSearch')
+  if (!read.ok) {
+    templateMessage.value = read.message
+    return
+  }
+  const nextValues: Record<string, string> = { ...DEFAULT_FEE_VALUES }
+  const nextChecks: Record<string, boolean> = {}
+  let count = 0
+  for (const [k, v] of Object.entries(read.conditions.fields)) {
+    if (!v.trim()) continue
+    if (FEE_CHECK_KEYS.has(k)) {
+      const lower = v.trim().toLowerCase()
+      if (lower === 'on' || lower === 'true' || lower === '1') {
+        nextChecks[k] = true
+        count += 1
+      }
+    } else {
+      nextValues[k] = v
+      count += 1
+    }
+  }
+  values.value = nextValues
+  checkedBoxes.value = nextChecks
+  unknownTemplateFields.value = { ...read.conditions.unknownFields }
+
+  const parseModalList = (idStr: string | undefined, nameStr: string | undefined): SelectedCustomerEntry[] => {
+    if (!idStr?.trim()) return []
+    const ids = idStr.split(/[;,]/).map(s => s.trim()).filter(Boolean)
+    const names = (nameStr ?? '').split(/[;,]/).map(s => s.trim()).filter(Boolean)
+    return ids.map((id, idx) => ({ id, name: names[idx] || id }))
+  }
+  selectedCustomers.value = parseModalList(nextValues.customer_id, read.conditions.displayValues.customer_id)
+  selectedRuleOutCustomers.value = parseModalList(nextValues.ruleOutcustomer_id, read.conditions.displayValues.ruleOutcustomer_id)
+  if (selectedCustomers.value.length) {
+    void loadApplicantsForCustomers(selectedCustomers.value.map(c => c.id).join(';'), true)
+  } else {
+    applicantOptions.value = []
+  }
+  if (nextValues.case_type || nextValues.country) {
+    void refreshCtrlProc()
+  }
+  maybeExpandAdvanced(nextValues, nextChecks)
+  selectedTemplateId.value = ''
+  saveName.value = ''
+  saveNameDirty.value = false
+  templateMessage.value = `已导入 ${count} 个查询条件。可以继续追加或修改条件，最后自己填模板名称保存。`
+}
+
+watch(
+  () => props.userId,
+  nextUser => {
+    templates.value = []
+    selectedTemplateId.value = ''
+    saveName.value = ''
+    saveNameDirty.value = false
+    templateMessage.value = ''
+    if (nextUser) {
+      void loadTemplates(false)
+      if (!pickersReady.value && !loadingPickers.value) void loadPickers(false)
+    }
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(() => {
+  templateLoads.dispose()
+})
+
 // 对齐 FeeSearch.js L637-650: 显示全部 vs 仅显示选中项
 const displayRows = computed(() => {
   if (!result.value) return []
@@ -795,15 +1193,41 @@ const totalPages = computed(() => {
 
 <template>
   <div class="fee-search-query">
-    <!-- Query Conditions Card -->
-    <section class="card query-conditions" aria-label="费用查询条件">
+    <!-- Query Conditions + History Templates Card -->
+    <section class="card query-template query-conditions" aria-label="费用查询条件">
+      <!-- 历史查询条件（当前账号的费用模板，与文件管理 / 期限监控同样式） -->
       <div class="section-heading">
+        <strong>当前账号的费用模板</strong>
+        <button type="button" class="text-button" :disabled="!canRead || loadingTemplates" @click="loadTemplates(true)">
+          重新读取
+        </button>
+      </div>
+      <p v-if="loadingTemplates" class="hint">正在读取当前账号的费用模板…</p>
+      <p v-if="templateMessage" class="hint">{{ templateMessage }}</p>
+      <ul v-if="templates.length" class="template-picks">
+        <li v-for="item in templates" :key="item.id">
+          <button type="button" :class="{ on: selectedTemplateId === item.id }" @click="applyTemplate(item.id)">
+            <b v-hint.clip="templateLabel(item)">{{ templateLabel(item) }}</b>
+          </button>
+        </li>
+      </ul>
+      <label class="template-select-label">选用模板
+        <ThemeSelect
+          :model-value="selectedTemplateId"
+          placeholder="请选择"
+          empty-text="当前账号还没有费用查询模板。"
+          :options="templates.map(item => ({ value: item.id, label: templateLabel(item) }))"
+          @update:model-value="applyTemplate(String($event))"
+        />
+      </label>
+
+      <div class="section-heading query-section-head">
         <strong>查询条件</strong>
         <span class="inline-actions">
           <label class="query-timeout">超时时间
             <ThemeSelect v-model="queryTimeoutMs" :options="timeoutOptions" />
           </label>
-          <button type="button" class="text-button" :disabled="!canSearch || loadingPickers" @click="loadPickers(true)">
+          <button type="button" class="text-button" :disabled="!canRead || loadingPickers" @click="loadPickers(true)">
             校对最新字典
           </button>
         </span>
@@ -1213,45 +1637,60 @@ const totalPages = computed(() => {
         </section>
       </div>
 
-      <!-- Action Buttons Row -->
+      <!-- Template & Action Buttons Row -->
       <div class="form-actions fee-actions">
-        <span v-if="exportNotice" class="export-notice">{{ exportNotice }}</span>
+        <label class="fee-template-save">
+          模板名称
+          <input v-model="saveName" type="text" maxlength="80" placeholder="输入模板名称" @input="saveNameDirty = true" />
+        </label>
+        <button class="ghost" type="button" :disabled="!canRead || savingTemplate" @click="saveTemplate">
+          {{ savingTemplate ? '正在保存…' : '保存到网站' }}
+        </button>
+        <button class="ghost" type="button" :disabled="!canRead || deletingTemplate || !selectedTemplateId" @click="deleteTemplate">
+          {{ deletingTemplate ? '正在删除…' : '删除原网站模板' }}
+        </button>
+        <button class="ghost" type="button" @click="exportTemplateJson">导出 JSON</button>
+        <button class="ghost" type="button" @click="templateJsonInput?.click()">导入 JSON</button>
+        <input ref="templateJsonInput" type="file" accept=".json,application/json" hidden aria-label="导入费用模板 JSON" @change="importTemplateJson" />
         <button class="ghost" type="button" @click="resetForm">重置</button>
-        <button
-          class="ghost"
-          type="button"
-          :disabled="!canSearch"
-          v-hint="'按当前查询条件导出全部费用 Excel（支持原站模板与栏位排序）'"
-          @click="openExportModal('cond')"
-        >
-          导出清单
-        </button>
-        <button
-          class="ghost"
-          type="button"
-          :disabled="!canSearch"
-          v-hint="'导出下方已勾选费用记录的 Excel（支持原站模板）'"
-          @click="openExportModal('checked')"
-        >
-          导出勾选费用
-        </button>
-        <button
-          class="ghost"
-          type="button"
-          :disabled="!canSearch"
-          v-hint="'按案件汇总官费/代理费/第三方费并导出 Excel（支持原站模板）'"
-          @click="openExportModal('count')"
-        >
-          导出汇总数据
-        </button>
-        <button class="solid primary-search" type="button" :disabled="!canSearch || searchState === 'loading'" @click="doSearch(1)">
-          {{ searchState === 'loading' ? '正在查询…' : '查询' }}
-        </button>
+        <template v-if="!manage">
+          <button
+            class="ghost"
+            type="button"
+            :disabled="!canSearch"
+            v-hint="'按当前查询条件导出全部费用 Excel（支持原站模板与栏位排序）'"
+            @click="openExportModal('cond')"
+          >
+            导出清单
+          </button>
+          <button
+            class="ghost"
+            type="button"
+            :disabled="!canSearch"
+            v-hint="'导出下方已勾选费用记录的 Excel（支持原站模板）'"
+            @click="openExportModal('checked')"
+          >
+            导出勾选费用
+          </button>
+          <button
+            class="ghost"
+            type="button"
+            :disabled="!canSearch"
+            v-hint="'按案件汇总官费/代理费/第三方费并导出 Excel（支持原站模板）'"
+            @click="openExportModal('count')"
+          >
+            导出汇总数据
+          </button>
+          <button class="solid primary-search" type="button" :disabled="!canSearch || searchState === 'loading'" @click="doSearch(1)">
+            {{ searchState === 'loading' ? '正在查询…' : '查询' }}
+          </button>
+        </template>
       </div>
+      <p v-if="exportNotice" class="hint export-notice-line">{{ exportNotice }}</p>
     </section>
 
     <!-- Results Section -->
-    <section class="card fee-results-section" aria-label="费用查询结果">
+    <section v-if="!manage" class="card fee-results-section" aria-label="费用查询结果">
       <div class="section-heading"><strong>查询结果</strong></div>
       <!-- Filter Radios Bar (exact alignment with FeeSearch.aspx: 显示全部 / 仅显示选中项 / 只选官费 / 只选代理费) -->
       <div class="filter-radios-bar">
@@ -1655,7 +2094,41 @@ const totalPages = computed(() => {
 .block-title { font-size: 13px; font-weight: 650; color: #c44b7e; margin: 0; padding-left: 8px; border-left: 3px solid #f5a9ca; }
 
 .fee-actions { flex-wrap: wrap; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-.export-notice { margin-right: auto; font-size: 12px; color: #b93d74; }
+.fee-template-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: 12px;
+  color: #8a7290;
+}
+.fee-template-save input {
+  width: 170px;
+  min-height: 31px;
+  padding: 5px 8px;
+  border: 1px solid #e9d9e9;
+  border-radius: 8px;
+  background: #fff;
+  color: #4e4056;
+  font: inherit;
+  font-size: 12px;
+}
+.template-select-label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #8a7290;
+  margin-bottom: 12px;
+}
+.query-section-head {
+  padding-top: 12px;
+  border-top: 1px dashed #f0e1eb;
+}
+.export-notice-line {
+  margin: 8px 0 0;
+  color: #b93d74;
+  text-align: right;
+}
 .primary-search { min-width: 76px; }
 
 .fee-results-section { display: grid; gap: 12px; min-width: 0; }

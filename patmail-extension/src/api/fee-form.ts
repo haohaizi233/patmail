@@ -1,3 +1,5 @@
+import { apiError, type ApiResult } from './types'
+
 export interface FeeCheckItem {
   key: string
   label: string
@@ -509,4 +511,255 @@ export const FEE_ADVANCED_BLOCKS: FeeBlock[] = [
 export function feeCellKey(cell: FeeCell): string {
   if (cell.kind === 'spacer') return cell.id
   return cell.kind === 'dates' ? `${cell.start}-${cell.end}` : cell.key
+}
+
+function collectCellKeys(cells: FeeCell[]): { fields: string[]; checks: string[] } {
+  const fields: string[] = []
+  const checks: string[] = []
+  for (const cell of cells) {
+    if (cell.kind === 'spacer') continue
+    if (cell.kind === 'dates') {
+      fields.push(cell.start, cell.end)
+      if (cell.empty) checks.push(cell.empty)
+      for (const chk of cell.checks ?? []) checks.push(chk.key)
+    } else {
+      fields.push(cell.key)
+      if ('checks' in cell && cell.checks) {
+        for (const chk of cell.checks) checks.push(chk.key)
+      }
+    }
+  }
+  return { fields, checks }
+}
+
+const quickCollected = collectCellKeys(FEE_QUICK_CELLS)
+const commonCollected = collectCellKeys(FEE_COMMON_CELLS)
+const advCollected = collectCellKeys(FEE_ADVANCED_BLOCKS.flatMap(b => b.cells))
+
+export const FEE_CHECK_KEYS = new Set<string>([
+  ...quickCollected.checks,
+  ...commonCollected.checks,
+  ...advCollected.checks
+])
+
+export const FEE_ADVANCED_KEYS = new Set<string>([
+  ...advCollected.fields,
+  ...advCollected.checks
+])
+
+export const FEE_ALL_INPUT_KEYS = new Set<string>([
+  ...quickCollected.fields,
+  ...quickCollected.checks,
+  ...commonCollected.fields,
+  ...commonCollected.checks,
+  ...advCollected.fields,
+  ...advCollected.checks
+])
+
+export function isFeeSearchInputField(key: string): boolean {
+  return FEE_ALL_INPUT_KEYS.has(key)
+}
+
+/** 原站 FeeSearch.aspx 控件 ID 与查询参数名不一致的 2 处映射（QueryHistory 按 DOM id 读写 XML） */
+const FIELD_TO_FEE_XML: Record<string, string> = {
+  applicant_id: 'applicant',
+  charge_dept_id: 'charge_dept'
+}
+const FEE_XML_TO_FIELD: Record<string, string> = {
+  applicant: 'applicant_id',
+  charge_dept: 'charge_dept_id'
+}
+
+const FEE_NODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const FEE_UNSAFE_NODE = new Set(['__proto__', 'constructor', 'prototype'])
+const MAX_FEE_XML_CHARS = 200_000
+const MAX_FEE_XML_NODES = 400
+
+export interface FeeCustomerRef {
+  id: string
+  name: string
+}
+
+export interface FeeParsedQuery {
+  fields: Record<string, string>
+  checks: Record<string, boolean>
+  displayValues: Record<string, string>
+  customers: FeeCustomerRef[]
+  ruleOutCustomers: FeeCustomerRef[]
+  unknownFields: Record<string, string>
+}
+
+function escapeFeeXml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function pushFeeNode(parts: string[], used: Set<string>, name: string, value: string): void {
+  const text = value.trim()
+  if (!text || !FEE_NODE_NAME.test(name) || used.has(name) || FEE_UNSAFE_NODE.has(name)) return
+  used.add(name)
+  parts.push(`<${name}>${escapeFeeXml(text)}</${name}>`)
+}
+
+/**
+ * 构造原站 FeeSearch 历史查询模板 XML（与 QueryHistory.SaveQueryCondition 双向兼容）。
+ * - customer_id 严格按原站 FeeSearch 特例序列化为 JSON 数组 + `[{ value, text }]`
+ * - 树形框附写 `{控件}_text`；勾选框写 `on`
+ */
+export function buildFeeQueryXml(input: {
+  fields: Record<string, string>
+  checks?: Record<string, boolean>
+  displayValues?: Record<string, string>
+  customers?: FeeCustomerRef[]
+  ruleOutCustomers?: FeeCustomerRef[]
+  unknownFields?: Record<string, string>
+}): string {
+  const parts: string[] = []
+  const used = new Set<string>()
+  const fields = input.fields
+  const checks = input.checks ?? {}
+  const displayValues = input.displayValues ?? {}
+  const customers = input.customers ?? []
+  const ruleOutCustomers = input.ruleOutCustomers ?? []
+  const unknownFields = input.unknownFields ?? {}
+
+  if (customers.length) {
+    pushFeeNode(parts, used, 'customer_id', JSON.stringify(customers.map(c => c.id)))
+    pushFeeNode(parts, used, 'customer_id_text', JSON.stringify(customers.map(c => ({ value: c.id, text: c.name }))))
+  }
+  if (ruleOutCustomers.length) {
+    pushFeeNode(parts, used, 'ruleOutcustomer_id', ruleOutCustomers.map(c => c.id).join(';'))
+    pushFeeNode(parts, used, 'ruleOutcustomer_id_text', ruleOutCustomers.map(c => c.name).join(';'))
+  }
+
+  for (const key of Object.keys(fields).sort()) {
+    if (!isFeeSearchInputField(key) || FEE_CHECK_KEYS.has(key)) continue
+    if (key === 'customer_id' && customers.length) continue
+    if (key === 'ruleOutcustomer_id' && ruleOutCustomers.length) continue
+    const node = FIELD_TO_FEE_XML[key] ?? key
+    const val = (fields[key] ?? '').trim()
+    if (!val) continue
+    pushFeeNode(parts, used, node, val)
+    const label = (displayValues[key] ?? '').trim()
+    if (label && label !== val) pushFeeNode(parts, used, `${node}_text`, label)
+  }
+
+  for (const key of Object.keys(checks).sort()) {
+    if (!FEE_CHECK_KEYS.has(key) || !checks[key]) continue
+    pushFeeNode(parts, used, key, 'on')
+  }
+
+  for (const key of Object.keys(unknownFields).sort()) {
+    pushFeeNode(parts, used, key, unknownFields[key] ?? '')
+  }
+
+  return `<xmlRoot>${parts.join('')}</xmlRoot>`
+}
+
+function parseCustomerRefs(rawIds: string, rawText: string): FeeCustomerRef[] {
+  const idsText = rawIds.trim()
+  const labelText = rawText.trim()
+  if (!idsText && !labelText) return []
+
+  // 原站 FeeSearch 格式：customer_id = ["id1",...], customer_id_text = [{"value":"id1","text":"名1"},...]
+  try {
+    const parsedInfo = labelText ? JSON.parse(labelText) as unknown : null
+    if (Array.isArray(parsedInfo)) {
+      const refs = parsedInfo
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+        .map(item => ({
+          id: typeof item.value === 'string' ? item.value.trim() : typeof item.id === 'string' ? item.id.trim() : '',
+          name: typeof item.text === 'string' ? item.text.trim() : typeof item.name === 'string' ? item.name.trim() : ''
+        }))
+        .filter(item => Boolean(item.id))
+      if (refs.length) return refs
+    }
+  } catch { /* fallback below */ }
+
+  let ids: string[] = []
+  try {
+    const parsedIds = idsText ? JSON.parse(idsText) as unknown : null
+    if (Array.isArray(parsedIds)) {
+      ids = parsedIds.map(v => String(v ?? '').trim()).filter(Boolean)
+    }
+  } catch { /* fallback below */ }
+  if (!ids.length && idsText) {
+    ids = idsText.split(/[;,]/).map(s => s.trim()).filter(Boolean)
+  }
+  const names = labelText ? labelText.split(/[;,]/).map(s => s.trim()).filter(Boolean) : []
+  return ids.map((id, idx) => ({ id, name: names[idx] || id }))
+}
+
+function mapFeeXmlNode(nodeName: string): string | null {
+  if (FEE_UNSAFE_NODE.has(nodeName)) return null
+  const mapped = FEE_XML_TO_FIELD[nodeName] ?? nodeName
+  return isFeeSearchInputField(mapped) ? mapped : null
+}
+
+/** 解析原站 FeeSearch 历史查询模板 XML（兼容原站单层/双层 xmlRoot 与客户 JSON 格式）。 */
+export function readFeeQueryXml(xml: string): ApiResult<FeeParsedQuery> {
+  if (typeof xml !== 'string' || !xml.trim()) return apiError('INVALID_RESPONSE', '费用模板为空。')
+  if (xml.length > MAX_FEE_XML_CHARS) return apiError('INVALID_RESPONSE', '费用模板超出大小限制。')
+  if (/<!DOCTYPE|<!ENTITY|<!ELEMENT|<!ATTLIST/i.test(xml)) return apiError('INVALID_RESPONSE', '费用模板包含不允许的文档类型声明。')
+  if (typeof DOMParser === 'undefined') return apiError('INVALID_RESPONSE', '当前环境无法解析费用模板。')
+  const doc = new DOMParser().parseFromString(xml, 'application/xml')
+  if (doc.getElementsByTagName('parsererror').length > 0) return apiError('INVALID_RESPONSE', '费用模板无法解析。')
+  const root = doc.documentElement
+  if (!root || root.nodeName !== 'xmlRoot') return apiError('INVALID_RESPONSE', '费用模板缺少 xmlRoot。')
+
+  let nodes = Array.from(root.children)
+  while (nodes.length === 1 && nodes[0].nodeName === 'xmlRoot') nodes = Array.from(nodes[0].children)
+  if (nodes.length > MAX_FEE_XML_NODES) return apiError('INVALID_RESPONSE', '费用模板节点过多。')
+
+  const fields: Record<string, string> = {}
+  const checks: Record<string, boolean> = {}
+  const displayValues: Record<string, string> = {}
+  const unknownFields: Record<string, string> = {}
+  let rawCustId = ''
+  let rawCustText = ''
+  let rawRuleOutId = ''
+  let rawRuleOutText = ''
+
+  for (const node of nodes) {
+    const name = node.nodeName
+    if (FEE_UNSAFE_NODE.has(name)) continue
+    const value = (node.textContent ?? '').trim()
+    if (!value) continue
+
+    if (name === 'customer_id') { rawCustId = value; continue }
+    if (name === 'customer_id_text') { rawCustText = value; continue }
+    if (name === 'ruleOutcustomer_id') { rawRuleOutId = value; continue }
+    if (name === 'ruleOutcustomer_id_text') { rawRuleOutText = value; continue }
+
+    if (name.endsWith('_text')) {
+      const key = mapFeeXmlNode(name.slice(0, -'_text'.length))
+      if (key) displayValues[key] = value
+      else if (FEE_NODE_NAME.test(name)) unknownFields[name] = value
+      continue
+    }
+
+    const key = mapFeeXmlNode(name)
+    if (key) {
+      if (FEE_CHECK_KEYS.has(key)) {
+        const lower = value.toLowerCase()
+        if (lower === 'on' || lower === 'true' || lower === '1') checks[key] = true
+      } else {
+        fields[key] = value
+      }
+    } else if (FEE_NODE_NAME.test(name)) {
+      unknownFields[name] = value
+    }
+  }
+
+  const customers = parseCustomerRefs(rawCustId, rawCustText)
+  if (customers.length) {
+    fields.customer_id = customers.map(c => c.id).join(';')
+    displayValues.customer_id = customers.map(c => c.name).join(';') + ';'
+  }
+  const ruleOutCustomers = parseCustomerRefs(rawRuleOutId, rawRuleOutText)
+  if (ruleOutCustomers.length) {
+    fields.ruleOutcustomer_id = ruleOutCustomers.map(c => c.id).join(';')
+    displayValues.ruleOutcustomer_id = ruleOutCustomers.map(c => c.name).join(';') + ';'
+  }
+
+  return { ok: true, data: { fields, checks, displayValues, customers, ruleOutCustomers, unknownFields } }
 }

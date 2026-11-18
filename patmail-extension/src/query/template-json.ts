@@ -1,5 +1,6 @@
 import { filingSearchValueLimit, isFilingSearchInputField } from '../api/filing-search-params'
 import { fileSearchValueLimit, isFileSearchBusinessField } from '../api/file-search-params'
+import { isFeeSearchInputField } from '../api/fee-form'
 import { isLimitMonitorInputField } from '../api/limit-monitor-params'
 import { isForbiddenFieldName } from './field-registry'
 
@@ -14,8 +15,8 @@ import { isForbiddenFieldName } from './field-registry'
 export const TEMPLATE_JSON_FORMAT = 'patmail.query-template'
 export const TEMPLATE_JSON_VERSION = 1
 
-/** 模板 JSON 记的查询面。三张表各用各的模板，条件不能混用。 */
-export type TemplateJsonSurface = 'FileSearch' | 'FilingSearch' | 'LimitMonitor'
+/** 模板 JSON 记的查询面。四张表各用各的模板，条件不能混用。 */
+export type TemplateJsonSurface = 'FileSearch' | 'FilingSearch' | 'LimitMonitor' | 'FeeSearch'
 
 export interface TemplateJsonConditions {
   fields: Record<string, string>
@@ -48,7 +49,8 @@ const EXTRA_VALUE_MAX = 4000
 const SURFACES: Record<TemplateJsonSurface, SurfaceRules> = {
   FileSearch: { label: '文件管理', isField: isFileSearchBusinessField, valueLimit: fileSearchValueLimit, allowExtras: true },
   FilingSearch: { label: '递交管理', isField: isFilingSearchInputField, valueLimit: filingSearchValueLimit, allowExtras: false },
-  LimitMonitor: { label: '期限监控', isField: isLimitMonitorInputField, valueLimit: fileSearchValueLimit, allowExtras: true }
+  LimitMonitor: { label: '期限监控', isField: isLimitMonitorInputField, valueLimit: fileSearchValueLimit, allowExtras: true },
+  FeeSearch: { label: '费用查询', isField: isFeeSearchInputField, valueLimit: fileSearchValueLimit, allowExtras: true }
 }
 
 export function templateJsonSurfaceLabel(surface: TemplateJsonSurface): string {

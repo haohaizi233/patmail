@@ -1,13 +1,19 @@
 /** SearchQueryHisList 按页面区分。期限监控的破折号是 U+2014，不是普通连字符。 */
-export const HISTORY_SURFACES = ['file', 'limit'] as const
+export const HISTORY_SURFACES = ['file', 'limit', 'fee'] as const
 export type HistorySurface = (typeof HISTORY_SURFACES)[number]
 
 export function isHistorySurface(value: unknown): value is HistorySurface {
-  return value === 'file' || value === 'limit'
+  return value === 'file' || value === 'limit' || value === 'fee'
+}
+
+function surfaceMeta(surface: HistorySurface): { queryType: string; pageName: string } {
+  if (surface === 'limit') return { queryType: 'LimitMonitor\u2014liall', pageName: 'LimitMonitor.aspx' }
+  if (surface === 'fee') return { queryType: 'FeeSearch', pageName: 'FeeSearch.aspx' }
+  return { queryType: 'FileSearch', pageName: 'FileSearch.aspx' }
 }
 
 export function historySaveRequest(surface: HistorySurface, title: string, queryId: string, queryXml: string): URLSearchParams {
-  const limit = surface === 'limit'
+  const { queryType } = surfaceMeta(surface)
   return new URLSearchParams({
     Call: 'SearchQueryHisSave',
     is_proc: 'false',
@@ -17,25 +23,25 @@ export function historySaveRequest(surface: HistorySurface, title: string, query
     query_id: queryId,
     query_xml: queryXml,
     out_xml: '',
-    query_type: limit ? 'LimitMonitor\u2014liall' : 'FileSearch'
+    query_type: queryType
   })
 }
 
 export function historyDeleteRequest(surface: HistorySurface, queryId: string): URLSearchParams {
-  const limit = surface === 'limit'
+  const { pageName } = surfaceMeta(surface)
   return new URLSearchParams({
     Call: 'SearchQueryHisDelete',
     query_id: queryId,
-    log_pagename: limit ? 'LimitMonitor.aspx' : 'FileSearch.aspx'
+    log_pagename: pageName
   })
 }
 
 export function historyRequest(surface: HistorySurface, queryId: string): URLSearchParams {
-  const limit = surface === 'limit'
+  const { queryType, pageName } = surfaceMeta(surface)
   return new URLSearchParams({
     Call: 'SearchQueryHisList',
-    query_type: limit ? 'LimitMonitor\u2014liall' : 'FileSearch',
+    query_type: queryType,
     query_id: queryId,
-    log_pagename: limit ? 'LimitMonitor.aspx' : 'FileSearch.aspx'
+    log_pagename: pageName
   })
 }

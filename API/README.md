@@ -16,7 +16,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 - [WIPO eHague：HTTP、JSF、上传与扩展 RPC 契约](external-platforms/hague.md)
 - [海牙技术算法：材料解析、并发隔离、检查点与有界容灾](../patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md)
 
-按「入口 + Call」去重后，本索引共 **392** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
+按「入口 + Call」去重后，本索引共 **408** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
 
 表里的「骨架」链到 14–43 的响应字段，「01」到「13」链到页面怎么读这些字段。两边都有的 Call，字段骨架看抓包文档，页面含义看专题文档。
 
@@ -68,9 +68,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [41-发文页读取.md](41-发文页读取.md) | 发文页 Filing.aspx 打开时的读取。24 个 Call |
 | [42-案件页读取.md](42-案件页读取.md) | 案件页 CaseManage.aspx 的权限、读取和留痕。9 个 Call |
 | [43-首页与待办.md](43-首页与待办.md) | 首页与流程待办页 ProcessNew.aspx。6 个 Call |
-| [44-费用查询.md](44-费用查询.md) | 官费管理 FeeSearch 与 FeeSearchTotalAmount 请求、84列与响应。2 个 Call |
+| [44-费用查询.md](44-费用查询.md) | 费用查询 FeeSearch / FeeSearchTotalAmount、初始化与二级弹窗字典、历史查询条件（FeeSearch）与生产站基线 |
+| [45-高级导出与模板协议.md](45-高级导出与模板协议.md) | 通用高级导出弹窗 IhgAdvExport 模板接口（Common.ashx）与费用三大服务端 Excel 导出接口（Report.ashx）及同步/异步下载分流 |
+| [46-运行期补充接口契约.md](46-运行期补充接口契约.md) | 运行期已接入的会话探测、费用辅助树、提案流程、递交版本探测、代理所检索与 FileHandler 取件契约 |
 
-14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。下面的入口表才是去重后的 392。
+14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。44–46 补齐费用查询、高级导出与运行期补充接口。下面的入口表才是去重后的 408。
 
 ## 抓包里需要单独看的几条
 
@@ -94,16 +96,16 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 | 入口 | 接口数 |
 |---|---:|
-| [CaseInfo.ashx](#caseinfoashx) | 87 |
-| [Common.ashx](#commonashx) | 56 |
+| [CaseInfo.ashx](#caseinfoashx) | 88 |
+| [Common.ashx](#commonashx) | 62 |
 | [Customer.ashx](#customerashx) | 42 |
 | [Mail.ashx](#mailashx) | 27 |
 | [Bill.ashx](#billashx) | 23 |
 | [PatentAction.ashx](#patentactionashx) | 22 |
-| [Report.ashx](#reportashx) | 22 |
-| [BaseInfo.ashx](#baseinfoashx) | 20 |
+| [Report.ashx](#reportashx) | 27 |
+| [BaseInfo.ashx](#baseinfoashx) | 21 |
 | [Notice.ashx](#noticeashx) | 12 |
-| [Login.ashx](#loginashx) | 9 |
+| [Login.ashx](#loginashx) | 10 |
 | [Eflow.ashx](#eflowashx) | 6 |
 | [FilingAction.ashx](#filingactionashx) | 23 |
 | [Batch.ashx](#batchashx) | 5 |
@@ -124,7 +126,9 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [Rule.ashx](#ruleashx) | 1 |
 | [TNotice.ashx](#tnoticeashx) | 1 |
 | [UploadFile.aspx](#uploadfileaspx) | 1 |
-| 合计 | 392 |
+| [AgencyAction.ashx](#agencyactionashx) | 1 |
+| [FileHandler.ashx](#filehandlerashx) | 1 |
+| 合计 | 408 |
 
 ## 全部接口
 
@@ -132,7 +136,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### CaseInfo.ashx
 
-87 个。
+88 个。
 
 | Call | 文档 |
 |---|---|
@@ -223,12 +227,13 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `SearchQueryHisDelete` | [03](03-历史查询条件.md#searchqueryhisdelete) |
 | `SearchQueryHisList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-searchqueryhislist) · [03](03-历史查询条件.md#searchqueryhislist) |
 | `SearchQueryHisSave` | [03](03-历史查询条件.md#searchqueryhissave) |
+| `GetIsNewCPC` | [46](46-运行期补充接口契约.md#getisnewcpccaseinfoashx)。递交流程打开表单前只读探测新旧 CPC 版本 |
 
 <a id="commonashx"></a>
 
 ### Common.ashx
 
-56 个。
+62 个。
 
 | Call | 文档 |
 |---|---|
@@ -288,6 +293,12 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `LoadTreeIndustryCls` | [骨架](18-公共-字典与列表列.md#commonashx-loadtreeindustrycls) |
 | `LoadTreeSalesUser` | [骨架](18-公共-字典与列表列.md#commonashx-loadtreesalesuser) |
 | `LoadUserRank` | [骨架](18-公共-字典与列表列.md#commonashx-loaduserrank) |
+| `GetProcessByTypeAP` | [46](46-运行期补充接口契约.md#getprocessbytypeapcommonashx)。待办中心提案流程列表 |
+| `GetQueryOutConfig` | [45](45-高级导出与模板协议.md#22-getqueryoutconfig读取模板列表--栏位明细)。高级导出模板列表与栏位明细 |
+| `LoadTechnical` | [46](46-运行期补充接口契约.md#loadtechnicalcommonashx)。费用高级查询技术领域树 |
+| `ShowUserInfo` | [46](46-运行期补充接口契约.md#showuserinfocommonashx)。办理人悬停浮窗部门与联系方式 |
+| `UpdateQueryOutConfig` | [45](45-高级导出与模板协议.md#23-updatequeryoutconfig新建--删除模板)。新建（`ud_type=add`）或删除（`ud_type=del`）导出模板 |
+| `UpdateQueryOutConfigNew` | [45](45-高级导出与模板协议.md#24-updatequeryoutconfignew更新已有模板)。更新已有导出模板（`ud_type=up`） |
 
 <a id="customerashx"></a>
 
@@ -443,7 +454,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Report.ashx
 
-22 个。
+27 个。
 
 | Call | 文档 |
 |---|---|
@@ -469,12 +480,17 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `PointSearch` | [骨架](40-报表.md#reportashx-pointsearch) |
 | `ProjectFeeSearch` | [骨架](40-报表.md#reportashx-projectfeesearch) |
 | `ReportBaseData` | [骨架](40-报表.md#reportashx-reportbasedata) |
+| `ExcelFeeListByChecked` | [45](45-高级导出与模板协议.md#32-excelfeelistbychecked导出勾选费用)。按勾选 `fee_ids` 服务端生成费用 Excel |
+| `ExcelFeeListByCond` | [45](45-高级导出与模板协议.md#31-excelfeelistbycond导出清单)。按当前查询条件服务端生成全量费用 Excel |
+| `ExcelFeeListCountByCond` | [45](45-高级导出与模板协议.md#33-excelfeelistcountbycond导出汇总数据)。按案件汇总官费/代理费/第三方费导出 Excel |
+| `GetCustomerTreeData` | [46](46-运行期补充接口契约.md#getcustomertreedatareportashx)。费用查询客户选择二级弹窗（`ShowIhgSelect`）检索 |
+| `GetTreeApplicant` | [46](46-运行期补充接口契约.md#gettreeapplicantreportashx)。费用查询按已选客户联动加载申请人树 |
 
 <a id="baseinfoashx"></a>
 
 ### BaseInfo.ashx
 
-20 个。
+21 个。
 
 | Call | 文档 |
 |---|---|
@@ -498,6 +514,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetStageByProjectTypeID` | [骨架](22-基础信息.md#baseinfoashx-getstagebyprojecttypeid) |
 | `GetUserDetail` | [骨架](31-基础信息补充.md#baseinfoashx-getuserdetail) |
 | `SaveFileTepmName` | [06](06-文件操作.md#savefiletepmname)。Call 名里的 Tepm 是页面原文，2026-11-01 抓包已核对 |
+| `GetProducts` | [46](46-运行期补充接口契约.md#getproductsbaseinfoashx)。费用高级查询产品类别树 |
 
 <a id="noticeashx"></a>
 
@@ -524,7 +541,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Login.ashx
 
-9 个。
+10 个。
 
 | Call | 文档 |
 |---|---|
@@ -537,6 +554,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetMailSignatureSettingList` | [10](10-邮件签名.md#getmailsignaturesettinglist)。第二段抓包 TableRows 为 null，TableRowsCount 为字符串 0 |
 | `GetSignatureset` | [10](10-邮件签名.md#getsignatureset)。响应正文未保存 |
 | `SaveSignatureset` | [10](10-邮件签名.md#保存和删除)。未调用 |
+| `GetUserModel` | [46](46-运行期补充接口契约.md#getusermodel)。会话心跳与当前登录操作人身份探测（`Result=false` 仍可已登录，掉线可能返回短 HTML） |
 
 <a id="eflowashx"></a>
 
@@ -789,3 +807,23 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | Call | 文档 |
 |---|---|
 | `CommUpload` | [06](06-文件操作.md#上传)。页面入口已核对，未上传 |
+
+<a id="agencyactionashx"></a>
+
+### AgencyAction.ashx
+
+1 个。
+
+| Call | 文档 |
+|---|---|
+| `AgencySearchCase` | [46](46-运行期补充接口契约.md#agencysearchcase)。按客户文号批量反查案件主键（实体编码 XML `Element`） |
+
+<a id="filehandlerashx"></a>
+
+### FileHandler.ashx
+
+1 个。
+
+| Call | 文档 |
+|---|---|
+| `（guid 取件，无 Call）` | [46](46-运行期补充接口契约.md#5-统一文件取件入口filehandlerashx) · [45](45-高级导出与模板协议.md#41-同步导出响应常规数据量)。打包 ZIP 与高级导出 Excel 统一取件入口，`FileHandler.ashx?guid=` |
