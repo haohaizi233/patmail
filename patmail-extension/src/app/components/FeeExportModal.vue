@@ -602,7 +602,8 @@ function onKeydown(e: KeyboardEvent): void {
 .fee-export-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 9998;
+  /* 低于 .theme-select-menu (70) 与 .mask.app-dialog (120)，确保模板下拉菜单和卡哇伊确认/提示弹窗永远浮在最上层 */
+  z-index: 60;
   background: rgba(54, 34, 58, 0.36);
   backdrop-filter: blur(2px);
   display: grid;
@@ -611,8 +612,8 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 .fee-export-modal {
-  width: min(1040px, 96vw);
-  height: min(680px, 90vh);
+  width: min(1060px, 96vw);
+  height: min(740px, 90vh);
   background: #fff;
   border: 1px solid #f4d7e6;
   border-radius: 18px;
@@ -727,23 +728,24 @@ function onKeydown(e: KeyboardEvent): void {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 6px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
 .col-group {
+  flex: 0 0 auto;
   border: 1px solid #f1dfeb;
   border-radius: 12px;
   background: #fffcfe;
-  overflow: hidden;
 }
 .group-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 7px 12px;
+  border-radius: 11px 11px 0 0;
   background: #fff5fa;
   border-bottom: 1px solid #f3e0ec;
 }
