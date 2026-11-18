@@ -203,6 +203,7 @@ function confirmSelection(): void {
                 v-for="entry in draft"
                 :key="entry.id"
                 :class="{ 'is-active': activeSelectedId === entry.id }"
+                v-hint.clip="entry.name"
                 @click="activeSelectedId = entry.id"
                 @dblclick="removePicked(entry.id)"
               >
@@ -430,6 +431,7 @@ function confirmSelection(): void {
 .picked-name {
   flex: 1;
   min-width: 0;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

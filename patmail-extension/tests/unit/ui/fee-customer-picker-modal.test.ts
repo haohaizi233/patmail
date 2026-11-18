@@ -26,6 +26,13 @@ describe('FeeCustomerPickerModal 卡哇伊提示浮窗', () => {
     const modal = document.querySelector('.ihg-modal')
     expect(modal).not.toBeNull()
 
+    const pickedItems = modal!.querySelectorAll('.ihg-picked-list li')
+    expect(pickedItems.length).toBe(2)
+    pickedItems.forEach((el, index) => {
+      expect(el.getAttribute('title')).toBeNull()
+      expect((el as unknown as { __hintText?: string }).__hintText).toBe(selected[index].name)
+    })
+
     const pickedNames = modal!.querySelectorAll('.picked-name')
     expect(pickedNames.length).toBe(2)
 

@@ -98,7 +98,7 @@ function showBubble(el: HTMLElement, text: string): void {
   const bubble = bubbleOf(root)
   bubble.textContent = text
   bubble.hidden = false
-  const rect = el.getBoundingClientRect()
+  const rect = anchorRectOf(el)
   const box = bubble.getBoundingClientRect()
   const gap = 10
   const center = rect.left + rect.width / 2
