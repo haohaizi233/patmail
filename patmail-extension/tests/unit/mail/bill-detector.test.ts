@@ -121,5 +121,99 @@ describe('账单识别算法 (bill-detector)', () => {
       expect(res.isBill).toBe(true)
       expect(res.date).toBe('20261105')
     })
+
+    describe('P1-A 专项缺陷暴露测试', () => {
+      it('无 caseVolumeHint 时，INVSG... 在前、PA... 在后的文件不得把账单号误判为案号', () => {
+        const res = parseBillFileName('INVSG260800245 PA2511528CN-ID 实审账单 20260811（更新）.pdf')
+        expect(res.isBill).toBe(true)
+        expect(res.billNo).toBe('INVSG260800245')
+        expect(res.caseNo).toBe('PA2511528CN-ID')
+        expect(res.matter).toBe('实审账单')
+        expect(res.date).toBe('20260811')
+        expect(res.versionSuffix).toBe('（更新）')
+      })
+
+      it('无 caseVolumeHint 时，BILL... 在前、PA... 在后的文件不得把账单号误判为案号', () => {
+        const res = parseBillFileName('BILL20260101 PA2511528CN-ID 事项 20260811.pdf')
+        expect(res.isBill).toBe(true)
+        expect(res.billNo).toBe('BILL20260101')
+        expect(res.caseNo).toBe('PA2511528CN-ID')
+        expect(res.matter).toBe('事项')
+        expect(res.date).toBe('20260811')
+      })
+
+      it('无 caseVolumeHint 时，Credit Memo 在前、PA... 在后的文件能准确定位案号与账单号', () => {
+        const res = parseBillFileName('Credit Memo PA2310398CN-US RCE退款 20261111.pdf')
+        expect(res.isBill).toBe(true)
+        expect(res.billNo).toBe('Credit Memo')
+        expect(res.caseNo).toBe('PA2310398CN-US')
+        expect(res.matter).toBe('RCE退款')
+        expect(res.date).toBe('20261111')
+      })
+
+      it('严格验证日历日期有效性：拒绝 20260231 等非法日历日期', () => {
+        const res = parseBillFileName('604032 PA2611555CN 事项 20260231.pdf')
+        expect(res.isBill).toBe(false)
+        expect(res.reason).toMatch(/日历日期无效|合法.*日期/)
+      })
+
+      it('严格验证日历日期有效性：拒绝 20260431（4月只有30天）', () => {
+        const res = parseBillFileName('604032 PA2611555CN 事项 20260431.pdf')
+        expect(res.isBill).toBe(false)
+      })
+
+      it('当 caseVolumeHint 仅为其他编号的局部子串（如 CN 或 25）时，不允许作为部分子串随意误切', () => {
+        const res = parseBillFileName('INVSG260800245 PA2511528CN-ID 实审账单 20260811.pdf', '25')
+        expect(res.isBill).toBe(true)
+        expect(res.billNo).toBe('INVSG260800245')
+        expect(res.caseNo).toBe('PA2511528CN-ID')
+      })
+
+      it('返回明确的置信度和识别规则字段', () => {
+        const res = parseBillFileName('604032 PA2611555PCT-UK-D1 英国发明分案新申请+提实审账单 20261101.PDF')
+        expect(res.isBill).toBe(true)
+        expect(res.confidence).toBe('high')
+        expect(res.recognitionRule).toBe('pa_standard_pattern')
+      })
+
+      it('完整测试：覆盖12项用例指标与各项字段逐一断言', () => {
+        // 1. 有正确 caseVolumeHint 的标准文件
+        const r1 = parseBillFileName('INV-100 PA2511001CN 答复审查意见 20261010.pdf', 'PA2511001CN')
+        expect(r1.isBill).toBe(true)
+        expect(r1.billNo).toBe('INV-100')
+        expect(r1.caseNo).toBe('PA2511001CN')
+        expect(r1.matter).toBe('答复审查意见')
+        expect(r1.date).toBe('20261010')
+        expect(r1.versionSuffix).toBe('')
+        expect(r1.ext).toBe('pdf')
+
+        // 2. 无 caseVolumeHint 的标准文件
+        const r2 = parseBillFileName('INV-200 PA2511002CN 缴年费 20261011.pdf')
+        expect(r2.isBill).toBe(true)
+        expect(r2.billNo).toBe('INV-200')
+        expect(r2.caseNo).toBe('PA2511002CN')
+        expect(r2.matter).toBe('缴年费')
+        expect(r2.date).toBe('20261011')
+        expect(r2.versionSuffix).toBe('')
+
+        // 3. 案号后带连接符
+        const r3 = parseBillFileName('1262538 PA2631884CN-US- 美国外观新申请账单 20261105.pdf', 'PA2631884CN-US')
+        expect(r3.isBill).toBe(true)
+        expect(r3.billNo).toBe('1262538')
+        expect(r3.caseNo).toBe('PA2631884CN-US')
+        expect(r3.matter).toBe('美国外观新申请账单')
+        expect(r3.date).toBe('20261105')
+
+        // 4. 文件名只有案号而没有账单号（非账单）
+        const r4 = parseBillFileName('PA2631801CN-HAGUE 海牙外观缴费通知书 20261113.pdf', 'PA2631801CN-HAGUE')
+        expect(r4.isBill).toBe(false)
+        expect(r4.reason).toMatch(/缺少账单号/)
+
+        // 5. 无法识别时的失败原因清晰
+        const r5 = parseBillFileName('未命名文件.pdf')
+        expect(r5.isBill).toBe(false)
+        expect(r5.reason).toBeDefined()
+      })
+    })
   })
 })
