@@ -655,7 +655,7 @@ function toggleFile(file: PatentFile): void {
 /** 全选所有进行中把「预计几点完成」也写在按钮旁，翻页快时彩虹条一闪而过也看得到。 */
 const selectingBillsOnly = ref(false)
 const pagingHint = computed(() => selectingAll.value
-  ? (taskCheckProgress.eta ? `（${selectingBillsOnly.value ? '勾选所有账单' : '全选所有'}进行中，预计 ${taskCheckProgress.eta} 完成）` : `（${selectingBillsOnly.value ? '勾选所有账单' : '全选所有'}进行中…）`)
+  ? (taskCheckProgress.eta ? `（${selectingBillsOnly.value ? '只选所有账单' : '全选所有'}进行中，预计 ${taskCheckProgress.eta} 完成）` : `（${selectingBillsOnly.value ? '只选所有账单' : '全选所有'}进行中…）`)
   : '')
 
 /** 全选所有翻页的进度：彩虹条动词换成「翻页」。并发拉页时哪页先回不一定，按读回的页数计。 */
@@ -758,7 +758,8 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
       if (!bulkCurrent(bulk)) return
       // defineModel 的受控 prop 要等父组件渲染后才回流；同一轮并发响应不能各自基于旧 prop 覆盖。
       const targetRows = bulk.billsOnly ? rows.filter(isBillPatentFile) : rows
-      bulk.selection = selectPage({ ...bulk.selection, ...candidateSelection.value }, targetRows, true)
+      const baseSelection = bulk.billsOnly ? bulk.selection : { ...bulk.selection, ...candidateSelection.value }
+      bulk.selection = selectPage(baseSelection, targetRows, true)
       candidateSelection.value = bulk.selection
       bulk.completed.add(page)
       readPages.value = [...new Set([...readPages.value, page])]
@@ -768,7 +769,7 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
   })
 }
 
-/** 全选所有：并发把每一页的行拉回来勾上（6 路把请求打满），翻页时顶栏有进度条；下载数量不设上限。
+/** 全选所有 / 只选所有账单：并发把每一页的行拉回来勾上（6 路把请求打满），翻页时顶栏有进度条；下载数量不设上限。
  * 有漏的自动兜一轮，再不行留按钮补。 */
 const selectingAll = ref(false)
 const failedPages = ref<number[]>([])
@@ -780,7 +781,8 @@ async function selectAllPages(billsOnly = false): Promise<void> {
     generation, query: { ...lastQuery.value, ...(lastQuery.value.resolvedFields ? { resolvedFields: { ...lastQuery.value.resolvedFields } } : {}), pageSize: BULK_PAGE_SIZE },
     querySessionId: summary.pageSize === BULK_PAGE_SIZE ? querySessionId.value : '',
     totalPages: Math.max(1, Math.ceil(summary.total / BULK_PAGE_SIZE)), timeoutMs: searchTimeoutMs.value,
-    controller: new AbortController(), interrupted: false, reason: '', completed: new Set(), selection: { ...candidateSelection.value },
+    controller: new AbortController(), interrupted: false, reason: '', completed: new Set(),
+    selection: billsOnly ? {} : { ...candidateSelection.value },
     billsOnly
   }
   activeBulk = bulk
@@ -789,6 +791,10 @@ async function selectAllPages(billsOnly = false): Promise<void> {
   selectingBillsOnly.value = billsOnly
   failedPages.value = []
   toolbarNotice.value = ''
+  if (billsOnly) {
+    // 账单过滤模式：清除旧选择，确立最终集合的账单纯洁性
+    candidateSelection.value = {}
+  }
   try {
     paging.startedAt = Date.now()
     paging.total = bulk.totalPages
@@ -799,7 +805,7 @@ async function selectAllPages(billsOnly = false): Promise<void> {
       const loaded = await readBulkPage(bulk, 1, true)
       if (!bulkCurrent(bulk)) return
       if (!loaded.ok) {
-        toolbarNotice.value = bulk.reason || (billsOnly ? '没有读到100条分页的第一页，请重试勾选账单。' : '没有读到100条分页的第一页，请重试全选。')
+        toolbarNotice.value = bulk.reason || (billsOnly ? '没有读到100条分页的第一页，请重试只选账单。' : '没有读到100条分页的第一页，请重试全选。')
         paintPaging('fail')
         return
       }
@@ -833,7 +839,7 @@ async function selectAllPages(billsOnly = false): Promise<void> {
     failedPages.value = missed
     retryBulk = missed.length ? bulk : null
     paintPaging(missed.length ? 'fail' : 'done')
-    const actionLabel = billsOnly ? '勾选账单' : '全选所有'
+    const actionLabel = billsOnly ? '只选账单' : '全选所有'
     toolbarNotice.value = bulk.interrupted ? `${bulk.reason} 还有 ${missed.length} 页未读完。` : missed.length
       ? `${actionLabel}有 ${missed.length} 页没读到（${describeMissed(missed)}）。已勾上的不受影响，点「重试没读到的页」补齐。`
       : billsOnly
@@ -1031,7 +1037,7 @@ onBeforeUnmount(() => {
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages(false)">{{ selectingAll && !selectingBillsOnly ? '正在全选…' : '全选所有' }}</button>
-          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" v-hint="'按「账单号+我方案号+事项+账单日期」识别并一键勾选所有账单文件'" @click="selectAllPages(true)">{{ selectingAll && selectingBillsOnly ? '正在勾选账单…' : '勾选所有账单' }}</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" v-hint="'将清除当前已选的非账单文件，仅勾选本次查询范围内识别出的账单'" @click="selectAllPages(true)">{{ selectingAll && selectingBillsOnly ? '正在只选账单…' : '只选所有账单' }}</button>
           <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
           <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('review')">查看已选</button>
           <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('plan')">生成发文计划</button>

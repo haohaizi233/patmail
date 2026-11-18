@@ -952,8 +952,8 @@ describe('file query durable remount', () => {
     button('测试查询').click()
     await settle()
 
-    expect(button('勾选所有账单')).toBeDefined()
-    button('勾选所有账单').click()
+    expect(button('只选所有账单')).toBeDefined()
+    button('只选所有账单').click()
     await settle()
 
     // 只有 b-1 和 b-2 被勾选，not-1/not-2/not-3 不被勾选
@@ -965,5 +965,119 @@ describe('file query durable remount', () => {
     expect(selected.value['not-3']).toBeUndefined()
     expect(document.body.textContent).toContain('已选 2 个文件')
     expect(document.body.textContent).toContain('已勾选 2 个账单文件')
+  })
+
+  it('P1-B 集合语义测试：已有全部文件选中时，点击「只选所有账单」应清除所有非账单文件', async () => {
+    const mixedFiles = [
+      { fileId: 'b-1', fileName: '202605182 PA2510821PCT-EP 答复欧洲检索报告 20261110.pdf', caseVolume: 'PA2510821PCT-EP', fileNo: 'NO1' },
+      { fileId: 'b-2', fileName: 'Credit Memo PA2310398CN-US RCE退款20261111.pdf', caseVolume: 'PA2310398CN-US', fileNo: 'NO2' },
+      { fileId: 'not-1', fileName: 'PA2631801CN-HAGUE 海牙外观缴费通知书.pdf', caseVolume: 'PA2631801CN-HAGUE', fileNo: 'NO3' },
+      { fileId: 'not-2', fileName: '云图发票.pdf', caseVolume: 'PA2631761CN-US', fileNo: 'NO4' }
+    ]
+    const request: MessageBridge['request'] = async message => {
+      if (message.type === MessageType.SearchFiles) {
+        return {
+          type: MessageType.SearchFilesResult,
+          payload: {
+            ok: true,
+            data: {
+              pageIndex: 1,
+              pageSize: 100,
+              total: 4,
+              totalPages: 1,
+              querySessionId: 'sess-bill-2',
+              items: mixedFiles
+            }
+          }
+        }
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }
+
+    const selected = mount(request)
+    button('测试查询').click()
+    await settle()
+
+    // 1. 先全选本页（此时包括两个非账单 not-1 和 not-2）
+    button('全选本页').click()
+    await settle()
+    expect(Object.keys(selected.value)).toHaveLength(4)
+
+    // 2. 点击「只选所有账单」
+    button('只选所有账单').click()
+    await settle()
+
+    // 3. 必须断言非账单被清除，仅剩下 2 个账单
+    expect(Object.keys(selected.value)).toHaveLength(2)
+    expect(selected.value['b-1']).toBeDefined()
+    expect(selected.value['b-2']).toBeDefined()
+    expect(selected.value['not-1']).toBeUndefined()
+    expect(selected.value['not-2']).toBeUndefined()
+
+    // 4. 再点击「全选所有」切换为全部文件
+    button('全选所有').click()
+    await settle()
+    expect(Object.keys(selected.value)).toHaveLength(4)
+  })
+
+  it('P1-B 集合语义测试：多页部分失败及重试，全程绝不污染非账单文件', async () => {
+    let failPage2 = true
+    const page1Items = [
+      { fileId: 'p1-b', fileName: '1262526 PA2510173PCT-US IDS3账单 20261105.pdf', caseVolume: 'PA2510173PCT-US', fileNo: 'F1' },
+      { fileId: 'p1-not', fileName: '云图发票.pdf', caseVolume: 'PA2510173PCT-US', fileNo: 'F2' }
+    ]
+    const page2Items = [
+      { fileId: 'p2-b', fileName: '603814 PA2410192PCT-EP 缴纳第六年维持费 20261101.PDF', caseVolume: 'PA2410192PCT-EP', fileNo: 'F3' },
+      { fileId: 'p2-not', fileName: 'PA2410192PCT-EP 缴费通知书.pdf', caseVolume: 'PA2410192PCT-EP', fileNo: 'F4' }
+    ]
+    const request: MessageBridge['request'] = async message => {
+      if (message.type === MessageType.SearchFiles) {
+        const page = message.payload.query.pageIndex
+        if (page === 2 && failPage2) {
+          return { type: MessageType.Error, payload: { message: '登录已失效。' } }
+        }
+        return {
+          type: MessageType.SearchFilesResult,
+          payload: {
+            ok: true,
+            data: {
+              pageIndex: page,
+              pageSize: 100,
+              total: 101,
+              totalPages: 2,
+              querySessionId: 'sess-paged-bill',
+              items: page === 1 ? page1Items : page2Items
+            }
+          }
+        }
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }
+
+    const selected = mount(request)
+    button('测试查询').click()
+    await settle()
+
+    button('只选所有账单').click()
+    await settle()
+
+    // 第2页失败，第1页账单勾选成功，非账单不被勾选
+    expect(Object.keys(selected.value)).toHaveLength(1)
+    expect(selected.value['p1-b']).toBeDefined()
+    expect(selected.value['p1-not']).toBeUndefined()
+
+    // 重试第2页
+    failPage2 = false
+    const retryBtn = Array.from(document.querySelectorAll('button')).find(n => n.textContent?.includes('重试'))
+    expect(retryBtn).toBeDefined()
+    retryBtn!.click()
+    await settle()
+
+    // 重试成功后，最终包含 p1-b 和 p2-b，绝无 p1-not 或 p2-not
+    expect(Object.keys(selected.value)).toHaveLength(2)
+    expect(selected.value['p1-b']).toBeDefined()
+    expect(selected.value['p2-b']).toBeDefined()
+    expect(selected.value['p1-not']).toBeUndefined()
+    expect(selected.value['p2-not']).toBeUndefined()
   })
 })
