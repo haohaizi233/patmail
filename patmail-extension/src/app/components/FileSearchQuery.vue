@@ -426,7 +426,7 @@ function cellText(file: PatentFile, key: typeof resultColumns[number]['key']): s
   return file[key]?.trim() ?? ''
 }
 function togglePage(event: Event): void {
-  if (needsRevalidation.value || !props.canSearch) return
+  if (needsRevalidation.value || !props.canSearch || selectingAll.value) return
   stopBulk()
   const items = result.value?.items ?? []
   const on = (event.target as HTMLInputElement).checked
@@ -635,7 +635,7 @@ async function discardDownloadTask(): Promise<void> {
 
 /** 全选本页 / 取消全选本页：只动当前页的行，其他页已选的不受影响。 */
 function selectCurrentPage(on: boolean): void {
-  if (needsRevalidation.value || !props.canSearch) return
+  if (needsRevalidation.value || !props.canSearch || selectingAll.value) return
   stopBulk()
   const items = result.value?.items ?? []
   if (!items.length) return
@@ -647,7 +647,7 @@ function clearSelection(): void {
   candidateSelection.value = {}
 }
 function toggleFile(file: PatentFile): void {
-  if (needsRevalidation.value || !props.canSearch) return
+  if (needsRevalidation.value || !props.canSearch || selectingAll.value) return
   stopBulk()
   candidateSelection.value = selectPage(candidateSelection.value, [toSelectedFile(file, candidateSelection.value[file.fileId]?.customerProfileId, querySessionId.value)], !selected.value[file.fileId])
 }
@@ -693,7 +693,7 @@ let retryBulk: BulkRead | null = null
 function bulkCurrent(bulk: BulkRead): boolean {
   return activeBulk === bulk && bulk.generation === generation && !bulk.controller.signal.aborted
 }
-function stopBulk(): void {
+function stopBulk(notice = ''): void {
   activeBulk?.controller.abort()
   activeBulk = null
   retryBulk = null
@@ -701,6 +701,7 @@ function stopBulk(): void {
   selectingBillsOnly.value = false
   failedPages.value = []
   if (taskCheckProgress.label === '翻页') resetTaskCheckProgress()
+  if (notice) toolbarNotice.value = notice
 }
 
 /** 批次固定查询条件、来源和布局；不读取后续手工查询改变的响应式值。 */
@@ -1003,9 +1004,9 @@ onBeforeUnmount(() => {
       <div class="section-heading">
         <strong>查询结果</strong>
         <label class="page-size">每页数量
-          <ThemeSelect v-model="pageSize" :disabled="!canSearch || searchState === 'loading'" :options="pageSizeOptions" @change="changePageSize" />
+          <ThemeSelect v-model="pageSize" :disabled="!canSearch || searchState === 'loading' || selectingAll" :options="pageSizeOptions" @change="changePageSize" />
         </label>
-        <button type="button" class="text-button" :disabled="!canSearch || !lastQuery || searchState === 'loading'" @click="refresh">刷新</button>
+        <button type="button" class="text-button" :disabled="!canSearch || !lastQuery || searchState === 'loading' || selectingAll" @click="refresh">刷新</button>
       </div>
       <div v-if="result" class="result-toolbar">
         <span>共 {{ result.total }} 个文件</span>
@@ -1034,13 +1035,14 @@ onBeforeUnmount(() => {
         <p v-if="sourceNotice" class="hint" role="status">{{ sourceNotice }}</p>
         <div v-if="selectable" class="result-toolbar">
           <label class="deduplicate-opt" v-hint="'同一案件内按最终下载名称合并重复版本，doc/docx 视为同类，保留上传时间最新的文件'"><input v-model="deduplicate" type="checkbox" :disabled="needsRevalidation || !canSearch || downloading || choosingTarget || selectingAll" @change="changeDeduplicate" />同名文件仅保留最新</label>
-          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || searchState === 'loading'" @click="selectCurrentPage(true)">全选本页</button>
-          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0" @click="selectCurrentPage(false)">取消全选本页</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || searchState === 'loading' || selectingAll" @click="selectCurrentPage(true)">全选本页</button>
+          <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || Object.keys(selected).length === 0 || selectingAll" @click="selectCurrentPage(false)">取消全选本页</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" @click="selectAllPages(false)">{{ selectingAll && !selectingBillsOnly ? '正在全选…' : '全选所有' }}</button>
           <button type="button" class="ghost" :disabled="needsRevalidation || !canSearch || !result || selectingAll || downloading" v-hint="'将清除当前已选的非账单文件，仅勾选本次查询范围内识别出的账单'" @click="selectAllPages(true)">{{ selectingAll && selectingBillsOnly ? '正在只选账单…' : '只选所有账单' }}</button>
+          <button v-if="selectingAll" type="button" class="ghost" @click="stopBulk('已停止翻页。')">停止翻页</button>
           <button type="button" class="ghost" :disabled="Object.keys(selected).length === 0" @click="clearSelection">取消全选所有</button>
-          <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('review')">查看已选</button>
-          <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0" @click="emit('plan')">生成发文计划</button>
+          <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0 || selectingAll" @click="emit('review')">查看已选</button>
+          <button v-if="showMailActions" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || Object.keys(selected).length === 0 || selectingAll" @click="emit('plan')">生成发文计划</button>
           <button v-if="failedPages.length" type="button" class="ghost" :disabled="needsRevalidation || !canSearch || selectingAll || downloading" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
           <span class="hint">已选 {{ Object.keys(selected).length }} 个文件{{ pagingHint }}</span>
         </div>
@@ -1056,7 +1058,7 @@ onBeforeUnmount(() => {
             <thead>
               <tr>
                 <th v-if="selectable" class="check">
-                  <input type="checkbox" aria-label="当前页全选" :disabled="needsRevalidation || !canSearch" :checked="pageAllSelected" @change="togglePage" />
+                  <input type="checkbox" aria-label="当前页全选" :disabled="needsRevalidation || !canSearch || selectingAll" :checked="pageAllSelected" @change="togglePage" />
                 </th>
                 <th class="seq">序号</th>
                 <th v-for="column in resultColumns" :key="column.key">{{ column.label }}</th>
@@ -1065,7 +1067,7 @@ onBeforeUnmount(() => {
             <tbody>
               <tr v-for="(file, index) in result.items" :key="file.fileId" :class="{ 'is-selected': Boolean(selected[file.fileId]) }">
                 <td v-if="selectable" class="check">
-                  <input type="checkbox" :aria-label="file.fileName" :disabled="needsRevalidation || !canSearch" :checked="Boolean(selected[file.fileId])" @change="toggleFile(file)" />
+                  <input type="checkbox" :aria-label="file.fileName" :disabled="needsRevalidation || !canSearch || selectingAll" :checked="Boolean(selected[file.fileId])" @change="toggleFile(file)" />
                 </td>
                 <td class="seq">{{ rowNo(index) }}</td>
                 <td v-for="column in resultColumns" :key="column.key">
@@ -1076,9 +1078,9 @@ onBeforeUnmount(() => {
           </table>
         </div>
         <nav class="pagination" aria-label="文件分页">
-          <button type="button" :disabled="result.pageIndex <= 1 || searchState === 'loading'" @click="page(-1)">上一页</button>
+          <button type="button" :disabled="result.pageIndex <= 1 || searchState === 'loading' || selectingAll" @click="page(-1)">上一页</button>
           <span>第 {{ result.pageIndex }} / {{ result.totalPages }} 页</span>
-          <button type="button" :disabled="result.pageIndex >= result.totalPages || searchState === 'loading'" @click="page(1)">下一页</button>
+          <button type="button" :disabled="result.pageIndex >= result.totalPages || searchState === 'loading' || selectingAll" @click="page(1)">下一页</button>
         </nav>
       </template>
     </section>

@@ -1080,4 +1080,137 @@ describe('file query durable remount', () => {
     expect(selected.value['p1-not']).toBeUndefined()
     expect(selected.value['p2-not']).toBeUndefined()
   })
+
+  it('正在翻页过程中行复选框与全选本页按钮禁用，且防误触不中断批量翻页', async () => {
+    let pendingResolve: ((res: ContentResponse) => void) | null = null
+    const request: MessageBridge['request'] = async message => {
+      if (message.type === MessageType.SearchFiles) {
+        const page = message.payload.query.pageIndex
+        if (page === 1) {
+          return {
+            type: MessageType.SearchFilesResult,
+            payload: {
+              ok: true,
+              data: {
+                pageIndex: 1,
+                pageSize: 100,
+                total: 200,
+                totalPages: 2,
+                querySessionId: 'sess-lock',
+                items: [{ fileId: 'f1', fileName: 'PA2510173PCT-US 账单 20261105.pdf', caseVolume: 'PA2510173PCT-US', fileNo: 'F1' }]
+              }
+            }
+          }
+        }
+        // 第2页挂起
+        return new Promise(resolve => { pendingResolve = resolve })
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }
+
+    const selected = mount(request)
+    button('测试查询').click()
+    await settle()
+
+    button('全选所有').click()
+    await settle()
+
+    // 此时正在批量翻页
+    const checkboxes = Array.from(document.querySelectorAll<HTMLInputElement>('table input[type="checkbox"]'))
+    expect(checkboxes.length).toBeGreaterThan(0)
+    for (const cb of checkboxes) {
+      expect(cb.disabled).toBe(true)
+    }
+
+    const selectCurBtn = button('全选本页')
+    expect(selectCurBtn.disabled).toBe(true)
+
+    // 存在「停止翻页」按钮
+    const stopBtn = Array.from(document.querySelectorAll('button')).find(n => n.textContent?.includes('停止翻页'))
+    expect(stopBtn).toBeDefined()
+
+    // 释放第2页
+    expect(pendingResolve).not.toBeNull()
+    pendingResolve!({
+      type: MessageType.SearchFilesResult,
+      payload: {
+        ok: true,
+        data: {
+          pageIndex: 2,
+          pageSize: 100,
+          total: 200,
+          totalPages: 2,
+          querySessionId: 'sess-lock',
+          items: [{ fileId: 'f2', fileName: 'PA2510173PCT-US 账单2 20261105.pdf', caseVolume: 'PA2510173PCT-US', fileNo: 'F2' }]
+        }
+      }
+    })
+    await settle()
+
+    expect(Object.keys(selected.value)).toHaveLength(2)
+  })
+
+  it('正在翻页过程中点击「停止翻页」可安全中止翻页', async () => {
+    let pendingResolve: ((res: ContentResponse) => void) | null = null
+    const request: MessageBridge['request'] = async message => {
+      if (message.type === MessageType.SearchFiles) {
+        const page = message.payload.query.pageIndex
+        if (page === 1) {
+          return {
+            type: MessageType.SearchFilesResult,
+            payload: {
+              ok: true,
+              data: {
+                pageIndex: 1,
+                pageSize: 100,
+                total: 200,
+                totalPages: 2,
+                querySessionId: 'sess-stop',
+                items: [{ fileId: 'f1', fileName: 'PA2510173PCT-US 账单 20261105.pdf', caseVolume: 'PA2510173PCT-US', fileNo: 'F1' }]
+              }
+            }
+          }
+        }
+        return new Promise(resolve => { pendingResolve = resolve })
+      }
+      return { type: MessageType.Error, payload: { message: 'unused' } }
+    }
+
+    mount(request)
+    button('测试查询').click()
+    await settle()
+
+    button('全选所有').click()
+    await settle()
+
+    const stopBtn = Array.from(document.querySelectorAll('button')).find(n => n.textContent?.includes('停止翻页'))
+    expect(stopBtn).toBeDefined()
+    stopBtn!.click()
+    await settle()
+
+    // 停止后提示已停止翻页，停止翻页按钮消失
+    const stopBtnAfter = Array.from(document.querySelectorAll('button')).find(n => n.textContent?.includes('停止翻页'))
+    expect(stopBtnAfter).toBeUndefined()
+    expect(document.body.textContent).toContain('已停止翻页')
+
+    // 即使第2页再回来，也不会重新激活已停止的批次
+    const resolveLater = pendingResolve as ((res: ContentResponse) => void) | null
+    if (resolveLater) {
+      resolveLater({
+        type: MessageType.SearchFilesResult,
+        payload: {
+          ok: true,
+          data: {
+            pageIndex: 2,
+            pageSize: 100,
+            total: 200,
+            totalPages: 2,
+            querySessionId: 'sess-stop',
+            items: [{ fileId: 'f2', fileName: 'PA2510173PCT-US 账单2 20261105.pdf', caseVolume: 'PA2510173PCT-US', fileNo: 'F2' }]
+          }
+        }
+      })
+      await settle()
+    }
+  })
 })
