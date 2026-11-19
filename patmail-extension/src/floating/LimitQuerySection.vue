@@ -29,7 +29,7 @@ import { MessageType, type MessageBridge } from '../shared/message'
 
 const props = defineProps<{ bridge?: MessageBridge; userId: string; canSearch: boolean; seed?: Record<string, string> | null; seedToken?: number }>()
 const emit = defineEmits<{
-  search: [query: Omit<LimitMonitorQuery, 'pageIndex' | 'pageSize'> & { reset?: boolean; templateId?: string }]
+  search: [query: Omit<LimitMonitorQuery, 'pageIndex' | 'pageSize'> & { reset?: boolean; templateId?: string; templateName?: string }]
   draft: [fields: Record<string, string>]
 }>()
 
@@ -490,6 +490,8 @@ function search(): void {
     return
   }
   if (ctrlReady) fields.ctrl_proc = ctrlIds.join(',')
+  const currentTemplate = templates.value.find(item => item.id === selectedId.value)
+  const templateName = saveName.value.trim() || currentTemplate?.name?.trim() || ''
   emit('search', {
     type: 'all',
     caseVolume: fields.case_volume,
@@ -497,7 +499,8 @@ function search(): void {
     customerName: fields.customer_name ?? '',
     ...(ctrlReady ? { ctrlProcId: ctrlIds.join(',') } : {}),
     fields,
-    ...(selectedId.value ? { templateId: selectedId.value } : {})
+    ...(selectedId.value ? { templateId: selectedId.value } : {}),
+    ...(templateName ? { templateName } : {})
   })
 }
 

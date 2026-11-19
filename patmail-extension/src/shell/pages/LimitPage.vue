@@ -262,6 +262,20 @@ function reset() {
   if (props.live) emit('search', { type: 'all', caseVolume: '', applicationNo: '', customerName: '', reset: true })
   else demoRows.value = samples
 }
+
+function isFailedMessage(text) {
+  if (!text) return false
+  if (text.includes('没有期限记录') || text.includes('没有符合') || text.includes('没有可显示的') || text.includes('查询完成') || text.includes('一起查完')) {
+    return false
+  }
+  return true
+}
+
+const emptyNotice = computed(() => {
+  if (props.loading) return '正在读取期限列表…'
+  if (isFailedMessage(props.message)) return '查询没有完成，上面有原因。'
+  return '没有可显示的期限记录'
+})
 </script>
 
 <template>
@@ -317,7 +331,7 @@ function reset() {
       <template v-if="cachePages">
         <tbody v-for="n in seenPages" :key="n" v-show="n === pageIndex">
           <tr v-if="!rowsFor(n).length">
-            <td class="limit-empty" :colspan="selectable ? 10 : 9">{{ loading ? '正在读取期限列表…' : (message ? '查询没有完成，上面有原因。' : '没有可显示的期限记录') }}</td>
+            <td class="limit-empty" :colspan="selectable ? 10 : 9">{{ emptyNotice }}</td>
           </tr>
           <tr v-for="row in rowsFor(n)" :key="row.procId" :class="{ 'is-pending': gates[row.procId] === 'pending' || flowByProc[row.procId] === '已提交审核' || flowByProc[row.procId] === MAILED_UNFINISHED_REVIEW || checking }">
             <td v-if="selectable" class="check">
@@ -338,7 +352,7 @@ function reset() {
       </template>
       <tbody v-else>
         <tr v-if="!shown.length">
-          <td class="limit-empty" :colspan="selectable ? 10 : 9">{{ loading ? '正在读取期限列表…' : (message ? '查询没有完成，上面有原因。' : '没有可显示的期限记录') }}</td>
+          <td class="limit-empty" :colspan="selectable ? 10 : 9">{{ emptyNotice }}</td>
         </tr>
         <tr v-for="row in shown" :key="row.procId" v-memo="[row, gates[row.procId], flowByProc[row.procId], checking, selected.includes(row.procId), allowMailedUnfinished]" :class="{ 'is-pending': gates[row.procId] === 'pending' || flowByProc[row.procId] === '已提交审核' || flowByProc[row.procId] === MAILED_UNFINISHED_REVIEW || checking }">
           <td v-if="selectable" class="check">

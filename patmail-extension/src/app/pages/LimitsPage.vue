@@ -40,6 +40,7 @@ const pageSize = ref(10)
 const selected = ref<string[]>([])
 const confirmedIds = ref<string[]>([])
 const templateId = ref('')
+const activeTemplateName = ref('')
 const seed = ref<Record<string, string> | null>(null)
 const seedToken = ref(0)
 const draftFields = ref<Record<string, string>>({})
@@ -158,7 +159,22 @@ async function markSendGates(items: LimitMonitorRow[]): Promise<void> {
   if (bits.length) message.value = [message.value, ...bits].filter(Boolean).join('')
 }
 
-async function search(input: { type: string; caseVolume?: string; applicationNo?: string; customerName?: string; ctrlProcId?: string; fields?: Record<string, string>; templateId?: string; reset?: boolean; page?: number }): Promise<void> {
+function limitEmptyMessage(tplName?: string, q?: Omit<LimitMonitorQuery, 'pageIndex' | 'pageSize'>): string {
+  const name = tplName?.trim() || activeTemplateName.value.trim()
+  if (name) {
+    return `「${name}」模板查询完成，当前条件下没有符合的期限记录。`
+  }
+  const hasConditions = Boolean(
+    q?.caseVolume || q?.applicationNo || q?.customerName || q?.ctrlProcId ||
+    (q?.fields && Object.values(q.fields).some(v => typeof v === 'string' && v.trim()))
+  )
+  if (hasConditions) {
+    return '查询完成，当前筛选条件下没有符合的期限记录。'
+  }
+  return '查询完成，当前没有可显示的期限记录。'
+}
+
+async function search(input: { type: string; caseVolume?: string; applicationNo?: string; customerName?: string; ctrlProcId?: string; fields?: Record<string, string>; templateId?: string; templateName?: string; reset?: boolean; page?: number }): Promise<void> {
   if (input.reset) {
     rows.value = []
     gates.value = {}
@@ -169,6 +185,7 @@ async function search(input: { type: string; caseVolume?: string; applicationNo?
     pageIndex.value = 1
     selected.value = []
     templateId.value = ''
+    activeTemplateName.value = ''
     lastQuery.value = null
     submittedFields.value = {}
     sheetMerged.value = false
@@ -193,8 +210,9 @@ async function search(input: { type: string; caseVolume?: string; applicationNo?
   }
   lastQuery.value = query
   if (input.templateId) templateId.value = input.templateId
+  if (input.templateName !== undefined) activeTemplateName.value = input.templateName
   if (!input.page && splitCaseVolumes(query.caseVolume ?? '').length > 1) {
-    await showCollected(query)
+    await showCollected(query, input.templateName)
     return
   }
   if (!input.page) {
@@ -211,7 +229,7 @@ async function search(input: { type: string; caseVolume?: string; applicationNo?
     checkingGates.value = data.items.length > 0
     total.value = data.total
     pageIndex.value = targetPage
-    message.value = data.items.length ? '' : '这个条件下没有期限记录。'
+    message.value = data.items.length ? '' : limitEmptyMessage(input.templateName, query)
     void markSendGates(data.items)
   } catch (error) {
     message.value = typeof error === 'string' ? error : '期限查询失败，请重试。'
@@ -220,7 +238,7 @@ async function search(input: { type: string; caseVolume?: string; applicationNo?
   }
 }
 
-async function showCollected(query: Omit<LimitMonitorQuery, 'pageIndex' | 'pageSize'>): Promise<void> {
+async function showCollected(query: Omit<LimitMonitorQuery, 'pageIndex' | 'pageSize'>, tplName?: string): Promise<void> {
   loading.value = true
   sheetMerged.value = true
   selected.value = []
@@ -238,7 +256,8 @@ async function showCollected(query: Omit<LimitMonitorQuery, 'pageIndex' | 'pageS
     checkingGates.value = items.length > 0
     total.value = items.length
     pageIndex.value = 1
-    message.value = items.length ? `一起查完，共 ${items.length} 件。` : '这个条件下没有期限记录。'
+    const name = tplName?.trim() || activeTemplateName.value.trim()
+    message.value = items.length ? `一起查完，共 ${items.length} 件。` : (name ? `「${name}」模板查询完成，当前文号条件下没有符合的期限记录。` : '这些文号查询完成，当前条件下没有符合的期限记录。')
     void markSendGates(items)
   } catch (error) {
     message.value = typeof error === 'string' ? error : '期限查询失败，请重试。'

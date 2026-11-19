@@ -355,7 +355,7 @@ async function showCollected(query: Omit<LimitMonitorQuery, 'pageIndex' | 'pageS
     checkingGates.value = items.length > 0
     total.value = items.length
     pageIndex.value = 1
-    message.value = items.length ? `一起查完，共 ${items.length} 件。` : '这个条件下没有期限记录。'
+    message.value = items.length ? `一起查完，共 ${items.length} 件。` : '这些文号查询完成，当前条件下没有符合的期限记录。'
     publish()
     void markSendGates(items)
   } catch (error) {
@@ -464,7 +464,7 @@ async function search(input: SearchInput): Promise<void> {
     checkingGates.value = data.items.length > 0
     total.value = data.total
     pageIndex.value = targetPage
-    message.value = data.items.length ? '' : '这个条件下没有期限记录。'
+    message.value = data.items.length ? '' : '查询完成，当前条件下没有符合的期限记录。'
     publish()
     void markSendGates(data.items)
   } catch (error) {
