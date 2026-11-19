@@ -679,6 +679,37 @@ async function loadFileTypes(caseTypeId: string, force = false): Promise<void> {
   fileTypeNodes.value = response.payload.data.nodes
   fileTypeRoots.value = response.payload.data.rootIds
   if (response.payload.data.rootIds.length === 0) fileTypeMessage.value = '这个案件类型下面没有文件描述。'
+  resolveSeedFileType()
+}
+
+/** 将 seed 传入的中文文件描述名（如「付款INVOICE」）自动换算为当前站点实时 GUID，供树控件高亮和提交。 */
+function resolveSeedFileType(): void {
+  if (!temporaryActive.value.filetype || !fileTypeNodes.value.length) return
+  const raw = (temporary.value.filetype ?? '').trim()
+  if (!raw) return
+  const parts = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+  const guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (parts.every(p => guidRe.test(p))) return
+  const resolvedIds: string[] = []
+  let changed = false
+  for (const part of parts) {
+    if (guidRe.test(part)) {
+      resolvedIds.push(part)
+      continue
+    }
+    const lower = part.toLowerCase()
+    const exact = fileTypeNodes.value.filter(n => n.name.trim() === part && n.selectable !== false)
+    const matched = exact.length
+      ? exact
+      : fileTypeNodes.value.filter(n => n.name.trim().toLowerCase() === lower && n.selectable !== false)
+    if (matched.length) {
+      changed = true
+      for (const node of matched) resolvedIds.push(node.id)
+    }
+  }
+  if (changed && resolvedIds.length) {
+    temporary.value = { ...temporary.value, filetype: [...new Set(resolvedIds)].join(',') }
+  }
 }
 async function loadDictionaries(ticketId: number, signal: AbortSignal, force = false): Promise<{ changed: string[]; problems: string[] }> {
   const summary = { changed: [] as string[], problems: [] as string[] }
@@ -1447,6 +1478,7 @@ function applySeed(): void {
   }
   temporaryActive.value = nextActive
   temporary.value = next
+  resolveSeedFileType()
   const copy = { ...openExtra.value }
   for (const block of formSections.value) {
     if (extraFilled(block, next)) copy[block.title] = true

@@ -63,6 +63,8 @@ pnpm scan:secrets --write-baseline  # 把当前发现登记进例外表（必须
 - 季华传文仅新增 `https://oa.jihualab.net/*` 主机权限，不扩展 EASY 的来源/账号判定，也不向该站自动注入 EASY content script。独立通道只接受本扩展 `app.html`，固定顶层文档和用户绑定；MAIN 世界令牌仅用于同源请求，不进入工作台、存储或日志。隔离 E2E 完整拦截该域名，采用生成文件和模拟会话。
 - 备用模型仅新增 `https://api.xiaomimimo.com/*` 主机权限，让后台 service worker 的 `fetch` 免 CORS 直连（请求带 `api-key` 等自定义头，无主机权限时依赖对端 CORS 放行，备用链路不可押注于此）。与主模型 `http://43.138.138.200:8588/*` 同等口径；单测注入 fetcher，不发真实请求。
 
+- 请款工作流仅新增 `https://www.pbc.gov.cn/*` 主机权限，用于工作台页面只读抓取「人民币汇率中间价公告」页面（两次 GET：公告列表 + 最新公告），不带 Cookie（`credentials: 'omit'`），不向该站注入脚本。汇率只在页面内存里使用，用户可手工改；单测只解析固定公告文本，不发真实请求。
+
 ### 4.1 eHague Summary PDF 打印权限（2026-11-11 登记）
 
 - 新增 `debugger` 权限的唯一业务用途是 `src/background/hague-pdf.ts` 对已验证的 eHague Summary 执行 `Page.printToPDF`。Chrome 不允许将此权限声明为可选权限，见 [官方 permissions 文档](https://developer.chrome.com/docs/extensions/reference/api/permissions)。

@@ -35,7 +35,8 @@ const props = withDefaults(defineProps<{
   showMailActions?: boolean
   epoch?: number
   recoverySurface?: string
-}>(), { seed: null, seedToken: 0, selectable: false, showMailActions: true, epoch: 0, recoverySurface: 'file-query' })
+  autoSelectBills?: boolean
+}>(), { seed: null, seedToken: 0, selectable: false, showMailActions: true, epoch: 0, recoverySurface: 'file-query', autoSelectBills: false })
 
 const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { default: () => ({}) })
 
@@ -287,7 +288,7 @@ watch(() => props.canSearch, allowed => {
   if (taskCheckProgress.label === '下载文件' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
   scheduleSurface()
 })
-defineExpose({ protectSurface })
+defineExpose({ protectSurface, selectAllPages })
 
 function messageForError(code: string, message: string): string {
   if (code === 'SESSION_EXPIRED') return 'EASY 登录已失效，请在原网站重新登录后检测。'
@@ -409,6 +410,9 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     await protectSurface().catch(() => {})
     searchState.value = result.value.total === 0 ? 'empty' : 'success'
     void showResults()
+    if (props.autoSelectBills && run === 'start' && result.value.total > 0 && !revalidate) {
+      void selectAllPages(true)
+    }
   } catch {
     if (current !== generation) return
     searchState.value = 'error'

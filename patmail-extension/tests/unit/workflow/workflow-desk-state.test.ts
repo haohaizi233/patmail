@@ -5,7 +5,7 @@ const valid = (value: unknown): value is { id: string; steps: unknown[] } => !!v
 describe('workflow desk recovery state', () => {
   it('restores navigation and unsaved editor selections', () => {
     const draft = { id: 'custom', steps: [{ id: 'step-2' }] }
-    expect(sanitizeWorkflowDeskState({ screen: 'flow', hagueView: 'guide', jihuaView: 'use', draft, selectedId: 'step-2', dirty: true, picked: ['a'], newName: 'draft' }, valid)).toEqual({ screen: 'flow', hagueView: 'guide', jihuaView: 'use', draft, selectedId: 'step-2', dirty: true, picked: ['a'], newName: 'draft' })
+    expect(sanitizeWorkflowDeskState({ screen: 'flow', hagueView: 'guide', jihuaView: 'use', billingView: 'use', draft, selectedId: 'step-2', dirty: true, picked: ['a'], newName: 'draft' }, valid)).toEqual({ screen: 'flow', hagueView: 'guide', jihuaView: 'use', billingView: 'use', draft, selectedId: 'step-2', dirty: true, picked: ['a'], newName: 'draft' })
   })
   it('rejects unknown screens and sanitizes optional fields', () => {
     expect(sanitizeWorkflowDeskState({ screen: 'unknown' }, valid)).toBeNull()

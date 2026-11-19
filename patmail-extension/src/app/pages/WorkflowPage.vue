@@ -7,9 +7,11 @@ import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { bg } from '../../shell/assets'
 import JihuaUploadPage from './JihuaUploadPage.vue'
 import HaguePage from './HaguePage.vue'
+import BillingWorkflowPage from './BillingWorkflowPage.vue'
 import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
 import hagueGuide from '../../../docs/workflows/海牙新申请.md?raw'
 import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
+import billingGuide from '../../../docs/workflows/请款.md?raw'
 import {
   cloneCatalog,
   cloneWorkflow,
@@ -50,11 +52,14 @@ import { createRecoveryClient } from '../../recovery/client'
 import { systemScope } from '../../recovery/wal-ledger'
 import { sanitizeWorkflowDeskState } from './workflow-desk-state'
 
-type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague'
+type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague' | 'billing'
 
 const screen = ref<Screen>('sea')
 const hagueView = ref<'guide' | 'use'>('use')
 const jihuaView = ref<'guide' | 'use'>('use')
+const billingView = ref<'guide' | 'use'>('use')
+const billingMounted = ref(false)
+watch(screen, next => { if (next === 'billing') billingMounted.value = true }, { immediate: true })
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
 const draft = ref<WorkflowDefinition | null>(null)
 const selectedId = ref('')
@@ -81,7 +86,7 @@ function validDraft(value: unknown): value is WorkflowDefinition {
 }
 
 function deskState() {
-  return { screen: screen.value, hagueView: hagueView.value, jihuaView: jihuaView.value, draft: draft.value, selectedId: selectedId.value, dirty: dirty.value, picked: picked.value, newName: newName.value }
+  return { screen: screen.value, hagueView: hagueView.value, jihuaView: jihuaView.value, billingView: billingView.value, draft: draft.value, selectedId: selectedId.value, dirty: dirty.value, picked: picked.value, newName: newName.value }
 }
 
 function flushDeskState(): void {
@@ -99,7 +104,7 @@ onBeforeUnmount(() => {
   flushDeskState()
 })
 
-watch([screen, hagueView, jihuaView, draft, selectedId, dirty, picked, newName], () => {
+watch([screen, hagueView, jihuaView, billingView, draft, selectedId, dirty, picked, newName], () => {
   if (!hydrated) return
   clearTimeout(persistTimer)
   persistTimer = setTimeout(flushDeskState, 120)
@@ -125,6 +130,7 @@ onMounted(async () => {
     screen.value = restored.screen
     hagueView.value = restored.hagueView
     jihuaView.value = restored.jihuaView
+    billingView.value = restored.billingView
     replaceDraft(restored.draft, restored.dirty)
     selectedId.value = restored.selectedId
     picked.value = restored.picked
@@ -483,7 +489,7 @@ function chooseProc(param: WorkflowParam, id: string): void {
 </script>
 
 <template>
-  <div v-show="screen !== 'jihua' && screen !== 'hague'" class="workflow-main">
+  <div v-show="screen !== 'jihua' && screen !== 'hague' && screen !== 'billing'" class="workflow-main">
     <header v-if="screen === 'flow' && draft" class="page-head flow-head">
       <Bunny />
       <div class="flow-head-fields">
@@ -532,6 +538,18 @@ function chooseProc(param: WorkflowParam, id: string): void {
         <div class="sea-actions">
           <button type="button" class="sea-remove" @click="jihuaView = 'guide'; screen = 'jihua'">流程说明</button>
           <button type="button" class="sea-remove" @click="jihuaView = 'use'; screen = 'jihua'">开始使用</button>
+        </div>
+      </article>
+      <article class="sea-card billing-workflow-card">
+        <button type="button" class="sea-open" @click="billingView = 'use'; screen = 'billing'">
+          <b>请款</b>
+          <small>文件管理自动抓取海外账单并提取我方文号，无缝联动费用查询，保留 Excel 原式导出。</small>
+          <span class="sea-badge">工作流</span>
+          <em>账单抓取 · 费用联动 · 人行汇率 · 公式导出</em>
+        </button>
+        <div class="sea-actions">
+          <button type="button" class="sea-remove" @click="billingView = 'guide'; screen = 'billing'">使用说明</button>
+          <button type="button" class="sea-remove" @click="billingView = 'use'; screen = 'billing'">开始请款</button>
         </div>
       </article>
       <button type="button" class="sea-card sea-add" @click="openOcean">
@@ -709,6 +727,15 @@ function chooseProc(param: WorkflowParam, id: string): void {
       :guide="jihuaGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
     >
       <JihuaUploadPage embedded @back="screen = 'sea'" />
+    </WorkflowWorkspace>
+  </div>
+  <div v-if="billingMounted" v-show="screen === 'billing'" class="workflow-billing">
+    <WorkflowWorkspace
+      v-model:view="billingView" title="请款"
+      description="先选请款模板智能预填查询条件：涉外自动抓账单查第三方费用，PCT 查官费与我方代理费，保留 Excel 原式导出。"
+      :guide="billingGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
+    >
+      <BillingWorkflowPage embedded :is-active="screen === 'billing' && billingView === 'use'" @back="screen = 'sea'" />
     </WorkflowWorkspace>
   </div>
 </template>

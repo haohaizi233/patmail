@@ -43,11 +43,14 @@ const props = defineProps<{
   userId: string
   canSearch: boolean
   manage?: boolean
+  initialValues?: Record<string, string>
+  initialToken?: number
 }>()
 
 const emit = defineEmits<{
   searched: [query: FeeSearchQuery]
   export: [rows: FeeSearchRow[]]
+  'selection-change': [rows: FeeSearchRow[]]
 }>()
 
 const injectedBridge = inject<MessageBridge>('bridge')
@@ -537,6 +540,37 @@ const pageSizeOptions = [
 // Row Selection
 const selectedIds = ref<Record<string, boolean>>({})
 const selectedCount = computed(() => Object.values(selectedIds.value).filter(Boolean).length)
+const selectedFeeIds = computed(() =>
+  Object.entries(selectedIds.value)
+    .filter(([, checked]) => checked)
+    .map(([id]) => id)
+)
+const allKnownRows = ref<Map<string, FeeSearchRow>>(new Map())
+
+const selectedRowsList = computed(() =>
+  selectedFeeIds.value.map(id => allKnownRows.value.get(id)).filter((r): r is FeeSearchRow => Boolean(r))
+)
+
+watch(selectedRowsList, rows => {
+  emit('selection-change', rows)
+}, { deep: true })
+
+function applyValuesPatch(patch: Record<string, string>): void {
+  const prevCaseType = values.value.case_type
+  const prevCountry = values.value.country
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined) values.value[k] = v
+  }
+  if (values.value.case_type !== prevCaseType || values.value.country !== prevCountry) {
+    void refreshCtrlProc()
+  }
+}
+
+function applyInitialValues(): void {
+  if (!props.initialValues) return
+  applyValuesPatch(props.initialValues)
+}
+watch(() => props.initialToken, applyInitialValues, { immediate: true })
 
 function isRowSelected(row: FeeSearchRow): boolean {
   return Boolean(selectedIds.value[row.feeId])
@@ -645,6 +679,9 @@ async function doSearch(page = 1): Promise<void> {
 
       const data = resp.payload.data
       result.value = data
+      for (const row of data.rows) {
+        allKnownRows.value.set(row.feeId, row)
+      }
       if (data.total === 0 || data.rows.length === 0) {
         searchState.value = 'empty'
       } else {
@@ -734,6 +771,7 @@ function resetForm(): void {
   quickFeeSelectMode.value = ''
   result.value = null
   selectedIds.value = {}
+  allKnownRows.value.clear()
   totalAmountInfo.value = {
     originalAgentFee: 0,
     discountAgentFee: 0,
@@ -782,12 +820,6 @@ const columns = [
 const exportModalOpen = ref(false)
 const exportModalMode = ref<FeeExportMode>('cond')
 const exportNotice = ref('')
-
-const selectedFeeIds = computed(() =>
-  Object.entries(selectedIds.value)
-    .filter(([, checked]) => checked)
-    .map(([id]) => id)
-)
 
 async function openExportModal(mode: FeeExportMode): Promise<void> {
   if (!props.canSearch) {
@@ -1206,6 +1238,17 @@ const displayRows = computed(() => {
 const totalPages = computed(() => {
   if (!result.value || result.value.total === 0) return 1
   return Math.ceil(result.value.total / pageSize.value)
+})
+
+defineExpose({
+  getSelectedRows: () => selectedRowsList.value,
+  setValues(patch: Record<string, string>) {
+    applyValuesPatch(patch)
+  },
+  doSearch,
+  selectedCount,
+  selectedFeeIds,
+  selectedRowsList
 })
 </script>
 

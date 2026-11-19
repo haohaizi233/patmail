@@ -18,7 +18,9 @@ const props = withDefaults(defineProps<{
   showSession?: boolean
   seed?: Record<string, string> | null
   seedToken?: number
-}>(), { showSession: true, seed: null, seedToken: 0 })
+  recoverySurface?: string
+  autoSelectBills?: boolean
+}>(), { showSession: true, seed: null, seedToken: 0, recoverySurface: '', autoSelectBills: false })
 const emit = defineEmits<{
   searched: [query: FileSearchRequest]
   'download-name': [selection: FileDownloadSelection | null, problem: string]
@@ -34,7 +36,12 @@ const sessionLoading = ref(false)
 const lastVerifiedUserId = ref('')
 const queryUserId = computed(() => props.showSession ? (sessionUserId.value || lastVerifiedUserId.value) : workspace.connection.value.operatorId)
 const epoch = ref(0)
-const selected = ref<Record<string, SelectedPatentFile>>({})
+const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { default: () => ({}) })
+const queryRef = ref<InstanceType<typeof FileSearchQuery> | null>(null)
+
+defineExpose({
+  selectAllPages: (billsOnly = false) => queryRef.value?.selectAllPages(billsOnly)
+})
 const showSelected = ref(false)
 const showMail = ref(false)
 const bindProfileId = ref('')
@@ -157,10 +164,12 @@ onBeforeUnmount(() => {
     </section>
 
     <FileSearchQuery
+      ref="queryRef"
       v-model:selected="selected"
       selectable
       :show-mail-actions="showSession"
-      :recovery-surface="showSession ? 'floating-files' : 'workspace-files'"
+      :recovery-surface="recoverySurface || (showSession ? 'floating-files' : 'workspace-files')"
+      :auto-select-bills="autoSelectBills"
       :user-id="queryUserId"
       :origin="accountOrigin"
       :can-search="canSearch"
