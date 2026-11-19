@@ -940,15 +940,47 @@ onBeforeUnmount(() => {
         </label>
         <button type="button" class="text-button" :disabled="!canSearch || !lastQuery || searchState === 'loading'" @click="refresh">刷新</button>
       </div>
-      <div v-if="result" class="toolbar limit-bar">
-        <span class="sheet-count">共 {{ result.total }} 条递交记录</span>
-        <button type="button" class="ghost" :disabled="searchState === 'loading'" @click="selectPage(true)">全选本页</button>
-        <button type="button" class="ghost" :disabled="searchState === 'loading'" @click="selectPage(false)">取消本页</button>
-        <button type="button" class="ghost" :disabled="searchState === 'loading' || selectingAll" @click="selectAllPages">{{ selectingAll ? '正在全选…' : '全选所有' }}</button>
-        <button type="button" class="ghost" :disabled="searchState === 'loading' || selectedCount === 0" @click="clearSelected">取消所有</button>
-        <span class="hint">已选 {{ selectedCount }} 件{{ pagingHint }}</span>
-        <button v-if="failedPages.length" type="button" class="ghost" :disabled="selectingAll" @click="retryFailedPages">重试没读到的 {{ failedPages.length }} 页</button>
-        <button type="button" class="solid tiny" :disabled="selectedCount === 0 || selectingAll" @click="exportSelected">导出 Excel</button>
+      <div v-if="result" class="toolbar limit-bar filing-toolbar">
+        <div class="toolbar-left">
+          <div class="stat-badge sheet-count">
+            <span class="stat-label">共</span>
+            <strong class="stat-number">{{ result.total }}</strong>
+            <span class="stat-unit">条递交记录</span>
+          </div>
+
+          <div class="btn-group page-group">
+            <button type="button" class="btn-pill ghost" :disabled="searchState === 'loading'" @click="selectPage(true)">全选本页</button>
+            <button type="button" class="btn-pill ghost" :disabled="searchState === 'loading'" @click="selectPage(false)">取消本页</button>
+          </div>
+
+          <div class="btn-group all-group">
+            <button type="button" class="btn-pill ghost" :disabled="searchState === 'loading' || selectingAll" @click="selectAllPages">
+              <span v-if="selectingAll" class="spinner-dot"></span>
+              {{ selectingAll ? '正在全选…' : '全选所有' }}
+            </button>
+            <button type="button" class="btn-pill ghost" :disabled="searchState === 'loading' || selectedCount === 0" @click="clearSelected">取消所有</button>
+          </div>
+
+          <button v-if="failedPages.length" type="button" class="btn-pill btn-warn ghost" :disabled="selectingAll" @click="retryFailedPages">
+            重试没读到的 {{ failedPages.length }} 页
+          </button>
+        </div>
+
+        <div class="toolbar-right">
+          <div class="selected-badge hint" :class="{ 'has-selected': selectedCount > 0 }">
+            <span class="dot-indicator"></span>
+            已选 <strong class="selected-number">{{ selectedCount }}</strong> 件{{ pagingHint }}
+          </div>
+
+          <button type="button" class="btn-export solid tiny" :disabled="selectedCount === 0 || selectingAll" @click="exportSelected">
+            <svg class="export-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <span>导出 Excel</span>
+          </button>
+        </div>
       </div>
       <p v-if="selectionNotice" class="error" role="alert">{{ selectionNotice }}</p>
       <p v-if="searchState === 'idle'" class="hint">输入条件后查询递交记录。</p>
@@ -992,3 +1024,213 @@ onBeforeUnmount(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+.filing-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: linear-gradient(135deg, #fff9fc 0%, #ffffff 100%);
+  border: 1px solid #f6e2ed;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(220, 90, 140, 0.04);
+  margin-bottom: 12px;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: #ffffff;
+  border: 1px solid #f1d5e4;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #8c738f;
+  box-shadow: 0 1px 3px rgba(220, 90, 140, 0.05);
+}
+
+.stat-number {
+  font-weight: 700;
+  color: #e44f8b;
+  font-size: 13px;
+}
+
+.btn-group {
+  display: inline-flex;
+  background: #fdf5f9;
+  border: 1px solid #f2dbe7;
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.btn-pill {
+  border: none;
+  background: transparent;
+  color: #695270;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.btn-pill:hover:not(:disabled) {
+  background: #ffffff;
+  color: #e04b86;
+  box-shadow: 0 1px 4px rgba(220, 80, 130, 0.12);
+}
+
+.btn-pill:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn-pill:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-pill.btn-warn {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #c2410c;
+}
+
+.btn-pill.btn-warn:hover:not(:disabled) {
+  background: #ffedd5;
+  box-shadow: 0 1px 4px rgba(194, 65, 12, 0.15);
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.selected-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: #faf7fa;
+  border: 1px solid #ebdbe5;
+  border-radius: 20px;
+  font-size: 12px;
+  color: #88748c;
+  transition: all 0.25s ease;
+}
+
+.selected-badge.has-selected {
+  background: #fff0f6;
+  border-color: #fbcfe8;
+  color: #be185d;
+  box-shadow: 0 1px 4px rgba(220, 60, 120, 0.08);
+}
+
+.dot-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c9b7c8;
+  display: inline-block;
+  transition: background-color 0.25s ease;
+}
+
+.has-selected .dot-indicator {
+  background: #ec4899;
+  box-shadow: 0 0 0 2px rgba(236, 72, 153, 0.2);
+}
+
+.selected-number {
+  font-weight: 700;
+  color: #88748c;
+}
+
+.has-selected .selected-number {
+  color: #d94680;
+}
+
+.btn-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #ff6fa9 0%, #ff4b8b 100%);
+  border: 1px solid #ff4286;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(255, 75, 139, 0.25);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.btn-export:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ff80b4 0%, #ff5c97 100%);
+  box-shadow: 0 4px 12px rgba(255, 75, 139, 0.38);
+  transform: translateY(-1px);
+}
+
+.btn-export:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+  box-shadow: 0 1px 4px rgba(255, 75, 139, 0.2);
+}
+
+.btn-export:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+  box-shadow: none;
+  transform: none;
+}
+
+.export-icon {
+  flex-shrink: 0;
+}
+
+.spinner-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 900px) {
+  .filing-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .toolbar-right {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+</style>
