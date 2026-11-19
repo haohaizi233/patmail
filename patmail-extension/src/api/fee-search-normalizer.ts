@@ -33,9 +33,17 @@ export function normalizeFeeSearch(raw: unknown, query: FeeSearchQuery): ApiResu
     return apiError('HTTP_ERROR', cleanString(clientInfo.Message) || '系统繁忙，请求失败，请稍后重试！')
   }
 
-  const rawRows = Array.isArray(raw.TableRows) ? raw.TableRows : []
-  const countStr = cleanString(raw.TableRowsCount)
-  const total = countStr ? parseNumber(countStr, rawRows.length) : rawRows.length
+  const rawRows = Array.isArray(raw.rows)
+    ? raw.rows
+    : Array.isArray(raw.TableRows)
+      ? raw.TableRows
+      : []
+  const countStr = cleanString(raw.total) || cleanString(raw.TableRowsCount)
+  const total = typeof raw.total === 'number'
+    ? raw.total
+    : countStr
+      ? parseNumber(countStr, rawRows.length)
+      : rawRows.length
 
   let pageAgentFee = 0
   let pageOfficialFee = 0
