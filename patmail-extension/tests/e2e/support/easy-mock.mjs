@@ -263,6 +263,14 @@ async function limitQueryRoute(route, request, pathName, params, authenticated, 
       await route.fulfill({ status: 503, contentType: 'text/plain; charset=utf-8', body: 'fixture unavailable' })
       return
     }
+    if (state.limitMode === 'empty') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/plain; charset=utf-8',
+        body: json({ TableRows: [], TableRowsCount: '0' })
+      })
+      return
+    }
     const customerName = params.get('customer_name') || ''
     await route.fulfill({
       status: 200,

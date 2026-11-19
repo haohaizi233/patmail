@@ -110,6 +110,27 @@ try {
   assert.equal(apiCalls.filter(call => call.path === '/AjaxServers/Report.ashx' && call.params.get('Call') === 'GetLimitMonitorCaseList' && call.params.get('customer_name') === '网关错误').length, 3)
   report.pass('limits query surfaces a direct HTTP error response after read-only retries')
 
+  mock.setLimitMode('empty')
+  await customer.fill('无待办外观')
+  const emptyRequest = easyPage.waitForRequest(request => {
+    if (request.url() !== `${new URL(easyUrl).origin}/AjaxServers/Report.ashx`) return false
+    const params = new URLSearchParams(request.postData() ?? '')
+    return params.get('Call') === 'GetLimitMonitorCaseList' && params.get('customer_name') === '无待办外观'
+  }, { timeout: 15_000 })
+  await queryButton.click()
+  await emptyRequest
+
+  await app.getByText('期限共 0 条', { exact: true }).waitFor({ timeout: 15_000 })
+  await app.getByText('查询完成，当前筛选条件下没有符合的期限记录。', { exact: true }).waitFor({ timeout: 15_000 })
+
+  const emptyCell = app.locator('.limit-empty')
+  await emptyCell.waitFor({ timeout: 15_000 })
+  assert.equal(await emptyCell.innerText(), '没有可显示的期限记录')
+
+  const ambiguousText = await app.getByText('查询没有完成，上面有原因。').count()
+  assert.equal(ambiguousText, 0, '正常查出0条记录时不得显示“查询没有完成”')
+  report.pass('limits query surfaces unambiguous empty state without false failure notice')
+
   assert(apiCalls.some(call => call.path === '/AjaxServers/Login.ashx' && call.params.get('Call') === 'GetUserModel' && call.authenticated))
   assert.equal(requestFailures.length, 0, `unexpected EASY request failures: ${JSON.stringify(requestFailures)}`)
   assert.deepEqual(errors, [], `browser errors: ${errors.join('\n')}`)
