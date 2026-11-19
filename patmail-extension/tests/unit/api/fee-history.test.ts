@@ -118,10 +118,46 @@ describe('fee query history template support', () => {
       fields: {
         case_type: '31D1A147-2931-43B5-94AE-B72B1525BA8A',
         receive_account_id: 'null',
-        business_coop: 'undefined'
+        business_coop: 'undefined',
+        customer_id: '[]'
       }
     })
     expect(rebuilt).not.toContain('receive_account_id')
     expect(rebuilt).not.toContain('business_coop')
+    expect(rebuilt).not.toContain('customer_id')
+  })
+
+  it('treats empty JSON arrays [] in customer_id / ruleOutcustomer_id XML as empty selection instead of dirty "[]" entry', () => {
+    const emptyCustomerXml = `<xmlRoot>
+      <case_type>31D1A147-2931-43B5-94AE-B72B1525BA8A</case_type>
+      <customer_id>[]</customer_id>
+      <customer_id_text>[]</customer_id_text>
+      <ruleOutcustomer_id>[]</ruleOutcustomer_id>
+      <ruleOutcustomer_id_text>[]</ruleOutcustomer_id_text>
+    </xmlRoot>`
+
+    const parsed = readFeeQueryXml(emptyCustomerXml)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.data.customers).toEqual([])
+    expect(parsed.data.ruleOutCustomers).toEqual([])
+    expect(parsed.data.fields.customer_id).toBeUndefined()
+    expect(parsed.data.displayValues.customer_id).toBeUndefined()
+    expect(parsed.data.fields.ruleOutcustomer_id).toBeUndefined()
+
+    const nullArrayXml = `<xmlRoot><customer_id>[null, "", "undefined"]</customer_id><customer_id_text>[]</customer_id_text></xmlRoot>`
+    const parsedNullArr = readFeeQueryXml(nullArrayXml)
+    expect(parsedNullArr.ok).toBe(true)
+    if (parsedNullArr.ok) {
+      expect(parsedNullArr.data.customers).toEqual([])
+      expect(parsedNullArr.data.fields.customer_id).toBeUndefined()
+    }
+
+    const partialTextXml = `<xmlRoot><customer_id>["cust-1"]</customer_id><customer_id_text>[]</customer_id_text></xmlRoot>`
+    const parsedPartial = readFeeQueryXml(partialTextXml)
+    expect(parsedPartial.ok).toBe(true)
+    if (parsedPartial.ok) {
+      expect(parsedPartial.data.customers).toEqual([{ id: 'cust-1', name: 'cust-1' }])
+    }
   })
 })

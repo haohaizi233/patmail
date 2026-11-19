@@ -65,20 +65,25 @@ describe('fee search params builder', () => {
       finish_date_from: '2026-08-01',
       finish_date_to: '2026-11-19',
       receive_account_id: 'null',
+      customer_id: '[]',
       fields: {
         receive_account_id: 'null',
         business_coop: 'undefined',
         case_agency: 'NULL',
+        customer_id: '[]',
+        ruleOutcustomer_id: '{}',
         Call: 'Hijack',
         log_pagename: 'Wrong.aspx'
       }
     })
     expect(res.ok).toBe(true)
     const p = res.data
-    // Must never send literal "null" or "undefined" for select/named/date fields
+    // Must never send literal "null", "undefined", "[]", or "{}" for select/named/date/customer fields
     expect(p.get('receive_account_id')).toBe('')
     expect(p.get('business_coop')).toBe('')
     expect(p.get('case_agency')).toBe('')
+    expect(p.get('customer_id')).toBe('')
+    expect(p.get('ruleOutcustomer_id')).toBe('')
     // System params must not be overwritten by fields bag
     expect(p.get('Call')).toBe('FeeSearch')
     expect(p.get('log_pagename')).toBe('FeeSearch.aspx')

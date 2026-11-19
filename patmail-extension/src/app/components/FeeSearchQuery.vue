@@ -18,6 +18,7 @@ import {
   buildFeeQueryXml,
   feeCellKey,
   isFeeSearchInputField,
+  parseFeeCustomerRefs,
   readFeeQueryXml,
   sanitizeFeeFieldValue,
   type FeeCell
@@ -1143,18 +1144,21 @@ async function importTemplateJson(event: Event): Promise<void> {
       count += 1
     }
   }
+  selectedCustomers.value = parseFeeCustomerRefs(nextValues.customer_id ?? '', read.conditions.displayValues.customer_id ?? '')
+  selectedRuleOutCustomers.value = parseFeeCustomerRefs(nextValues.ruleOutcustomer_id ?? '', read.conditions.displayValues.ruleOutcustomer_id ?? '')
+  if (selectedCustomers.value.length) {
+    nextValues.customer_id = selectedCustomers.value.map(c => c.id).join(';')
+  } else {
+    delete nextValues.customer_id
+  }
+  if (selectedRuleOutCustomers.value.length) {
+    nextValues.ruleOutcustomer_id = selectedRuleOutCustomers.value.map(c => c.id).join(';')
+  } else {
+    delete nextValues.ruleOutcustomer_id
+  }
   values.value = nextValues
   checkedBoxes.value = nextChecks
   unknownTemplateFields.value = { ...read.conditions.unknownFields }
-
-  const parseModalList = (idStr: string | undefined, nameStr: string | undefined): SelectedCustomerEntry[] => {
-    if (!idStr?.trim()) return []
-    const ids = idStr.split(/[;,]/).map(s => s.trim()).filter(Boolean)
-    const names = (nameStr ?? '').split(/[;,]/).map(s => s.trim()).filter(Boolean)
-    return ids.map((id, idx) => ({ id, name: names[idx] || id }))
-  }
-  selectedCustomers.value = parseModalList(nextValues.customer_id, read.conditions.displayValues.customer_id)
-  selectedRuleOutCustomers.value = parseModalList(nextValues.ruleOutcustomer_id, read.conditions.displayValues.ruleOutcustomer_id)
   if (selectedCustomers.value.length) {
     void loadApplicantsForCustomers(selectedCustomers.value.map(c => c.id).join(';'), true)
   } else {

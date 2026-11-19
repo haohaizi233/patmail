@@ -562,12 +562,15 @@ export const FEE_NON_TEXT_FIELD_KEYS = new Set<string>([
 
 /**
  * 原站 FeeSearch.aspx 保存历史查询模板时，未选中的 <select>（如异步加载的 receive_account_id）
- * 会被 jQuery .val() 序列化为字面量 "null" / "undefined"。原站回填 <select> 时因无匹配 option 自动退回空值，
- * 插件必须同样把这些占位字符串清洗为空，避免拼成 `receive_account_id=null` 导致查询为空或后端报异常。
+ * 会被 jQuery .val() 序列化为字面量 "null" / "undefined"，未选中的客户选择框会被序列化为 "[]"。
+ * 插件必须把这些空占位字符串清洗为空，避免拼成 `receive_account_id=null` 或产生脏客户项 `[]`。
  */
 export function isFeeNullSentinel(value: string): boolean {
   const normalized = value.trim().toLowerCase()
-  return normalized === 'null' || normalized === 'undefined'
+  return normalized === 'null'
+    || normalized === 'undefined'
+    || /^\[\s*\]$/.test(normalized)
+    || /^\{\s*\}$/.test(normalized)
 }
 
 export function sanitizeFeeFieldValue(key: string, value: string): string {
@@ -694,37 +697,58 @@ export function buildFeeQueryXml(input: {
   return `<xmlRoot>${parts.join('')}</xmlRoot>`
 }
 
-function parseCustomerRefs(rawIds: string, rawText: string): FeeCustomerRef[] {
+export function parseFeeCustomerRefs(rawIds: string, rawText: string): FeeCustomerRef[] {
   const idsText = isFeeNullSentinel(rawIds) ? '' : rawIds.trim()
   const labelText = isFeeNullSentinel(rawText) ? '' : rawText.trim()
   if (!idsText && !labelText) return []
 
   // 原站 FeeSearch 格式：customer_id = ["id1",...], customer_id_text = [{"value":"id1","text":"名1"},...]
-  try {
-    const parsedInfo = labelText ? JSON.parse(labelText) as unknown : null
-    if (Array.isArray(parsedInfo)) {
-      const refs = parsedInfo
-        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-        .map(item => ({
-          id: typeof item.value === 'string' ? item.value.trim() : typeof item.id === 'string' ? item.id.trim() : '',
-          name: typeof item.text === 'string' ? item.text.trim() : typeof item.name === 'string' ? item.name.trim() : ''
-        }))
-        .filter(item => Boolean(item.id) && !isFeeNullSentinel(item.id))
-      if (refs.length) return refs
-    }
-  } catch { /* fallback below */ }
+  let labelWasJson = false
+  if (labelText) {
+    try {
+      const parsedInfo = JSON.parse(labelText) as unknown
+      if (Array.isArray(parsedInfo)) {
+        labelWasJson = true
+        const refs = parsedInfo
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+          .map(item => ({
+            id: typeof item.value === 'string' ? item.value.trim() : typeof item.id === 'string' ? item.id.trim() : '',
+            name: typeof item.text === 'string' ? item.text.trim() : typeof item.name === 'string' ? item.name.trim() : ''
+          }))
+          .filter(item => Boolean(item.id) && !isFeeNullSentinel(item.id))
+        if (refs.length) return refs
+      }
+    } catch { /* fallback below */ }
+  }
 
   let ids: string[] = []
-  try {
-    const parsedIds = idsText ? JSON.parse(idsText) as unknown : null
-    if (Array.isArray(parsedIds)) {
-      ids = parsedIds.map(v => String(v ?? '').trim()).filter(id => Boolean(id) && !isFeeNullSentinel(id))
-    }
-  } catch { /* fallback below */ }
-  if (!ids.length && idsText) {
-    ids = idsText.split(/[;,]/).map(s => s.trim()).filter(id => Boolean(id) && !isFeeNullSentinel(id))
+  let idsWasJson = false
+  if (idsText) {
+    try {
+      const parsedIds = JSON.parse(idsText) as unknown
+      if (Array.isArray(parsedIds)) {
+        idsWasJson = true
+        ids = parsedIds
+          .map(v => (v === null || v === undefined ? '' : String(v).trim()))
+          .filter(id => Boolean(id) && !isFeeNullSentinel(id))
+      } else if (parsedIds === null) {
+        idsWasJson = true
+      }
+    } catch { /* fallback below */ }
   }
-  const names = labelText ? labelText.split(/[;,]/).map(s => s.trim()).filter(Boolean) : []
+
+  if (!idsWasJson && idsText) {
+    ids = idsText
+      .split(/[;,]/)
+      .map(s => s.trim())
+      .filter(id => Boolean(id) && !isFeeNullSentinel(id))
+  }
+
+  if (!ids.length) return []
+
+  const names = !labelWasJson && labelText
+    ? labelText.split(/[;,]/).map(s => s.trim()).filter(name => Boolean(name) && !isFeeNullSentinel(name))
+    : []
   return ids.map((id, idx) => ({ id, name: names[idx] || id }))
 }
 
@@ -791,12 +815,12 @@ export function readFeeQueryXml(xml: string): ApiResult<FeeParsedQuery> {
     }
   }
 
-  const customers = parseCustomerRefs(rawCustId, rawCustText)
+  const customers = parseFeeCustomerRefs(rawCustId, rawCustText)
   if (customers.length) {
     fields.customer_id = customers.map(c => c.id).join(';')
     displayValues.customer_id = customers.map(c => c.name).join(';') + ';'
   }
-  const ruleOutCustomers = parseCustomerRefs(rawRuleOutId, rawRuleOutText)
+  const ruleOutCustomers = parseFeeCustomerRefs(rawRuleOutId, rawRuleOutText)
   if (ruleOutCustomers.length) {
     fields.ruleOutcustomer_id = ruleOutCustomers.map(c => c.id).join(';')
     displayValues.ruleOutcustomer_id = ruleOutCustomers.map(c => c.name).join(';') + ';'
