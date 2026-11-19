@@ -252,6 +252,7 @@ export function buildFeeSearchParams(query: FeeSearchQuery, columns?: string[]):
   params.set('pageIndex', String(query.pageIndex || 1))
   params.set('pageSize', String(query.pageSize || 10))
   params.set('colsel', buildFeeColsel(columns))
+  params.set('log_pagename', 'FeeSearch.aspx')
 
   // Populate from query fields or fields bag
   const bag = { ...(query.fields ?? {}) }

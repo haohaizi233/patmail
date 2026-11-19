@@ -322,9 +322,9 @@ export const FEE_COMMON_CELLS: FeeCell[] = [
   ]),
 
   // Row 6
-  dates('开卷日期', 'create_date_from', 'create_date_to', 'create_date_isnull'),
+  dates('开卷日期', 'createtime_from', 'createtime_to', 'createtime_isnull'),
   dates('申请日', 'app_date_from', 'app_date_to', 'app_date_isnull'),
-  dates('创建日期', 'createtime_from', 'createtime_to', 'createtime_isnull'),
+  dates('费用创建日期', 'create_date_from', 'create_date_to', 'create_date_isnull'),
 
   // Row 7
   { kind: 'named', key: 'ctrl_proc', label: '处理事项', placeholder: '选择处理事项' },
