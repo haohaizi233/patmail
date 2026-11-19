@@ -34,6 +34,9 @@ cookies.txt
 *.out
 .tmp-*
 __*.mjs
+scratch_*
+*.tmp.mjs
+*.tmp.js
 
 # 运行 pull-sme-customers.py 生成的客户名单快照（含公司名/联系人等敏感数据），只留本机，不入仓
 /assets/sme-customers.json
