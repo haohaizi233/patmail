@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildFeeSearchParams,
-  buildFeeSearchAmountParams,
-  buildFeeColsel,
-  FEE_SEARCH_DEFAULT_COLUMNS
+  buildFeeSearchAmountParams
 } from '../../../src/api/fee-search-params'
 import { FEE_COMMON_CELLS } from '../../../src/api/fee-form'
 
