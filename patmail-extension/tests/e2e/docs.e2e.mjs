@@ -18,6 +18,7 @@ assert.deepEqual(
     '递交管理-已完成导出.md',
     '季华实验室-文件导入.md',
     '海牙新申请.md',
+    '请款.md',
   ].sort(),
 )
 const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 } })
