@@ -19,6 +19,7 @@ import {
   feeCellKey,
   isFeeSearchInputField,
   readFeeQueryXml,
+  sanitizeFeeFieldValue,
   type FeeCell
 } from '../../api/fee-form'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
@@ -610,6 +611,12 @@ async function doSearch(page = 1): Promise<void> {
   searchState.value = 'loading'
   searchMessage.value = ''
   quickFeeSelectMode.value = ''
+  totalAmountInfo.value = {
+    originalAgentFee: 0,
+    discountAgentFee: 0,
+    officialFee: 0,
+    thirdPartyFee: 0
+  }
 
   const q = buildCurrentQuery(page, pageSize.value)
 
@@ -726,6 +733,12 @@ function resetForm(): void {
   quickFeeSelectMode.value = ''
   result.value = null
   selectedIds.value = {}
+  totalAmountInfo.value = {
+    originalAgentFee: 0,
+    discountAgentFee: 0,
+    officialFee: 0,
+    thirdPartyFee: 0
+  }
   searchState.value = 'idle'
 }
 
@@ -1117,15 +1130,16 @@ async function importTemplateJson(event: Event): Promise<void> {
   const nextChecks: Record<string, boolean> = {}
   let count = 0
   for (const [k, v] of Object.entries(read.conditions.fields)) {
-    if (!v.trim()) continue
+    const cleaned = sanitizeFeeFieldValue(k, v)
+    if (!cleaned) continue
     if (FEE_CHECK_KEYS.has(k)) {
-      const lower = v.trim().toLowerCase()
+      const lower = cleaned.toLowerCase()
       if (lower === 'on' || lower === 'true' || lower === '1') {
         nextChecks[k] = true
         count += 1
       }
     } else {
-      nextValues[k] = v
+      nextValues[k] = cleaned
       count += 1
     }
   }

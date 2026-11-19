@@ -53,4 +53,64 @@ describe('fee search params builder', () => {
       expect(feeCreateCell.empty).toBe('create_date_isnull')
     }
   })
+
+  it('strips literal null/undefined sentinels and sends EASY default boolean flags & empty fields', () => {
+    const res = buildFeeSearchParams({
+      pageIndex: 1,
+      pageSize: 10,
+      case_volume: 'PA2411768CN-EP',
+      case_type: '31D1A147-2931-43B5-94AE-B72B1525BA8A',
+      Case_direction: 'IO',
+      fee_class: 'T',
+      finish_date_from: '2026-08-01',
+      finish_date_to: '2026-11-19',
+      receive_account_id: 'null',
+      fields: {
+        receive_account_id: 'null',
+        business_coop: 'undefined',
+        case_agency: 'NULL',
+        Call: 'Hijack',
+        log_pagename: 'Wrong.aspx'
+      }
+    })
+    expect(res.ok).toBe(true)
+    const p = res.data
+    // Must never send literal "null" or "undefined" for select/named/date fields
+    expect(p.get('receive_account_id')).toBe('')
+    expect(p.get('business_coop')).toBe('')
+    expect(p.get('case_agency')).toBe('')
+    // System params must not be overwritten by fields bag
+    expect(p.get('Call')).toBe('FeeSearch')
+    expect(p.get('log_pagename')).toBe('FeeSearch.aspx')
+    expect(p.get('fee_page_type')).toBe('')
+    expect(p.get('_t')).toMatch(/^\d+$/)
+    // All 10 EASY boolean flags default explicitly to "false"
+    for (const flag of [
+      'is_fuzzy_query_case_volume',
+      'is_accurate_query_sort',
+      'is_fuzzy_query_app_no',
+      'is_point_app_no',
+      'is_fuzzy_query_pct_app_no',
+      'is_fuzzy_query_issue_no',
+      'pay_due_date_is_agent_fee',
+      'pay_status_is_agent_fee',
+      'pay_date_is_agent_fee',
+      'office_no_is_agent_fee'
+    ]) {
+      expect(p.get(flag)).toBe('false')
+    }
+    expect(p.get('first_applicant')).toBe('0')
+
+    // Amount request inherits sanitization and default flags
+    const amountRes = buildFeeSearchAmountParams({
+      pageIndex: 1,
+      pageSize: 10,
+      case_volume: 'PA2411768CN-EP',
+      receive_account_id: 'null',
+      fields: { receive_account_id: 'null' }
+    })
+    expect(amountRes.data.get('Call')).toBe('FeeSearchTotalAmount')
+    expect(amountRes.data.get('receive_account_id')).toBe('')
+    expect(amountRes.data.get('is_fuzzy_query_case_volume')).toBe('false')
+  })
 })

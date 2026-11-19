@@ -78,4 +78,50 @@ describe('fee query history template support', () => {
     expect(isMessage({ type: 'SAVE_HISTORY_QUERY', payload: { title: '测试', queryId: '', queryXml: '<xmlRoot></xmlRoot>', surface: 'fee' } })).toBe(true)
     expect(isMessage({ type: 'DELETE_HISTORY_QUERY', payload: { queryId: '11111111-2222-3333-4444-555555555555', surface: 'fee' } })).toBe(true)
   })
+
+  it('strips EASY select null/undefined sentinel strings when reading or building FeeSearch XML', () => {
+    const rawEasyXml = `<xmlRoot>
+      <case_type>31D1A147-2931-43B5-94AE-B72B1525BA8A</case_type>
+      <Case_direction>IO</Case_direction>
+      <fee_class>T</fee_class>
+      <receive_account_id>null</receive_account_id>
+      <business_coop>undefined</business_coop>
+      <case_agency>NULL</case_agency>
+      <finish_date_from>null</finish_date_from>
+      <customer_id>null</customer_id>
+      <customer_id_text>null</customer_id_text>
+      <ruleOutcustomer_id>undefined</ruleOutcustomer_id>
+      <legacy_unused_select>null</legacy_unused_select>
+      <fee_remark>null</fee_remark>
+    </xmlRoot>`
+
+    const parsed = readFeeQueryXml(rawEasyXml)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.data.fields.case_type).toBe('31D1A147-2931-43B5-94AE-B72B1525BA8A')
+    expect(parsed.data.fields.Case_direction).toBe('IO')
+    expect(parsed.data.fields.fee_class).toBe('T')
+    // Non-text select/named/date/customer sentinels must be stripped
+    expect(parsed.data.fields.receive_account_id).toBeUndefined()
+    expect(parsed.data.fields.business_coop).toBeUndefined()
+    expect(parsed.data.fields.case_agency).toBeUndefined()
+    expect(parsed.data.fields.finish_date_from).toBeUndefined()
+    expect(parsed.data.fields.customer_id).toBeUndefined()
+    expect(parsed.data.customers).toEqual([])
+    expect(parsed.data.ruleOutCustomers).toEqual([])
+    expect(parsed.data.unknownFields.legacy_unused_select).toBeUndefined()
+    // Free-text field keeps literal text if user actually entered it
+    expect(parsed.data.fields.fee_remark).toBe('null')
+
+    // buildFeeQueryXml also drops null/undefined sentinels on non-text fields
+    const rebuilt = buildFeeQueryXml({
+      fields: {
+        case_type: '31D1A147-2931-43B5-94AE-B72B1525BA8A',
+        receive_account_id: 'null',
+        business_coop: 'undefined'
+      }
+    })
+    expect(rebuilt).not.toContain('receive_account_id')
+    expect(rebuilt).not.toContain('business_coop')
+  })
 })

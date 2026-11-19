@@ -513,23 +513,28 @@ export function feeCellKey(cell: FeeCell): string {
   return cell.kind === 'dates' ? `${cell.start}-${cell.end}` : cell.key
 }
 
-function collectCellKeys(cells: FeeCell[]): { fields: string[]; checks: string[] } {
+function collectCellKeys(cells: FeeCell[]): { fields: string[]; checks: string[]; nonTextFields: string[] } {
   const fields: string[] = []
   const checks: string[] = []
+  const nonTextFields: string[] = []
   for (const cell of cells) {
     if (cell.kind === 'spacer') continue
     if (cell.kind === 'dates') {
       fields.push(cell.start, cell.end)
+      nonTextFields.push(cell.start, cell.end)
       if (cell.empty) checks.push(cell.empty)
       for (const chk of cell.checks ?? []) checks.push(chk.key)
     } else {
       fields.push(cell.key)
+      if (cell.kind !== 'text' && cell.kind !== 'textarea') {
+        nonTextFields.push(cell.key)
+      }
       if ('checks' in cell && cell.checks) {
         for (const chk of cell.checks) checks.push(chk.key)
       }
     }
   }
-  return { fields, checks }
+  return { fields, checks, nonTextFields }
 }
 
 const quickCollected = collectCellKeys(FEE_QUICK_CELLS)
@@ -541,6 +546,38 @@ export const FEE_CHECK_KEYS = new Set<string>([
   ...commonCollected.checks,
   ...advCollected.checks
 ])
+
+export const FEE_NON_TEXT_FIELD_KEYS = new Set<string>([
+  ...quickCollected.nonTextFields,
+  ...commonCollected.nonTextFields,
+  ...advCollected.nonTextFields,
+  'case_pic_id',
+  'generation_status',
+  'is_vip',
+  'is_advance_payment',
+  'status',
+  'request_creator',
+  'commission_user'
+])
+
+/**
+ * 原站 FeeSearch.aspx 保存历史查询模板时，未选中的 <select>（如异步加载的 receive_account_id）
+ * 会被 jQuery .val() 序列化为字面量 "null" / "undefined"。原站回填 <select> 时因无匹配 option 自动退回空值，
+ * 插件必须同样把这些占位字符串清洗为空，避免拼成 `receive_account_id=null` 导致查询为空或后端报异常。
+ */
+export function isFeeNullSentinel(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  return normalized === 'null' || normalized === 'undefined'
+}
+
+export function sanitizeFeeFieldValue(key: string, value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if ((FEE_NON_TEXT_FIELD_KEYS.has(key) || FEE_CHECK_KEYS.has(key)) && isFeeNullSentinel(trimmed)) {
+    return ''
+  }
+  return trimmed
+}
 
 export const FEE_ADVANCED_KEYS = new Set<string>([
   ...advCollected.fields,
@@ -636,11 +673,11 @@ export function buildFeeQueryXml(input: {
     if (key === 'customer_id' && customers.length) continue
     if (key === 'ruleOutcustomer_id' && ruleOutCustomers.length) continue
     const node = FIELD_TO_FEE_XML[key] ?? key
-    const val = (fields[key] ?? '').trim()
+    const val = sanitizeFeeFieldValue(key, fields[key] ?? '')
     if (!val) continue
     pushFeeNode(parts, used, node, val)
     const label = (displayValues[key] ?? '').trim()
-    if (label && label !== val) pushFeeNode(parts, used, `${node}_text`, label)
+    if (label && label !== val && !isFeeNullSentinel(label)) pushFeeNode(parts, used, `${node}_text`, label)
   }
 
   for (const key of Object.keys(checks).sort()) {
@@ -649,15 +686,17 @@ export function buildFeeQueryXml(input: {
   }
 
   for (const key of Object.keys(unknownFields).sort()) {
-    pushFeeNode(parts, used, key, unknownFields[key] ?? '')
+    const raw = (unknownFields[key] ?? '').trim()
+    if (!raw || isFeeNullSentinel(raw)) continue
+    pushFeeNode(parts, used, key, raw)
   }
 
   return `<xmlRoot>${parts.join('')}</xmlRoot>`
 }
 
 function parseCustomerRefs(rawIds: string, rawText: string): FeeCustomerRef[] {
-  const idsText = rawIds.trim()
-  const labelText = rawText.trim()
+  const idsText = isFeeNullSentinel(rawIds) ? '' : rawIds.trim()
+  const labelText = isFeeNullSentinel(rawText) ? '' : rawText.trim()
   if (!idsText && !labelText) return []
 
   // 原站 FeeSearch 格式：customer_id = ["id1",...], customer_id_text = [{"value":"id1","text":"名1"},...]
@@ -670,7 +709,7 @@ function parseCustomerRefs(rawIds: string, rawText: string): FeeCustomerRef[] {
           id: typeof item.value === 'string' ? item.value.trim() : typeof item.id === 'string' ? item.id.trim() : '',
           name: typeof item.text === 'string' ? item.text.trim() : typeof item.name === 'string' ? item.name.trim() : ''
         }))
-        .filter(item => Boolean(item.id))
+        .filter(item => Boolean(item.id) && !isFeeNullSentinel(item.id))
       if (refs.length) return refs
     }
   } catch { /* fallback below */ }
@@ -679,11 +718,11 @@ function parseCustomerRefs(rawIds: string, rawText: string): FeeCustomerRef[] {
   try {
     const parsedIds = idsText ? JSON.parse(idsText) as unknown : null
     if (Array.isArray(parsedIds)) {
-      ids = parsedIds.map(v => String(v ?? '').trim()).filter(Boolean)
+      ids = parsedIds.map(v => String(v ?? '').trim()).filter(id => Boolean(id) && !isFeeNullSentinel(id))
     }
   } catch { /* fallback below */ }
   if (!ids.length && idsText) {
-    ids = idsText.split(/[;,]/).map(s => s.trim()).filter(Boolean)
+    ids = idsText.split(/[;,]/).map(s => s.trim()).filter(id => Boolean(id) && !isFeeNullSentinel(id))
   }
   const names = labelText ? labelText.split(/[;,]/).map(s => s.trim()).filter(Boolean) : []
   return ids.map((id, idx) => ({ id, name: names[idx] || id }))
@@ -731,6 +770,7 @@ export function readFeeQueryXml(xml: string): ApiResult<FeeParsedQuery> {
     if (name === 'ruleOutcustomer_id_text') { rawRuleOutText = value; continue }
 
     if (name.endsWith('_text')) {
+      if (isFeeNullSentinel(value)) continue
       const key = mapFeeXmlNode(name.slice(0, -'_text'.length))
       if (key) displayValues[key] = value
       else if (FEE_NODE_NAME.test(name)) unknownFields[name] = value
@@ -743,9 +783,10 @@ export function readFeeQueryXml(xml: string): ApiResult<FeeParsedQuery> {
         const lower = value.toLowerCase()
         if (lower === 'on' || lower === 'true' || lower === '1') checks[key] = true
       } else {
-        fields[key] = value
+        const cleaned = sanitizeFeeFieldValue(key, value)
+        if (cleaned) fields[key] = cleaned
       }
-    } else if (FEE_NODE_NAME.test(name)) {
+    } else if (FEE_NODE_NAME.test(name) && !isFeeNullSentinel(value)) {
       unknownFields[name] = value
     }
   }
