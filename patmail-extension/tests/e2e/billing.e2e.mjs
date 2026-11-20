@@ -133,6 +133,20 @@ try {
 
   await app.locator('.step-2-section').getByRole('button', { name: '查询', exact: true }).click()
   await app.getByRole('button', { name: /进入请款单导出.*已选 1 笔/ }).waitFor()
+  const feeResults = app.getByRole('region', { name: '费用查询结果' })
+  const selectionNotice = feeResults.getByRole('status').filter({ hasText: '默认勾选' })
+  assert.match(await selectionNotice.innerText(), /1 项有请款单号或状态并非明确未请款、1 项不适用当前模板/)
+  const pageSize = feeResults.getByRole('combobox', { name: '每页条数' })
+  for (const width of [1440, 900]) {
+    await app.setViewportSize({ width, height: 1000 })
+    const toolbar = await feeResults.locator('.fee-results-toolbar').boundingBox()
+    const picker = await pageSize.boundingBox()
+    const noticeBox = await selectionNotice.boundingBox()
+    assert.ok(toolbar && picker && noticeBox)
+    assert.ok(picker.x + picker.width <= toolbar.x + toolbar.width + 1, `page-size control overflows at ${width}px`)
+    assert.ok(noticeBox.y >= toolbar.y + toolbar.height, 'selection notice wraps below the toolbar')
+  }
+  await app.setViewportSize({ width: 1440, height: 1000 })
   await app.getByRole('row').filter({ hasText: 'PA124PCT' }).getByRole('checkbox').check()
   await feeResultNext.click()
   const bottomExport = app.locator('.export-execute-card').getByRole('button', { name: /导出 Excel 请款表/ })
@@ -172,6 +186,53 @@ try {
     await zip.close()
   }
   report.pass('Goer reads translation word count by fee ID and fills T, U and V')
+
+  const titleField = app.locator('.template-params-grid input').first()
+  await titleField.fill('2026年11月格尔请款恢复测试')
+  await easyPage.bringToFront()
+  await app.bringToFront()
+  await app.evaluate(async () => {
+    // Exercise the actual visibility-triggered workspace load, even when the
+    // headless compositor keeps both tabs visible.
+    const original = chrome.runtime.sendMessage
+    await new Promise((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error('workspace refresh did not complete')), 5000)
+      chrome.runtime.sendMessage = function (envelope, callback) {
+        if (envelope?.message?.type !== 'WORKSPACE' || typeof callback !== 'function') {
+          return original.apply(this, arguments)
+        }
+        return original.call(this, envelope, response => {
+          callback(response)
+          clearTimeout(deadline)
+          setTimeout(resolve, 0)
+        })
+      }
+      document.dispatchEvent(new Event('visibilitychange'))
+    }).finally(() => { chrome.runtime.sendMessage = original })
+  })
+  assert.equal(await titleField.inputValue(), '2026年11月格尔请款恢复测试')
+  await app.evaluate(() => { location.hash = '#/settings' })
+  await app.locator('.billing-workflow-page').waitFor({ state: 'hidden' })
+  await app.evaluate(() => { location.hash = '#/workflow' })
+  await app.locator('.step-3-section').waitFor({ state: 'visible' })
+  await app.waitForFunction(async () => {
+    const reply = await chrome.runtime.sendMessage({
+      type: 'PATMAIL_RECOVERY_RPC', request: { op: 'latest', slot: 'billing-desk' }
+    })
+    const draft = reply?.value?.payload?.payload
+    return draft?.step === 3 && draft.fees?.selectedIds?.length === 2 &&
+      draft.headers?.title === '2026年11月格尔请款恢复测试'
+  })
+  await app.reload()
+  await app.locator('.step-3-section').waitFor({ state: 'visible' })
+  assert.equal(await titleField.inputValue(), '2026年11月格尔请款恢复测试')
+  assert.match(await app.locator('.export-execute-card .summary-line').innerText(), /待填入费用：2 笔/)
+  await navigation.getByRole('button', { name: '返回费用查询调整' }).click()
+  assert.equal(await feeResults.getByRole('row').filter({ hasText: 'PA925-EP' }).count(), 2)
+  await feeResultNext.click()
+  await app.locator('.step-3-section').waitFor({ state: 'visible' })
+  assert.equal(wordCountRequests, 1, 'restoring the draft does not repeat the fee query')
+  report.pass('billing keeps step three and restores draft after tab switch, navigation and reload')
 
   // 使用说明：请款.md 的 mermaid 图完整渲染且无错误
   await app.getByRole('tab', { name: '流程说明', exact: true }).click()
