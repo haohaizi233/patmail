@@ -61,6 +61,32 @@ function mockFeeRow(partial: Partial<FeeSearchRow>): FeeSearchRow {
 }
 
 describe('billing templates filler', () => {
+  it('uses the recorded overseas bill date and reconciled translation calculation for Midea', async () => {
+    const rows = [
+      mockFeeRow({ feeId: 'outside', customerName: '美的小家电事业部', feeType: '合作所代理费', amount: 1400,
+        currency: 'USD', raw: { fee_desc: '主动修改费用', out_bill_date: '2026-07-22', agency_name_cn: 'K&L' } }),
+      mockFeeRow({ feeId: 'translate', feeType: '合作所代理费', currency: 'CNY', amount: 1797.12,
+        raw: { fee_desc: '7488 字*240 元/千字= 1797.12 元' } }),
+      mockFeeRow({ feeId: 'official', feeClass: 'O', feeType: '海外申请官费', currency: 'CNY', amount: 10381.21 })
+    ]
+    const result = await fillBillingTemplate('midea-foreign', readAsset('qingkuan-midea-foreign.xlsx'), {
+      rows, bills: {}, rates: { USD: 7 }, rateDate: '2026-11-20', headers: defaultHeaders('midea-foreign'),
+      options: { reviewFee: 100, bankFee: 250 }
+    })
+    const book = await XlsxBook.open(result.bytes)
+    expect(result.blockCount).toBe(1)
+    for (const { name } of book.sheets.slice(1, 3)) {
+      const sheet = book.sheet(name)
+      expect(['L7', 'P7', 'S8', 'W9', 'X9', 'Y9', 'AH7'].map(cell => sheet.valueOf(cell)))
+        .toEqual([46225, null, 1400, 7488, 0.24, 1797.12, 'K&L'])
+    }
+    expect(result.warnings.join(' ')).toContain('10381.21 CNY')
+    expect(book.sheet(book.sheets[1].name).hasFormula('AP7')).toBe(false)
+    const rates = book.sheet('汇率截图')
+    expect(rates.valueOf('A1')).toBe('本次导出汇率')
+    expect(rates.valueOf('B5')).toBe(7)
+    expect(book.doc(book.sheets[3].path).getElementsByTagName('drawing').length).toBe(0)
+  })
   it('fills the historical Goer validation row with independently verified fee components', async () => {
     const rows = [
       mockFeeRow({ feeId: 'gov', feeClass: 'O', feeType: '生效官费', amount: 52 }),
@@ -200,7 +226,8 @@ describe('billing templates filler', () => {
     expect(summary.hasFormula('L4')).toBe(false)
     expect(summary.hasFormula('M4')).toBe(false)
     expect(summary.hasFormula('J6')).toBe(false)
-    expect(summary.formulaOf('L5')).toBe("'线下专利请款表A-生活电器2026M7-9'!AF10")
+    expect(summary.formulaOf('L5')).toBe("'线下专利请款表A-生活电器2026M7-9'!AF10-M5")
+    expect(summary.formulaOf('M5')).toBe("'线下专利请款表A-生活电器2026M7-9'!V10")
     expect(summary.hasFormula('N4')).toBe(true)
     expect(summary.hasFormula('N7')).toBe(true)
     expect(summary.hasFormula('L8')).toBe(true)
@@ -212,10 +239,13 @@ describe('billing templates filler', () => {
       mockFeeRow({ feeId: 'f1', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeClass: 'O', feeType: 'PCT国际申请费', amount: 1330, currency: 'USD' }),
       mockFeeRow({ feeId: 'f2', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeClass: 'O', feeType: 'PCT检索费', amount: 2100, currency: 'USD' }),
       mockFeeRow({ feeId: 'f3', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeClass: 'A', feeType: '事务所代理费', amount: 5000, currency: 'CNY' })
-    ]
+    ].map(row => ({ ...row, customerName: '美的小家电事业部' }))
+    rows[0].caseVolumeCustomer = ''
+    rows[1].ctrlProc = 'PCT初步审查'
 
     const rates = { USD: 7.25, CNY: 1 }
-    const headers = defaultHeaders('midea-pct', new Date('2026-11-19'))
+    const today = new Date(2026, 10, 19)
+    const headers = defaultHeaders('midea-pct', today)
     headers.client = '广东美的生活电器制造有限公司'
 
     const result = await fillBillingTemplate('midea-pct', rawTemplate, {
@@ -225,14 +255,18 @@ describe('billing templates filler', () => {
       rateDate: '2026-11-19',
       headers,
       options: { reviewFee: 0, bankFee: 0 },
-      today: new Date('2026-11-19')
+      today
     })
 
     expect(result.blockCount).toBe(1)
     const book = await XlsxBook.open(result.bytes)
-    const sheet = book.sheet('生活电器2026M7-9')
+    const sheet = book.sheet('PCT费用明细')
 
     expect(sheet.valueOf('C6')).toBe('PA2411768CN-WO')
+    expect(sheet.valueOf('B6')).toBe('CL-001')
+    expect(sheet.valueOf('F6')).toBe('国际申请；PCT初步审查')
+    expect(sheet.valueOf('N6')).toBeNull()
+    expect(sheet.valueOf('K13')).toBe(46345)
     // USD 1330 * 7.25 = 9642.5
     expect(sheet.valueOf('I6')).toBe(9642.5)
     // USD 2100 * 7.25 = 15225
@@ -245,10 +279,27 @@ describe('billing templates filler', () => {
     const summary = book.sheet('账单汇总')
     expect(summary.hasFormula('L4')).toBe(false)
     expect(summary.hasFormula('L5')).toBe(false)
-    expect(summary.formulaOf('J6')).toBe("'生活电器2026M7-9'!I7")
-    expect(summary.formulaOf('K6')).toBe("'生活电器2026M7-9'!L7")
+    expect(summary.valueOf('A1')).toContain('2026-08-20')
+    expect(summary.valueOf('B6')).toBe('美的小家电事业部')
+    expect(summary.formulaOf('J6')).toBe("'PCT费用明细'!I7")
+    expect(summary.formulaOf('K6')).toBe("'PCT费用明细'!L7")
     expect(summary.hasFormula('N6')).toBe(true)
     expect(summary.hasFormula('N7')).toBe(true)
+  })
+
+  it.each([
+    ['云南电网', '美的小家电事业部', /美的客户/],
+    ['美的小家电事业部', '美的新能源事业部', /同一客户/],
+    ['', '美的小家电事业部', /客户名称缺失/]
+  ])('rejects an unsafe PCT customer scope (%s, %s)', async (first, second, message) => {
+    const rows = [first, second].map((customerName, index) => mockFeeRow({
+      customerName, feeId: String(index), caseVolume: `PA260000${index}PCT`, feeType: 'PCT国际申请费',
+      feeClass: 'O', currency: 'CNY'
+    }))
+    await expect(fillBillingTemplate('midea-pct', readAsset('qingkuan-midea-pct.xlsx'), {
+      rows, bills: {}, rates: {}, rateDate: '2026-11-20', headers: defaultHeaders('midea-pct'),
+      options: { reviewFee: 0, bankFee: 0 }
+    })).rejects.toThrow(message)
   })
 
   it('provides template-specific smart query presets (foreign=T, pct=O,A) and default midea overhead', () => {
@@ -256,7 +307,7 @@ describe('billing templates filler', () => {
     const mideaForeign = BILLING_TEMPLATES.find(t => t.id === 'midea-foreign')!
     const mideaPct = BILLING_TEMPLATES.find(t => t.id === 'midea-pct')!
     expect(general.queryPreset.feeFields.fee_class).toBe('O,A,T')
-    expect(mideaForeign.queryPreset.feeFields.fee_class).toBe('T')
+    expect(mideaForeign.queryPreset.feeFields.fee_class).toBe('O,A,T')
     expect(mideaForeign.queryPreset.defaultOptions).toEqual({ reviewFee: 100, bankFee: 250 })
     expect(mideaPct.queryPreset.feeFields.fee_class).toBe('O,A')
     expect(mideaPct.queryPreset.fileStepOptional).toBe(true)
@@ -295,6 +346,8 @@ describe('billing templates filler', () => {
     { caseVolume: 'PA123PCT', feeClass: 'T', feeType: '翻译费' },
     { caseVolume: 'PA123-EP', feeClass: 'O', feeType: '申请费' },
     { caseVolume: 'PA123PCT', feeClass: 'O', feeType: '国家阶段申请费' },
+    { caseVolume: 'PA123PCT', feeClass: 'O', feeType: '初步审查费（PCT国际）' },
+    { caseVolume: 'PA123PCT', feeClass: 'O', feeType: '优先权文件传送费（PCT国际）' },
     { caseVolume: 'PA123PCT', feeClass: 'O', feeType: '年费' }
   ])('blocks an unsupported PCT row (%j)', fee => {
     return expect(fillBillingTemplate('midea-pct', readAsset('qingkuan-midea-pct.xlsx'), {

@@ -45,14 +45,20 @@ await context.route('**/AjaxServers/Report.ashx*', async route => {
     ]
   } : call === 'FeeSearch' ? {
     ClientInfo: client,
-    total: 3,
+    total: 6,
     rows: [
       { fee_id: 'pct-test', case_volume: 'PA123PCT', business_type_name: 'PCT国际阶段', fee_class: 'O',
-        fee_name: '国际申请费', currency_id: 'CNY', amount: 100, request_status: '未请款' },
+        fee_name: '国际申请费', currency_id: 'CNY', amount: 100, request_status: '未请款', customer_name: '美的小家电事业部', finish_date: '2026-11-16' },
       { fee_id: 'pct-requested', case_volume: 'PA124PCT', fee_class: 'O',
-        fee_name: '国际申请费', currency_id: 'CNY', amount: 300, request_status: '审核中' },
+        fee_name: '国际申请费', currency_id: 'CNY', amount: 300, request_status: '审核中', customer_name: '美的小家电事业部', finish_date: '2026-11-18' },
       { fee_id: 'foreign-test', case_volume: 'PA123-EP', fee_class: 'O',
-        fee_name: '申请费', currency_id: 'CNY', amount: 200, request_status: '未请款' }
+        fee_name: '申请费', currency_id: 'CNY', amount: 200, request_status: '未请款', customer_name: '美的小家电事业部' },
+      { fee_id: 'another-customer', case_volume: 'PA125PCT', fee_class: 'A',
+        fee_name: '代理费', currency_id: 'CNY', amount: 1000, request_status: '未请款', customer_name: '美的新能源事业部' },
+      { fee_id: 'external-customer', case_volume: 'PA126PCT', fee_class: 'O',
+        fee_name: '国际申请费', currency_id: 'CNY', amount: 9220, request_status: '未请款', customer_name: '云南电网' },
+      { fee_id: 'unmapped-pct', case_volume: 'PA123PCT', fee_class: 'O',
+        fee_name: '优先权文件传送费（PCT国际）', currency_id: 'CNY', amount: 150, request_status: '未请款', customer_name: '美的小家电事业部' }
     ]
   } : call === 'FeeSearchTotalAmount' ? { ClientInfo: client, FeeList: [] } : null
   if (!body) return route.fallback()
@@ -132,10 +138,10 @@ try {
   report.pass('export step is gated behind fee selection with an explicit notice')
 
   await app.locator('.step-2-section').getByRole('button', { name: '查询', exact: true }).click()
-  await app.getByRole('button', { name: /进入请款单导出.*已选 1 笔/ }).waitFor()
+  await app.getByRole('button', { name: /进入请款单导出.*已选 2 笔/ }).waitFor()
   const feeResults = app.getByRole('region', { name: '费用查询结果' })
   const selectionNotice = feeResults.getByRole('status').filter({ hasText: '默认勾选' })
-  assert.match(await selectionNotice.innerText(), /1 项有请款单号或状态并非明确未请款、1 项不适用当前模板/)
+  assert.match(await selectionNotice.innerText(), /1 项有请款单号或状态并非明确未请款.*1 项不属于美的客户.*1 项模板没有对应的 PCT 官费列/)
   const pageSize = feeResults.getByRole('combobox', { name: '每页条数' })
   for (const width of [1440, 900]) {
     await app.setViewportSize({ width, height: 1000 })
@@ -147,6 +153,10 @@ try {
     assert.ok(noticeBox.y >= toolbar.y + toolbar.height, 'selection notice wraps below the toolbar')
   }
   await app.setViewportSize({ width: 1440, height: 1000 })
+  await feeResultNext.click()
+  await feeResults.getByRole('alert').filter({ hasText: /只能导出同一客户/ }).waitFor()
+  await feeResults.getByRole('button', { name: /只选 美的小家电事业部/ }).click()
+  await navigation.getByRole('button', { name: /进入请款单导出.*已选 1 笔/ }).waitFor()
   await app.getByRole('row').filter({ hasText: 'PA124PCT' }).getByRole('checkbox').check()
   await feeResultNext.click()
   const bottomExport = app.locator('.export-execute-card').getByRole('button', { name: /导出 Excel 请款表/ })
@@ -155,6 +165,22 @@ try {
   assert.equal(await topExport.isDisabled(), true)
   assert.equal(await bottomExport.isDisabled(), true)
   await app.getByRole('checkbox', { name: /已核对并确认导出/ }).check()
+  assert.equal(await topExport.isDisabled(), true)
+  await app.getByRole('checkbox', { name: /以上费用另行处理/ }).check()
+  await app.evaluate(() => {
+    const original = window.fetch
+    window.fetch = (resource, init) => {
+      if (String(resource).includes('qingkuan-midea-pct.xlsx')) {
+        window.fetch = original
+        return Promise.resolve(new Response(null, { status: 503 }))
+      }
+      return original(resource, init)
+    }
+  })
+  await topExport.click()
+  await app.getByRole('status').filter({ hasText: '请款表模板读取失败（HTTP 503）' }).waitFor()
+  assert.match(await app.locator('.export-execute-card .summary-line').innerText(), /待填入费用：2 笔/)
+  assert.equal(await topExport.isEnabled(), true)
   const pendingDownload = app.waitForEvent('download', { timeout: 10_000 })
   await topExport.click()
   const download = await pendingDownload
@@ -162,6 +188,24 @@ try {
   assert.equal(await download.failure(), null)
   const workbook = await readFile(await download.path())
   assert.equal(workbook.subarray(0, 4).toString('hex'), '504b0304')
+  const pctZip = new ZipReader(new Uint8ArrayReader(workbook))
+  try {
+    const entries = await pctZip.getEntries()
+    const xml = name => entries.find(entry => entry.filename === name).getData(new TextWriter())
+    const [summary, detail, strings, definition] = await Promise.all([
+      xml('xl/worksheets/sheet1.xml'), xml('xl/worksheets/sheet2.xml'),
+      xml('xl/sharedStrings.xml'), xml('xl/workbook.xml')
+    ])
+    assert.match(summary, /2026-11-16 至 2026-11-18/)
+    assert.match(summary, /PCT费用明细'!I8/)
+    assert.match(detail, /PA123PCT/)
+    assert.match(detail, /PA124PCT/)
+    assert.doesNotMatch(detail, /PA125PCT|PA126PCT|优先权文件传送费/)
+    assert.doesNotMatch(strings, /PA2601250PCT|2026P1031798|XML递交/)
+    assert.doesNotMatch(definition, /absPath|2026M7-9/)
+  } finally {
+    await pctZip.close()
+  }
   await app.locator('.template-preset-bar').getByText('格尔涉外请款单', { exact: true }).click()
   await app.getByRole('button', { name: /进入请款单导出.*已选 0 笔/ }).waitFor()
   assert.equal(await step2Next.isDisabled(), true)

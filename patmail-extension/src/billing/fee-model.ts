@@ -39,6 +39,10 @@ export function latestBillDate(bills: BillInfo[] | undefined): string {
 }
 
 export function matchedBillDate(group: EventGroup, bills: BillInfo[] | undefined): string {
+  const recordedDates = uniqueText([...group.agent, ...group.official, ...group.translation.filter(row => row.feeClass === 'T')].map(row =>
+    typeof row.raw.out_bill_date === 'string' ? row.raw.out_bill_date.trim().slice(0, 10).replaceAll('/', '-') : ''
+  )).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date))
+  if (recordedDates.length) return recordedDates.length === 1 ? recordedDates[0] : ''
   const normalize = (value: string) => value.trim().toUpperCase()
   const identifiers = uniqueText(
     [...group.official, ...group.agent, ...group.internalAgent, ...group.translation]
@@ -87,7 +91,20 @@ export function isInternalAgentFee(row: FeeSearchRow): boolean {
 
 export function isTranslationFee(row: FeeSearchRow): boolean {
   return /翻译|译文|校对|translate|translation/i.test(row.feeType) ||
-    (row.feeClass !== 'O' && !row.feeType.trim() && /翻译|译文/i.test(row.ctrlProc))
+    (row.feeClass !== 'O' && !row.feeType.trim() && /翻译|译文/i.test(row.ctrlProc)) ||
+    wordBasedTranslation(row) !== null
+}
+
+/** EASY 中有些合作所代理费实际是按千字收费的翻译。仅认可金额可核对的明确人民币算式。 */
+export function wordBasedTranslation(row: FeeSearchRow): { words: number; pricePerThousand: number } | null {
+  const description = row.raw.fee_desc
+  if (row.feeClass === 'O' || normalizeCurrency(row.currency) !== 'CNY' || typeof description !== 'string') return null
+  const match = /^([\d,]+)\s*(?:字|词)\s*[*×xX]\s*([\d,.]+)\s*元\s*[/／]\s*千(?:字|词)\s*[=＝]\s*([\d,.]+)\s*元$/.exec(description.trim())
+  if (!match) return null
+  const [words, pricePerThousand, amount] = match.slice(1).map(value => Number(value.replaceAll(',', '')))
+  if (!Number.isSafeInteger(words) || words <= 0 || pricePerThousand <= 0 ||
+      amount !== row.amount || round2(words * pricePerThousand / 1000) !== amount) return null
+  return { words, pricePerThousand }
 }
 
 export function isPctCase(row: FeeSearchRow): boolean {
@@ -101,7 +118,7 @@ export function feeMatterKey(row: Pick<FeeSearchRow, 'caseVolume' | 'procId' | '
 export function translationWordCount(row: FeeSearchRow): number | null {
   const value = row.raw.word_count
   const text = typeof value === 'number' || typeof value === 'string' ? String(value).trim() : ''
-  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) return null
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) return wordBasedTranslation(row)?.words ?? null
   const count = Number(text.replace(/,/g, ''))
   return Number.isSafeInteger(count) && count > 0 ? count : null
 }
@@ -144,11 +161,39 @@ export function officialKind(row: FeeSearchRow, mode: 'foreign' | 'pct' = 'forei
 }
 
 export function pctFeeProblem(row: FeeSearchRow): string {
-  if (!isPctCase(row)) return '无法确认是 PCT 国际阶段案卷'
+  if (!row.caseVolume.trim() || !isPctCase(row)) return '无法确认是 PCT 国际阶段案卷'
   if (isTranslationFee(row)) return 'PCT 模板没有翻译费列'
-  if (isInternalAgentFee(row)) return ''
-  if (row.feeClass !== 'O' || officialKind(row, 'pct') === 'other') return '不属于 PCT 国际申请费、检索费、附加费或我方代理费'
+  if (row.feeClass !== 'A' && (row.feeClass !== 'O' || officialKind(row, 'pct') === 'other')) {
+    return row.feeClass === 'O' ? '模板没有对应的 PCT 官费列' : '不属于 PCT 官费或我方代理费'
+  }
+  if (!row.feeId.trim() || !Number.isFinite(row.amount) || !row.currency.trim()) return '费用编号、金额或币别缺失或无效'
   return ''
+}
+
+export function isMideaPctCustomer(name: string): boolean {
+  return name.trim().includes('美的')
+}
+
+export function pctSelectionProblem(rows: FeeSearchRow[]): string {
+  const customers = uniqueText(rows.map(row => row.customerName))
+  const feeIds = new Set<string>()
+  const caseIds = new Map<string, string>()
+  for (const row of rows) {
+    const problem = pctFeeProblem(row)
+    if (problem) return `${row.caseVolume}「${row.feeType || row.feeId}」：${problem}。`
+    if (!row.customerName.trim()) return `${row.caseVolume} 的 EASY 客户名称缺失，请核对原站。`
+    if (!isMideaPctCustomer(row.customerName)) return `${row.caseVolume} 属于「${row.customerName}」，请只选择美的客户的费用。`
+    const feeId = row.feeId.trim()
+    if (feeIds.has(feeId)) return `费用「${feeId}」重复，请核对勾选范围。`
+    feeIds.add(feeId)
+    const volume = row.caseVolume.trim()
+    const id = row.caseId.trim().toLowerCase()
+    if (!id) continue
+    const previous = caseIds.get(volume)
+    if (previous && previous !== id) return `${volume} 对应多个 EASY 案件，请核对后再导出。`
+    caseIds.set(volume, id)
+  }
+  return customers.length > 1 ? 'PCT 请款单每次只能导出同一客户的费用，请按事业部分别导出。' : ''
 }
 
 export function round2(value: number): number {
@@ -212,18 +257,19 @@ export function groupFeeCases(rows: FeeSearchRow[]): Array<EventGroup & { rows: 
   const groups = new Map<string, EventGroup & { rows: FeeSearchRow[] }>()
   for (const row of sortFeeRows(rows)) {
     const currency = normalizeCurrency(row.currency)
-    let group = groups.get(row.caseVolume)
+    const caseVolume = row.caseVolume.trim()
+    let group = groups.get(caseVolume)
     if (!group) {
       group = {
-        caseVolume: row.caseVolume, customerVolume: row.caseVolumeCustomer, caseName: row.caseName,
+        caseVolume, customerVolume: row.caseVolumeCustomer, caseName: row.caseName,
         applicant: row.applicant, appNo: row.appNo, appDate: row.appDate, applyType: row.applyType,
         procId: row.procId || '', ctrlProc: row.ctrlProc, finishDate: row.finishDate, currency,
         official: [], agent: [], internalAgent: [], translation: [], rows: []
       }
-      groups.set(row.caseVolume, group)
+      groups.set(caseVolume, group)
     }
     group.rows.push(row)
-    if (isAgentFee(row)) group.agent.push(row)
+    if (row.feeClass === 'A') group.agent.push(row)
     else if (isTranslationFee(row)) group.translation.push(row)
     else group.official.push(row)
   }

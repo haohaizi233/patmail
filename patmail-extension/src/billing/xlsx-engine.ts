@@ -234,6 +234,13 @@ export class SheetEditor {
     return f ? (f.textContent ?? '') : null
   }
 
+  setFormula(ref: string, formula: string): void {
+    this.setCell(ref, null)
+    const f = this.doc.createElementNS(MAIN_NS, 'f')
+    f.textContent = formula
+    this.cell(ref, true)?.appendChild(f)
+  }
+
   /** 读取单元格（共享字符串/内联字符串/数值），仅用于核对。 */
   valueOf(ref: string): string | number | null {
     const cell = this.cell(ref)
@@ -373,7 +380,11 @@ export class SheetEditor {
     }
   }
 
-  private refreshDimension(): void {
+  removeDrawings(): void {
+    for (const drawing of elements(this.doc.documentElement, 'drawing')) drawing.remove()
+  }
+
+  refreshDimension(): void {
     for (const dim of elements(this.doc.documentElement, 'dimension')) dim.remove()
   }
 }

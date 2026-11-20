@@ -49,7 +49,7 @@ const props = defineProps<{
   manage?: boolean
   initialValues?: Record<string, string>
   initialToken?: number
-  defaultSelectionFilter?: (row: FeeSearchRow) => boolean
+  defaultSelectionExclusion?: (row: FeeSearchRow) => string
   includeTranslationWordCounts?: boolean
 }>()
 
@@ -634,7 +634,7 @@ function deselectAllPages(): void {
 }
 
 function selectBulkRow(row: FeeSearchRow, unrequestedOnly: boolean): void {
-  selectedIds.value[row.feeId] = !unrequestedOnly || (isUnrequestedFee(row) && (props.defaultSelectionFilter?.(row) ?? true))
+  selectedIds.value[row.feeId] = !unrequestedOnly || (isUnrequestedFee(row) && !props.defaultSelectionExclusion?.(row))
 }
 
 async function selectAllPages(unrequestedOnly = false): Promise<void> {
@@ -668,9 +668,13 @@ async function readSelectionPages(pages: number[]): Promise<void> {
       const rows = [...allKnownRows.value.values()]
       const unrequested = rows.filter(isUnrequestedFee)
       const statusExcluded = rows.length - unrequested.length
-      const templateExcluded = unrequested.filter(row => props.defaultSelectionFilter?.(row) === false).length
       if (statusExcluded) exclusions.push(`${statusExcluded} 项有请款单号或状态并非明确未请款`)
-      if (templateExcluded) exclusions.push(`${templateExcluded} 项不适用当前模板`)
+      const perReason = new Map<string, number>()
+      for (const row of unrequested) {
+        const reason = props.defaultSelectionExclusion?.(row)
+        if (reason) perReason.set(reason, (perReason.get(reason) ?? 0) + 1)
+      }
+      for (const [reason, count] of perReason) exclusions.push(`${count} 项${reason}`)
     }
     selectionNotice.value = missed.length
       ? `有 ${missed.length} 页没读到（第 ${missed.slice(0, 5).join('、')} 页）。点击「重试没读到的页」补齐。`
@@ -1421,8 +1425,11 @@ const totalPages = computed(() => {
 
 function billingSnapshot() {
   const cleanRow = (row: FeeSearchRow): FeeSearchRow => {
-    const count = row.raw.word_count
-    return { ...row, raw: typeof count === 'string' || typeof count === 'number' ? { word_count: count } : {} }
+    const raw = Object.fromEntries(['word_count', 'fee_desc', 'out_bill_date', 'agency_name_cn', 'country', 'law_fee_date'].flatMap(key => {
+      const value = row.raw[key]
+      return typeof value === 'string' || typeof value === 'number' ? [[key, value]] : []
+    }))
+    return { ...row, raw }
   }
   return {
     values: values.value, checks: checkedBoxes.value,
@@ -1465,6 +1472,12 @@ defineExpose({
   billingSnapshot,
   restoreBillingSnapshot,
   getSelectedRows: () => selectedRowsList.value,
+  getKnownRows: () => allKnownRows.value.values(),
+  replaceBillingSelection(rows: FeeSearchRow[]) {
+    if (selectionPending.value || selectionIncomplete.value) return
+    selectedIds.value = Object.fromEntries(rows.filter(row => allKnownRows.value.has(row.feeId)).map(row => [row.feeId, true]))
+    selectionNotice.value = ''
+  },
   setValues(patch: Record<string, string>) {
     applyValuesPatch(patch)
   },
@@ -1984,6 +1997,7 @@ defineExpose({
         <strong>查询结果</strong>
         <slot name="result-actions" />
       </div>
+      <slot name="result-review" />
       <!-- Filter Radios Bar (exact alignment with FeeSearch.aspx: 显示全部 / 仅显示选中项 / 只选官费 / 只选代理费) -->
       <div class="filter-radios-bar">
         <label class="empty-check">

@@ -1,7 +1,7 @@
 import type { FeeSearchRow } from '../api/fee-search-types'
 import {
-  countryOfCase, feeMatterKey, groupFeeCases, groupFeeEvents, isTranslationFee, matchedBillDate, officialKind, patentTypeLabel, pctFeeProblem, rateOf, round2, sumAmount,
-  uniqueText, missingCurrencies, sortFeeRows, translationWordCount, type BillInfo, type EventGroup, type OfficialKind
+  countryOfCase, feeMatterKey, groupFeeCases, groupFeeEvents, isTranslationFee, matchedBillDate, officialKind, patentTypeLabel, pctSelectionProblem, rateOf, round2, sumAmount,
+  uniqueText, missingCurrencies, sortFeeRows, translationWordCount, wordBasedTranslation, type BillInfo, type EventGroup, type OfficialKind
 } from './fee-model'
 import { normalizeCurrency } from './pbc-rates'
 import { excelSerial, XlsxBook, type SheetEditor } from './xlsx-engine'
@@ -71,8 +71,8 @@ export const BILLING_TEMPLATES: BillingTemplateInfo[] = [
     queryPreset: {
       fileFields: { flow_direction: 'IO', filetype: '付款INVOICE' },
       fileStepOptional: false,
-      feeFields: { case_type: PATENT_CASE_TYPE_ID, Case_direction: 'IO', fee_class: 'T' },
-      feeClassLabel: '第三方费用',
+      feeFields: { case_type: PATENT_CASE_TYPE_ID, Case_direction: 'IO', fee_class: 'O,A,T' },
+      feeClassLabel: '官费 + 代理费 + 第三方费用',
       defaultOptions: { reviewFee: 100, bankFee: 250 }
     },
     headers: [
@@ -95,8 +95,8 @@ export const BILLING_TEMPLATES: BillingTemplateInfo[] = [
       defaultOptions: { reviewFee: 0, bankFee: 0 }
     },
     headers: [
-      { key: 'title', label: '表头标题', cells: ['A1'], default: '{y}年世纪恒程知识产权代理事务所-美的国外专利PCT费用清单' },
-      { key: 'client', label: '客户名称', cells: ['A3'], default: '客户名称：' },
+      { key: 'title', label: '表头标题（留空使用默认标题）', cells: ['A1'], default: '' },
+      { key: 'client', label: '客户名称（留空取 EASY 客户）', cells: ['A3'], default: '' },
       { key: 'sendDate', label: '发文日期', cells: ['G3'], default: '发文日期：{y}-{m}-{d}' },
       { key: 'ids', label: '知易通编号 / 财务编号', cells: ['I3'], default: '知易通编号： 财务编号：' }
     ]
@@ -126,6 +126,7 @@ export interface BillingInput {
   /** 币种 → 1 单位折合人民币（已含人工修改）。 */
   rates: Record<string, number>
   rateDate: string
+  rateSourceUrl?: string
   headers: Record<string, string>
   options: BillingOptions
   today?: Date
@@ -171,7 +172,7 @@ function cnyAmount(row: FeeSearchRow, rates: Record<string, number>): number {
   return round2(row.amount * rate)
 }
 
-function goerEvents(rows: FeeSearchRow[]): EventGroup[] {
+function foreignEvents(rows: FeeSearchRow[], mergeCnyForeign: boolean): EventGroup[] {
   const matterKey = (row: Pick<FeeSearchRow, 'caseVolume' | 'procId' | 'ctrlProc' | 'finishDate'>) =>
     row.procId.trim() ? feeMatterKey(row) : JSON.stringify([row.caseVolume, row.ctrlProc.trim(), row.finishDate])
   const byMatter = new Map<string, EventGroup[]>()
@@ -191,7 +192,7 @@ function goerEvents(rows: FeeSearchRow[]): EventGroup[] {
       anchor.translation.push(...group.translation)
       group.internalAgent = []
       group.translation = []
-      if (group.currency === 'CNY') {
+      if (mergeCnyForeign && group.currency === 'CNY') {
         anchor.official.push(...group.official)
         anchor.agent.push(...group.agent)
         group.official = []
@@ -205,7 +206,7 @@ function goerEvents(rows: FeeSearchRow[]): EventGroup[] {
 function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): number {
   const sheetName = book.sheets[0]?.name ?? ''
   const sheet = book.sheet(sheetName)
-  const events = goerEvents(input.rows)
+  const events = foreignEvents(input.rows, true)
   const billedCurrencies = new Set<string>()
   sheet.resizeBlocks({ firstRow: 5, blockSize: 1, oldCount: 2, newCount: events.length })
   events.forEach((group, index) => {
@@ -306,6 +307,15 @@ function fillMideaForeignBlock(
     ? round2(group.internalAgent.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
     : null
   const cur = group.currency
+  const sourceRows = [...group.agent, ...group.official, ...group.internalAgent, ...group.translation]
+  const rawText = (row: FeeSearchRow, key: string) => typeof row.raw[key] === 'string' ? row.raw[key] : ''
+  const recordedCountries = uniqueText(sourceRows.map(row => rawText(row, 'country')))
+  const customers = uniqueText(sourceRows.map(row => row.customerName))
+  const suppliers = uniqueText([...group.agent, ...group.official].map(row => rawText(row, 'agency_name_cn')))
+  const officialDates = uniqueText(group.official.map(row => rawText(row, 'law_fee_date')))
+  const descriptions = uniqueText(group.agent.map(row => rawText(row, 'fee_desc')).filter(text =>
+    text && !group.agent.some(row => row.feeType === text)
+  ))
   const review = chargeOverhead ? input.options.reviewFee : 0
   const bank = chargeOverhead ? input.options.bankFee : 0
   const officialCny = officialAmount === null || rate === null ? 0 : round2(officialAmount * rate)
@@ -316,21 +326,33 @@ function fillMideaForeignBlock(
   const r2 = base + 2
   const top: Record<string, string | number | null> = {
     A: index + 1, B: group.customerVolume, C: group.caseVolume, D: group.caseName, E: group.applicant,
-    F: patentTypeLabel(group.applyType), G: group.appNo, H: excelSerial(group.appDate), I: countryOfCase(group.caseVolume),
-    J: entrust, K: excelSerial(group.finishDate), L: excelSerial(billDate), M: group.ctrlProc,
-    O: officialName || '无', P: officialAmount, Q: officialAmount === null ? null : rate,
-    AG: officialAmount === null ? '' : `${officialName}${amountText(officialAmount, cur)}`, AH: null
+    F: patentTypeLabel(group.applyType), G: group.appNo, H: excelSerial(group.appDate),
+    I: recordedCountries.length === 1 ? recordedCountries[0] : countryOfCase(group.caseVolume),
+    J: entrust.trim() || (customers.length === 1 ? customers[0] : ''), K: excelSerial(group.finishDate), L: excelSerial(billDate), M: group.ctrlProc,
+    O: officialName || null, P: officialAmount, Q: officialAmount === null ? null : rate,
+    AG: officialAmount === null ? '' : `${officialName}${amountText(officialAmount, cur)}`, AH: suppliers.join('、') || null
   }
   for (const [col, value] of Object.entries(top)) sheet.setCell(`${col}${r0}`, value)
+  if (sheet.hasFormula(`AP${r0}`)) {
+    sheet.setCell(`AP${r0}`, officialDates.length === 1 ? excelSerial(officialDates[0]) : null)
+  }
   sheet.setCell(`S${r1}`, agentAmount)
   sheet.setCell(`T${r1}`, agentAmount === null ? null : rate)
-  sheet.setCell(`AG${r1}`, agentAmount === null ? '' : `${group.ctrlProc}外所代理费${amountText(agentAmount, cur)}`)
+  sheet.setCell(`AG${r1}`, agentAmount === null ? '' : [
+    `${group.ctrlProc}外所代理费${amountText(agentAmount, cur)}`, ...descriptions
+  ].join('；'))
+  const words = group.translation.map(translationWordCount)
+  if (words.length && words.every(count => count !== null)) {
+    sheet.setCell(`W${r2}`, words.reduce<number>((total, count) => total + (count ?? 0), 0))
+  }
+  const breakdown = group.translation.length === 1 ? wordBasedTranslation(group.translation[0]) : null
+  if (breakdown) sheet.setCell(`X${r2}`, breakdown.pricePerThousand / 1000)
   sheet.setCell(`Y${r2}`, translationCny)
   sheet.setCell(`Z${r2}`, internalAgentCny)
   sheet.setCell(`AA${r2}`, review || null)
   sheet.setCell(`AB${r2}`, bank || null)
   const parts = [
-    translationCny ? `译${translationCny}CNY` : '',
+    translationCny ? `译${translationCny}CNY${breakdown ? `（${breakdown.words} 字 × ${breakdown.pricePerThousand} 元/千字）` : ''}` : '',
     internalAgentCny ? `代${internalAgentCny}` : '',
     review ? `审${review}` : '',
     bank ? `银${bank}` : '',
@@ -339,8 +361,23 @@ function fillMideaForeignBlock(
   sheet.setCell(`AG${r2}`, parts.join('+'))
 }
 
+export function mideaForeignGroups(inputRows: FeeSearchRow[], warnings?: string[]): EventGroup[] {
+  const rows = inputRows.filter(row => {
+    if (row.feeClass !== 'O' || (normalizeCurrency(row.currency) !== 'CNY' && !/外代费/.test(row.feeType))) return true
+    if (row.amount !== 0) warnings?.push(`${row.caseVolume}「${row.ctrlProc}」${row.feeType} ${row.amount} ${normalizeCurrency(row.currency)} 待核对原币或费用类别，未计入海外官费。`)
+    return false
+  })
+  return foreignEvents(rows, false)
+}
+
 function fillMideaForeign(book: XlsxBook, input: BillingInput, warnings: string[]): number {
-  const events = groupFeeEvents(input.rows)
+  const events = mideaForeignGroups(input.rows, warnings)
+  if (!events.length) throw new Error('所选费用均缺少可确认的海外官费原币或费用分类，无法生成美的涉外清单。')
+  const customers = uniqueText(input.rows.map(row => row.customerName))
+  if (customers.length > 1) warnings.push(`本批费用涉及 ${customers.length} 个 EASY 客户，请按事业部和开票主体核对导出范围。`)
+  for (const group of events) {
+    if (group.translation.some(row => translationWordCount(row) === null)) warnings.push(`${group.caseVolume}「${group.ctrlProc}」翻译费已填，字数待核对。`)
+  }
   const entrust = input.headers.entrust ?? ''
   const sheets = MIDEA_FOREIGN_SHEETS.map(name => book.sheet(name))
   const seenEvents = new Set<string>()
@@ -360,15 +397,60 @@ function fillMideaForeign(book: XlsxBook, input: BillingInput, warnings: string[
   })
   for (const sheet of sheets) {
     sheet.resizeBlocks({ firstRow: 7, blockSize: 3, oldCount: 3, newCount: events.length })
+    sheet.setCell('X6', '单价（元/字或词）')
     events.forEach((group, index) => fillMideaForeignBlock(sheet, group, index, 7 + index * 3, input, entrust, chargeFlags[index], billDates[index]))
   }
+  const summary = book.sheet('账单汇总')
+  const footer = 7 + events.length * 3
+  const detail = `'${MIDEA_FOREIGN_SHEETS[0]}'!`
+  summary.setFormula('M5', `${detail}V${footer}`)
+  summary.setFormula('L5', `${detail}AF${footer}-M5`)
+  const period = /(\d{4})年\s*(\d{1,2}(?:[-–—至]\d{1,2})?)月/.exec(input.headers.title ?? '')
+  if (period) {
+    const heading = customers.length === 1 ? customers[0] : '涉外'
+    summary.setCell('A1', `${heading}${period[1]}年（${period[2]}）月专利申请费用账单汇总`)
+  }
+  if (customers.length > 1) summary.setCell('B5', '多客户待核对')
+  else if (customers[0] && customers[0] !== '美的小家电事业部') summary.setCell('B5', customers[0])
+  const rates = book.sheet('汇率截图')
+  rates.removeDrawings()
+  rates.setCell('A1', '本次导出汇率')
+  rates.setCell('A2', input.rateDate)
+  rates.setCell('A3', input.rateSourceUrl ?? '')
+  const currencies = uniqueText(events.flatMap(event =>
+    [...event.official, ...event.agent, ...event.translation, ...event.internalAgent].map(row => normalizeCurrency(row.currency))
+  ))
+  for (const [index, currency] of currencies.entries()) {
+    const row = index + 5
+    rates.setCell(`A${row}`, currency)
+    rates.setCell(`B${row}`, rateOf(currency, input.rates))
+  }
+  if (warnings.length) rates.setCell(`A${6 + currencies.length}`, '导出待核对事项')
+  for (const [index, warning] of warnings.entries()) rates.setCell(`A${7 + currencies.length + index}`, warning)
+  rates.refreshDimension()
   return events.length
 }
 
 // ---------------------------------------------------------------- 美的 PCT 费用清单
 
-function fillMideaPct(book: XlsxBook, input: BillingInput): number {
-  const sheet = book.sheet('生活电器2026M7-9')
+const PCT_TEMPLATE_SHEET = 'PCT费用明细'
+
+function fillMideaPct(book: XlsxBook, input: BillingInput, warnings: string[]): number {
+  const sheet = book.sheet(PCT_TEMPLATE_SHEET)
+  const summary = book.sheet('账单汇总')
+  const customer = input.rows[0].customerName.trim()
+  const dates = input.rows.map(row => excelSerial(row.finishDate))
+  const knownDates = dates.filter(date => date !== null).sort((a, b) => a - b)
+  const toDateText = (serial: number) => new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000).toISOString().slice(0, 10)
+  const first = knownDates[0]
+  const last = knownDates.at(-1)
+  const period = first === undefined || last === undefined ? '事项完成日待核对'
+    : `事项完成日 ${toDateText(first)}${first === last ? '' : ` 至 ${toDateText(last)}`}${knownDates.length < dates.length ? '（部分缺失）' : ''}`
+  if (knownDates.length < dates.length) warnings.push(`${dates.length - knownDates.length} 笔费用缺少有效的处理事项完成日，请核对账期。`)
+  summary.setCell('A1', `${customer} PCT 费用账单汇总 · ${period}`)
+  summary.setCell('B6', customer)
+  const applicants = uniqueText(input.rows.map(row => row.applicant))
+  if (applicants.length > 1) warnings.push(`本批费用涉及 ${applicants.length} 个申请人，请按实际开票主体核对。`)
   const cases = groupFeeCases(input.rows)
   sheet.resizeBlocks({ firstRow: 6, blockSize: 1, oldCount: 2, newCount: cases.length })
   cases.forEach((group, index) => {
@@ -384,24 +466,25 @@ function fillMideaPct(book: XlsxBook, input: BillingInput): number {
       else apply += amount
     }
     const agent = round2(group.agent.reduce((total, fee) => total + cnyAmount(fee, input.rates), 0))
-    const proc = group.ctrlProc
+    const field = (label: string, values: string[]) => {
+      const usable = uniqueText(values)
+      if (usable.length !== 1) warnings.push(`${group.caseVolume} 的${label}${usable.length ? '存在多个值' : '缺失'}，已留空。`)
+      return usable.length === 1 ? usable[0] : null
+    }
+    const appDates = [...new Set(group.rows.map(fee => excelSerial(fee.appDate)).filter(date => date !== null))]
+    if (appDates.length !== 1) warnings.push(`${group.caseVolume} 的申请日${appDates.length ? '存在多个值' : '缺失'}，已留空。`)
     const cells: Record<string, string | number | null> = {
-      A: index + 1, B: group.customerVolume, C: group.caseVolume, D: group.caseName,
-      E: patentTypeLabel(group.applyType), F: /新申请|国际申请|PCT/.test(proc) ? '新申请' : proc, G: group.appNo,
-      H: excelSerial(group.appDate), I: apply ? round2(apply) : null, J: search ? round2(search) : null,
+      A: index + 1, B: field('客户案号', group.rows.map(fee => fee.caseVolumeCustomer)), C: group.caseVolume,
+      D: field('案件名称', group.rows.map(fee => fee.caseName)),
+      E: field('申请类型', group.rows.map(fee => fee.applyType.trim().replace(/专利$/, ''))),
+      F: group.ctrlProc || null, G: field('申请号', group.rows.map(fee => fee.appNo)),
+      H: appDates.length === 1 ? appDates[0] : null, I: apply ? round2(apply) : null, J: search ? round2(search) : null,
       K: extra ? round2(extra) : null, L: agent || null, N: null
     }
     for (const [col, value] of Object.entries(cells)) sheet.setCell(`${col}${row}`, value)
   })
-  // 页脚「敬呈」日期
-  const targetRow = 12 + cases.length
-  for (const n of [targetRow, targetRow + 1, targetRow - 1]) {
-    const val = sheet.valueOf(`K${n}`)
-    if (typeof val === 'number' && !sheet.hasFormula(`K${n}`)) {
-      sheet.setCell(`K${n}`, excelSerial(input.today ?? new Date()))
-      break
-    }
-  }
+  // 模板的页脚日期在第 14 行，明细原占 2 行。
+  sheet.setCell(`K${12 + cases.length}`, excelSerial(input.today ?? new Date()))
   return cases.length
 }
 
@@ -410,10 +493,8 @@ function fillMideaPct(book: XlsxBook, input: BillingInput): number {
 export async function fillBillingTemplate(id: BillingTemplateId, template: Uint8Array, input: BillingInput): Promise<BillingResult> {
   if (!input.rows.length) throw new Error('还没有选中的费用记录。')
   if (id === 'midea-pct') {
-    for (const row of input.rows) {
-      const problem = pctFeeProblem(row)
-      if (problem) throw new Error(`${row.caseVolume}「${row.feeType || row.feeId}」：${problem}。请返回费用查询核对。`)
-    }
+    const problem = pctSelectionProblem(input.rows)
+    if (problem) throw new Error(problem)
   }
   if (id === 'midea-foreign' && [input.options.reviewFee, input.options.bankFee].some(fee => !Number.isFinite(fee) || fee < 0)) {
     throw new Error('审核费和银行费须填写为大于或等于 0 的金额。')
@@ -430,11 +511,18 @@ export async function fillBillingTemplate(id: BillingTemplateId, template: Uint8
   let blockCount = 0
   if (id === 'general-foreign') blockCount = fillGeneral(book, sortedInput, warnings)
   else if (id === 'midea-foreign') blockCount = fillMideaForeign(book, sortedInput, warnings)
-  else blockCount = fillMideaPct(book, sortedInput)
+  else blockCount = fillMideaPct(book, sortedInput, warnings)
   const headerSheets = id === 'midea-foreign'
     ? MIDEA_FOREIGN_SHEETS.map(name => book.sheet(name))
-    : [book.sheet(id === 'general-foreign' ? (book.sheets[0]?.name ?? '') : '生活电器2026M7-9')]
-  applyHeaders(headerSheets, info, input.headers)
+    : [book.sheet(id === 'general-foreign' ? (book.sheets[0]?.name ?? '') : PCT_TEMPLATE_SHEET)]
+  const headers = id === 'midea-pct' ? {
+    ...defaultHeaders(id, today),
+    ...input.headers,
+    title: input.headers.title?.trim() || '世纪恒程知识产权代理事务所 · 美的 PCT 费用清单',
+    client: input.headers.client?.trim().replace(/^客户名称\s*[：:]\s*/, '') || input.rows[0].customerName.trim()
+  } : input.headers
+  if (id === 'midea-pct') headers.client = `客户名称：${headers.client}`
+  applyHeaders(headerSheets, info, headers)
   const unknownCurrency = uniqueText(input.rows.map(row => normalizeCurrency(row.currency))).filter(code => code.length !== 3)
   if (unknownCurrency.length) warnings.push(`币别「${unknownCurrency.join('、')}」不是标准代码，请核对汇率。`)
   const bytes = await book.save()

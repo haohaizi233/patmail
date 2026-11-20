@@ -11,10 +11,12 @@ import type { FeeSearchRow } from '../../api/fee-search-types'
 import {
   billInfoFromFile,
   missingCurrencies,
+  isMideaPctCustomer,
+  isPctCase,
   isUnrequestedFee,
   matchedBillDate,
-  groupFeeEvents,
   pctFeeProblem,
+  pctSelectionProblem,
   type BillInfo
 } from '../../billing/fee-model'
 import {
@@ -27,6 +29,7 @@ import {
   BILLING_TEMPLATES,
   defaultHeaders,
   fillBillingTemplate,
+  mideaForeignGroups,
   formatLocalDate,
   type BillingInput,
   type BillingOptions,
@@ -174,18 +177,52 @@ const feeInitialValues = ref<Record<string, string>>({
 const feeInitialToken = ref(1)
 const selectedFeeRows = ref<FeeSearchRow[]>([])
 const lastAppliedFeeSyncKey = ref('')
-const defaultSelectionFilter = computed(() => selectedTemplateId.value === 'midea-pct'
-  ? (row: FeeSearchRow) => !pctFeeProblem(row)
+const isMideaPct = computed(() => selectedTemplateId.value === 'midea-pct')
+const defaultSelectionExclusion = computed(() => isMideaPct.value
+  ? (row: FeeSearchRow) => {
+      if (!row.customerName.trim()) return '客户名称缺失'
+      if (!isMideaPctCustomer(row.customerName)) return '不属于美的客户'
+      return pctFeeProblem(row)
+    }
   : undefined)
+const pctCandidates = computed(() => {
+  const candidates = new Map<string, FeeSearchRow[]>()
+  if (!isMideaPct.value) return candidates
+  for (const row of feeQueryRef.value?.getKnownRows() ?? []) {
+    if (!isMideaPctCustomer(row.customerName) || !isUnrequestedFee(row) || pctFeeProblem(row)) continue
+    const name = row.customerName.trim()
+    const rows = candidates.get(name) ?? []
+    rows.push(row)
+    candidates.set(name, rows)
+  }
+  return candidates
+})
+const pctSelectedCustomer = computed(() => isMideaPct.value ? selectedFeeRows.value[0]?.customerName.trim() ?? '' : '')
+const pctExceptions = computed(() => {
+  if (!isMideaPct.value) return []
+  return Array.from(feeQueryRef.value?.getKnownRows() ?? []).flatMap(row => {
+    if (!isPctCase(row) || !isUnrequestedFee(row) ||
+        (row.customerName.trim() && !isMideaPctCustomer(row.customerName))) return []
+    const reason = pctFeeProblem(row) || (row.customerName.trim() ? '' : 'EASY 客户名称缺失')
+    return reason ? [{ row, reason }] : []
+  })
+})
+const pctExportExceptions = computed(() => pctSelectedCustomer.value
+  ? pctExceptions.value.filter(({ row }) => !row.customerName.trim() || row.customerName.trim() === pctSelectedCustomer.value)
+  : [])
+const confirmPctExceptions = ref(false)
+watch([selectedFeeRows, pctExportExceptions], () => { confirmPctExceptions.value = false })
+function selectPctCustomer(rows: FeeSearchRow[]): void {
+  feeQueryRef.value?.replaceBillingSelection(rows)
+  stepNotice.value = ''
+}
 const feeSelectionIssue = computed(() => {
   if (feeQueryRef.value?.selectionPending) return '费用还在读取，请等待完成。'
   if (feeQueryRef.value?.selectionIncomplete) return '费用查询未完成，请返回步骤 2 重试或重新查询。'
   if (!selectedFeeRows.value.length) return '步骤 2 还没有勾选费用。请先在费用查询表格中勾选要请款的费用行。'
   if (!ready.value) return '请先确认 EASY 登录会话。'
   if (lastAppliedFeeSyncKey.value !== buildFeeSyncKey()) return '请款范围已变化，请返回步骤 2 重新查询。'
-  const invalid = selectedTemplateId.value === 'midea-pct' && selectedFeeRows.value.find(row => pctFeeProblem(row))
-  if (invalid) return `${invalid.caseVolume}「${invalid.feeType || invalid.feeId}」：${pctFeeProblem(invalid)}。`
-  return ''
+  return isMideaPct.value ? pctSelectionProblem(selectedFeeRows.value) : ''
 })
 
 function buildFeeSyncKey(): string {
@@ -339,13 +376,12 @@ const reconciliationInfo = computed(() => {
   const allCases = [...caseSet]
   const matchedCases: string[] = []
   const unmatchedCases: string[] = []
-  const unmatchedMatters = selectedTemplateId.value === 'midea-foreign'
-    ? new Set(groupFeeEvents(selectedFeeRows.value)
-      .filter(group => !matchedBillDate(group, billMap.value[group.caseVolume]))
-      .map(group => group.caseVolume))
-    : new Set<string>()
+  const mideaGroups = selectedTemplateId.value === 'midea-foreign' ? mideaForeignGroups(selectedFeeRows.value) : null
   for (const vol of allCases) {
-    if (billMap.value[vol]?.length && !unmatchedMatters.has(vol)) matchedCases.push(vol)
+    const groups = mideaGroups?.filter(group => group.caseVolume === vol)
+    if (groups ? groups.length && groups.every(group => matchedBillDate(group, billMap.value[vol])) : billMap.value[vol]?.length) {
+      matchedCases.push(vol)
+    }
     else unmatchedCases.push(vol)
   }
   return {
@@ -367,12 +403,22 @@ const canAdvanceFromFees = computed(() => selectedFeeRows.value.length > 0 &&
   !feeQueryRef.value?.selectionPending && !feeQueryRef.value?.selectionIncomplete)
 const exportDisabled = computed(() => exporting.value || ratesLoading.value ||
   Boolean(fileSelectionIssue.value || feeSelectionIssue.value) ||
-  (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value))
+  (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
+  (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value))
 watch(selectedFeeRows, () => {
   confirmExistingFees.value = false
   exportResultNotice.value = ''
   exportWarnings.value = []
 })
+const exportParameters = computed(() => ({
+  headers: { ...headerValues.value },
+  options: { ...billingOptions.value },
+  rates: { ...effectiveRates.value },
+  rateSourceUrl: ratesSourceUrl.value,
+  rateDate: usesManualRate.value
+    ? `手工 ${manualRateDate.value}${ratesDate.value ? ` / 央行 ${ratesDate.value}` : ''}`
+    : ratesDate.value || formatLocalDate()
+}))
 
 async function doExportExcel(): Promise<void> {
   if (exporting.value) return
@@ -383,6 +429,10 @@ async function doExportExcel(): Promise<void> {
   }
   if (reconciliationInfo.value.requestedCount && !confirmExistingFees.value) {
     exportResultNotice.value = '请确认已立单或状态待核对的费用后再导出。'
+    return
+  }
+  if (pctExportExceptions.value.length && !confirmPctExceptions.value) {
+    exportResultNotice.value = '请先核对本客户待处理的 PCT 费用。'
     return
   }
   if (needsForeignRates.value && ratesCheckedOn !== formatLocalDate()) {
@@ -403,13 +453,8 @@ async function doExportExcel(): Promise<void> {
   const templateId = selectedTemplateId.value
   const rows = selectedFeeRows.value
   const bills = billMap.value
-  const rateDate = usesManualRate.value
-    ? `手工 ${manualRateDate.value}${ratesDate.value ? ` / 央行 ${ratesDate.value}` : ''}`
-    : ratesDate.value || formatLocalDate()
-  const input: BillingInput = {
-    rows, bills, rates: { ...effectiveRates.value }, rateDate,
-    headers: { ...headerValues.value }, options: { ...billingOptions.value }, today: new Date()
-  }
+  const parameters = exportParameters.value
+  const input: BillingInput = { ...parameters, rows, bills, today: new Date() }
   const account = connection.value.operatorId
   const origin = connection.value.easyOrigin
   exporting.value = true
@@ -421,8 +466,10 @@ async function doExportExcel(): Promise<void> {
     const result = await fillBillingTemplate(templateId, rawBytes, input)
     if (selectedTemplateId.value !== templateId || selectedFeeRows.value !== rows ||
         connection.value.operatorId !== account || connection.value.easyOrigin !== origin ||
-        billMap.value !== bills || fileSelectionIssue.value || feeSelectionIssue.value) {
-      exportResultNotice.value = '生成期间请款范围已变化，请核对后重新导出。'
+        billMap.value !== bills || parameters !== exportParameters.value || fileSelectionIssue.value || feeSelectionIssue.value ||
+        (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
+        (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value)) {
+      exportResultNotice.value = '生成期间请款范围或导出参数已变化，请核对后重新导出。'
       return
     }
 
@@ -435,10 +482,13 @@ async function doExportExcel(): Promise<void> {
     const link = document.createElement('a')
     link.href = url
     link.download = result.fileName
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    try {
+      document.body.appendChild(link)
+      link.click()
+    } finally {
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    }
 
     exportResultNotice.value = `请款单已成功导出并触发下载：${result.fileName}（共填入 ${result.blockCount} 个事项块/案卷）。`
   } catch (err) {
@@ -802,7 +852,7 @@ onBeforeUnmount(() => {
           <template v-else>
             （未带入文号，请按客户/日期/文号等条件自行检索）
           </template>。<br />
-          <template v-if="selectedTemplateId === 'midea-pct'"> 仅默认勾选可纳入 PCT 模板的费用。</template>
+          <template v-if="isMideaPct">请优先用「客户名称」和「处理事项完成日」限定范围。默认只勾选美的客户可归类的未请款费用，每份清单只能包含一个客户。</template>
           请在下方点击「查询」，然后在表格中<b>勾选</b>要纳入请款单的费用记录（翻页已选记录会自动保留）。
         </p>
         <div class="selection-status-strip">
@@ -821,8 +871,8 @@ onBeforeUnmount(() => {
         :can-search="ready"
         :initial-values="feeInitialValues"
         :initial-token="feeInitialToken"
-        :default-selection-filter="defaultSelectionFilter"
-        :include-translation-word-counts="selectedTemplateId === 'general-foreign'"
+        :default-selection-exclusion="defaultSelectionExclusion"
+        :include-translation-word-counts="selectedTemplateId !== 'midea-pct'"
         @selection-change="onFeeSelectionChange"
       >
         <template #result-actions>
@@ -831,11 +881,37 @@ onBeforeUnmount(() => {
             进入请款单导出 →
           </button>
         </template>
+        <template #result-review>
+          <div v-if="pctCandidates.size > 1 || (pctCandidates.size && feeSelectionIssue && selectedFeeRows.length)" class="pct-customer-actions">
+            <span>按客户选取可导出的未请款费用</span>
+            <button v-for="[name, rows] in pctCandidates" :key="name" type="button" class="text-button"
+              :disabled="feeQueryRef?.selectionPending || feeQueryRef?.selectionIncomplete" @click="selectPctCustomer(rows)">
+              只选 {{ name }}（{{ rows.length }} 笔）
+            </button>
+          </div>
+          <details v-if="pctExceptions.length" class="reconcile-warn">
+            <summary>PCT 待核对费用（{{ pctExceptions.length }} 笔）</summary>
+            <ul>
+              <li v-for="{ row, reason } in pctExceptions" :key="row.feeId">
+                {{ row.customerName || '客户待核对' }} · {{ row.caseVolume }} · {{ row.feeType || row.feeId }} · {{ row.amount }} {{ row.currency }}（{{ reason }}）
+              </li>
+            </ul>
+          </details>
+        </template>
       </FeeSearchQuery>
     </section>
 
     <!-- ============================================================== 步骤 3 -->
     <section v-show="currentStep === 3" class="step-section step-3-section">
+      <details v-if="pctExportExceptions.length" class="reconcile-warn" open>
+        <summary>有 {{ pctExportExceptions.length }} 笔未请款费用待处理</summary>
+        <ul>
+          <li v-for="{ row, reason } in pctExportExceptions" :key="row.feeId">
+            {{ row.customerName || '客户待核对' }} · {{ row.caseVolume }} · {{ row.feeType || row.feeId }} · {{ row.amount }} {{ row.currency }}（{{ reason }}）
+          </li>
+        </ul>
+        <label><input v-model="confirmPctExceptions" type="checkbox" /> 我已核对，以上费用另行处理，本次仅导出可归类的费用</label>
+      </details>
       <label v-if="reconciliationInfo.requestedCount > 0" class="reconcile-warn requested-warn">
         <input v-model="confirmExistingFees" type="checkbox" />
         已核对并确认导出 {{ reconciliationInfo.requestedCount }} 笔已立单或状态待核对的费用
@@ -944,6 +1020,7 @@ onBeforeUnmount(() => {
           <span>待填入费用：<b>{{ selectedFeeRows.length }}</b> 笔（未请款 <b>{{ reconciliationInfo.unrequestedCount }}</b>，已立单或状态待核对 <b>{{ reconciliationInfo.requestedCount }}</b>）</span>
           <span>涉及案卷：<b>{{ reconciliationInfo.totalCases }}</b> 个（匹配账单 <b>{{ reconciliationInfo.matchedCasesCount }}</b>，未匹配 <b>{{ reconciliationInfo.unmatchedCases.length }}</b>）</span>
           <span>目标模板：<b>{{ currentTemplate.label }}</b></span>
+          <span v-if="pctSelectedCustomer">EASY 客户：<b>{{ pctSelectedCustomer }}</b></span>
         </div>
 
         <p v-if="reconciliationInfo.unmatchedCases.length > 0 && selectedTemplateId === 'midea-foreign'" class="reconcile-warn bill-missing-warn">
@@ -1488,6 +1565,13 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.4;
+}
+.pct-customer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
 }
 .reconcile-warn.requested-warn {
   display: block;
