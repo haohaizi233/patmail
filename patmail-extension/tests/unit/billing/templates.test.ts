@@ -95,8 +95,8 @@ describe('billing templates filler', () => {
     const sheet = book.sheet(book.sheets[0].name)
     expect(result.blockCount).toBe(1)
     expect(['I5', 'K5', 'P5', 'T5', 'U5', 'V5'].map(cell => sheet.valueOf(cell))).toEqual(['/', '/', 682, null, '/', 1000])
-    expect(sheet.valueOf('X5')).toContain('1000 CNY')
-    expect(result.warnings.join(' ')).toContain('当地币种')
+    expect(sheet.valueOf('X5')).toBe('指定国生效')
+    expect(result.warnings.join(' ')).toContain('1000 CNY（EASY 以人民币登记，待核对当地币种')
   })
   it('fills general-foreign template, expands blocks and preserves Excel formulas', async () => {
     const rawTemplate = readAsset('qingkuan-general-foreign.xlsx')

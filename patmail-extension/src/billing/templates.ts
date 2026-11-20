@@ -215,10 +215,8 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
       F: excelSerial(group.appDate), G: patentTypeLabel(group.applyType), H: group.applicant
     }
     for (const col of ['I', 'J', 'K', 'L', 'M', 'N']) cells[col] = '/'
-    const remarks = [group.ctrlProc]
     const pending = (fee: FeeSearchRow, reason: string) => {
       const detail = `${fee.feeType || '费用'} ${fee.amount} ${normalizeCurrency(fee.currency)}（${reason}，未纳入合计）`
-      remarks.push(detail)
       warnings.push(`${group.caseVolume}「${group.ctrlProc}」${detail}。`)
     }
     const totals = new Map<string, number>()
@@ -245,7 +243,6 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
     cells.R = totals.size || foreignAgent.length ? rateOf(group.currency, input.rates) : null
     if (cells.R !== null) {
       billedCurrencies.add(group.currency)
-      remarks.push(`账单币种 ${group.currency}`)
     }
     // T 列为翻译费总额（折合 CNY），若有翻译费则填入，让总计 W = SUM(S:T, V) 完整包含翻译费
     const translationCny = group.translation.length
@@ -258,13 +255,12 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
     if (counts.some(count => count === null)) {
       const known = counts.reduce<number>((total, count) => total + (count ?? 0), 0)
       const note = known ? `已登记 ${known} 字，另有翻译字数待核对` : '翻译字数待核对'
-      remarks.push(note)
       warnings.push(`${group.caseVolume}「${group.ctrlProc}」${note}。`)
     }
     cells.V = group.internalAgent.length
       ? round2(group.internalAgent.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
       : null
-    cells.X = uniqueText([...remarks, ...group.translation.map(fee => fee.feeType)]).join('；')
+    cells.X = group.ctrlProc
     cells.Y = excelSerial(group.finishDate)
     for (const [col, value] of Object.entries(cells)) sheet.setCell(`${col}${row}`, value)
   })
@@ -274,7 +270,7 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
       const cell = `${col}${footerRow}`
       if (sheet.hasFormula(cell)) sheet.setCell(cell, null)
     }
-    sheet.setCell(`X${footerRow}`, '多币种仅汇总人民币金额')
+    warnings.push('存在多种账单币种，合计行仅汇总人民币金额。')
   }
   sheet.setCell('R3', `汇率\n（${input.rateDate}）`)
   const period = /(\d{4})年\s*(1[0-2]|0?[1-9])月/.exec(input.headers.title ?? '')
