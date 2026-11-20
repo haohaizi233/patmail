@@ -20,7 +20,8 @@ const props = withDefaults(defineProps<{
   seedToken?: number
   recoverySurface?: string
   autoSelectBills?: boolean
-}>(), { showSession: true, seed: null, seedToken: 0, recoverySurface: '', autoSelectBills: false })
+  workspaceUserId?: string
+}>(), { showSession: true, seed: null, seedToken: 0, recoverySurface: '', autoSelectBills: false, workspaceUserId: undefined })
 const emit = defineEmits<{
   searched: [query: FileSearchRequest]
   'download-name': [selection: FileDownloadSelection | null, problem: string]
@@ -34,7 +35,9 @@ const sessionUserId = ref('')
 const sessionMessage = ref('')
 const sessionLoading = ref(false)
 const lastVerifiedUserId = ref('')
-const queryUserId = computed(() => props.showSession ? (sessionUserId.value || lastVerifiedUserId.value) : workspace.connection.value.operatorId)
+const queryUserId = computed(() => props.showSession
+  ? (sessionUserId.value || lastVerifiedUserId.value)
+  : (props.workspaceUserId ?? workspace.connection.value.operatorId))
 const epoch = ref(0)
 const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { default: () => ({}) })
 const queryRef = ref<InstanceType<typeof FileSearchQuery> | null>(null)

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import FileSearchPanel from '../../floating/FileSearchPanel.vue'
 import FeeSearchQuery from '../components/FeeSearchQuery.vue'
 import { useWorkspace } from '../composables/useWorkspace'
+import { createRecoveryClient } from '../../recovery/client'
 import type { SelectedPatentFile } from '../../mail/types'
 import type { FeeSearchRow } from '../../api/fee-search-types'
 import {
@@ -46,7 +47,15 @@ defineEmits<{
 }>()
 
 const { connection } = useWorkspace()
-const ready = computed(() => connection.value.sessionStatus === 'authenticated')
+const confirmedScope = computed(() => {
+  const { easyOrigin, operatorId, sessionStatus } = connection.value
+  return sessionStatus === 'authenticated' && easyOrigin && operatorId
+    ? JSON.stringify([easyOrigin, operatorId]) : ''
+})
+const billingScope = ref('')
+const billingOwner = ref({ origin: '', userId: '' })
+const restoring = ref(false)
+const ready = computed(() => !restoring.value && Boolean(billingScope.value && confirmedScope.value === billingScope.value))
 
 // ---------------------------------------------------------------- 先选模板 → 智能预填查询条件
 const selectedTemplateId = ref<BillingTemplateId>('general-foreign')
@@ -73,7 +82,8 @@ async function advanceFromResults(target: 2 | 3): Promise<void> {
 
 function setStep(target: Step, fromResults = false): void {
   noticeInResults.value = fromResults
-  const issue = target === 1 ? '' : fileSelectionIssue.value || (target === 3 ? feeSelectionIssue.value : '')
+  const issue = target === 1 || (target === 2 && currentStep.value === 3)
+    ? '' : fileSelectionIssue.value || (target === 3 ? feeSelectionIssue.value : '')
   if (issue) {
     stepNotice.value = issue
     return
@@ -90,6 +100,7 @@ function setStep(target: Step, fromResults = false): void {
 // ---------------------------------------------------------------- 步骤 1：文件管理与账单识别
 const filePanelRef = ref<InstanceType<typeof FileSearchPanel> | null>(null)
 const fileSelection = ref<Record<string, SelectedPatentFile>>({})
+const recoveredBills = ref<Record<string, BillInfo[]>>({})
 const fileSelectionIssue = computed(() => filePanelRef.value?.getBillingSelectionIssue() ?? '')
 
 // 按所选模板自动预填文件管理条件（文件描述在树加载后自动换算为当前站点实时 GUID）
@@ -97,6 +108,7 @@ const fileSeed = ref<Record<string, string>>({ ...BILLING_TEMPLATES[0].queryPres
 const fileSeedToken = ref(1)
 
 const billMap = computed<Record<string, BillInfo[]>>(() => {
+  if (!Object.keys(fileSelection.value).length) return recoveredBills.value
   const result: Record<string, BillInfo[]> = {}
   for (const file of Object.values(fileSelection.value)) {
     const bill = billInfoFromFile(file)
@@ -177,7 +189,7 @@ const feeSelectionIssue = computed(() => {
 })
 
 function buildFeeSyncKey(): string {
-  return `${selectedTemplateId.value}\u0001${activeVolumes.value.join('\n')}`
+  return `${selectedTemplateId.value}\u0001${[...activeVolumes.value].sort().join('\n')}`
 }
 
 /**
@@ -204,6 +216,7 @@ function onFeeSelectionChange(rows: FeeSearchRow[]): void {
 
 // 切换模板时自动更新文件管理预填、费用查询预填、表头默认值及默认审核/银行费
 watch(selectedTemplateId, nextId => {
+  if (restoring.value) return
   const tpl = BILLING_TEMPLATES.find(t => t.id === nextId) ?? BILLING_TEMPLATES[0]
   headerValues.value = defaultHeaders(nextId)
   billingOptions.value = { ...tpl.queryPreset.defaultOptions }
@@ -214,16 +227,16 @@ watch(selectedTemplateId, nextId => {
 })
 
 watch(activeVolumes, () => {
-  if (currentStep.value !== 1) syncFeeQueryIfNeeded(false)
+  if (!restoring.value && currentStep.value !== 1) syncFeeQueryIfNeeded(false)
 })
 
-watch(() => [connection.value.easyOrigin, connection.value.operatorId], () => {
-  fileSelection.value = {}
-  extraVolumes.value = []
-  excludedVolumes.value = []
-  syncFeeQueryIfNeeded(true)
-  currentStep.value = 1
+watch(fileSelection, files => {
+  if (Object.keys(files).length) recoveredBills.value = {}
 })
+
+function onFileSearch(): void {
+  if (!restoring.value && !Object.keys(fileSelection.value).length) recoveredBills.value = {}
+}
 
 // ---------------------------------------------------------------- 步骤 3：请款单导出与央行汇率
 const ratesLoading = ref(false)
@@ -438,10 +451,119 @@ async function doExportExcel(): Promise<void> {
 watch(() => props.isActive, active => {
   if (active && currentStep.value === 3) initStep3()
 })
+
+const recovery = createRecoveryClient()
+let persistTimer: ReturnType<typeof setTimeout> | undefined
+let lastSnapshot = ''
+let disposed = false
+let restoreGeneration = 0
+const recoveryNotice = ref('')
+
+function billingSnapshot() {
+  return {
+    version: 1, template: selectedTemplateId.value, step: currentStep.value,
+    headers: headerValues.value, options: billingOptions.value,
+    extra: extraVolumes.value, excluded: excludedVolumes.value, volumeInput: customVolumeInput.value,
+    bills: billMap.value, syncKey: lastAppliedFeeSyncKey.value,
+    rates: customRates.value, clearedRates: clearedRates.value, rateDate: manualRateDate.value,
+    fees: feeQueryRef.value?.billingSnapshot()
+  }
+}
+
+function flushBilling(): void {
+  clearTimeout(persistTimer)
+  const scope = billingScope.value
+  if (!scope || restoring.value || !feeQueryRef.value) return
+  const serialized = JSON.stringify(billingSnapshot())
+  if (serialized === lastSnapshot) return
+  lastSnapshot = serialized
+  void recovery.put('billing-desk', scope, JSON.parse(serialized) as unknown).catch(() => {
+    if (billingScope.value !== scope) return
+    if (lastSnapshot === serialized) lastSnapshot = ''
+    recoveryNotice.value = '请款草稿未能保存，刷新前请保留当前页面。'
+  })
+}
+
+watch(billingSnapshot, () => {
+  if (!billingScope.value || restoring.value) return
+  clearTimeout(persistTimer)
+  persistTimer = setTimeout(flushBilling, 120)
+}, { deep: true })
+
+watch(confirmedScope, async scope => {
+  if (!scope || scope === billingScope.value) return
+  const generation = ++restoreGeneration
+  const stillCurrent = () => !disposed && generation === restoreGeneration
+  flushBilling()
+  restoring.value = true
+  billingScope.value = scope
+  billingOwner.value = { origin: connection.value.easyOrigin, userId: connection.value.operatorId }
+  lastSnapshot = ''
+  recoveryNotice.value = ''
+  currentStep.value = 1
+  selectedTemplateId.value = 'general-foreign'
+  headerValues.value = defaultHeaders('general-foreign')
+  billingOptions.value = { ...BILLING_TEMPLATES[0].queryPreset.defaultOptions }
+  fileSeed.value = { ...BILLING_TEMPLATES[0].queryPreset.fileFields }
+  fileSelection.value = {}
+  recoveredBills.value = {}
+  extraVolumes.value = []
+  excludedVolumes.value = []
+  customVolumeInput.value = ''
+  customRates.value = {}
+  clearedRates.value = {}
+  manualRateDate.value = ''
+  confirmExistingFees.value = false
+  stepNotice.value = ''
+  syncFeeQueryIfNeeded(true)
+  const state = await recovery.get('billing-desk', scope).catch(() => {
+    if (stillCurrent()) recoveryNotice.value = '请款草稿暂时无法读取。'
+    return null
+  }) as ReturnType<typeof billingSnapshot> | null
+  if (!stillCurrent()) return
+  if (state?.version === 1 && BILLING_TEMPLATES.some(item => item.id === state.template)) {
+    selectedTemplateId.value = state.template
+    headerValues.value = state.headers
+    billingOptions.value = state.options
+    fileSeed.value = { ...currentTemplate.value.queryPreset.fileFields }
+    fileSeedToken.value += 1
+    extraVolumes.value = state.extra
+    excludedVolumes.value = state.excluded
+    customVolumeInput.value = state.volumeInput
+    recoveredBills.value = state.bills
+    customRates.value = state.rates
+    clearedRates.value = state.clearedRates
+    manualRateDate.value = state.rateDate
+    syncFeeQueryIfNeeded(true)
+    // Only restore selections for the same template and exact case scope.
+    await nextTick()
+    if (!stillCurrent()) return
+    if (state.fees && state.syncKey === buildFeeSyncKey()) {
+      feeQueryRef.value?.restoreBillingSnapshot(state.fees)
+    }
+    currentStep.value = state.step === 2 || state.step === 3 ? state.step : 1
+    if (currentStep.value === 3) initStep3()
+    await nextTick()
+  }
+  if (!stillCurrent()) return
+  restoring.value = false
+}, { immediate: true })
+
+function onBillingVisibility(): void {
+  if (document.visibilityState === 'hidden') flushBilling()
+}
+document.addEventListener('visibilitychange', onBillingVisibility)
+window.addEventListener('pagehide', flushBilling)
+onBeforeUnmount(() => {
+  flushBilling()
+  disposed = true
+  document.removeEventListener('visibilitychange', onBillingVisibility)
+  window.removeEventListener('pagehide', flushBilling)
+})
 </script>
 
 <template>
-  <div class="billing-workflow-page">
+  <div class="billing-workflow-page" :inert="restoring">
     <PageHead
       v-if="!embedded"
       title="请款工作流"
@@ -568,6 +690,8 @@ watch(() => props.isActive, active => {
     </nav>
 
     <p v-if="stepNotice && !noticeInResults" class="step-notice-alert" role="alert">{{ stepNotice }}</p>
+    <p v-if="recoveryNotice" class="step-notice-alert" role="status">{{ recoveryNotice }}</p>
+    <p v-else-if="billingScope && !confirmedScope" class="step-notice-alert" role="status">请款进度已保留，恢复同一 EASY 账号连接后可继续。</p>
 
     <!-- ============================================================== 步骤 1 -->
     <section v-show="currentStep === 1" class="step-section step-1-section">
@@ -641,14 +765,17 @@ watch(() => props.isActive, active => {
 
       <!-- 嵌入文件管理查询面板 -->
       <FileSearchPanel
+        :key="billingScope"
         ref="filePanelRef"
         v-model:selected="fileSelection"
-        :page-origin="connection.easyOrigin"
+        :page-origin="billingOwner.origin"
+        :workspace-user-id="billingOwner.userId"
         :show-session="false"
         recovery-surface="billing-files"
         :auto-select-bills="true"
         :seed="fileSeed"
         :seed-token="fileSeedToken"
+        @searched="onFileSearch"
       >
         <template #result-actions>
           <span v-if="stepNotice && noticeInResults && currentStep === 1" class="step-notice-alert" role="alert">{{ stepNotice }}</span>
@@ -688,8 +815,9 @@ watch(() => props.isActive, active => {
 
       <!-- 嵌入费用查询组件 -->
       <FeeSearchQuery
+        :key="billingScope"
         ref="feeQueryRef"
-        :user-id="connection.operatorId"
+        :user-id="billingOwner.userId"
         :can-search="ready"
         :initial-values="feeInitialValues"
         :initial-token="feeInitialToken"

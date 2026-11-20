@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary } from '../../api/dictionaries/picker-catalog'
@@ -567,7 +567,7 @@ const selectingAll = ref(false)
 const failedPages = ref<number[]>([])
 const selectionNotice = ref('')
 const lastQuery = ref<FeeSearchQuery | null>(null)
-const cachedPages = new Map<number, Set<string>>()
+const cachedPages = reactive(new Map<number, Set<string>>())
 let searchController = new AbortController()
 let unrequestedOnlyBatch = false
 const selectionPending = computed(() => selectingAll.value || searchState.value === 'loading')
@@ -663,13 +663,19 @@ async function readSelectionPages(pages: number[]): Promise<void> {
   const announce = (missed: number[]) => {
     failedPages.value = missed
     paintPaging(missed.length ? 'fail' : 'done')
-    const excluded = [...allKnownRows.value.values()].filter(row =>
-      !isUnrequestedFee(row) || props.defaultSelectionFilter?.(row) === false
-    ).length
+    const exclusions: string[] = []
+    if (unrequestedOnly) {
+      const rows = [...allKnownRows.value.values()]
+      const unrequested = rows.filter(isUnrequestedFee)
+      const statusExcluded = rows.length - unrequested.length
+      const templateExcluded = unrequested.filter(row => props.defaultSelectionFilter?.(row) === false).length
+      if (statusExcluded) exclusions.push(`${statusExcluded} 项有请款单号或状态并非明确未请款`)
+      if (templateExcluded) exclusions.push(`${templateExcluded} 项不适用当前模板`)
+    }
     selectionNotice.value = missed.length
       ? `有 ${missed.length} 页没读到（第 ${missed.slice(0, 5).join('、')} 页）。点击「重试没读到的页」补齐。`
-      : unrequestedOnly && excluded
-        ? `默认勾选 ${selectedCount.value} 项未请款费用（已排除 ${excluded} 项状态或模板不匹配的费用）。`
+      : exclusions.length
+        ? `默认勾选 ${selectedCount.value} 项未请款费用。已排除 ${exclusions.join('、')}。`
         : ''
   }
   paging.startedAt = Date.now()
@@ -1413,7 +1419,51 @@ const totalPages = computed(() => {
   return Math.ceil(result.value.total / (lastQuery.value?.pageSize ?? pageSize.value))
 })
 
+function billingSnapshot() {
+  const cleanRow = (row: FeeSearchRow): FeeSearchRow => {
+    const count = row.raw.word_count
+    return { ...row, raw: typeof count === 'string' || typeof count === 'number' ? { word_count: count } : {} }
+  }
+  return {
+    values: values.value, checks: checkedBoxes.value,
+    customers: selectedCustomers.value, excludedCustomers: selectedRuleOutCustomers.value,
+    pageIndex: pageIndex.value, pageSize: pageSize.value, query: lastQuery.value,
+    result: result.value && { ...result.value, rows: result.value.rows.map(cleanRow) },
+    rows: [...allKnownRows.value.values()].map(cleanRow), selectedIds: selectedFeeIds.value,
+    pages: [...cachedPages].map(([page, ids]) => [page, [...ids]] as const),
+    failed: failedPages.value, unrequestedOnly: unrequestedOnlyBatch, pending: selectionPending.value,
+    incomplete: selectionIncomplete.value, totals: totalAmountInfo.value
+  }
+}
+
+function restoreBillingSnapshot(state: ReturnType<typeof billingSnapshot>): void {
+  invalidateSearch()
+  values.value = state.values
+  checkedBoxes.value = state.checks
+  selectedCustomers.value = state.customers
+  selectedRuleOutCustomers.value = state.excludedCustomers
+  pageSize.value = state.pageSize
+  pageIndex.value = state.pageIndex
+  lastQuery.value = state.query
+  result.value = state.result
+  unrequestedOnlyBatch = state.unrequestedOnly
+  totalAmountInfo.value = state.totals
+  for (const row of state.rows) allKnownRows.value.set(row.feeId, row)
+  selectedIds.value = Object.fromEntries(state.selectedIds.filter(id => allKnownRows.value.has(id)).map(id => [id, true]))
+  for (const [page, ids] of state.pages) cachedPages.set(page, new Set(ids))
+  failedPages.value = state.failed
+  if (state.pending && state.result && state.query) {
+    failedPages.value = Array.from({ length: totalPages.value }, (_, i) => i + 1).filter(page => !cachedPages.has(page))
+  }
+  if (failedPages.value.length) selectionNotice.value = '已恢复已读费用。请重试未读完的页。'
+  searchState.value = (state.pending || state.incomplete) && !failedPages.value.length
+    ? 'error' : state.result ? (state.result.total ? 'success' : 'empty') : 'idle'
+  if (searchState.value === 'error') searchMessage.value = '上次费用查询未完成，请重新查询。'
+}
+
 defineExpose({
+  billingSnapshot,
+  restoreBillingSnapshot,
   getSelectedRows: () => selectedRowsList.value,
   setValues(patch: Record<string, string>) {
     applyValuesPatch(patch)
@@ -1984,7 +2034,7 @@ defineExpose({
       </div>
 
       <!-- Results Toolbar -->
-      <div class="section-heading">
+      <div class="section-heading fee-results-toolbar">
         <span class="sheet-count">共 {{ result?.total ?? 0 }} 条费用记录</span>
         <div class="table-actions">
           <button type="button" class="ghost tiny" :disabled="!result || selectingAll" @click="selectAllPages()">
@@ -1996,13 +2046,13 @@ defineExpose({
           <button type="button" class="ghost tiny" :disabled="selectedCount === 0 || selectingAll" @click="clearAllSelected">清空选择</button>
           <button v-if="failedPages.length > 0 && !selectingAll" type="button" class="ghost tiny warn-btn" @click="retryFailedPages">重试没读到的页</button>
           <span v-if="selectedCount > 0" class="hint">已勾选 {{ selectedCount }} 项</span>
-          <span v-if="selectionNotice" class="hint warn-hint">{{ selectionNotice }}</span>
-          <label class="page-size-selector">
-            每页条数
-            <ThemeSelect v-model="pageSize" :options="pageSizeOptions" @update:model-value="onPageSizeChange" />
-          </label>
+        </div>
+        <div class="page-size-selector">
+          每页条数
+          <ThemeSelect v-model="pageSize" aria-label="每页条数" :options="pageSizeOptions" @update:model-value="onPageSizeChange" />
         </div>
       </div>
+      <p v-if="selectionNotice" class="hint warn-hint selection-notice" role="status">{{ selectionNotice }}</p>
 
       <p v-if="searchState === 'idle'" class="hint">请输入查询条件并点击「查询」。</p>
       <p v-else-if="searchState === 'loading'" class="hint" role="status">正在向原网站检索费用明细…</p>
@@ -2381,7 +2431,7 @@ defineExpose({
 }
 .primary-search { min-width: 76px; }
 
-.fee-results-section { display: grid; gap: 12px; min-width: 0; }
+.fee-results-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .filter-radios-bar { display: flex; flex-wrap: wrap; gap: 10px 18px; padding-bottom: 12px; border-bottom: 1px solid #f0e1eb; }
 
 .amount-summary-box { background: #fff6fa; border: 1px solid #f3d7e5; border-radius: 12px; padding: 12px 14px; font-size: 12px; }
@@ -2390,8 +2440,12 @@ defineExpose({
 .stat-item em { font-style: normal; font-weight: 650; color: #d9578c; margin-left: 4px; }
 
 .fee-results-section > .section-heading, .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.page-size-selector { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8a7290; }
+.fee-results-toolbar .table-actions { flex: 1 1 360px; min-width: 0; }
+.page-size-selector { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; white-space: nowrap; font-size: 12px; color: #8a7290; }
+.page-size-selector :deep(.theme-select) { flex: 0 0 92px; }
+.page-size-selector :deep(.theme-select-trigger) { min-width: 0; }
 .page-size-selector :deep(.theme-select), .query-timeout :deep(.theme-select) { width: 92px; }
+.selection-notice { margin: 0; overflow-wrap: anywhere; }
 .warn-hint { color: #c95276; font-size: 12px; }
 .warn-btn { border-color: #f3c2d4; color: #b8436e; }
 
@@ -2409,6 +2463,6 @@ defineExpose({
 }
 @media (max-width: 700px) {
   .fee-form-grid { grid-template-columns: minmax(0, 1fr); }
-  .table-actions { width: 100%; }
+  .fee-results-toolbar .table-actions { order: 1; flex-basis: 100%; }
 }
 </style>

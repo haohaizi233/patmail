@@ -297,7 +297,9 @@ defineExpose({ protectSurface, selectAllPages, getBillingSelectionIssue })
 
 function getBillingSelectionIssue(): string {
   if (searchState.value === 'loading' || selectingAll.value) return '账单还在读取，请等待完成。'
-  if (needsRevalidation.value) return '请先刷新验证已恢复的账单查询。'
+  if (needsRevalidation.value && (lastQuery.value || result.value || Object.keys(selected.value).length)) {
+    return '请先刷新验证已恢复的账单查询。'
+  }
   if (searchState.value === 'error') return '账单查询失败，请重新查询。'
   if (failedPages.value.length || billingScanIncomplete.value) return '账单页未读完，请重试失败页或重新执行只选所有账单。'
   return ''
