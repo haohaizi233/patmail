@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { TextWriter, Uint8ArrayReader, ZipReader } from '@zip.js/zip.js'
 import { distDir, fixturePagePath } from './support/paths.mjs'
 import { easyFixtureUrl, installEasyMock } from './support/easy-mock.mjs'
 import { extensionWorker, launchExtensionContext, waitForContentScript } from './support/browser.mjs'
@@ -15,11 +16,34 @@ assert.ok(guideDiagrams >= 1, '请款.md must contain at least one mermaid diagr
 
 const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 } })
 const mock = await installEasyMock(context, { fixtureHtml: fixture, profile: 'extension' })
+const goerCaseId = '7C842A11-A2E8-467D-9079-D3C766928198'
+const goerFeeId = 'goer-translation'
+let wordCountRequests = 0
+await context.route('**/AjaxServers/CaseInfo.ashx*', async route => {
+  const params = new URLSearchParams(route.request().postData() ?? '')
+  if (params.get('Call') !== 'GetFeeListByCase') return route.fallback()
+  assert.equal(params.get('case_id'), goerCaseId)
+  assert.equal(params.get('fee_class'), 'A')
+  wordCountRequests++
+  await route.fulfill({ json: { ClientInfo: { IsLogin: true, Status: true }, TableRows: [
+    { fee_id: 'other-translation', word_count: 9999 },
+    { fee_id: goerFeeId, word_count: 4420 }
+  ] } })
+})
 await context.route('**/AjaxServers/Report.ashx*', async route => {
   const request = route.request()
-  const call = new URLSearchParams(request.postData() ?? '').get('Call') ?? new URL(request.url()).searchParams.get('Call')
+  const params = new URLSearchParams(request.postData() ?? '')
+  const call = params.get('Call') ?? new URL(request.url()).searchParams.get('Call')
   const client = { IsLogin: true, Status: true, Result: true }
-  const body = call === 'FeeSearch' ? {
+  const body = call === 'FeeSearch' && params.get('fee_class') === 'O,A,T' ? {
+    ClientInfo: client, total: 2,
+    rows: [
+      { fee_id: goerFeeId, case_id: goerCaseId, case_volume: 'PA925-EP', fee_class: 'A',
+        fee_name: '翻译费', currency_id: 'CNY', amount: 6630, request_status: '未请款', ctrl_proc: '指定国生效' },
+      { fee_id: 'goer-internal', case_id: goerCaseId, case_volume: 'PA925-EP', fee_class: 'A',
+        fee_name: '合同金额', currency_id: 'CNY', amount: 6500, request_status: '未请款', ctrl_proc: '指定国生效' }
+    ]
+  } : call === 'FeeSearch' ? {
     ClientInfo: client,
     total: 3,
     rows: [
@@ -60,18 +84,18 @@ try {
   await app.goto(`chrome-extension://${extensionId}/app.html#/workflow`)
   await app.getByText('测试员', { exact: true }).waitFor({ timeout: 15_000 })
 
-  // 工作台卡片「请款」→ 请款工作流（默认通用涉外模板 + 步骤 1）
+  // 工作台卡片「请款」→ 请款工作流（默认格尔涉外模板 + 步骤 1）
   await app.locator('.billing-workflow-card .sea-open').click()
   await app.locator('.billing-workflow-page').waitFor({ timeout: 15_000 })
   report.pass('billing workflow opens from the workflow catalogue card')
 
-  for (const label of ['通用涉外请款单', '美的涉外费用清单', '美的 PCT 费用清单']) {
+  for (const label of ['格尔涉外请款单', '美的涉外费用清单', '美的 PCT 费用清单']) {
     await app.locator('.template-preset-bar').getByText(label, { exact: true }).waitFor({ timeout: 15_000 })
   }
   const selectedTitle = app.locator('.template-radio-item.selected .tpl-title-line b')
-  assert.equal(await selectedTitle.innerText(), '通用涉外请款单', '默认选中通用涉外模板')
+  assert.equal(await selectedTitle.innerText(), '格尔涉外请款单', '默认选中通用涉外模板')
   const presetBadge = app.locator('.template-preset-bar .preset-badge')
-  assert.ok((await presetBadge.innerText()).includes('第三方费用'), '涉外模板预填第三方费用')
+  assert.ok((await presetBadge.innerText()).includes('官费 + 代理费 + 第三方费用'), '格尔模板预填全部三类费用')
   assert.ok((await app.locator('.flow-steps-bar .step-title').first().innerText()).includes('文件管理（账单抓取）'))
   report.pass('billing template picker lists three presets with general-foreign default')
 
@@ -124,10 +148,30 @@ try {
   assert.equal(await download.failure(), null)
   const workbook = await readFile(await download.path())
   assert.equal(workbook.subarray(0, 4).toString('hex'), '504b0304')
-  await app.locator('.template-preset-bar').getByText('通用涉外请款单', { exact: true }).click()
+  await app.locator('.template-preset-bar').getByText('格尔涉外请款单', { exact: true }).click()
   await app.getByRole('button', { name: /进入请款单导出.*已选 0 笔/ }).waitFor()
   assert.equal(await step2Next.isDisabled(), true)
   report.pass('PCT filters the fixture, downloads a workbook and invalidates selection on template change')
+
+  await app.locator('.step-2-section').getByRole('button', { name: '查询', exact: true }).click()
+  await navigation.getByRole('button', { name: /进入请款单导出.*已选 2 笔/ }).waitFor()
+  assert.equal(wordCountRequests, 1)
+  await feeResultNext.click()
+  const goerDownload = app.waitForEvent('download', { timeout: 10_000 })
+  await topExport.click()
+  const goer = await goerDownload
+  assert.match(goer.suggestedFilename(), /^格尔涉外请款单-\d{8}\.xlsx$/)
+  const zip = new ZipReader(new Uint8ArrayReader(await readFile(await goer.path())))
+  try {
+    const entries = await zip.getEntries()
+    const sheet = await entries.find(entry => entry.filename === 'xl/worksheets/sheet1.xml').getData(new TextWriter())
+    assert.match(sheet, /<c\b[^>]*\br="T5"[^>]*><v>6630<\/v><\/c>/)
+    assert.match(sheet, /<c\b[^>]*\br="U5"[^>]*><v>4420<\/v><\/c>/)
+    assert.match(sheet, /<c\b[^>]*\br="V5"[^>]*><v>6500<\/v><\/c>/)
+  } finally {
+    await zip.close()
+  }
+  report.pass('Goer reads translation word count by fee ID and fills T, U and V')
 
   // 使用说明：请款.md 的 mermaid 图完整渲染且无错误
   await app.getByRole('tab', { name: '流程说明', exact: true }).click()
