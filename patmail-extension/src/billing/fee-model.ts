@@ -98,6 +98,14 @@ export function feeMatterKey(row: Pick<FeeSearchRow, 'caseVolume' | 'procId' | '
   return JSON.stringify([row.caseVolume, row.procId.trim() || row.ctrlProc.trim()])
 }
 
+export function translationWordCount(row: FeeSearchRow): number | null {
+  const value = row.raw.word_count
+  const text = typeof value === 'number' || typeof value === 'string' ? String(value).trim() : ''
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) return null
+  const count = Number(text.replace(/,/g, ''))
+  return Number.isSafeInteger(count) && count > 0 ? count : null
+}
+
 export function isForeignAgentFee(row: FeeSearchRow): boolean {
   if (isInternalAgentFee(row) || isTranslationFee(row) || row.feeClass === 'O') return false
   return /代理|律师|服务费|外所|答辩|代办/i.test(row.feeType)
@@ -174,11 +182,11 @@ export interface EventGroup {
 }
 
 /** 按「案件 + 处理事项 + 币种」归并：官费、外所代理费和翻译费落在同一个事项块里；内所代理费单列。优先使用 procId 识别唯一业务事项。 */
-export function groupFeeEvents(rows: FeeSearchRow[]): EventGroup[] {
+export function groupFeeEvents(rows: FeeSearchRow[], matterKey: (row: FeeSearchRow) => string = feeMatterKey): EventGroup[] {
   const groups = new Map<string, EventGroup>()
   for (const row of sortFeeRows(rows)) {
     const currency = normalizeCurrency(row.currency)
-    const key = `${feeMatterKey(row)}\u0001${currency}`
+    const key = `${matterKey(row)}\u0001${currency}`
     let group = groups.get(key)
     if (!group) {
       group = {

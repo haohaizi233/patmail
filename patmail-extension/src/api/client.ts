@@ -17,6 +17,7 @@ import { buildFilingSearchParams, type FilingSearchQuery } from './filing-search
 import { normalizeFilingSearch } from './filing-search-normalizer'
 import type { FilingSearchResult } from './filing-search-types'
 import { buildFeeSearchParams, buildFeeSearchAmountParams, type FeeSearchQuery } from './fee-search-params'
+import { isTranslationFee, translationWordCount } from '../billing/fee-model'
 import {
   buildExportColumnsXml,
   buildTemplateElementXml,
@@ -889,12 +890,53 @@ export class EasyRuntime {
       const response = await this.transport.post('feeSearch', params.data, controller.signal, timeoutMs)
       if (!batch && requestNumber !== this.feeSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
       const result = response.ok ? normalizeFeeSearch(response.data, query) : response
+      if (result.ok && query.includeTranslationWordCounts === true) {
+        await this.loadTranslationWordCounts(result.data, controller.signal)
+        if (controller.signal.aborted || (!batch && requestNumber !== this.feeSequence)) {
+          return apiError('REQUEST_ABORTED', '旧查询已取消。')
+        }
+      }
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
         this.session.expire()
         this.cancelFeeSearch()
       }
       return result
     })()
+  }
+
+  private async loadTranslationWordCounts(result: FeeSearchResult, signal: AbortSignal): Promise<void> {
+    const byCaseClass = new Map<string, typeof result.rows>()
+    for (const row of result.rows) {
+      if (!isTranslationFee(row) || translationWordCount(row) !== null ||
+          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(row.caseId) || !/^[OAT]$/.test(row.feeClass)) continue
+      const key = `${row.caseId}:${row.feeClass}`
+      const same = byCaseClass.get(key) ?? []
+      same.push(row)
+      byCaseClass.set(key, same)
+    }
+    for (const candidates of byCaseClass.values()) {
+      if (signal.aborted) return
+      const first = candidates[0]
+      const response = await this.transport.post('caseFeeList', new URLSearchParams({
+        Call: 'GetFeeListByCase', case_id: first.caseId, fee_class: first.feeClass,
+        pageIndex: '1', pageSize: '100', _PK: 'fee_id', colsel: '', searchKey: '', log_pagename: 'CaseManage.aspx'
+      }), signal, 8_000)
+      if (!response.ok || !isRecord(response.data)) continue
+      let details: unknown = response.data.TableRows
+      if (typeof details === 'string') {
+        try { details = JSON.parse(details) } catch { continue }
+      }
+      if (!Array.isArray(details)) continue
+      const byId = new Map<string, unknown>()
+      for (const detail of details) {
+        if (!isRecord(detail) || typeof detail.fee_id !== 'string') continue
+        byId.set(detail.fee_id.toUpperCase(), detail.word_count)
+      }
+      for (const row of candidates) {
+        const count = byId.get(row.feeId.toUpperCase())
+        if (typeof count === 'string' || typeof count === 'number') row.raw.word_count = count
+      }
+    }
   }
 
   searchFeesAmount(query: FeeSearchQuery, timeoutMs?: number): Promise<ApiResult<Record<string, unknown>>> {

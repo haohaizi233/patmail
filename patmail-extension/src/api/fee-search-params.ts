@@ -4,6 +4,7 @@ import { isRecord } from './response-guards'
 export interface FeeSearchQuery {
   pageIndex: number
   pageSize: number
+  includeTranslationWordCounts?: boolean
   // Quick fields
   case_volume?: string
   is_fuzzy_query_case_volume?: boolean

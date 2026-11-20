@@ -50,6 +50,7 @@ const props = defineProps<{
   initialValues?: Record<string, string>
   initialToken?: number
   defaultSelectionFilter?: (row: FeeSearchRow) => boolean
+  includeTranslationWordCounts?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -757,6 +758,7 @@ function buildCurrentQuery(page = pageIndex.value, size = pageSize.value): FeeSe
   const q: FeeSearchQuery = {
     pageIndex: page,
     pageSize: size,
+    ...(props.includeTranslationWordCounts ? { includeTranslationWordCounts: true } : {}),
     fields: { ...values.value }
   }
 

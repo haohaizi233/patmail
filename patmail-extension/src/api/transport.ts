@@ -15,7 +15,7 @@ export type EasyOperation =
   | 'agencySearchCase' | 'agencyCaseInfo' | 'patentCaseData' | 'icSearch' | 'customerList'
   | 'hagueApplicants' | 'haguePriorities' | 'caseManageInfo' | 'caseCustomField' | 'caseInventor' | 'caseRecordContact' | 'casePageDemand' | 'getFileName' | 'fileDownload'
   | 'filingSearch' | 'filingFlowNode' | 'contractInit'
-  | 'feeSearch' | 'feeSearchAmount'
+  | 'feeSearch' | 'feeSearchAmount' | 'caseFeeList'
   | 'feeSearchInit' | 'feeCustomerTree' | 'feeApplicantTree' | 'feeAgencyList' | 'feeContactInit' | 'feeProducts' | 'feeTechnical'
   | 'feeExportConfig' | 'feeExportConfigSave' | 'feeExportConfigUpdate'
   | 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
@@ -100,6 +100,7 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   filingFlowNode: { path: '/AjaxServers/FilingAction.ashx', call: 'GetFilingFlowNode' },
   contractInit: { path: '/AjaxServers/Customer.ashx', call: 'InitContractStatus' },
   feeSearch: { path: '/AjaxServers/Report.ashx', call: 'FeeSearch' },
+  caseFeeList: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetFeeListByCase' },
   feeSearchAmount: { path: '/AjaxServers/Report.ashx', call: 'FeeSearchTotalAmount' },
   feeSearchInit: { path: '/AjaxServers/Bill.ashx', call: 'FeeSearchInit' },
   feeCustomerTree: { path: '/AjaxServers/Report.ashx', call: 'GetCustomerTreeData' },
