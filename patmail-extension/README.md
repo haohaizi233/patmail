@@ -53,7 +53,7 @@ pnpm build
 
 `pnpm test:e2e` 用真实 Chromium 加载 `dist/`。`pnpm test:e2e:limits` 只验期限查询，并拦截整个 EASY Origin，不会打到线上。Playwright 只在测试依赖里，正式 `dist/` 没有浏览器驱动。
 
-Manifest 对 `http://183.36.43.66:88/*`、`https://ip.pcl.ac.cn:81/*`、`http://127.0.0.1/*` 和 `http://localhost/*` 注入内容脚本。后两个只给本地页面用。业务请求只信任固定的 EASY 源。权限是 `tabs` 和 `storage`，没有 `scripting`、`activeTab` 或 `<all_urls>`。
+扩展在 Manifest 登记的 EASY、鹏城和本地测试地址加载内容脚本。Chrome 权限包括 `tabs`、`storage`、`unlimitedStorage`、`scripting`、`alarms`、`downloads`、`webNavigation` 和 `debugger`。季华实验室、eHague、中国人民银行汇率和模型服务使用各自登记的站点权限。具体地址与授权范围见 [manifest.json](manifest.json)。
 
 ## 工作台
 
