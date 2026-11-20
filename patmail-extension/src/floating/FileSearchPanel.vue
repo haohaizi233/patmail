@@ -184,6 +184,9 @@ onBeforeUnmount(() => {
       @review="showSelected = !showSelected"
     >
       <slot />
+      <template v-if="$slots['result-actions']" #result-actions>
+        <slot name="result-actions" />
+      </template>
     </FileSearchQuery>
 
     <section v-if="showSelected" class="card" aria-label="已选文件">

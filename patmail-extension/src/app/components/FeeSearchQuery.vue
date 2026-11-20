@@ -1928,7 +1928,10 @@ defineExpose({
 
     <!-- Results Section -->
     <section v-if="!manage" class="card fee-results-section" aria-label="费用查询结果">
-      <div class="section-heading"><strong>查询结果</strong></div>
+      <div class="section-heading">
+        <strong>查询结果</strong>
+        <slot name="result-actions" />
+      </div>
       <!-- Filter Radios Bar (exact alignment with FeeSearch.aspx: 显示全部 / 仅显示选中项 / 只选官费 / 只选代理费) -->
       <div class="filter-radios-bar">
         <label class="empty-check">

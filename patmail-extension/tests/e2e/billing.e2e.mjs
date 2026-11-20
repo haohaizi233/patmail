@@ -21,10 +21,12 @@ await context.route('**/AjaxServers/Report.ashx*', async route => {
   const client = { IsLogin: true, Status: true, Result: true }
   const body = call === 'FeeSearch' ? {
     ClientInfo: client,
-    total: 2,
+    total: 3,
     rows: [
       { fee_id: 'pct-test', case_volume: 'PA123PCT', business_type_name: 'PCT国际阶段', fee_class: 'O',
         fee_name: '国际申请费', currency_id: 'CNY', amount: 100, request_status: '未请款' },
+      { fee_id: 'pct-requested', case_volume: 'PA124PCT', fee_class: 'O',
+        fee_name: '国际申请费', currency_id: 'CNY', amount: 300, request_status: '审核中' },
       { fee_id: 'foreign-test', case_volume: 'PA123-EP', fee_class: 'O',
         fee_name: '申请费', currency_id: 'CNY', amount: 200, request_status: '未请款' }
     ]
@@ -81,10 +83,14 @@ try {
   report.pass('PCT template makes the file step optional and switches the fee preset')
 
   // 快捷进入步骤 2：费用查询面板挂载，导出闸门在 0 行时禁用
-  await app.getByRole('button', { name: /跳过文件管理，直接查 PCT 费用/ }).click()
+  await app.getByRole('region', { name: '查询结果', exact: true })
+    .getByRole('button', { name: /进入费用查询/ }).click()
   await app.locator('.step-2-section').waitFor({ state: 'visible', timeout: 15_000 })
   assert.equal(await app.locator('.step-1-section').isVisible(), false)
-  const step2Next = app.getByRole('button', { name: /进入请款单导出/ })
+  const navigation = app.getByRole('navigation', { name: '请款流程导航' })
+  const step2Next = navigation.getByRole('button', { name: /进入请款单导出/ })
+  const feeResultNext = app.getByRole('region', { name: '费用查询结果' })
+    .getByRole('button', { name: /进入请款单导出/ })
   await step2Next.waitFor({ timeout: 15_000 })
   assert.ok((await step2Next.innerText()).includes('已选 0 笔费用'))
   report.pass('quick action advances to the fee query step with the export gate disabled')
@@ -97,14 +103,22 @@ try {
   assert.equal(await app.locator('.step-3-section').isVisible(), false, '闸门拦截时不得进入步骤 3')
   assert.equal(await app.locator('.step-2-section').isVisible(), true)
   assert.equal(await step2Next.isDisabled(), true, '未勾选费用时导出前进按钮必须禁用')
+  assert.equal(await feeResultNext.isDisabled(), true)
   await report.screenshot(app, 'billing-step-gate.png')
   report.pass('export step is gated behind fee selection with an explicit notice')
 
   await app.locator('.step-2-section').getByRole('button', { name: '查询', exact: true }).click()
   await app.getByRole('button', { name: /进入请款单导出.*已选 1 笔/ }).waitFor()
-  await step2Next.click()
+  await app.getByRole('row').filter({ hasText: 'PA124PCT' }).getByRole('checkbox').check()
+  await feeResultNext.click()
+  const bottomExport = app.locator('.export-execute-card').getByRole('button', { name: /导出 Excel 请款表/ })
+  const topExport = navigation.getByRole('button', { name: '导出 Excel 请款表', exact: true })
+  await bottomExport.waitFor()
+  assert.equal(await topExport.isDisabled(), true)
+  assert.equal(await bottomExport.isDisabled(), true)
+  await app.getByRole('checkbox', { name: /已核对并确认导出/ }).check()
   const pendingDownload = app.waitForEvent('download', { timeout: 10_000 })
-  await app.getByRole('button', { name: /导出 Excel 请款表/ }).click()
+  await topExport.click()
   const download = await pendingDownload
   assert.match(download.suggestedFilename(), /^美的PCT费用清单-\d{8}\.xlsx$/)
   assert.equal(await download.failure(), null)

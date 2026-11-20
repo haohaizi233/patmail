@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import FileSearchPanel from '../../floating/FileSearchPanel.vue'
@@ -61,8 +61,18 @@ const billingOptions = ref<BillingOptions>({ ...BILLING_TEMPLATES[0].queryPreset
 type Step = 1 | 2 | 3
 const currentStep = ref<Step>(1)
 const stepNotice = ref('')
+const noticeInResults = ref(false)
+const stepNavigation = ref<HTMLElement | null>(null)
 
-function setStep(target: Step): void {
+async function advanceFromResults(target: 2 | 3): Promise<void> {
+  setStep(target, true)
+  if (currentStep.value !== target) return
+  await nextTick()
+  stepNavigation.value?.scrollIntoView({ block: 'start' })
+}
+
+function setStep(target: Step, fromResults = false): void {
+  noticeInResults.value = fromResults
   const issue = target === 1 ? '' : fileSelectionIssue.value || (target === 3 ? feeSelectionIssue.value : '')
   if (issue) {
     stepNotice.value = issue
@@ -340,6 +350,11 @@ const exporting = ref(false)
 const exportResultNotice = ref('')
 const exportWarnings = ref<string[]>([])
 const confirmExistingFees = ref(false)
+const canAdvanceFromFees = computed(() => selectedFeeRows.value.length > 0 &&
+  !feeQueryRef.value?.selectionPending && !feeQueryRef.value?.selectionIncomplete)
+const exportDisabled = computed(() => exporting.value || ratesLoading.value ||
+  Boolean(fileSelectionIssue.value || feeSelectionIssue.value) ||
+  (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value))
 watch(selectedFeeRows, () => {
   confirmExistingFees.value = false
   exportResultNotice.value = ''
@@ -467,7 +482,7 @@ watch(() => props.isActive, active => {
     </section>
 
     <!-- Workflow Progress Bar -->
-    <nav class="flow-steps-bar card" aria-label="请款流程导航">
+    <nav ref="stepNavigation" class="flow-steps-bar card" aria-label="请款流程导航">
       <div class="steps-wrapper">
         <button
           type="button"
@@ -538,23 +553,21 @@ watch(() => props.isActive, active => {
           v-else-if="currentStep === 2"
           type="button"
           class="solid next-btn"
-          :disabled="selectedFeeRows.length === 0 || feeQueryRef?.selectionPending || feeQueryRef?.selectionIncomplete"
+          :disabled="!canAdvanceFromFees"
           @click="setStep(3)"
         >
           进入请款单导出 (已选 {{ selectedFeeRows.length }} 笔费用) →
         </button>
-        <button
-          v-else
-          type="button"
-          class="ghost back-btn"
-          @click="setStep(2)"
-        >
-          ← 返回费用查询调整
-        </button>
+        <template v-else>
+          <button type="button" class="ghost back-btn" @click="setStep(2)">← 返回费用查询调整</button>
+          <button type="button" class="solid next-btn" :disabled="exportDisabled" @click="doExportExcel">
+            {{ exporting ? '正在生成 Excel…' : '导出 Excel 请款表' }}
+          </button>
+        </template>
       </div>
     </nav>
 
-    <p v-if="stepNotice" class="step-notice-alert" role="alert">{{ stepNotice }}</p>
+    <p v-if="stepNotice && !noticeInResults" class="step-notice-alert" role="alert">{{ stepNotice }}</p>
 
     <!-- ============================================================== 步骤 1 -->
     <section v-show="currentStep === 1" class="step-section step-1-section">
@@ -636,7 +649,14 @@ watch(() => props.isActive, active => {
         :auto-select-bills="true"
         :seed="fileSeed"
         :seed-token="fileSeedToken"
-      />
+      >
+        <template #result-actions>
+          <span v-if="stepNotice && noticeInResults && currentStep === 1" class="step-notice-alert" role="alert">{{ stepNotice }}</span>
+          <button type="button" class="solid billing-result-action" @click="advanceFromResults(2)">
+            {{ activeVolumes.length ? `带入 ${activeVolumes.length} 个文号并进入费用查询 →` : '进入费用查询 →' }}
+          </button>
+        </template>
+      </FileSearchPanel>
     </section>
 
     <!-- ============================================================== 步骤 2 -->
@@ -659,19 +679,9 @@ watch(() => props.isActive, active => {
           请在下方点击「查询」，然后在表格中<b>勾选</b>要纳入请款单的费用记录（翻页已选记录会自动保留）。
         </p>
         <div class="selection-status-strip">
-          <div class="strip-left">
-            <span>当前已勾选：<b>{{ selectedFeeRows.length }}</b> 笔费用记录</span>
-            <button type="button" class="text-button" @click="syncFeeQueryIfNeeded(true)">
-              重新同步模板条件与步骤 1 文号
-            </button>
-          </div>
-          <button
-            type="button"
-            class="solid"
-            :disabled="selectedFeeRows.length === 0 || feeQueryRef?.selectionPending || feeQueryRef?.selectionIncomplete"
-            @click="setStep(3)"
-          >
-            确认并进入下一步导出请款单 →
+          <span>当前已勾选：<b>{{ selectedFeeRows.length }}</b> 笔费用记录</span>
+          <button type="button" class="text-button" @click="syncFeeQueryIfNeeded(true)">
+            重新同步模板条件与步骤 1 文号
           </button>
         </div>
       </div>
@@ -685,11 +695,23 @@ watch(() => props.isActive, active => {
         :initial-token="feeInitialToken"
         :default-selection-filter="defaultSelectionFilter"
         @selection-change="onFeeSelectionChange"
-      />
+      >
+        <template #result-actions>
+          <span v-if="stepNotice && noticeInResults && currentStep === 2" class="step-notice-alert" role="alert">{{ stepNotice }}</span>
+          <button type="button" class="solid billing-result-action" :disabled="!canAdvanceFromFees" @click="advanceFromResults(3)">
+            进入请款单导出 →
+          </button>
+        </template>
+      </FeeSearchQuery>
     </section>
 
     <!-- ============================================================== 步骤 3 -->
     <section v-show="currentStep === 3" class="step-section step-3-section">
+      <label v-if="reconciliationInfo.requestedCount > 0" class="reconcile-warn requested-warn">
+        <input v-model="confirmExistingFees" type="checkbox" />
+        已核对并确认导出 {{ reconciliationInfo.requestedCount }} 笔已立单或状态待核对的费用
+      </label>
+      <p v-if="exportResultNotice" class="export-notice-text" role="status">{{ exportResultNotice }}</p>
       <!-- 央行汇率卡片 -->
       <div class="pbc-rates-card card">
         <div class="card-title-row">
@@ -795,10 +817,6 @@ watch(() => props.isActive, active => {
           <span>目标模板：<b>{{ currentTemplate.label }}</b></span>
         </div>
 
-        <label v-if="reconciliationInfo.requestedCount > 0" class="reconcile-warn requested-warn">
-          <input v-model="confirmExistingFees" type="checkbox" />
-          已核对并确认导出 {{ reconciliationInfo.requestedCount }} 笔已立单或状态待核对的费用
-        </label>
         <p v-if="reconciliationInfo.unmatchedCases.length > 0 && selectedTemplateId === 'midea-foreign'" class="reconcile-warn bill-missing-warn">
           ℹ️ 提示：有 <b>{{ reconciliationInfo.unmatchedCases.length }}</b> 个案卷有事项未能确认海外账单日（{{ reconciliationInfo.unmatchedCases.slice(0, 4).join('、') }}{{ reconciliationInfo.unmatchedCases.length > 4 ? ' 等' : '' }}），导出时对应事项的账单日将留空。
         </p>
@@ -807,7 +825,7 @@ watch(() => props.isActive, active => {
           <button
             type="button"
             class="solid export-btn"
-            :disabled="exporting || ratesLoading || Boolean(fileSelectionIssue || feeSelectionIssue) || (reconciliationInfo.requestedCount > 0 && !confirmExistingFees)"
+            :disabled="exportDisabled"
             @click="doExportExcel"
           >
             {{ exporting ? '正在填表并生成 Excel…' : '导出 Excel 请款表 (100%保留公式)' }}
@@ -952,7 +970,14 @@ watch(() => props.isActive, active => {
 
 .flow-steps-bar .step-quick-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.billing-result-action {
+  margin-inline-start: auto;
+  padding: 8px 14px;
+  white-space: nowrap;
 }
 
 .flow-steps-bar .step-quick-actions .next-btn {
@@ -1014,18 +1039,11 @@ watch(() => props.isActive, active => {
 .workflow-guide-banner .selection-status-strip {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 14px;
   padding-top: 8px;
   border-top: 1px dashed #e2e8f0;
   font-size: 14px;
-}
-
-.workflow-guide-banner .selection-status-strip .strip-left {
-  display: flex;
-  align-items: center;
-  gap: 14px;
 }
 
 .extracted-volumes-card {
@@ -1343,6 +1361,7 @@ watch(() => props.isActive, active => {
   line-height: 1.4;
 }
 .reconcile-warn.requested-warn {
+  display: block;
   background: #fff5f5;
   color: #c53030;
   border-left: 3px solid #e53e3e;
@@ -1359,6 +1378,7 @@ watch(() => props.isActive, active => {
   font-weight: 700;
 }
 
+.step-3-section > .export-notice-text,
 .export-execute-card .export-notice-text {
   margin-top: 14px;
   font-size: 14px;

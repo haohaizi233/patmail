@@ -1027,6 +1027,7 @@ onBeforeUnmount(() => {
     <section ref="resultsSection" class="card file-results" aria-label="查询结果">
       <div class="section-heading">
         <strong>查询结果</strong>
+        <slot name="result-actions" />
         <label class="page-size">每页数量
           <ThemeSelect v-model="pageSize" :disabled="!canSearch || searchState === 'loading' || selectingAll" :options="pageSizeOptions" @change="changePageSize" />
         </label>
