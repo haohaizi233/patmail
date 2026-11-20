@@ -1,6 +1,6 @@
 import type { FeeSearchRow } from '../api/fee-search-types'
 import {
-  countryOfCase, groupFeeCases, groupFeeEvents, latestBillDate, officialKind, patentTypeLabel, rateOf, round2, sumAmount,
+  countryOfCase, feeMatterKey, groupFeeCases, groupFeeEvents, matchedBillDate, officialKind, patentTypeLabel, pctFeeProblem, rateOf, round2, sumAmount,
   uniqueText, missingCurrencies, sortFeeRows, type BillInfo, type EventGroup, type OfficialKind
 } from './fee-model'
 import { normalizeCurrency } from './pbc-rates'
@@ -207,7 +207,7 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
     cells.Y = excelSerial(group.finishDate)
     for (const [col, value] of Object.entries(cells)) sheet.setCell(`${col}${row}`, value)
   })
-  sheet.setCell('R3', `汇率\n（以账单当月为准${input.rateDate}）`)
+  sheet.setCell('R3', `汇率\n（${input.rateDate}）`)
   return events.length
 }
 
@@ -222,7 +222,8 @@ function fillMideaForeignBlock(
   base: number,
   input: BillingInput,
   entrust: string,
-  chargeOverhead: boolean
+  chargeOverhead: boolean,
+  billDate: string
 ): void {
   const rate = rateOf(group.currency, input.rates)
   const officialName = uniqueText(group.official.map(fee => fee.feeType)).join('、')
@@ -235,7 +236,6 @@ function fillMideaForeignBlock(
     ? round2(group.internalAgent.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
     : null
   const cur = group.currency
-  const billDate = latestBillDate(input.bills[group.caseVolume])
   const review = chargeOverhead ? input.options.reviewFee : 0
   const bank = chargeOverhead ? input.options.bankFee : 0
   const officialCny = officialAmount === null || rate === null ? 0 : round2(officialAmount * rate)
@@ -275,7 +275,7 @@ function fillMideaForeign(book: XlsxBook, input: BillingInput, warnings: string[
   const sheets = MIDEA_FOREIGN_SHEETS.map(name => book.sheet(name))
   const seenEvents = new Set<string>()
   const chargeFlags = events.map(group => {
-    const key = `${group.caseVolume}\u0001${group.ctrlProc}`
+    const key = feeMatterKey(group)
     if (seenEvents.has(key)) {
       warnings.push(`${group.caseVolume}「${group.ctrlProc}」含多种币别已拆块填写，仅首块计入审核费与银行费，请核对。`)
       return false
@@ -283,16 +283,21 @@ function fillMideaForeign(book: XlsxBook, input: BillingInput, warnings: string[
     seenEvents.add(key)
     return true
   })
+  const billDates = events.map(group => {
+    const date = matchedBillDate(group, input.bills[group.caseVolume])
+    if (!date) warnings.push(`${group.caseVolume}「${group.ctrlProc}」未能确认海外账单日，已留空，请核对。`)
+    return date
+  })
   for (const sheet of sheets) {
     sheet.resizeBlocks({ firstRow: 7, blockSize: 3, oldCount: 3, newCount: events.length })
-    events.forEach((group, index) => fillMideaForeignBlock(sheet, group, index, 7 + index * 3, input, entrust, chargeFlags[index] ?? true))
+    events.forEach((group, index) => fillMideaForeignBlock(sheet, group, index, 7 + index * 3, input, entrust, chargeFlags[index], billDates[index]))
   }
   return events.length
 }
 
 // ---------------------------------------------------------------- 美的 PCT 费用清单
 
-function fillMideaPct(book: XlsxBook, input: BillingInput, warnings: string[]): number {
+function fillMideaPct(book: XlsxBook, input: BillingInput): number {
   const sheet = book.sheet('生活电器2026M7-9')
   const cases = groupFeeCases(input.rows)
   sheet.resizeBlocks({ firstRow: 6, blockSize: 1, oldCount: 2, newCount: cases.length })
@@ -306,10 +311,7 @@ function fillMideaPct(book: XlsxBook, input: BillingInput, warnings: string[]): 
       const kind = officialKind(fee, 'pct')
       if (kind === 'pctSearch') search += amount
       else if (kind === 'pctExtra') extra += amount
-      else {
-        if (kind !== 'pctApply') warnings.push(`${group.caseVolume}「${fee.feeType || fee.ctrlProc}」不是 PCT 国际申请费/检索费/附加费，已计入「PCT 国际申请费」列，请核对。`)
-        apply += amount
-      }
+      else apply += amount
     }
     const agent = round2(group.agent.reduce((total, fee) => total + cnyAmount(fee, input.rates), 0))
     const proc = group.ctrlProc
@@ -337,6 +339,15 @@ function fillMideaPct(book: XlsxBook, input: BillingInput, warnings: string[]): 
 
 export async function fillBillingTemplate(id: BillingTemplateId, template: Uint8Array, input: BillingInput): Promise<BillingResult> {
   if (!input.rows.length) throw new Error('还没有选中的费用记录。')
+  if (id === 'midea-pct') {
+    for (const row of input.rows) {
+      const problem = pctFeeProblem(row)
+      if (problem) throw new Error(`${row.caseVolume}「${row.feeType || row.feeId}」：${problem}。请返回费用查询核对。`)
+    }
+  }
+  if (id === 'midea-foreign' && [input.options.reviewFee, input.options.bankFee].some(fee => !Number.isFinite(fee) || fee < 0)) {
+    throw new Error('审核费和银行费须填写为大于或等于 0 的金额。')
+  }
   requireRates(input)
   const info = BILLING_TEMPLATES.find(item => item.id === id)
   if (!info) throw new Error('未知的请款表模板。')
@@ -349,7 +360,7 @@ export async function fillBillingTemplate(id: BillingTemplateId, template: Uint8
   let blockCount = 0
   if (id === 'general-foreign') blockCount = fillGeneral(book, sortedInput, warnings)
   else if (id === 'midea-foreign') blockCount = fillMideaForeign(book, sortedInput, warnings)
-  else blockCount = fillMideaPct(book, sortedInput, warnings)
+  else blockCount = fillMideaPct(book, sortedInput)
   const headerSheets = id === 'midea-foreign'
     ? MIDEA_FOREIGN_SHEETS.map(name => book.sheet(name))
     : [book.sheet(id === 'general-foreign' ? (book.sheets[0]?.name ?? '') : '生活电器2026M7-9')]

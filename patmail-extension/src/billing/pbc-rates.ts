@@ -88,11 +88,12 @@ export function latestAnnouncementUrl(indexHtml: string, base = PBC_INDEX_URL): 
 }
 
 export async function fetchPbcRates(fetchImpl: typeof fetch = fetch): Promise<PbcRates> {
-  const indexResponse = await fetchImpl(PBC_INDEX_URL, { credentials: 'omit' })
+  const options: RequestInit = { credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(15_000) }
+  const indexResponse = await fetchImpl(PBC_INDEX_URL, options)
   if (!indexResponse.ok) throw new Error(`人民银行汇率公告列表读取失败（HTTP ${indexResponse.status}）。`)
   const detailUrl = latestAnnouncementUrl(await indexResponse.text())
   if (!detailUrl) throw new Error('人民银行汇率公告列表里没有找到最新公告。')
-  const detailResponse = await fetchImpl(detailUrl, { credentials: 'omit' })
+  const detailResponse = await fetchImpl(detailUrl, options)
   if (!detailResponse.ok) throw new Error(`人民银行汇率公告读取失败（HTTP ${detailResponse.status}）。`)
   const rates = parsePbcAnnouncement(await detailResponse.text(), detailUrl)
   if (!rates) throw new Error('人民银行汇率公告格式无法识别，请手工填写汇率。')

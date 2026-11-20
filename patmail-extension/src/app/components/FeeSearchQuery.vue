@@ -3,6 +3,7 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary } from '../../api/dictionaries/picker-catalog'
+import { isUnrequestedFee } from '../../billing/fee-model'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
 import type { FeeApplicantItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
 import { sortFeeRows } from '../../billing/fee-model'
@@ -48,6 +49,7 @@ const props = defineProps<{
   manage?: boolean
   initialValues?: Record<string, string>
   initialToken?: number
+  defaultSelectionFilter?: (row: FeeSearchRow) => boolean
 }>()
 
 const emit = defineEmits<{
@@ -564,7 +566,11 @@ const selectingAll = ref(false)
 const failedPages = ref<number[]>([])
 const selectionNotice = ref('')
 const lastQuery = ref<FeeSearchQuery | null>(null)
-const cachedPages = ref<Set<number>>(new Set())
+const cachedPages = new Map<number, Set<string>>()
+let searchController = new AbortController()
+let unrequestedOnlyBatch = false
+const selectionPending = computed(() => selectingAll.value || searchState.value === 'loading')
+const selectionIncomplete = computed(() => failedPages.value.length > 0 || searchState.value === 'error')
 
 const paging = { startedAt: 0, total: 0, done: 0 }
 function paintPaging(status: TaskCheckStatus): void {
@@ -579,11 +585,6 @@ const pagingHint = computed(() => {
   if (!selectingAll.value) return ''
   return taskCheckProgress.eta ? `（全选所有中，预计 ${taskCheckProgress.eta} 完成）` : '（全选所有中…）'
 })
-
-function isRowUnrequested(row: FeeSearchRow): boolean {
-  const s = String(row.requestStatus || '').trim()
-  return !s.includes('已请款')
-}
 
 function applyValuesPatch(patch: Record<string, string>): void {
   const prevCaseType = values.value.case_type
@@ -600,7 +601,11 @@ function applyInitialValues(): void {
   if (!props.initialValues) return
   applyValuesPatch(props.initialValues)
 }
-watch(() => props.initialToken, applyInitialValues, { immediate: true })
+applyInitialValues()
+watch(() => props.initialToken, () => {
+  invalidateSearch()
+  applyInitialValues()
+})
 
 function isRowSelected(row: FeeSearchRow): boolean {
   return Boolean(selectedIds.value[row.feeId])
@@ -627,193 +632,99 @@ function deselectAllPages(): void {
   clearAllSelected()
 }
 
+function selectBulkRow(row: FeeSearchRow, unrequestedOnly: boolean): void {
+  selectedIds.value[row.feeId] = !unrequestedOnly || (isUnrequestedFee(row) && (props.defaultSelectionFilter?.(row) ?? true))
+}
+
 async function selectAllPages(unrequestedOnly = false): Promise<void> {
-  const b = activeBridge()
   const res = result.value
-  const q = lastQuery.value
-  if (!res || res.total === 0 || selectingAll.value) return
-
-  const gen = currentSearchGeneration.value
-  let excludedCount = 0
-
-  // 1. 先把当前页及已缓存的所有行进行勾选
-  for (const row of res.rows) {
-    allKnownRows.value.set(row.feeId, row)
-  }
-  for (const row of allKnownRows.value.values()) {
-    if (unrequestedOnly && !isRowUnrequested(row)) {
-      selectedIds.value[row.feeId] = false
-      excludedCount++
-    } else {
-      selectedIds.value[row.feeId] = true
-    }
-  }
-  cachedPages.value.add(pageIndex.value)
-
-  // 2. 如果所有页已缓存完成或只有 1 页，直接结束
-  const allPageIndices = Array.from({ length: totalPages.value }, (_, i) => i + 1)
-  const pagesToFetch = allPageIndices.filter(p => !cachedPages.value.has(p))
-  if (pagesToFetch.length === 0 || totalPages.value <= 1 || res.total <= res.rows.length) {
-    paging.startedAt = Date.now()
-    paging.total = Math.max(1, totalPages.value)
-    paging.done = Math.max(1, totalPages.value)
-    paintPaging('done')
-    if (excludedCount > 0) {
-      selectionNotice.value = `默认勾选 ${selectedCount.value} 项未请款费用（已自动排除 ${excludedCount} 项已请款记录；如需全部请款可点「全选所有」）。`
-    }
-    return
-  }
-
-  if (!b || !q) return
-
-  selectingAll.value = true
-  selectionNotice.value = ''
-  failedPages.value = []
-
-  try {
-    paging.startedAt = Date.now()
-    paging.total = pagesToFetch.length
-    paging.done = 0
-    paintPaging('run')
-
-    const fetchSinglePage = async (page: number) => {
-      try {
-        const resp = await b.request({
-          type: MessageType.SearchFee,
-          payload: {
-            query: { ...q, pageIndex: page, pageSize: pageSize.value },
-            timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value),
-            batch: true
-          }
-        })
-        if (resp.type === MessageType.SearchFeeResult && resp.payload.ok) {
-          return { ok: true as const, rows: resp.payload.data.rows }
-        }
-        const msg = resp.type === MessageType.SearchFeeResult && !resp.payload.ok
-          ? resp.payload.error.message
-          : resp.type === MessageType.Error ? resp.payload.message : ''
-        return { ok: false as const, session: /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(msg) }
-      } catch {
-        return { ok: false as const, session: false }
-      }
-    }
-
-    let missed = await runPagedFetch<FeeSearchRow>(
-      pagesToFetch,
-      fetchSinglePage,
-      {
-        concurrency: 6,
-        onPage: (page, rows) => {
-          if (gen !== currentSearchGeneration.value) return
-          cachedPages.value.add(page)
-          for (const row of rows) {
-            allKnownRows.value.set(row.feeId, row)
-            if (unrequestedOnly && !isRowUnrequested(row)) {
-              selectedIds.value[row.feeId] = false
-              excludedCount++
-            } else {
-              selectedIds.value[row.feeId] = true
-            }
-          }
-          tickPage()
-        }
-      }
-    )
-
-    if (missed.length && gen === currentSearchGeneration.value) {
-      missed = await runPagedFetch<FeeSearchRow>(
-        missed,
-        fetchSinglePage,
-        {
-          concurrency: 6,
-          onPage: (page, rows) => {
-            if (gen !== currentSearchGeneration.value) return
-            cachedPages.value.add(page)
-            for (const row of rows) {
-              allKnownRows.value.set(row.feeId, row)
-              if (unrequestedOnly && !isRowUnrequested(row)) {
-                selectedIds.value[row.feeId] = false
-                excludedCount++
-              } else {
-                selectedIds.value[row.feeId] = true
-              }
-            }
-            tickPage()
-          }
-        }
-      )
-    }
-
-    if (gen !== currentSearchGeneration.value) return
-
-    failedPages.value = missed
-    paintPaging(missed.length ? 'fail' : 'done')
-    if (missed.length) {
-      selectionNotice.value = `全选所有有 ${missed.length} 页没读到（第 ${missed.slice(0, 5).join('、')} 页）。已勾上的不受影响，点「重试没读到的页」补齐。`
-    } else if (excludedCount > 0) {
-      selectionNotice.value = `默认勾选 ${selectedCount.value} 项未请款费用（已自动排除 ${excludedCount} 项已请款记录；如需全部请款可点「全选所有」）。`
-    }
-  } finally {
-    if (gen === currentSearchGeneration.value) {
-      selectingAll.value = false
-    }
-  }
+  if (!res?.total || selectionPending.value) return
+  unrequestedOnlyBatch = unrequestedOnly
+  for (const row of allKnownRows.value.values()) selectBulkRow(row, unrequestedOnly)
+  const pages = Array.from({ length: totalPages.value }, (_, i) => i + 1)
+    .filter(page => !cachedPages.has(page))
+  await readSelectionPages(pages)
 }
 
 async function retryFailedPages(): Promise<void> {
+  await readSelectionPages(failedPages.value)
+}
+
+async function readSelectionPages(pages: number[]): Promise<void> {
   const b = activeBridge()
-  const q = lastQuery.value
-  const pages = failedPages.value
-  if (!b || !q || selectingAll.value || !pages.length) return
+  const query = lastQuery.value
+  const total = result.value?.total
+  if (!b || !query || selectionPending.value) return
+
+  const gen = currentSearchGeneration.value
+  const signal = searchController.signal
+  const unrequestedOnly = unrequestedOnlyBatch
+  const announce = (missed: number[]) => {
+    failedPages.value = missed
+    paintPaging(missed.length ? 'fail' : 'done')
+    const excluded = [...allKnownRows.value.values()].filter(row =>
+      !isUnrequestedFee(row) || props.defaultSelectionFilter?.(row) === false
+    ).length
+    selectionNotice.value = missed.length
+      ? `有 ${missed.length} 页没读到（第 ${missed.slice(0, 5).join('、')} 页）。点击「重试没读到的页」补齐。`
+      : unrequestedOnly && excluded
+        ? `默认勾选 ${selectedCount.value} 项未请款费用（已排除 ${excluded} 项状态或模板不匹配的费用）。`
+        : ''
+  }
+  paging.startedAt = Date.now()
+  paging.total = pages.length || 1
+  paging.done = pages.length ? 0 : 1
+  if (!pages.length) {
+    announce([])
+    return
+  }
+
   selectingAll.value = true
+  selectionNotice.value = ''
+  paintPaging('run')
+  const fetchedIds = new Set(allKnownRows.value.keys())
   try {
-    paging.startedAt = Date.now()
-    paging.total = pages.length
-    paging.done = 0
-    paintPaging('run')
-    const fetchSinglePage = async (page: number) => {
+    const missed = await runPagedFetch<FeeSearchRow>(pages, async page => {
       try {
         const resp = await b.request({
           type: MessageType.SearchFee,
           payload: {
-            query: { ...q, pageIndex: page, pageSize: pageSize.value },
+            query: { ...query, pageIndex: page },
             timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value),
             batch: true
           }
-        })
-        if (resp.type === MessageType.SearchFeeResult && resp.payload.ok) {
-          return { ok: true as const, rows: resp.payload.data.rows }
+        }, signal)
+        if (!signal.aborted && resp.type === MessageType.SearchFeeResult && resp.payload.ok && resp.payload.data.total === total) {
+          const { rows } = resp.payload.data
+          if (rows.length && rows.every(row => !fetchedIds.has(row.feeId))) {
+            for (const row of rows) fetchedIds.add(row.feeId)
+            return { ok: true, rows }
+          }
         }
-        const msg = resp.type === MessageType.SearchFeeResult && !resp.payload.ok
+        const message = resp.type === MessageType.SearchFeeResult && !resp.payload.ok
           ? resp.payload.error.message
           : resp.type === MessageType.Error ? resp.payload.message : ''
-        return { ok: false as const, session: /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(msg) }
+        return { ok: false, session: /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(message) }
       } catch {
-        return { ok: false as const, session: false }
+        return { ok: false, session: false }
       }
-    }
-    const missed = await runPagedFetch<FeeSearchRow>(
-      pages,
-      fetchSinglePage,
-      {
-        concurrency: 6,
-        onPage: (page, rows) => {
-          cachedPages.value.add(page)
-          for (const row of rows) {
-            allKnownRows.value.set(row.feeId, row)
-            selectedIds.value[row.feeId] = true
-          }
-          tickPage()
+    }, {
+      concurrency: 6,
+      signal,
+      onPage: (page, rows) => {
+        if (gen !== currentSearchGeneration.value) return
+        cachedPages.set(page, new Set(rows.map(row => row.feeId)))
+        for (const row of rows) {
+          allKnownRows.value.set(row.feeId, row)
+          selectBulkRow(row, unrequestedOnly)
         }
+        tickPage()
       }
-    )
-    failedPages.value = missed
-    paintPaging(missed.length ? 'fail' : 'done')
-    selectionNotice.value = missed.length
-      ? `还有 ${missed.length} 页没读到（第 ${missed.slice(0, 5).join('、')} 页），可以再点一次重试。`
-      : '没读到的页都补齐了。'
+    })
+
+    if (gen === currentSearchGeneration.value) announce(missed)
   } finally {
-    selectingAll.value = false
+    if (gen === currentSearchGeneration.value) selectingAll.value = false
   }
 }
 
@@ -858,8 +769,26 @@ function buildCurrentQuery(page = pageIndex.value, size = pageSize.value): FeeSe
   return q
 }
 
+function invalidateSearch(): void {
+  currentSearchGeneration.value += 1
+  searchController.abort()
+  searchController = new AbortController()
+  if (selectingAll.value) resetTaskCheckProgress()
+  selectingAll.value = false
+  failedPages.value = []
+  lastQuery.value = null
+  result.value = null
+  allKnownRows.value.clear()
+  cachedPages.clear()
+  clearAllSelected()
+  pageIndex.value = 1
+  searchState.value = 'idle'
+  searchMessage.value = ''
+  totalAmountInfo.value = { originalAgentFee: 0, discountAgentFee: 0, officialFee: 0, thirdPartyFee: 0 }
+}
+
 // Perform Search
-async function doSearch(page = 1): Promise<void> {
+async function doSearch(page = 1, newSearch = true): Promise<void> {
   const b = activeBridge()
   if (!b) {
     searchState.value = 'error'
@@ -867,26 +796,14 @@ async function doSearch(page = 1): Promise<void> {
     return
   }
 
-  const gen = ++currentSearchGeneration.value
-  pageIndex.value = page
+  if (newSearch) invalidateSearch()
+  if (!newSearch && selectionPending.value) return
+  const q = newSearch ? buildCurrentQuery(page, pageSize.value) : lastQuery.value && { ...lastQuery.value, pageIndex: page }
+  if (!q) return
+  const gen = currentSearchGeneration.value
+  const signal = searchController.signal
   searchState.value = 'loading'
   searchMessage.value = ''
-  quickFeeSelectMode.value = ''
-  selectionNotice.value = ''
-  if (page === 1) {
-    selectedIds.value = {}
-    allKnownRows.value.clear()
-    cachedPages.value.clear()
-  }
-  totalAmountInfo.value = {
-    originalAgentFee: 0,
-    discountAgentFee: 0,
-    officialFee: 0,
-    thirdPartyFee: 0
-  }
-
-  const q = buildCurrentQuery(page, pageSize.value)
-  lastQuery.value = { ...q }
 
   try {
     const resp = await b.request({
@@ -895,7 +812,7 @@ async function doSearch(page = 1): Promise<void> {
         query: q,
         timeoutMs: queryTimeoutMs.value
       }
-    })
+    }, signal)
 
     if (gen !== currentSearchGeneration.value) return
 
@@ -913,24 +830,42 @@ async function doSearch(page = 1): Promise<void> {
       }
 
       const data = resp.payload.data
+      const previousIds = cachedPages.get(page)
+      const changed = previousIds
+        ? data.rows.length !== previousIds.size || data.rows.some(row => !previousIds.has(row.feeId))
+        : data.rows.some(row => allKnownRows.value.has(row.feeId))
+      if (!newSearch && (changed || data.total !== result.value?.total)) {
+        invalidateSearch()
+        searchState.value = 'error'
+        searchMessage.value = '费用查询的结果已变化，请重新查询后再勾选。'
+        return
+      }
+      pageIndex.value = page
+      if (newSearch) lastQuery.value = q
       result.value = data
       for (const row of data.rows) {
         allKnownRows.value.set(row.feeId, row)
       }
-      cachedPages.value.add(page)
+      cachedPages.set(page, new Set(data.rows.map(row => row.feeId)))
       if (data.total === 0 || data.rows.length === 0) {
         searchState.value = 'empty'
         clearAllSelected()
       } else {
         searchState.value = 'success'
-        if (page === 1) {
-          // 默认全选未请款费用（保护财务避免重复请款）
+        if (newSearch) {
           void selectAllPages(true)
+        } else if (failedPages.value.includes(page)) {
+          for (const row of data.rows) selectBulkRow(row, unrequestedOnlyBatch)
+          failedPages.value = failedPages.value.filter(failed => failed !== page)
+          if (!failedPages.value.length) selectionNotice.value = ''
         }
       }
 
       emit('searched', q)
-      void fetchTotalAmounts(q)
+      if (newSearch) void fetchTotalAmounts(q, gen, signal)
+    } else {
+      searchState.value = 'error'
+      searchMessage.value = '费用查询返回了意外结果，请重新查询。'
     }
   } catch (e: unknown) {
     if (gen !== currentSearchGeneration.value) return
@@ -939,7 +874,7 @@ async function doSearch(page = 1): Promise<void> {
   }
 }
 
-async function fetchTotalAmounts(q: FeeSearchQuery): Promise<void> {
+async function fetchTotalAmounts(q: FeeSearchQuery, gen: number, signal: AbortSignal): Promise<void> {
   const b = activeBridge()
   if (!b) return
   try {
@@ -949,7 +884,8 @@ async function fetchTotalAmounts(q: FeeSearchQuery): Promise<void> {
         query: q,
         timeoutMs: queryTimeoutMs.value
       }
-    })
+    }, signal)
+    if (gen !== currentSearchGeneration.value) return
     if (resp.type === MessageType.SearchFeeAmountResult && resp.payload.ok) {
       const data = resp.payload.data as Record<string, unknown>
       if (Array.isArray(data.FeeList)) {
@@ -1010,27 +946,13 @@ function resetForm(): void {
   templateMessage.value = ''
   exportNotice.value = ''
   showTypeMode.value = 'all'
-  quickFeeSelectMode.value = ''
-  result.value = null
-  selectedIds.value = {}
-  allKnownRows.value.clear()
-  cachedPages.value.clear()
-  failedPages.value = []
-  selectionNotice.value = ''
-  totalAmountInfo.value = {
-    originalAgentFee: 0,
-    discountAgentFee: 0,
-    officialFee: 0,
-    thirdPartyFee: 0
-  }
-  searchState.value = 'idle'
-  resetTaskCheckProgress()
+  invalidateSearch()
 }
 
 function changePage(delta: number): void {
   const nextPage = pageIndex.value + delta
   if (nextPage >= 1 && nextPage <= totalPages.value) {
-    void doSearch(nextPage)
+    void doSearch(nextPage, false)
   }
 }
 
@@ -1455,6 +1377,7 @@ async function importTemplateJson(event: Event): Promise<void> {
 watch(
   () => props.userId,
   nextUser => {
+    invalidateSearch()
     templates.value = []
     selectedTemplateId.value = ''
     saveName.value = ''
@@ -1470,6 +1393,7 @@ watch(
 
 onBeforeUnmount(() => {
   templateLoads.dispose()
+  searchController.abort()
   resetTaskCheckProgress()
 })
 
@@ -1484,7 +1408,7 @@ const displayRows = computed(() => {
 
 const totalPages = computed(() => {
   if (!result.value || result.value.total === 0) return 1
-  return Math.ceil(result.value.total / pageSize.value)
+  return Math.ceil(result.value.total / (lastQuery.value?.pageSize ?? pageSize.value))
 })
 
 defineExpose({
@@ -1495,6 +1419,8 @@ defineExpose({
   doSearch,
   selectAllPages,
   deselectAllPages,
+  selectionPending,
+  selectionIncomplete,
   selectingAll,
   selectedCount,
   selectedFeeIds,
@@ -2087,6 +2013,7 @@ defineExpose({
                 <input
                   type="checkbox"
                   aria-label="全选本页"
+                  :disabled="selectingAll"
                   :checked="displayRows.length > 0 && displayRows.every(isRowSelected)"
                   @change="selectCurrentPage(($event.target as HTMLInputElement).checked)"
                 />
@@ -2101,6 +2028,7 @@ defineExpose({
               <td class="check-col">
                 <input
                   type="checkbox"
+                  :disabled="selectingAll"
                   :checked="isRowSelected(row)"
                   @change="toggleRow(row, ($event.target as HTMLInputElement).checked)"
                 />
@@ -2120,9 +2048,9 @@ defineExpose({
 
         <!-- Pagination Bar -->
         <nav class="pagination" aria-label="费用查询分页">
-          <button type="button" :disabled="pageIndex <= 1" @click="changePage(-1)">上一页</button>
+          <button type="button" :disabled="pageIndex <= 1 || selectionPending" @click="changePage(-1)">上一页</button>
           <span>第 {{ pageIndex }} / {{ totalPages }} 页</span>
-          <button type="button" :disabled="pageIndex >= totalPages" @click="changePage(1)">下一页</button>
+          <button type="button" :disabled="pageIndex >= totalPages || selectionPending" @click="changePage(1)">下一页</button>
         </nav>
       </div>
     </section>

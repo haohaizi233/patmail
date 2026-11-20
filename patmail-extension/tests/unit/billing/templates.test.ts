@@ -171,9 +171,9 @@ describe('billing templates filler', () => {
   it('fills midea-pct template (1 row per case)', async () => {
     const rawTemplate = readAsset('qingkuan-midea-pct.xlsx')
     const rows: FeeSearchRow[] = [
-      mockFeeRow({ feeId: 'f1', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeType: 'PCT国际申请费', amount: 1330, currency: 'USD' }),
-      mockFeeRow({ feeId: 'f2', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeType: 'PCT检索费', amount: 2100, currency: 'USD' }),
-      mockFeeRow({ feeId: 'f3', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeType: '事务所代理费', amount: 5000, currency: 'CNY' })
+      mockFeeRow({ feeId: 'f1', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeClass: 'O', feeType: 'PCT国际申请费', amount: 1330, currency: 'USD' }),
+      mockFeeRow({ feeId: 'f2', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeClass: 'O', feeType: 'PCT检索费', amount: 2100, currency: 'USD' }),
+      mockFeeRow({ feeId: 'f3', caseVolume: 'PA2411768CN-WO', ctrlProc: '国际申请', feeClass: 'A', feeType: '事务所代理费', amount: 5000, currency: 'CNY' })
     ]
 
     const rates = { USD: 7.25, CNY: 1 }
@@ -222,6 +222,48 @@ describe('billing templates filler', () => {
     expect(mideaForeign.queryPreset.defaultOptions).toEqual({ reviewFee: 100, bankFee: 250 })
     expect(mideaPct.queryPreset.feeFields.fee_class).toBe('O,A')
     expect(mideaPct.queryPreset.fileStepOptional).toBe(true)
+  })
+
+  it('charges separately for same-name matters with different procIds', async () => {
+    const result = await fillBillingTemplate('midea-foreign', readAsset('qingkuan-midea-foreign.xlsx'), {
+      rows: [mockFeeRow({}), mockFeeRow({ feeId: 'f2', procId: 'proc-2' })],
+      bills: {}, rates: { EUR: 7.85 }, rateDate: '2026-11-20', headers: defaultHeaders('midea-foreign'),
+      options: { reviewFee: 100, bankFee: 250 }
+    })
+    const book = await XlsxBook.open(result.bytes)
+    const sheet = book.sheet(book.sheets[1].name)
+    expect([sheet.valueOf('AA9'), sheet.valueOf('AA12'), sheet.valueOf('AB12')]).toEqual([100, 100, 250])
+  })
+
+  it('matches overseas invoice dates per matter and leaves ambiguous dates blank', async () => {
+    const a = mockFeeRow({ billNo: 'B1' })
+    const b = mockFeeRow({ feeId: 'f2', procId: 'proc-2', ctrlProc: '答辩', sn: 2 })
+    const bills = ['B1', 'B2'].map((billNo, index) => ({
+      billNo, date: `2026-10-0${index + 1}`, caseVolume: a.caseVolume, matter: '',
+      fileName: `${billNo}.pdf`, versionSuffix: ''
+    }))
+    const result = await fillBillingTemplate('midea-foreign', readAsset('qingkuan-midea-foreign.xlsx'), {
+      rows: [a, b], bills: { [a.caseVolume]: bills }, rates: { EUR: 7.85 }, rateDate: '2026-11-20',
+      headers: defaultHeaders('midea-foreign'), options: { reviewFee: 100, bankFee: 250 }
+    })
+    const book = await XlsxBook.open(result.bytes)
+    const sheet = book.sheet(book.sheets[1].name)
+    expect(sheet.valueOf('L7')).toBe(46296)
+    expect(sheet.valueOf('L10')).toBeNull()
+    expect(result.warnings).toHaveLength(1)
+  })
+
+  it.each([
+    { caseVolume: 'PA123PCT', feeClass: 'T', feeType: '翻译费' },
+    { caseVolume: 'PA123-EP', feeClass: 'O', feeType: '申请费' },
+    { caseVolume: 'PA123PCT', feeClass: 'O', feeType: '国家阶段申请费' },
+    { caseVolume: 'PA123PCT', feeClass: 'O', feeType: '年费' }
+  ])('blocks an unsupported PCT row (%j)', fee => {
+    return expect(fillBillingTemplate('midea-pct', readAsset('qingkuan-midea-pct.xlsx'), {
+      rows: [mockFeeRow({ ...fee, ctrlProc: '', currency: 'CNY' })],
+      bills: {}, rates: {}, rateDate: '2026-11-20', headers: defaultHeaders('midea-pct'),
+      options: { reviewFee: 0, bankFee: 0 }
+    })).rejects.toThrow(/PCT/)
   })
 
   it('charges midea-foreign review/bank fee only once when a single event splits across currencies', async () => {

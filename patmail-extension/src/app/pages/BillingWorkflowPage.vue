@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import FileSearchPanel from '../../floating/FileSearchPanel.vue'
@@ -9,8 +9,11 @@ import type { SelectedPatentFile } from '../../mail/types'
 import type { FeeSearchRow } from '../../api/fee-search-types'
 import {
   billInfoFromFile,
-  uniqueCaseVolumes,
   missingCurrencies,
+  isUnrequestedFee,
+  matchedBillDate,
+  groupFeeEvents,
+  pctFeeProblem,
   type BillInfo
 } from '../../billing/fee-model'
 import {
@@ -24,6 +27,7 @@ import {
   defaultHeaders,
   fillBillingTemplate,
   formatLocalDate,
+  type BillingInput,
   type BillingOptions,
   type BillingTemplateId
 } from '../../billing/templates'
@@ -59,8 +63,9 @@ const currentStep = ref<Step>(1)
 const stepNotice = ref('')
 
 function setStep(target: Step): void {
-  if (target === 3 && selectedFeeRows.value.length === 0) {
-    stepNotice.value = '步骤 2 还没有勾选费用。请先在费用查询表格中勾选要请款的费用行。'
+  const issue = target === 1 ? '' : fileSelectionIssue.value || (target === 3 ? feeSelectionIssue.value : '')
+  if (issue) {
+    stepNotice.value = issue
     return
   }
   stepNotice.value = ''
@@ -75,6 +80,7 @@ function setStep(target: Step): void {
 // ---------------------------------------------------------------- 步骤 1：文件管理与账单识别
 const filePanelRef = ref<InstanceType<typeof FileSearchPanel> | null>(null)
 const fileSelection = ref<Record<string, SelectedPatentFile>>({})
+const fileSelectionIssue = computed(() => filePanelRef.value?.getBillingSelectionIssue() ?? '')
 
 // 按所选模板自动预填文件管理条件（文件描述在树加载后自动换算为当前站点实时 GUID）
 const fileSeed = ref<Record<string, string>>({ ...BILLING_TEMPLATES[0].queryPreset.fileFields })
@@ -95,9 +101,7 @@ const recognizedBillsCount = computed(() =>
   Object.values(billMap.value).reduce((sum, list) => sum + list.length, 0)
 )
 
-const autoExtractedVolumes = computed(() =>
-  uniqueCaseVolumes(Object.values(fileSelection.value))
-)
+const autoExtractedVolumes = computed(() => Object.keys(billMap.value))
 
 const customVolumeInput = ref('')
 const extraVolumes = ref<string[]>([])
@@ -148,6 +152,19 @@ const feeInitialValues = ref<Record<string, string>>({
 const feeInitialToken = ref(1)
 const selectedFeeRows = ref<FeeSearchRow[]>([])
 const lastAppliedFeeSyncKey = ref('')
+const defaultSelectionFilter = computed(() => selectedTemplateId.value === 'midea-pct'
+  ? (row: FeeSearchRow) => !pctFeeProblem(row)
+  : undefined)
+const feeSelectionIssue = computed(() => {
+  if (feeQueryRef.value?.selectionPending) return '费用还在读取，请等待完成。'
+  if (feeQueryRef.value?.selectionIncomplete) return '费用查询未完成，请返回步骤 2 重试或重新查询。'
+  if (!selectedFeeRows.value.length) return '步骤 2 还没有勾选费用。请先在费用查询表格中勾选要请款的费用行。'
+  if (!ready.value) return '请先确认 EASY 登录会话。'
+  if (lastAppliedFeeSyncKey.value !== buildFeeSyncKey()) return '请款范围已变化，请返回步骤 2 重新查询。'
+  const invalid = selectedTemplateId.value === 'midea-pct' && selectedFeeRows.value.find(row => pctFeeProblem(row))
+  if (invalid) return `${invalid.caseVolume}「${invalid.feeType || invalid.feeId}」：${pctFeeProblem(invalid)}。`
+  return ''
+})
 
 function buildFeeSyncKey(): string {
   return `${selectedTemplateId.value}\u0001${activeVolumes.value.join('\n')}`
@@ -167,6 +184,7 @@ function syncFeeQueryIfNeeded(force: boolean): void {
     ...presetFields,
     case_volume: volumeText
   }
+  selectedFeeRows.value = []
   feeInitialToken.value += 1
 }
 
@@ -181,14 +199,20 @@ watch(selectedTemplateId, nextId => {
   billingOptions.value = { ...tpl.queryPreset.defaultOptions }
   fileSeed.value = { ...tpl.queryPreset.fileFields }
   fileSeedToken.value += 1
-  // 立即把模板对应的费用查询条件（涉外=第三方费用；PCT=官费+我方代理费）同步到步骤 2
-  const nextFeePatch: Record<string, string> = {
-    ...tpl.queryPreset.feeFields,
-    ...(activeVolumes.value.length ? { case_volume: activeVolumes.value.join('\n') } : {})
-  }
-  feeInitialValues.value = { ...feeInitialValues.value, ...nextFeePatch }
-  feeInitialToken.value += 1
-  lastAppliedFeeSyncKey.value = buildFeeSyncKey()
+  syncFeeQueryIfNeeded(true)
+  if (currentStep.value === 3) currentStep.value = 2
+})
+
+watch(activeVolumes, () => {
+  if (currentStep.value !== 1) syncFeeQueryIfNeeded(false)
+})
+
+watch(() => [connection.value.easyOrigin, connection.value.operatorId], () => {
+  fileSelection.value = {}
+  extraVolumes.value = []
+  excludedVolumes.value = []
+  syncFeeQueryIfNeeded(true)
+  currentStep.value = 1
 })
 
 // ---------------------------------------------------------------- 步骤 3：请款单导出与央行汇率
@@ -199,6 +223,11 @@ const pbcPerCny = ref<Record<string, number>>({})
 const customRates = ref<Record<string, number>>({})
 const clearedRates = ref<Record<string, boolean>>({})
 const ratesError = ref('')
+let ratesCheckedOn = ''
+const manualRateDate = ref('')
+const usesManualRate = computed(() => selectedFeeRows.value.some(row =>
+  Boolean(customRates.value[normalizeCurrency(row.currency)])))
+const missingRateCodes = computed(() => missingCurrencies(selectedFeeRows.value, effectiveRates.value))
 
 const effectiveRates = computed<Record<string, number>>(() => {
   const out: Record<string, number> = { CNY: 1 }
@@ -220,21 +249,25 @@ const involvedCurrencies = computed(() => {
   for (const c of ['USD', 'EUR', 'JPY', 'GBP', 'CHF', 'HKD']) codes.add(c)
   return [...codes].filter(c => c !== 'CNY')
 })
+const needsForeignRates = computed(() => selectedFeeRows.value.some(row => normalizeCurrency(row.currency) !== 'CNY'))
 
 function formatRate(val: number): string {
   return val < 0.1 ? val.toFixed(6) : val.toFixed(4)
 }
 
 async function loadPbcRates(): Promise<void> {
+  if (ratesLoading.value) return
   ratesLoading.value = true
+  ratesCheckedOn = formatLocalDate()
   ratesError.value = ''
+  ratesDate.value = ''
+  ratesSourceUrl.value = ''
+  pbcPerCny.value = {}
   try {
     const data: PbcRates = await fetchPbcRates()
     ratesDate.value = data.date
     ratesSourceUrl.value = data.sourceUrl
     pbcPerCny.value = { ...data.perCny }
-    // 新拉到央行基准后，保留用户手工填写值，只解除此前被清空但现已获取的标记
-    clearedRates.value = {}
   } catch (err) {
     ratesError.value = `${err instanceof Error ? err.message : '中国人民银行汇率获取失败'}（不会使用离线估算值，请点击重试或在下方手工填写准确汇率）`
   } finally {
@@ -265,7 +298,7 @@ function resetRate(code: string): void {
 }
 
 function initStep3(): void {
-  if (!ratesDate.value && !ratesLoading.value) {
+  if (needsForeignRates.value && ratesCheckedOn !== formatLocalDate()) {
     void loadPbcRates()
   }
 }
@@ -277,19 +310,20 @@ const reconciliationInfo = computed(() => {
   let requestedCount = 0
   for (const row of selectedFeeRows.value) {
     if (row.caseVolume) caseSet.add(row.caseVolume)
-    const st = String(row.requestStatus || '')
-    if (st.includes('已请款')) requestedCount++
-    else unrequestedCount++
+    if (isUnrequestedFee(row)) unrequestedCount++
+    else requestedCount++
   }
   const allCases = [...caseSet]
   const matchedCases: string[] = []
   const unmatchedCases: string[] = []
+  const unmatchedMatters = selectedTemplateId.value === 'midea-foreign'
+    ? new Set(groupFeeEvents(selectedFeeRows.value)
+      .filter(group => !matchedBillDate(group, billMap.value[group.caseVolume]))
+      .map(group => group.caseVolume))
+    : new Set<string>()
   for (const vol of allCases) {
-    if (billMap.value[vol] && billMap.value[vol].length > 0) {
-      matchedCases.push(vol)
-    } else {
-      unmatchedCases.push(vol)
-    }
+    if (billMap.value[vol]?.length && !unmatchedMatters.has(vol)) matchedCases.push(vol)
+    else unmatchedCases.push(vol)
   }
   return {
     totalRows: selectedFeeRows.value.length,
@@ -305,33 +339,64 @@ const reconciliationInfo = computed(() => {
 const exporting = ref(false)
 const exportResultNotice = ref('')
 const exportWarnings = ref<string[]>([])
+const confirmExistingFees = ref(false)
+watch(selectedFeeRows, () => {
+  confirmExistingFees.value = false
+  exportResultNotice.value = ''
+  exportWarnings.value = []
+})
 
 async function doExportExcel(): Promise<void> {
-  if (selectedFeeRows.value.length === 0) {
-    exportResultNotice.value = '没有勾选任何费用记录，无法导出。'
+  if (exporting.value) return
+  const issue = fileSelectionIssue.value || feeSelectionIssue.value
+  if (issue) {
+    exportResultNotice.value = issue
     return
   }
-  const missing = missingCurrencies(selectedFeeRows.value, effectiveRates.value)
-  if (missing.length > 0) {
-    exportResultNotice.value = `缺少以下币种的汇率：${missing.join('、')}，请重新读取央行汇率或在上方汇率表中手工填写。`
+  if (reconciliationInfo.value.requestedCount && !confirmExistingFees.value) {
+    exportResultNotice.value = '请确认已立单或状态待核对的费用后再导出。'
+    return
+  }
+  if (needsForeignRates.value && ratesCheckedOn !== formatLocalDate()) {
+    void loadPbcRates()
+    exportResultNotice.value = '已开始刷新汇率，请等待完成后再导出。'
+    return
+  }
+  if (ratesLoading.value) return
+  if (missingRateCodes.value.length) {
+    exportResultNotice.value = `缺少以下币种的汇率：${missingRateCodes.value.join('、')}，请重试或手工填写。`
+    return
+  }
+  if (usesManualRate.value && (!manualRateDate.value || manualRateDate.value > formatLocalDate())) {
+    exportResultNotice.value = '请填写有效的手工汇率基准日期。'
     return
   }
 
+  const templateId = selectedTemplateId.value
+  const rows = selectedFeeRows.value
+  const bills = billMap.value
+  const rateDate = usesManualRate.value
+    ? `手工 ${manualRateDate.value}${ratesDate.value ? ` / 央行 ${ratesDate.value}` : ''}`
+    : ratesDate.value || formatLocalDate()
+  const input: BillingInput = {
+    rows, bills, rates: { ...effectiveRates.value }, rateDate,
+    headers: { ...headerValues.value }, options: { ...billingOptions.value }, today: new Date()
+  }
+  const account = connection.value.operatorId
+  const origin = connection.value.easyOrigin
   exporting.value = true
   exportResultNotice.value = '正在加载内置模板并生成 Excel（保留原有公式）…'
   exportWarnings.value = []
 
   try {
-    const rawBytes = await loadBillingTemplate(selectedTemplateId.value)
-    const result = await fillBillingTemplate(selectedTemplateId.value, rawBytes, {
-      rows: selectedFeeRows.value,
-      bills: billMap.value,
-      rates: effectiveRates.value,
-      rateDate: ratesDate.value || formatLocalDate(new Date()),
-      headers: headerValues.value,
-      options: billingOptions.value,
-      today: new Date()
-    })
+    const rawBytes = await loadBillingTemplate(templateId)
+    const result = await fillBillingTemplate(templateId, rawBytes, input)
+    if (selectedTemplateId.value !== templateId || selectedFeeRows.value !== rows ||
+        connection.value.operatorId !== account || connection.value.easyOrigin !== origin ||
+        billMap.value !== bills || fileSelectionIssue.value || feeSelectionIssue.value) {
+      exportResultNotice.value = '生成期间请款范围已变化，请核对后重新导出。'
+      return
+    }
 
     exportWarnings.value = result.warnings
 
@@ -355,10 +420,8 @@ async function doExportExcel(): Promise<void> {
   }
 }
 
-onMounted(() => {
-  if (props.isActive) {
-    void loadPbcRates()
-  }
+watch(() => props.isActive, active => {
+  if (active && currentStep.value === 3) initStep3()
 })
 </script>
 
@@ -475,7 +538,7 @@ onMounted(() => {
           v-else-if="currentStep === 2"
           type="button"
           class="solid next-btn"
-          :disabled="selectedFeeRows.length === 0"
+          :disabled="selectedFeeRows.length === 0 || feeQueryRef?.selectionPending || feeQueryRef?.selectionIncomplete"
           @click="setStep(3)"
         >
           进入请款单导出 (已选 {{ selectedFeeRows.length }} 笔费用) →
@@ -592,6 +655,7 @@ onMounted(() => {
           <template v-else>
             （未带入文号，请按客户/日期/文号等条件自行检索）
           </template>。<br />
+          <template v-if="selectedTemplateId === 'midea-pct'"> 仅默认勾选可纳入 PCT 模板的费用。</template>
           请在下方点击「查询」，然后在表格中<b>勾选</b>要纳入请款单的费用记录（翻页已选记录会自动保留）。
         </p>
         <div class="selection-status-strip">
@@ -604,7 +668,7 @@ onMounted(() => {
           <button
             type="button"
             class="solid"
-            :disabled="selectedFeeRows.length === 0"
+            :disabled="selectedFeeRows.length === 0 || feeQueryRef?.selectionPending || feeQueryRef?.selectionIncomplete"
             @click="setStep(3)"
           >
             确认并进入下一步导出请款单 →
@@ -619,6 +683,7 @@ onMounted(() => {
         :can-search="ready"
         :initial-values="feeInitialValues"
         :initial-token="feeInitialToken"
+        :default-selection-filter="defaultSelectionFilter"
         @selection-change="onFeeSelectionChange"
       />
     </section>
@@ -648,6 +713,10 @@ onMounted(() => {
           可直接在下方表格修改汇率数值进行微调，将按最终数值自动计算折算人民币金额。
         </p>
 
+        <label v-if="usesManualRate">
+          手工汇率基准日期
+          <input v-model="manualRateDate" type="date" :max="formatLocalDate()" />
+        </label>
         <div class="rates-table-wrapper">
           <table class="rates-table">
             <thead>
@@ -721,23 +790,24 @@ onMounted(() => {
       <!-- 最终导出操作卡片 -->
       <div class="export-execute-card card">
         <div class="summary-line">
-          <span>待填入费用：<b>{{ selectedFeeRows.length }}</b> 笔（未请款 <b>{{ reconciliationInfo.unrequestedCount }}</b>，已请款 <b>{{ reconciliationInfo.requestedCount }}</b>）</span>
+          <span>待填入费用：<b>{{ selectedFeeRows.length }}</b> 笔（未请款 <b>{{ reconciliationInfo.unrequestedCount }}</b>，已立单或状态待核对 <b>{{ reconciliationInfo.requestedCount }}</b>）</span>
           <span>涉及案卷：<b>{{ reconciliationInfo.totalCases }}</b> 个（匹配账单 <b>{{ reconciliationInfo.matchedCasesCount }}</b>，未匹配 <b>{{ reconciliationInfo.unmatchedCases.length }}</b>）</span>
           <span>目标模板：<b>{{ currentTemplate.label }}</b></span>
         </div>
 
-        <p v-if="reconciliationInfo.requestedCount > 0" class="reconcile-warn requested-warn">
-          ⚠️ 注意：当前勾选的数据中包含 <b>{{ reconciliationInfo.requestedCount }}</b> 笔「已请款」费用，导出前请核对是否确认重复请款。
-        </p>
-        <p v-if="reconciliationInfo.unmatchedCases.length > 0 && selectedTemplateId !== 'midea-pct'" class="reconcile-warn bill-missing-warn">
-          ℹ️ 提示：有 <b>{{ reconciliationInfo.unmatchedCases.length }}</b> 个案卷未在步骤 1 匹配到账单（{{ reconciliationInfo.unmatchedCases.slice(0, 4).join('、') }}{{ reconciliationInfo.unmatchedCases.length > 4 ? ' 等' : '' }}），导出时其海外账单日将留空。
+        <label v-if="reconciliationInfo.requestedCount > 0" class="reconcile-warn requested-warn">
+          <input v-model="confirmExistingFees" type="checkbox" />
+          已核对并确认导出 {{ reconciliationInfo.requestedCount }} 笔已立单或状态待核对的费用
+        </label>
+        <p v-if="reconciliationInfo.unmatchedCases.length > 0 && selectedTemplateId === 'midea-foreign'" class="reconcile-warn bill-missing-warn">
+          ℹ️ 提示：有 <b>{{ reconciliationInfo.unmatchedCases.length }}</b> 个案卷有事项未能确认海外账单日（{{ reconciliationInfo.unmatchedCases.slice(0, 4).join('、') }}{{ reconciliationInfo.unmatchedCases.length > 4 ? ' 等' : '' }}），导出时对应事项的账单日将留空。
         </p>
 
         <div class="button-row">
           <button
             type="button"
             class="solid export-btn"
-            :disabled="exporting || selectedFeeRows.length === 0"
+            :disabled="exporting || ratesLoading || Boolean(fileSelectionIssue || feeSelectionIssue) || (reconciliationInfo.requestedCount > 0 && !confirmExistingFees)"
             @click="doExportExcel"
           >
             {{ exporting ? '正在填表并生成 Excel…' : '导出 Excel 请款表 (100%保留公式)' }}

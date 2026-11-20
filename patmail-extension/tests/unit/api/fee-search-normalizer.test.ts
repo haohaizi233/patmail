@@ -48,8 +48,8 @@ describe('FeeSearch 响应标准化 (normalizeFeeSearch)', () => {
     const response = {
       TableRowsCount: '2',
       TableRows: [
-        { case_volume: 'PA001', fee_class: 'O', amount: 100, fee_id: 'id-1' },
-        { case_volume: 'PA002', fee_class: 'A', amount: 200, fee_id: 'id-2' }
+        { case_volume: 'PA001', fee_class: 'O', amount: 100, currency_id: 'CNY', fee_id: 'id-1' },
+        { case_volume: 'PA002', fee_class: 'A', amount: 200, currency_id: 'CNY', fee_id: 'id-2' }
       ],
       ClientInfo: clientInfo
     }
@@ -62,6 +62,26 @@ describe('FeeSearch 响应标准化 (normalizeFeeSearch)', () => {
       expect(result.data.summary.pageOfficialFee).toBe(100)
       expect(result.data.summary.pageAgentFee).toBe(200)
     }
+  })
+
+  it('reads legacy JSON rows and currency/name aliases', () => {
+    const result = normalizeFeeSearch({
+      TableRowsCount: '1',
+      TableRows: JSON.stringify([{ fee_id: 'f', currency_type: 'USD', fee_name: '检索费', amount: '1,200.50' }])
+    }, query)
+    expect(result).toMatchObject({ ok: true, data: { rows: [{ amount: 1200.5, currency: 'USD', feeType: '检索费' }] } })
+  })
+
+  it.each([
+    { fee_id: '', currency_id: 'CNY', amount: 10 },
+    { fee_id: 'f', currency_id: '', amount: 10 },
+    { fee_id: 'f', currency_id: 'CNY', amount: '' }
+  ])('rejects an invalid financial row (%j)', row => {
+    expect(normalizeFeeSearch({ total: 1, rows: [row] }, query).ok).toBe(false)
+  })
+
+  it('rejects an incomplete results page', () => {
+    expect(normalizeFeeSearch({ total: 10, rows: [] }, query).ok).toBe(false)
   })
 
   it('rejects session expired response from ClientInfo', () => {

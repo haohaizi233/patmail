@@ -38,6 +38,26 @@ export function latestBillDate(bills: BillInfo[] | undefined): string {
   return (bills ?? []).map(item => item.date).filter(Boolean).sort().at(-1) ?? ''
 }
 
+export function matchedBillDate(group: EventGroup, bills: BillInfo[] | undefined): string {
+  const normalize = (value: string) => value.trim().toUpperCase()
+  const identifiers = uniqueText(
+    [...group.official, ...group.agent, ...group.internalAgent, ...group.translation]
+      .map(row => row.billNo || row.invoiceNo)
+  ).map(normalize)
+  const candidates = bills ?? []
+  const byNumber = candidates.filter(bill => identifiers.includes(normalize(bill.billNo)))
+  const matter = normalize(group.ctrlProc)
+  const byMatter = candidates.filter(bill => matter && normalize(bill.matter) === matter)
+  const matches = identifiers.length ? byNumber : byMatter.length ? byMatter : candidates
+  if (identifiers.length && !identifiers.every(id => byNumber.some(bill => normalize(bill.billNo) === id))) return ''
+  const dates = new Set(matches.map(bill => bill.date))
+  return dates.size === 1 ? matches[0]?.date ?? '' : ''
+}
+
+export function isUnrequestedFee(row: FeeSearchRow): boolean {
+  return !row.requestNo.trim() && /^(?:0|未请款)$/.test(row.requestStatus.trim())
+}
+
 export function uniqueCaseVolumes(files: Array<{ caseVolume?: string }>): string[] {
   const seen = new Set<string>()
   for (const file of files) {
@@ -66,7 +86,16 @@ export function isInternalAgentFee(row: FeeSearchRow): boolean {
 }
 
 export function isTranslationFee(row: FeeSearchRow): boolean {
-  return /翻译|译文|校对|translate|translation/i.test(row.feeType) || /翻译|译文/i.test(row.ctrlProc)
+  return /翻译|译文|校对|translate|translation/i.test(row.feeType) ||
+    (row.feeClass !== 'O' && !row.feeType.trim() && /翻译|译文/i.test(row.ctrlProc))
+}
+
+export function isPctCase(row: FeeSearchRow): boolean {
+  return /(?:PCT|-WO)$/i.test(row.caseVolume) || /PCT\s*(?:国际阶段|国际申请)|国际阶段/.test(row.businessType)
+}
+
+export function feeMatterKey(row: Pick<FeeSearchRow, 'caseVolume' | 'procId' | 'ctrlProc'>): string {
+  return JSON.stringify([row.caseVolume, row.procId.trim() || row.ctrlProc.trim()])
 }
 
 export function isForeignAgentFee(row: FeeSearchRow): boolean {
@@ -84,9 +113,10 @@ function classifyOfficialText(text: string, mode: 'foreign' | 'pct'): OfficialKi
   const clean = text.trim()
   if (!clean) return null
   if (mode === 'pct') {
+    if (/国家阶段|年费|维持|授权|办登/.test(clean)) return null
     if (/检索费/.test(clean)) return 'pctSearch'
-    if (/附加费|超页|超项|滞纳/.test(clean)) return 'pctExtra'
-    if (/国际申请费|PCT.*申请费|新申请|申请费/i.test(clean)) return 'pctApply'
+    if (/附加费|超页|超项/.test(clean)) return 'pctExtra'
+    if (/国际申请费|PCT.*申请费|^(?:新)?申请费$/i.test(clean)) return 'pctApply'
     return null
   }
   // 优先匹配更具体的特征词，避免「国家阶段申请费」先命中「申请费」
@@ -101,7 +131,16 @@ function classifyOfficialText(text: string, mode: 'foreign' | 'pct'): OfficialKi
 
 /** 优先按费用名称判定官费类别，未命中时再回退处理事项，避免处理事项抢占费用名称。 */
 export function officialKind(row: FeeSearchRow, mode: 'foreign' | 'pct' = 'foreign'): OfficialKind {
+  if (mode === 'pct') return classifyOfficialText(row.feeType, mode) ?? 'other'
   return classifyOfficialText(row.feeType, mode) ?? classifyOfficialText(row.ctrlProc, mode) ?? 'other'
+}
+
+export function pctFeeProblem(row: FeeSearchRow): string {
+  if (!isPctCase(row)) return '无法确认是 PCT 国际阶段案卷'
+  if (isTranslationFee(row)) return 'PCT 模板没有翻译费列'
+  if (isInternalAgentFee(row)) return ''
+  if (row.feeClass !== 'O' || officialKind(row, 'pct') === 'other') return '不属于 PCT 国际申请费、检索费、附加费或我方代理费'
+  return ''
 }
 
 export function round2(value: number): number {
@@ -139,8 +178,7 @@ export function groupFeeEvents(rows: FeeSearchRow[]): EventGroup[] {
   const groups = new Map<string, EventGroup>()
   for (const row of sortFeeRows(rows)) {
     const currency = normalizeCurrency(row.currency)
-    const procKey = row.procId ? row.procId.trim() : row.ctrlProc.trim()
-    const key = `${row.caseVolume}\u0001${procKey}\u0001${currency}`
+    const key = `${feeMatterKey(row)}\u0001${currency}`
     let group = groups.get(key)
     if (!group) {
       group = {

@@ -36,7 +36,8 @@ const props = withDefaults(defineProps<{
   epoch?: number
   recoverySurface?: string
   autoSelectBills?: boolean
-}>(), { seed: null, seedToken: 0, selectable: false, showMailActions: true, epoch: 0, recoverySurface: 'file-query', autoSelectBills: false })
+  searchOnSeedChange?: boolean
+}>(), { seed: null, seedToken: 0, selectable: false, showMailActions: true, epoch: 0, recoverySurface: 'file-query', autoSelectBills: false, searchOnSeedChange: true })
 
 const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { default: () => ({}) })
 
@@ -281,6 +282,10 @@ watch(() => props.canSearch, allowed => {
   downloadConnectionRecovered.value = false
   stopBulk()
   generation += 1
+  if (props.autoSelectBills && searchState.value === 'loading') {
+    searchState.value = 'error'
+    searchMessage.value = '连接已断开，请重新查询账单。'
+  }
   pauseActiveDownload()
   downloadWait?.abort()
   if (activeTask.value?.status === 'running') activeTask.value.status = 'paused'
@@ -288,7 +293,15 @@ watch(() => props.canSearch, allowed => {
   if (taskCheckProgress.label === '下载文件' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
   scheduleSurface()
 })
-defineExpose({ protectSurface, selectAllPages })
+defineExpose({ protectSurface, selectAllPages, getBillingSelectionIssue })
+
+function getBillingSelectionIssue(): string {
+  if (searchState.value === 'loading' || selectingAll.value) return '账单还在读取，请等待完成。'
+  if (needsRevalidation.value) return '请先刷新验证已恢复的账单查询。'
+  if (searchState.value === 'error') return '账单查询失败，请重新查询。'
+  if (failedPages.value.length || billingScanIncomplete.value) return '账单页未读完，请重试失败页或重新执行只选所有账单。'
+  return ''
+}
 
 function messageForError(code: string, message: string): string {
   if (code === 'SESSION_EXPIRED') return 'EASY 登录已失效，请在原网站重新登录后检测。'
@@ -344,6 +357,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
   if (!bridge || !props.canSearch) return
   searchGeneration += 1
   stopBulk()
+  if (run === 'start') billingScanIncomplete.value = false
   const preserveRecoveredSelection = needsRevalidation.value && run === 'continue'
   if (needsRevalidation.value) { querySessionId.value = ''; run = 'start' }
   const { fields, oversized } = fieldsFor(query)
@@ -408,6 +422,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     readPages.value = [...new Set([...readPages.value, result.value.pageIndex])]
     await rememberRecovery('file-query', `${snapshotScope}:page:${querySessionId.value}:${result.value.pageIndex}`, result.value).catch(error => { recoveryNotice.value = String(error) })
     await protectSurface().catch(() => {})
+    if (current !== generation) return
     searchState.value = result.value.total === 0 ? 'empty' : 'success'
     void showResults()
     if (props.autoSelectBills && run === 'start' && result.value.total > 0 && !revalidate) {
@@ -466,6 +481,7 @@ function page(delta: number): void {
 }
 function clearView(): void {
   stopBulk()
+  billingScanIncomplete.value = false
   pageCache.clear()
   generation += 1
   result.value = null
@@ -777,6 +793,7 @@ function collectPages(bulk: BulkRead, pages: number[]): Promise<number[]> {
 /** 全选所有 / 只选所有账单：并发把每一页的行拉回来勾上（6 路把请求打满），翻页时顶栏有进度条；下载数量不设上限。
  * 有漏的自动兜一轮，再不行留按钮补。 */
 const selectingAll = ref(false)
+const billingScanIncomplete = ref(false)
 const failedPages = ref<number[]>([])
 async function selectAllPages(billsOnly = false): Promise<void> {
   if (needsRevalidation.value || !props.canSearch) return
@@ -793,6 +810,7 @@ async function selectAllPages(billsOnly = false): Promise<void> {
   activeBulk = bulk
   retryBulk = null
   selectingAll.value = true
+  if (props.autoSelectBills) billingScanIncomplete.value = true
   selectingBillsOnly.value = billsOnly
   failedPages.value = []
   toolbarNotice.value = ''
@@ -842,6 +860,7 @@ async function selectAllPages(billsOnly = false): Promise<void> {
     if (missed.length && !bulk.interrupted) missed = await collectPages(bulk, missed)
     if (!bulkCurrent(bulk)) return
     failedPages.value = missed
+    if (props.autoSelectBills) billingScanIncomplete.value = missed.length > 0
     retryBulk = missed.length ? bulk : null
     paintPaging(missed.length ? 'fail' : 'done')
     const actionLabel = billsOnly ? '只选账单' : '全选所有'
@@ -882,6 +901,7 @@ async function retryFailedPages(): Promise<void> {
     if (missed.length && !bulk.interrupted) missed = await collectPages(bulk, missed)
     if (!bulkCurrent(bulk)) return
     failedPages.value = missed
+    if (props.autoSelectBills) billingScanIncomplete.value = missed.length > 0
     retryBulk = missed.length ? bulk : null
     paintPaging(missed.length ? 'fail' : 'done')
     toolbarNotice.value = missed.length
@@ -951,7 +971,7 @@ watch(snapshotIdentity, async scope => {
 
 watch(() => props.epoch, () => { stopBulk(); generation += 1 })
 watch(() => props.seedToken, () => {
-  if (!props.seedToken || !props.seed) return
+  if (!props.searchOnSeedChange || !props.seedToken || !props.seed) return
   const fields: Record<string, string> = {}
   for (const [key, value] of Object.entries(props.seed)) {
     const text = value.trim()

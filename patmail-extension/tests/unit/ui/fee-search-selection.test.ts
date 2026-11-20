@@ -58,6 +58,7 @@ type MaybeRef<T> = T | { value: T }
 
 interface FeeSearchExpose {
   doSearch: (pageIndex?: number) => Promise<void> | void
+  setValues: (patch: Record<string, string>) => void
   selectingAll: MaybeRef<boolean>
   selectedCount: MaybeRef<number>
   getSelectedRows: () => FeeSearchRow[]
@@ -152,21 +153,29 @@ function mockFeeRow(index: number): FeeSearchRow {
 }
 
 describe('FeeSearchQuery selection tests', () => {
-  it('多页默认全选所有：查询成功后自动并发勾选所有页的数据，支持取消全选所有与重新全选所有', async () => {
+  it('多页默认勾选、失败页重试及手动全选使用正确的勾选范围', async () => {
     const total = 25
     const pageSize = 10
     const requestedPages: number[] = []
+    const requestedVolumes: Array<string | undefined> = []
+    let thirdPageAttempts = 0
 
     const bridge: MessageBridge = {
       request: vi.fn(async (message: ContentRequest): Promise<ContentResponse> => {
         if (message.type === MessageType.SearchFee) {
           const pageIndex = message.payload.query.pageIndex
           requestedPages.push(pageIndex)
+          requestedVolumes.push(message.payload.query.case_volume)
+          if (pageIndex === 3 && ++thirdPageAttempts <= 3) {
+            return { type: MessageType.Error, payload: { message: 'fixture unavailable' } }
+          }
           const start = (pageIndex - 1) * pageSize
           const end = Math.min(start + pageSize, total)
           const rows: FeeSearchRow[] = []
           for (let i = start + 1; i <= end; i++) {
-            rows.push(mockFeeRow(i))
+            const row = mockFeeRow(i)
+            if (i === 25) row.requestStatus = '审核中'
+            rows.push(row)
           }
           return {
             type: MessageType.SearchFeeResult,
@@ -221,20 +230,18 @@ describe('FeeSearchQuery selection tests', () => {
     // 触发查询
     await vm().doSearch(1)
     await settle()
-    for (let i = 0; i < 50 && unwrapBool(vm().selectingAll); i++) {
-      await new Promise(r => setTimeout(r, 10))
-      await settle()
-    }
+    await vi.waitFor(() => expect(unwrapBool(vm().selectingAll)).toBe(false), 3000)
 
     // 验证：3 页（1, 2, 3）都被请求
     expect(requestedPages).toContain(1)
     expect(requestedPages).toContain(2)
     expect(requestedPages).toContain(3)
 
-    // 验证：默认开始全选所有，总数 25 条已全选
     const currentSelectedCount = () => unwrapCount(vm().selectedCount)
-    expect(currentSelectedCount()).toBe(25)
-    expect(vm().getSelectedRows().length).toBe(25)
+    expect(currentSelectedCount()).toBe(20)
+    button('重试没读到的页').click()
+    await vi.waitFor(() => expect(currentSelectedCount()).toBe(24))
+    expect(vm().getSelectedRows().some(row => row.requestStatus === '审核中')).toBe(false)
 
     // 验证：「取消全选所有」按钮可清空所有选择
     const deselectBtn = button('取消全选所有')
@@ -266,6 +273,13 @@ describe('FeeSearchQuery selection tests', () => {
     selectCurrentPageBtn.click()
     await settle()
 
+    expect(currentSelectedCount()).toBe(25)
+
+    vm().setValues({ case_volume: 'NEW-SCOPE' })
+    button('下一页').click()
+    await settle()
+    expect(requestedPages.at(-1)).toBe(2)
+    expect(requestedVolumes.at(-1)).toBeUndefined()
     expect(currentSelectedCount()).toBe(25)
 
     // 验证：「清空选择」清空全部

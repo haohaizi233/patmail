@@ -15,7 +15,7 @@ function parseNumber(val: unknown, fallback = 0): number {
   if (typeof val === 'string') {
     const cleaned = val.replace(/,/g, '').trim()
     const num = Number(cleaned)
-    if (Number.isFinite(num)) return num
+    if (cleaned && Number.isFinite(num)) return num
   }
   return fallback
 }
@@ -33,26 +33,33 @@ export function normalizeFeeSearch(raw: unknown, query: FeeSearchQuery): ApiResu
     return apiError('HTTP_ERROR', cleanString(clientInfo.Message) || '系统繁忙，请求失败，请稍后重试！')
   }
 
-  const rawRows = Array.isArray(raw.rows)
-    ? raw.rows
-    : Array.isArray(raw.TableRows)
-      ? raw.TableRows
-      : []
-  const countStr = cleanString(raw.total) || cleanString(raw.TableRowsCount)
-  const total = typeof raw.total === 'number'
-    ? raw.total
-    : countStr
-      ? parseNumber(countStr, rawRows.length)
-      : rawRows.length
+  let rawRows: unknown = Object.hasOwn(raw, 'rows') ? raw.rows : raw.TableRows
+  if (typeof rawRows === 'string') {
+    try { rawRows = JSON.parse(rawRows) } catch { return apiError('INVALID_RESPONSE', '费用明细格式无效。') }
+  }
+  const total = parseNumber(raw.total ?? raw.TableRowsCount, NaN)
+  if (rawRows === null && total === 0) rawRows = []
+  const expected = Math.max(0, Math.min(query.pageSize, total - (query.pageIndex - 1) * query.pageSize))
+  if (!Array.isArray(rawRows) || !Number.isSafeInteger(total) || total < 0 || rawRows.length !== expected) {
+    return apiError('INVALID_RESPONSE', '费用查询返回的页数或行数不完整，请重新查询。')
+  }
 
   let pageAgentFee = 0
   let pageOfficialFee = 0
   let pageThirdPartyFee = 0
 
-  const rows: FeeSearchRow[] = rawRows.map((item, index) => {
+  const rows: FeeSearchRow[] = []
+  const feeIds = new Set<string>()
+  for (const [index, item] of rawRows.entries()) {
     const record = isRecord(item) ? item : {}
     const feeClass = cleanString(record.fee_class).toUpperCase()
-    const amount = parseNumber(record.amount, 0)
+    const amount = parseNumber(record.amount, NaN)
+    const feeId = cleanString(record.fee_id) || cleanString(record.objid)
+    const currency = cleanString(record.currency_id) || cleanString(record.currency_type)
+    if (!feeId || feeIds.has(feeId) || !currency || !Number.isFinite(amount)) {
+      return apiError('INVALID_RESPONSE', `第 ${query.pageIndex} 页第 ${index + 1} 条费用的编号、币别或金额无效。`)
+    }
+    feeIds.add(feeId)
 
     if (feeClass === 'A') {
       pageAgentFee += amount
@@ -62,8 +69,8 @@ export function normalizeFeeSearch(raw: unknown, query: FeeSearchQuery): ApiResu
       pageThirdPartyFee += amount
     }
 
-    return {
-      feeId: cleanString(record.fee_id) || cleanString(record.objid),
+    rows.push({
+      feeId,
       caseId: cleanString(record.case_id),
       procId: cleanString(record.proc_id),
       sn: parseNumber(record.sn, index + 1 + ((query.pageIndex || 1) - 1) * (query.pageSize || 10)),
@@ -71,18 +78,18 @@ export function normalizeFeeSearch(raw: unknown, query: FeeSearchQuery): ApiResu
       caseVolumeCustomer: cleanString(record.case_volume_customer),
       caseStatus: cleanString(record.case_status),
       applyType: cleanString(record.apply_type),
-      businessType: cleanString(record.business_type),
+      businessType: cleanString(record.business_type_name) || cleanString(record.business_type),
       noticeStatus: cleanString(record.notice_status),
       requestStatus: cleanString(record.request_status),
       receiveStatus: cleanString(record.receive_status),
       payStatus: cleanString(record.pay_status),
       amount,
-      currency: cleanString(record.currency_id) || 'CNY',
+      currency,
       rate: parseNumber(record.rate, 1),
-      targetAmount: parseNumber(record.target_amount, amount),
-      targetCurrency: cleanString(record.target_currency_id) || cleanString(record.currency_id) || 'CNY',
+      targetAmount: parseNumber(record.target_amount ?? record.amount_currency, amount),
+      targetCurrency: cleanString(record.target_currency_id) || currency,
       reviewStage: cleanString(record.review_stage),
-      feeType: cleanString(record.fee_type),
+      feeType: cleanString(record.fee_name) || cleanString(record.fee_type),
       appNo: cleanString(record.app_no),
       appDate: cleanString(record.app_date),
       requestNo: cleanString(record.request_no),
@@ -106,8 +113,8 @@ export function normalizeFeeSearch(raw: unknown, query: FeeSearchQuery): ApiResu
       feeCustomer: cleanString(record.fee_customer),
       flowUser: cleanString(record.flow_user),
       raw: record
-    }
-  })
+    })
+  }
 
   const summary: FeeSearchAmountSummary = {
     pageAgentFee,

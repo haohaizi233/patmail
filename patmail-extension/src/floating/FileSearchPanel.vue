@@ -40,7 +40,8 @@ const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { d
 const queryRef = ref<InstanceType<typeof FileSearchQuery> | null>(null)
 
 defineExpose({
-  selectAllPages: (billsOnly = false) => queryRef.value?.selectAllPages(billsOnly)
+  selectAllPages: (billsOnly = false) => queryRef.value?.selectAllPages(billsOnly),
+  getBillingSelectionIssue: () => queryRef.value?.getBillingSelectionIssue() ?? ''
 })
 const showSelected = ref(false)
 const showMail = ref(false)
@@ -170,6 +171,7 @@ onBeforeUnmount(() => {
       :show-mail-actions="showSession"
       :recovery-surface="recoverySurface || (showSession ? 'floating-files' : 'workspace-files')"
       :auto-select-bills="autoSelectBills"
+      :search-on-seed-change="!autoSelectBills"
       :user-id="queryUserId"
       :origin="accountOrigin"
       :can-search="canSearch"

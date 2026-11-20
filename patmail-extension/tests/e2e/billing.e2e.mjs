@@ -15,6 +15,23 @@ assert.ok(guideDiagrams >= 1, '请款.md must contain at least one mermaid diagr
 
 const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 } })
 const mock = await installEasyMock(context, { fixtureHtml: fixture, profile: 'extension' })
+await context.route('**/AjaxServers/Report.ashx*', async route => {
+  const request = route.request()
+  const call = new URLSearchParams(request.postData() ?? '').get('Call') ?? new URL(request.url()).searchParams.get('Call')
+  const client = { IsLogin: true, Status: true, Result: true }
+  const body = call === 'FeeSearch' ? {
+    ClientInfo: client,
+    total: 2,
+    rows: [
+      { fee_id: 'pct-test', case_volume: 'PA123PCT', business_type_name: 'PCT国际阶段', fee_class: 'O',
+        fee_name: '国际申请费', currency_id: 'CNY', amount: 100, request_status: '未请款' },
+      { fee_id: 'foreign-test', case_volume: 'PA123-EP', fee_class: 'O',
+        fee_name: '申请费', currency_id: 'CNY', amount: 200, request_status: '未请款' }
+    ]
+  } : call === 'FeeSearchTotalAmount' ? { ClientInfo: client, FeeList: [] } : null
+  if (!body) return route.fallback()
+  await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: JSON.stringify(body) })
+})
 const errors = []
 const watch = page => {
   page.on('pageerror', error => errors.push(error.message))
@@ -82,6 +99,21 @@ try {
   assert.equal(await step2Next.isDisabled(), true, '未勾选费用时导出前进按钮必须禁用')
   await report.screenshot(app, 'billing-step-gate.png')
   report.pass('export step is gated behind fee selection with an explicit notice')
+
+  await app.locator('.step-2-section').getByRole('button', { name: '查询', exact: true }).click()
+  await app.getByRole('button', { name: /进入请款单导出.*已选 1 笔/ }).waitFor()
+  await step2Next.click()
+  const pendingDownload = app.waitForEvent('download', { timeout: 10_000 })
+  await app.getByRole('button', { name: /导出 Excel 请款表/ }).click()
+  const download = await pendingDownload
+  assert.match(download.suggestedFilename(), /^美的PCT费用清单-\d{8}\.xlsx$/)
+  assert.equal(await download.failure(), null)
+  const workbook = await readFile(await download.path())
+  assert.equal(workbook.subarray(0, 4).toString('hex'), '504b0304')
+  await app.locator('.template-preset-bar').getByText('通用涉外请款单', { exact: true }).click()
+  await app.getByRole('button', { name: /进入请款单导出.*已选 0 笔/ }).waitFor()
+  assert.equal(await step2Next.isDisabled(), true)
+  report.pass('PCT filters the fixture, downloads a workbook and invalidates selection on template change')
 
   // 使用说明：请款.md 的 mermaid 图完整渲染且无错误
   await app.getByRole('tab', { name: '流程说明', exact: true }).click()
