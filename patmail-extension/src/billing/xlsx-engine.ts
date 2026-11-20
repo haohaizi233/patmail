@@ -443,6 +443,26 @@ export class XlsxBook {
     return new SheetEditor(this, name, this.doc(found.path))
   }
 
+  renameSheet(name: string, nextName: string): void {
+    if (name === nextName) return
+    const entry = this.sheets.find(sheet => sheet.name === name)
+    if (!entry || this.sheets.some(sheet => sheet.name === nextName)) throw new Error('无法重命名请款工作表。')
+    const workbook = this.doc('xl/workbook.xml')
+    const sheet = elements(workbook.documentElement, 'sheet').find(item => item.getAttribute('name') === name)
+    if (!sheet) throw new Error('无法找到请款工作表。')
+    const quoted = (value: string) => `'${value.replace(/'/g, "''")}'!`
+    for (const node of [
+      ...elements(workbook.documentElement, 'definedName'),
+      ...this.sheets.flatMap(item => elements(this.doc(item.path).documentElement, 'f'))
+    ]) {
+      const formula = node.textContent ?? ''
+      if (formula.includes(quoted(name))) node.textContent = formula.replaceAll(quoted(name), quoted(nextName))
+      else if (formula.includes(`${name}!`)) node.textContent = formula.replaceAll(`${name}!`, quoted(nextName))
+    }
+    sheet.setAttribute('name', nextName)
+    entry.name = nextName
+  }
+
   private expandSharedFormulas(doc: Document): void {
     const masters = new Map<string, { text: string; row: number; col: number }>()
     const cells = elements(doc.documentElement, 'c')

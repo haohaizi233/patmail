@@ -61,6 +61,43 @@ function mockFeeRow(partial: Partial<FeeSearchRow>): FeeSearchRow {
 }
 
 describe('billing templates filler', () => {
+  it('fills the historical Goer validation row with independently verified fee components', async () => {
+    const rows = [
+      mockFeeRow({ feeId: 'gov', feeClass: 'O', feeType: '生效官费', amount: 52 }),
+      mockFeeRow({ feeId: 'agent', feeType: '合作所代理费', amount: 1527 }),
+      mockFeeRow({ feeId: 'translation', feeClass: 'A', feeType: '翻译费', currency: 'CNY', amount: 6630, raw: { word_count: '4,420' } }),
+      mockFeeRow({ feeId: 'internal', feeClass: 'A', feeType: '合同金额', currency: 'CNY', amount: 6500 })
+    ]
+    const result = await fillBillingTemplate('general-foreign', readAsset('qingkuan-general-foreign.xlsx'), {
+      rows, bills: {}, rates: { EUR: 7.85 }, rateDate: '2026-11-05',
+      headers: defaultHeaders('general-foreign', new Date(2026, 9, 1)),
+      options: { reviewFee: 0, bankFee: 0 }
+    })
+    const book = await XlsxBook.open(result.bytes)
+    expect(book.sheets[0].name).toBe('格尔2026年10月涉外')
+    const sheet = book.sheet(book.sheets[0].name)
+    expect(result.blockCount).toBe(1)
+    expect(['K5', 'P5', 'T5', 'U5', 'V5'].map(cell => sheet.valueOf(cell))).toEqual([52, 1527, 6630, 4420, 6500])
+    expect(sheet.formulaOf('W5')).toBe('SUM(S5:T5,V5)')
+  })
+
+  it('preserves different live amounts and keeps unverified original-currency official fees out of totals', async () => {
+    const result = await fillBillingTemplate('general-foreign', readAsset('qingkuan-general-foreign.xlsx'), {
+      rows: [
+        mockFeeRow({ feeId: 'o', feeClass: 'O', feeType: '海外申请官费', currency: 'CNY', amount: 1000, ctrlProc: '指定国生效' }),
+        mockFeeRow({ feeId: 't', feeType: '合作所代理费', amount: 682, ctrlProc: '指定国生效' }),
+        mockFeeRow({ feeId: 'a', feeClass: 'A', feeType: '合同金额', currency: 'CNY', amount: 1000, ctrlProc: '指定国生效' })
+      ],
+      bills: {}, rates: { EUR: 7.3446 }, rateDate: '2026-11-20',
+      headers: defaultHeaders('general-foreign'), options: { reviewFee: 0, bankFee: 0 }
+    })
+    const book = await XlsxBook.open(result.bytes)
+    const sheet = book.sheet(book.sheets[0].name)
+    expect(result.blockCount).toBe(1)
+    expect(['I5', 'K5', 'P5', 'T5', 'U5', 'V5'].map(cell => sheet.valueOf(cell))).toEqual(['/', '/', 682, null, '/', 1000])
+    expect(sheet.valueOf('X5')).toContain('1000 CNY')
+    expect(result.warnings.join(' ')).toContain('当地币种')
+  })
   it('fills general-foreign template, expands blocks and preserves Excel formulas', async () => {
     const rawTemplate = readAsset('qingkuan-general-foreign.xlsx')
     const rows: FeeSearchRow[] = [
@@ -84,7 +121,7 @@ describe('billing templates filler', () => {
       today: new Date('2026-11-19')
     })
 
-    expect(result.fileName).toContain('涉外请款单-20261119.xlsx')
+    expect(result.fileName).toBe('格尔涉外请款单-20261119.xlsx')
     expect(result.blockCount).toBe(3) // 3 distinct (caseVolume + ctrlProc) events
 
     // Verify output xlsx structure
@@ -108,6 +145,7 @@ describe('billing templates filler', () => {
     // Summary row formula should encompass rows 5 to 7
     const summaryFormula = sheet.formulaOf('S8')
     expect(summaryFormula).toContain('SUM(S5:S7)')
+    expect(sheet.hasFormula('P8')).toBe(false)
   })
 
   it('fills midea-foreign template with 3-row blocks and duplicate sheets', async () => {
@@ -217,7 +255,7 @@ describe('billing templates filler', () => {
     const general = BILLING_TEMPLATES.find(t => t.id === 'general-foreign')!
     const mideaForeign = BILLING_TEMPLATES.find(t => t.id === 'midea-foreign')!
     const mideaPct = BILLING_TEMPLATES.find(t => t.id === 'midea-pct')!
-    expect(general.queryPreset.feeFields.fee_class).toBe('T')
+    expect(general.queryPreset.feeFields.fee_class).toBe('O,A,T')
     expect(mideaForeign.queryPreset.feeFields.fee_class).toBe('T')
     expect(mideaForeign.queryPreset.defaultOptions).toEqual({ reviewFee: 100, bankFee: 250 })
     expect(mideaPct.queryPreset.feeFields.fee_class).toBe('O,A')

@@ -400,7 +400,7 @@ async function doExportExcel(): Promise<void> {
   const account = connection.value.operatorId
   const origin = connection.value.easyOrigin
   exporting.value = true
-  exportResultNotice.value = '正在加载内置模板并生成 Excel（保留原有公式）…'
+  exportResultNotice.value = '正在生成 Excel 请款表…'
   exportWarnings.value = []
 
   try {
@@ -445,7 +445,7 @@ watch(() => props.isActive, active => {
     <PageHead
       v-if="!embedded"
       title="请款工作流"
-      desc="先选请款模板智能预填查询条件，涉外抓账单查第三方费用、PCT 查官费与我方代理费，保留 Excel 原公式导出。"
+      desc="按模板带入查询条件，核对账单和费用后导出 Excel。"
       :art="bg('让重复工作变简单.png')"
     />
 
@@ -694,6 +694,7 @@ watch(() => props.isActive, active => {
         :initial-values="feeInitialValues"
         :initial-token="feeInitialToken"
         :default-selection-filter="defaultSelectionFilter"
+        :include-translation-word-counts="selectedTemplateId === 'general-foreign'"
         @selection-change="onFeeSelectionChange"
       >
         <template #result-actions>
@@ -828,7 +829,7 @@ watch(() => props.isActive, active => {
             :disabled="exportDisabled"
             @click="doExportExcel"
           >
-            {{ exporting ? '正在填表并生成 Excel…' : '导出 Excel 请款表 (100%保留公式)' }}
+            {{ exporting ? '正在填表并生成 Excel…' : '导出 Excel 请款表' }}
           </button>
         </div>
 

@@ -1,7 +1,7 @@
 import type { FeeSearchRow } from '../api/fee-search-types'
 import {
-  countryOfCase, feeMatterKey, groupFeeCases, groupFeeEvents, matchedBillDate, officialKind, patentTypeLabel, pctFeeProblem, rateOf, round2, sumAmount,
-  uniqueText, missingCurrencies, sortFeeRows, type BillInfo, type EventGroup, type OfficialKind
+  countryOfCase, feeMatterKey, groupFeeCases, groupFeeEvents, isTranslationFee, matchedBillDate, officialKind, patentTypeLabel, pctFeeProblem, rateOf, round2, sumAmount,
+  uniqueText, missingCurrencies, sortFeeRows, translationWordCount, type BillInfo, type EventGroup, type OfficialKind
 } from './fee-model'
 import { normalizeCurrency } from './pbc-rates'
 import { excelSerial, XlsxBook, type SheetEditor } from './xlsx-engine'
@@ -51,13 +51,13 @@ export interface BillingTemplateInfo {
 
 export const BILLING_TEMPLATES: BillingTemplateInfo[] = [
   {
-    id: 'general-foreign', label: '通用涉外请款单', fileBase: '涉外请款单',
+    id: 'general-foreign', label: '格尔涉外请款单', fileBase: '格尔涉外请款单',
     summary: '一事项一行：官费按新申请/年费/生效/IDS/RCE/授权分列，外所代理费、汇率、税费、翻译费、内所代理费。',
     queryPreset: {
       fileFields: { flow_direction: 'IO', filetype: '付款INVOICE' },
       fileStepOptional: false,
-      feeFields: { case_type: PATENT_CASE_TYPE_ID, Case_direction: 'IO', fee_class: 'T' },
-      feeClassLabel: '第三方费用',
+      feeFields: { case_type: PATENT_CASE_TYPE_ID, Case_direction: 'IO', fee_class: 'O,A,T' },
+      feeClassLabel: '官费 + 代理费 + 第三方费用',
       defaultOptions: { reviewFee: 0, bankFee: 0 }
     },
     headers: [
@@ -160,10 +160,10 @@ function amountText(amount: number, currency: string): string {
   return `${amount}${currency}`
 }
 
-// ---------------------------------------------------------------- 通用涉外请款单
+// ---------------------------------------------------------------- 格尔涉外请款单
 
-const GENERAL_COLUMN: Record<OfficialKind, string> = {
-  new: 'I', annual: 'J', validation: 'K', ids: 'L', rce: 'M', grant: 'N', pctApply: 'I', pctSearch: 'I', pctExtra: 'I', other: 'I'
+const GENERAL_COLUMN: Partial<Record<OfficialKind, string>> = {
+  new: 'I', annual: 'J', validation: 'K', ids: 'L', rce: 'M', grant: 'N'
 }
 
 function cnyAmount(row: FeeSearchRow, rates: Record<string, number>): number {
@@ -171,10 +171,42 @@ function cnyAmount(row: FeeSearchRow, rates: Record<string, number>): number {
   return round2(row.amount * rate)
 }
 
+function goerEvents(rows: FeeSearchRow[]): EventGroup[] {
+  const matterKey = (row: Pick<FeeSearchRow, 'caseVolume' | 'procId' | 'ctrlProc' | 'finishDate'>) =>
+    row.procId.trim() ? feeMatterKey(row) : JSON.stringify([row.caseVolume, row.ctrlProc.trim(), row.finishDate])
+  const byMatter = new Map<string, EventGroup[]>()
+  for (const event of groupFeeEvents(rows, matterKey)) {
+    event.translation.push(...event.internalAgent.filter(isTranslationFee))
+    event.internalAgent = event.internalAgent.filter(row => !isTranslationFee(row))
+    const key = matterKey(event)
+    const groups = byMatter.get(key) ?? []
+    groups.push(event)
+    byMatter.set(key, groups)
+  }
+  return [...byMatter.values()].flatMap(groups => {
+    const anchor = groups.find(group => group.currency !== 'CNY' && (group.official.length || group.agent.length)) ?? groups[0]
+    for (const group of groups) {
+      if (group === anchor) continue
+      anchor.internalAgent.push(...group.internalAgent)
+      anchor.translation.push(...group.translation)
+      group.internalAgent = []
+      group.translation = []
+      if (group.currency === 'CNY') {
+        anchor.official.push(...group.official)
+        anchor.agent.push(...group.agent)
+        group.official = []
+        group.agent = []
+      }
+    }
+    return groups.filter(group => group.official.length || group.agent.length || group.internalAgent.length || group.translation.length)
+  })
+}
+
 function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): number {
   const sheetName = book.sheets[0]?.name ?? ''
   const sheet = book.sheet(sheetName)
-  const events = groupFeeEvents(input.rows)
+  const events = goerEvents(input.rows)
+  const billedCurrencies = new Set<string>()
   sheet.resizeBlocks({ firstRow: 5, blockSize: 1, oldCount: 2, newCount: events.length })
   events.forEach((group, index) => {
     const row = 5 + index
@@ -183,31 +215,73 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
       F: excelSerial(group.appDate), G: patentTypeLabel(group.applyType), H: group.applicant
     }
     for (const col of ['I', 'J', 'K', 'L', 'M', 'N']) cells[col] = '/'
+    const remarks = [group.ctrlProc]
+    const pending = (fee: FeeSearchRow, reason: string) => {
+      const detail = `${fee.feeType || '费用'} ${fee.amount} ${normalizeCurrency(fee.currency)}（${reason}，未纳入合计）`
+      remarks.push(detail)
+      warnings.push(`${group.caseVolume}「${group.ctrlProc}」${detail}。`)
+    }
     const totals = new Map<string, number>()
     for (const fee of group.official) {
-      const kind = officialKind(fee, 'foreign')
-      if (kind === 'other') warnings.push(`${group.caseVolume}「${fee.feeType || fee.ctrlProc}」没有认出官费类别，已计入「新申请」列，请核对。`)
+      if (fee.amount === 0) continue
+      if (normalizeCurrency(fee.currency) === 'CNY') {
+        pending(fee, 'EASY 以人民币登记，待核对当地币种')
+        continue
+      }
+      const kind = officialKind(/^海外申请官费$/.test(fee.feeType) ? { ...fee, feeType: '' } : fee)
       const col = GENERAL_COLUMN[kind]
+      if (!col || /外代费/.test(fee.feeType)) {
+        pending(fee, '待核对费用类别')
+        continue
+      }
       totals.set(col, round2((totals.get(col) ?? 0) + fee.amount))
     }
     for (const [col, amount] of totals) cells[col] = amount
     // S 列公式为 ROUND((O+P)*R+Q,2)，P 列绝不能写文本 '/'（否则 Excel 计算出 #VALUE!）
-    cells.P = group.agent.length ? sumAmount(group.agent) : null
-    cells.R = rateOf(group.currency, input.rates)
+    const foreignAgent = group.agent.filter(fee => normalizeCurrency(fee.currency) !== 'CNY')
+    group.agent.filter(fee => normalizeCurrency(fee.currency) === 'CNY' && fee.amount !== 0)
+      .forEach(fee => pending(fee, 'EASY 以人民币登记，待核对当地币种'))
+    cells.P = foreignAgent.length ? sumAmount(foreignAgent) : null
+    cells.R = totals.size || foreignAgent.length ? rateOf(group.currency, input.rates) : null
+    if (cells.R !== null) {
+      billedCurrencies.add(group.currency)
+      remarks.push(`账单币种 ${group.currency}`)
+    }
     // T 列为翻译费总额（折合 CNY），若有翻译费则填入，让总计 W = SUM(S:T, V) 完整包含翻译费
     const translationCny = group.translation.length
       ? round2(group.translation.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
       : null
     cells.T = translationCny
-    cells.U = '/'
+    const counts = group.translation.map(translationWordCount)
+    cells.U = counts.length && counts.every(count => count !== null)
+      ? counts.reduce<number>((total, count) => total + (count ?? 0), 0) : '/'
+    if (counts.some(count => count === null)) {
+      const known = counts.reduce<number>((total, count) => total + (count ?? 0), 0)
+      const note = known ? `已登记 ${known} 字，另有翻译字数待核对` : '翻译字数待核对'
+      remarks.push(note)
+      warnings.push(`${group.caseVolume}「${group.ctrlProc}」${note}。`)
+    }
     cells.V = group.internalAgent.length
       ? round2(group.internalAgent.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
       : null
-    cells.X = uniqueText([group.ctrlProc, ...group.official.map(fee => fee.feeType), ...group.translation.map(f => f.feeType)]).join('；')
+    cells.X = uniqueText([...remarks, ...group.translation.map(fee => fee.feeType)]).join('；')
     cells.Y = excelSerial(group.finishDate)
     for (const [col, value] of Object.entries(cells)) sheet.setCell(`${col}${row}`, value)
   })
+  if (billedCurrencies.size > 1) {
+    const footerRow = 5 + events.length
+    for (const col of ['I', 'J', 'K', 'L', 'M', 'N', 'O', 'P']) {
+      const cell = `${col}${footerRow}`
+      if (sheet.hasFormula(cell)) sheet.setCell(cell, null)
+    }
+    sheet.setCell(`X${footerRow}`, '多币种仅汇总人民币金额')
+  }
   sheet.setCell('R3', `汇率\n（${input.rateDate}）`)
+  const period = /(\d{4})年\s*(1[0-2]|0?[1-9])月/.exec(input.headers.title ?? '')
+  const today = input.today ?? new Date()
+  const year = period?.[1] ?? today.getFullYear()
+  const month = period ? Number(period[2]) : today.getMonth() + 1
+  book.renameSheet(sheetName, `格尔${year}年${month}月涉外`)
   return events.length
 }
 
