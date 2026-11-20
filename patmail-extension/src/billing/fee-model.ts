@@ -65,9 +65,13 @@ export function isInternalAgentFee(row: FeeSearchRow): boolean {
   return row.feeClass === 'A' || /内所代理|我方代理/.test(row.feeType)
 }
 
+export function isTranslationFee(row: FeeSearchRow): boolean {
+  return /翻译|译文|校对|translate|translation/i.test(row.feeType) || /翻译|译文/i.test(row.ctrlProc)
+}
+
 export function isForeignAgentFee(row: FeeSearchRow): boolean {
-  if (isInternalAgentFee(row) || row.feeClass === 'O') return false
-  return /代理|律师|服务费|外所|答辩|代办/.test(row.feeType)
+  if (isInternalAgentFee(row) || isTranslationFee(row) || row.feeClass === 'O') return false
+  return /代理|律师|服务费|外所|答辩|代办/i.test(row.feeType)
 }
 
 export function isAgentFee(row: FeeSearchRow): boolean {
@@ -85,12 +89,13 @@ function classifyOfficialText(text: string, mode: 'foreign' | 'pct'): OfficialKi
     if (/国际申请费|PCT.*申请费|新申请|申请费/i.test(clean)) return 'pctApply'
     return null
   }
+  // 优先匹配更具体的特征词，避免「国家阶段申请费」先命中「申请费」
   if (/IDS/i.test(clean)) return 'ids'
   if (/RCE/i.test(clean)) return 'rce'
   if (/年费|维持/.test(clean)) return 'annual'
   if (/授权|办登|登记|发证/.test(clean)) return 'grant'
-  if (/新申请|申请费|filing/i.test(clean)) return 'new'
   if (/生效|进入.*国家|国家阶段|validation/i.test(clean)) return 'validation'
+  if (/新申请|申请费|filing/i.test(clean)) return 'new'
   return null
 }
 
@@ -116,6 +121,7 @@ export interface EventGroup {
   appNo: string
   appDate: string
   applyType: string
+  procId: string
   ctrlProc: string
   finishDate: string
   currency: string
@@ -124,51 +130,76 @@ export interface EventGroup {
   agent: FeeSearchRow[]
   /** 内所代理费（feeClass = 'A'），避免在涉外模板里错按外币汇率折算。 */
   internalAgent: FeeSearchRow[]
+  /** 翻译费（通用模板 T 列，美的模板 Y 列），避免误入官费计税。 */
+  translation: FeeSearchRow[]
 }
 
-/** 按「案件 + 处理事项 + 币种」归并：官费和外所代理费落在同一个事项块里；内所代理费单列。 */
+/** 按「案件 + 处理事项 + 币种」归并：官费、外所代理费和翻译费落在同一个事项块里；内所代理费单列。优先使用 procId 识别唯一业务事项。 */
 export function groupFeeEvents(rows: FeeSearchRow[]): EventGroup[] {
   const groups = new Map<string, EventGroup>()
-  for (const row of rows) {
+  for (const row of sortFeeRows(rows)) {
     const currency = normalizeCurrency(row.currency)
-    const key = `${row.caseVolume}\u0001${row.ctrlProc}\u0001${currency}`
+    const procKey = row.procId ? row.procId.trim() : row.ctrlProc.trim()
+    const key = `${row.caseVolume}\u0001${procKey}\u0001${currency}`
     let group = groups.get(key)
     if (!group) {
       group = {
         caseVolume: row.caseVolume, customerVolume: row.caseVolumeCustomer, caseName: row.caseName,
         applicant: row.applicant, appNo: row.appNo, appDate: row.appDate, applyType: row.applyType,
-        ctrlProc: row.ctrlProc, finishDate: row.finishDate, currency, official: [], agent: [], internalAgent: []
+        procId: row.procId || '', ctrlProc: row.ctrlProc, finishDate: row.finishDate, currency,
+        official: [], agent: [], internalAgent: [], translation: []
       }
       groups.set(key, group)
     }
     if (!group.finishDate && row.finishDate) group.finishDate = row.finishDate
     if (!group.applicant && row.applicant) group.applicant = row.applicant
     if (isInternalAgentFee(row)) group.internalAgent.push(row)
+    else if (isTranslationFee(row)) group.translation.push(row)
     else if (isForeignAgentFee(row)) group.agent.push(row)
     else group.official.push(row)
   }
   return [...groups.values()]
 }
 
-/** 同一案件的多个事项合成一行（PCT 请款表一案一行：官费 + 我方代理费）。 */
+/** 同一案件的多个事项合成一行（PCT 请款表一案一行：官费 + 我方代理费）。汇总该案件所有处理事项名称。 */
 export function groupFeeCases(rows: FeeSearchRow[]): Array<EventGroup & { rows: FeeSearchRow[] }> {
   const groups = new Map<string, EventGroup & { rows: FeeSearchRow[] }>()
-  for (const row of rows) {
+  for (const row of sortFeeRows(rows)) {
     const currency = normalizeCurrency(row.currency)
     let group = groups.get(row.caseVolume)
     if (!group) {
       group = {
         caseVolume: row.caseVolume, customerVolume: row.caseVolumeCustomer, caseName: row.caseName,
         applicant: row.applicant, appNo: row.appNo, appDate: row.appDate, applyType: row.applyType,
-        ctrlProc: row.ctrlProc, finishDate: row.finishDate, currency, official: [], agent: [], internalAgent: [], rows: []
+        procId: row.procId || '', ctrlProc: row.ctrlProc, finishDate: row.finishDate, currency,
+        official: [], agent: [], internalAgent: [], translation: [], rows: []
       }
       groups.set(row.caseVolume, group)
     }
     group.rows.push(row)
     if (isAgentFee(row)) group.agent.push(row)
+    else if (isTranslationFee(row)) group.translation.push(row)
     else group.official.push(row)
   }
+  // 综合案件下的全部事项名称，避免多事项被首行覆盖
+  for (const group of groups.values()) {
+    const procs = uniqueText(group.rows.map(r => r.ctrlProc))
+    if (procs.length > 0) {
+      group.ctrlProc = procs.join('；')
+    }
+  }
   return [...groups.values()]
+}
+
+export function sortFeeRows(rows: FeeSearchRow[]): FeeSearchRow[] {
+  return [...rows].sort((a, b) => {
+    if (a.sn !== undefined && b.sn !== undefined && a.sn !== b.sn) {
+      return a.sn - b.sn
+    }
+    const caseCmp = (a.caseVolume || '').localeCompare(b.caseVolume || '')
+    if (caseCmp !== 0) return caseCmp
+    return (a.feeId || '').localeCompare(b.feeId || '')
+  })
 }
 
 export function sumAmount(rows: FeeSearchRow[]): number {
@@ -188,5 +219,17 @@ export function rateOf(currency: string, rates: Record<string, number>): number 
 }
 
 export function missingCurrencies(rows: FeeSearchRow[], rates: Record<string, number>): string[] {
-  return uniqueText(rows.map(row => normalizeCurrency(row.currency))).filter(code => rateOf(code, rates) === null)
+  const missing = new Set<string>()
+  for (const row of rows) {
+    const trimmed = (row.currency ?? '').trim()
+    if (!trimmed) {
+      missing.add(`未填写币别(文号:${row.caseVolume || row.feeId})`)
+      continue
+    }
+    const code = normalizeCurrency(trimmed)
+    if (rateOf(code, rates) === null) {
+      missing.add(code)
+    }
+  }
+  return [...missing]
 }

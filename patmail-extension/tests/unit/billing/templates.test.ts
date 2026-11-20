@@ -263,4 +263,63 @@ describe('billing templates filler', () => {
       options: { reviewFee: 0, bankFee: 0 }
     })).rejects.toThrow(/缺少汇率.*CHF/)
   })
+
+  it('correctly places translation fee into column T for general-foreign and column Y for midea-foreign', async () => {
+    // 1. 通用涉外模板
+    const generalTpl = readAsset('qingkuan-general-foreign.xlsx')
+    const generalRes = await fillBillingTemplate('general-foreign', generalTpl, {
+      rows: [
+        mockFeeRow({ feeId: 'f1', caseVolume: 'PA2411768CN-EP', ctrlProc: '进入EP', feeType: '新申请官费', amount: 1000, currency: 'EUR' }),
+        mockFeeRow({ feeId: 'f2', caseVolume: 'PA2411768CN-EP', ctrlProc: '进入EP', feeType: '说明书翻译费', amount: 200, currency: 'EUR' })
+      ],
+      bills: {},
+      rates: { EUR: 7.85 },
+      rateDate: '2026-11-19',
+      headers: {},
+      options: { reviewFee: 0, bankFee: 0 }
+    })
+    const generalBook = await XlsxBook.open(generalRes.bytes)
+    const generalSheet = generalBook.sheet(generalBook.sheets[0].name)
+    // T5 应记录翻译费 200 EUR 折合 1570 CNY
+    expect(generalSheet.valueOf('T5')).toBe(1570)
+
+    // 2. 美的涉外模板
+    const mideaTpl = readAsset('qingkuan-midea-foreign.xlsx')
+    const mideaRes = await fillBillingTemplate('midea-foreign', mideaTpl, {
+      rows: [
+        mockFeeRow({ feeId: 'f1', caseVolume: 'PA2411768CN-EP', ctrlProc: '进入EP', feeType: '新申请官费', amount: 1000, currency: 'EUR' }),
+        mockFeeRow({ feeId: 'f2', caseVolume: 'PA2411768CN-EP', ctrlProc: '进入EP', feeType: '说明书翻译费', amount: 200, currency: 'EUR' })
+      ],
+      bills: {},
+      rates: { EUR: 7.85 },
+      rateDate: '2026-11-19',
+      headers: {},
+      options: { reviewFee: 100, bankFee: 250 }
+    })
+    const mideaBook = await XlsxBook.open(mideaRes.bytes)
+    const mideaSheet = mideaBook.sheet('线下专利请款表A-生活电器2026M7-9')
+    // Y9 应记录国内所翻译费 1570
+    expect(mideaSheet.valueOf('Y9')).toBe(1570)
+    // AG9 说明文字应包含 译1570CNY
+    expect(String(mideaSheet.valueOf('AG9'))).toContain('译1570CNY')
+  })
+
+  it('separates events by procId even when ctrlProc name is the same', async () => {
+    const rawTemplate = readAsset('qingkuan-general-foreign.xlsx')
+    const rows: FeeSearchRow[] = [
+      mockFeeRow({ feeId: 'f1', procId: 'proc-oa-1', caseVolume: 'PA2411768CN-EP', ctrlProc: '答复审查意见', feeType: '官费', amount: 300, currency: 'EUR' }),
+      mockFeeRow({ feeId: 'f2', procId: 'proc-oa-2', caseVolume: 'PA2411768CN-EP', ctrlProc: '答复审查意见', feeType: '官费', amount: 400, currency: 'EUR' })
+    ]
+
+    const result = await fillBillingTemplate('general-foreign', rawTemplate, {
+      rows,
+      bills: {},
+      rates: { EUR: 7.85 },
+      rateDate: '2026-11-19',
+      headers: {},
+      options: { reviewFee: 0, bankFee: 0 }
+    })
+    // 两个不同 procId 的 OA 事项，应该分为两个独立的 block 行
+    expect(result.blockCount).toBe(2)
+  })
 })

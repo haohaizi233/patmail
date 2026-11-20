@@ -23,8 +23,24 @@ const INDIRECT: Array<[string, string]> = [
 /** 常见币种代码与中文名称的互认（EASY 费用行里币别可能是代码，也可能是中文）。 */
 const CURRENCY_ALIASES: Record<string, string> = {
   人民币: 'CNY', RMB: 'CNY', CNY: 'CNY', 元: 'CNY',
-  美元: 'USD', 欧元: 'EUR', 日元: 'JPY', 港元: 'HKD', 英镑: 'GBP', 澳元: 'AUD', 澳大利亚元: 'AUD', 新西兰元: 'NZD',
-  新加坡元: 'SGD', 瑞士法郎: 'CHF', 加拿大元: 'CAD', 韩元: 'KRW', 俄罗斯卢布: 'RUB', 印度卢比: 'INR'
+  美元: 'USD', 美金: 'USD', USD: 'USD',
+  欧元: 'EUR', 欧: 'EUR', EUR: 'EUR',
+  日元: 'JPY', 日币: 'JPY', JPY: 'JPY',
+  港元: 'HKD', 港币: 'HKD', HKD: 'HKD',
+  英镑: 'GBP', GBP: 'GBP',
+  澳元: 'AUD', 澳币: 'AUD', 澳大利亚元: 'AUD', AUD: 'AUD',
+  新西兰元: 'NZD', 纽币: 'NZD', NZD: 'NZD',
+  新加坡元: 'SGD', 新币: 'SGD', SGD: 'SGD',
+  瑞士法郎: 'CHF', 瑞郎: 'CHF', CHF: 'CHF',
+  加拿大元: 'CAD', 加币: 'CAD', CAD: 'CAD',
+  韩元: 'KRW', 韩币: 'KRW', KRW: 'KRW',
+  俄罗斯卢布: 'RUB', 卢布: 'RUB', RUB: 'RUB',
+  印度卢比: 'INR', 卢比: 'INR', INR: 'INR',
+  泰铢: 'THB', THB: 'THB',
+  林吉特: 'MYR', 马币: 'MYR', MYR: 'MYR',
+  阿联酋迪拉姆: 'AED', 迪拉姆: 'AED', AED: 'AED',
+  沙特里亚尔: 'SAR', 里亚尔: 'SAR', SAR: 'SAR',
+  澳门元: 'MOP', 葡币: 'MOP', MOP: 'MOP'
 }
 
 export function normalizeCurrency(raw: string | undefined | null): string {

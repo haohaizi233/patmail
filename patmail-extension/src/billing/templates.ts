@@ -1,12 +1,21 @@
 import type { FeeSearchRow } from '../api/fee-search-types'
 import {
   countryOfCase, groupFeeCases, groupFeeEvents, latestBillDate, officialKind, patentTypeLabel, rateOf, round2, sumAmount,
-  uniqueText, missingCurrencies, type BillInfo, type EventGroup, type OfficialKind
+  uniqueText, missingCurrencies, sortFeeRows, type BillInfo, type EventGroup, type OfficialKind
 } from './fee-model'
 import { normalizeCurrency } from './pbc-rates'
 import { excelSerial, XlsxBook, type SheetEditor } from './xlsx-engine'
 
 export type BillingTemplateId = 'general-foreign' | 'midea-foreign' | 'midea-pct'
+
+export const BILLING_TAX_RATE = 0.0672
+
+export function formatLocalDate(date = new Date()): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
 
 export interface HeaderField {
   key: string
@@ -129,8 +138,6 @@ export interface BillingResult {
   blockCount: number
 }
 
-const TAX_RATE = 0.0672
-
 function stamp(today: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${today.getFullYear()}${p(today.getMonth() + 1)}${p(today.getDate())}`
@@ -187,12 +194,16 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
     // S 列公式为 ROUND((O+P)*R+Q,2)，P 列绝不能写文本 '/'（否则 Excel 计算出 #VALUE!）
     cells.P = group.agent.length ? sumAmount(group.agent) : null
     cells.R = rateOf(group.currency, input.rates)
-    cells.T = null
+    // T 列为翻译费总额（折合 CNY），若有翻译费则填入，让总计 W = SUM(S:T, V) 完整包含翻译费
+    const translationCny = group.translation.length
+      ? round2(group.translation.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
+      : null
+    cells.T = translationCny
     cells.U = '/'
     cells.V = group.internalAgent.length
       ? round2(group.internalAgent.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
       : null
-    cells.X = uniqueText([group.ctrlProc, ...group.official.map(fee => fee.feeType)]).join('；')
+    cells.X = uniqueText([group.ctrlProc, ...group.official.map(fee => fee.feeType), ...group.translation.map(f => f.feeType)]).join('；')
     cells.Y = excelSerial(group.finishDate)
     for (const [col, value] of Object.entries(cells)) sheet.setCell(`${col}${row}`, value)
   })
@@ -217,6 +228,9 @@ function fillMideaForeignBlock(
   const officialName = uniqueText(group.official.map(fee => fee.feeType)).join('、')
   const officialAmount = group.official.length ? sumAmount(group.official) : null
   const agentAmount = group.agent.length ? sumAmount(group.agent) : null
+  const translationCny = group.translation.length
+    ? round2(group.translation.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
+    : null
   const internalAgentCny = group.internalAgent.length
     ? round2(group.internalAgent.reduce((sum, fee) => sum + cnyAmount(fee, input.rates), 0))
     : null
@@ -226,7 +240,7 @@ function fillMideaForeignBlock(
   const bank = chargeOverhead ? input.options.bankFee : 0
   const officialCny = officialAmount === null || rate === null ? 0 : round2(officialAmount * rate)
   const agentCny = agentAmount === null || rate === null ? 0 : round2(agentAmount * rate)
-  const tax = round2((officialCny + agentCny) * TAX_RATE)
+  const tax = round2((officialCny + agentCny) * BILLING_TAX_RATE)
   const r0 = base
   const r1 = base + 1
   const r2 = base + 2
@@ -241,10 +255,12 @@ function fillMideaForeignBlock(
   sheet.setCell(`S${r1}`, agentAmount)
   sheet.setCell(`T${r1}`, agentAmount === null ? null : rate)
   sheet.setCell(`AG${r1}`, agentAmount === null ? '' : `${group.ctrlProc}外所代理费${amountText(agentAmount, cur)}`)
+  sheet.setCell(`Y${r2}`, translationCny)
   sheet.setCell(`Z${r2}`, internalAgentCny)
   sheet.setCell(`AA${r2}`, review || null)
   sheet.setCell(`AB${r2}`, bank || null)
   const parts = [
+    translationCny ? `译${translationCny}CNY` : '',
     internalAgentCny ? `代${internalAgentCny}` : '',
     review ? `审${review}` : '',
     bank ? `银${bank}` : '',
@@ -325,14 +341,15 @@ export async function fillBillingTemplate(id: BillingTemplateId, template: Uint8
   const info = BILLING_TEMPLATES.find(item => item.id === id)
   if (!info) throw new Error('未知的请款表模板。')
   const today = input.today ?? new Date()
+  const sortedInput: BillingInput = { ...input, rows: sortFeeRows(input.rows) }
   const book = await XlsxBook.open(template)
   // 清理模板根级 #REF! 失效格，保留下游汇总/小计计算公式
   book.clearRootRefFormulas()
   const warnings: string[] = []
   let blockCount = 0
-  if (id === 'general-foreign') blockCount = fillGeneral(book, input, warnings)
-  else if (id === 'midea-foreign') blockCount = fillMideaForeign(book, input, warnings)
-  else blockCount = fillMideaPct(book, input, warnings)
+  if (id === 'general-foreign') blockCount = fillGeneral(book, sortedInput, warnings)
+  else if (id === 'midea-foreign') blockCount = fillMideaForeign(book, sortedInput, warnings)
+  else blockCount = fillMideaPct(book, sortedInput, warnings)
   const headerSheets = id === 'midea-foreign'
     ? MIDEA_FOREIGN_SHEETS.map(name => book.sheet(name))
     : [book.sheet(id === 'general-foreign' ? (book.sheets[0]?.name ?? '') : '生活电器2026M7-9')]
