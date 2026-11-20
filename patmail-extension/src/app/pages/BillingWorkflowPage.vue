@@ -23,6 +23,7 @@ import {
   BILLING_TEMPLATES,
   defaultHeaders,
   fillBillingTemplate,
+  formatLocalDate,
   type BillingOptions,
   type BillingTemplateId
 } from '../../billing/templates'
@@ -269,6 +270,37 @@ function initStep3(): void {
   }
 }
 
+// 对账汇总信息
+const reconciliationInfo = computed(() => {
+  const caseSet = new Set<string>()
+  let unrequestedCount = 0
+  let requestedCount = 0
+  for (const row of selectedFeeRows.value) {
+    if (row.caseVolume) caseSet.add(row.caseVolume)
+    const st = String(row.requestStatus || '')
+    if (st.includes('已请款')) requestedCount++
+    else unrequestedCount++
+  }
+  const allCases = [...caseSet]
+  const matchedCases: string[] = []
+  const unmatchedCases: string[] = []
+  for (const vol of allCases) {
+    if (billMap.value[vol] && billMap.value[vol].length > 0) {
+      matchedCases.push(vol)
+    } else {
+      unmatchedCases.push(vol)
+    }
+  }
+  return {
+    totalRows: selectedFeeRows.value.length,
+    totalCases: allCases.length,
+    unrequestedCount,
+    requestedCount,
+    matchedCasesCount: matchedCases.length,
+    unmatchedCases
+  }
+})
+
 // 执行导出
 const exporting = ref(false)
 const exportResultNotice = ref('')
@@ -295,7 +327,7 @@ async function doExportExcel(): Promise<void> {
       rows: selectedFeeRows.value,
       bills: billMap.value,
       rates: effectiveRates.value,
-      rateDate: ratesDate.value || new Date().toISOString().slice(0, 10),
+      rateDate: ratesDate.value || formatLocalDate(new Date()),
       headers: headerValues.value,
       options: billingOptions.value,
       today: new Date()
@@ -602,11 +634,11 @@ onMounted(() => {
             <span v-else-if="ratesDate" class="date-badge">公布日期：{{ ratesDate }}</span>
             <button
               type="button"
-              class="text-button"
+              class="refresh-rates-btn"
               :disabled="ratesLoading"
               @click="loadPbcRates"
             >
-              重新爬取最新汇率
+              {{ ratesLoading ? '正在抓取…' : '↻ 重新抓取最新汇率' }}
             </button>
           </div>
         </div>
@@ -689,10 +721,17 @@ onMounted(() => {
       <!-- 最终导出操作卡片 -->
       <div class="export-execute-card card">
         <div class="summary-line">
-          <span>待填入费用行数：<b>{{ selectedFeeRows.length }}</b> 行</span>
-          <span>账单编号数：<b>{{ recognizedBillsCount }}</b> 份</span>
+          <span>待填入费用：<b>{{ selectedFeeRows.length }}</b> 笔（未请款 <b>{{ reconciliationInfo.unrequestedCount }}</b>，已请款 <b>{{ reconciliationInfo.requestedCount }}</b>）</span>
+          <span>涉及案卷：<b>{{ reconciliationInfo.totalCases }}</b> 个（匹配账单 <b>{{ reconciliationInfo.matchedCasesCount }}</b>，未匹配 <b>{{ reconciliationInfo.unmatchedCases.length }}</b>）</span>
           <span>目标模板：<b>{{ currentTemplate.label }}</b></span>
         </div>
+
+        <p v-if="reconciliationInfo.requestedCount > 0" class="reconcile-warn requested-warn">
+          ⚠️ 注意：当前勾选的数据中包含 <b>{{ reconciliationInfo.requestedCount }}</b> 笔「已请款」费用，导出前请核对是否确认重复请款。
+        </p>
+        <p v-if="reconciliationInfo.unmatchedCases.length > 0 && selectedTemplateId !== 'midea-pct'" class="reconcile-warn bill-missing-warn">
+          ℹ️ 提示：有 <b>{{ reconciliationInfo.unmatchedCases.length }}</b> 个案卷未在步骤 1 匹配到账单（{{ reconciliationInfo.unmatchedCases.slice(0, 4).join('、') }}{{ reconciliationInfo.unmatchedCases.length > 4 ? ' 等' : '' }}），导出时其海外账单日将留空。
+        </p>
 
         <div class="button-row">
           <button
@@ -1005,7 +1044,39 @@ onMounted(() => {
 .card-title-row .actions {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 12px;
+}
+
+.card-title-row .actions > * {
+  white-space: nowrap;
+  flex-shrink: 0;
+  writing-mode: horizontal-tb;
+}
+
+.card-title-row .refresh-rates-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: max-content;
+  padding: 5px 14px;
+  border: 1px solid #f3c2d4;
+  border-radius: 999px;
+  background: #fff6fa;
+  color: #d9578c;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.card-title-row .refresh-rates-btn:hover:not(:disabled) {
+  background: #ffe9f2;
+}
+
+.card-title-row .refresh-rates-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .card-title-row .date-badge {
@@ -1192,6 +1263,24 @@ onMounted(() => {
 
 .export-execute-card .summary-line b {
   color: #2d3748;
+}
+
+.reconcile-warn {
+  margin: 0 0 10px 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.reconcile-warn.requested-warn {
+  background: #fff5f5;
+  color: #c53030;
+  border-left: 3px solid #e53e3e;
+}
+.reconcile-warn.bill-missing-warn {
+  background: #fffaf0;
+  color: #c05621;
+  border-left: 3px solid #dd6b20;
 }
 
 .export-execute-card .export-btn {

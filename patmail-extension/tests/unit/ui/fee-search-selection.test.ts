@@ -1,0 +1,415 @@
+import { createApp, h, nextTick, type App } from 'vue'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import FeeSearchQuery from '../../../src/app/components/FeeSearchQuery.vue'
+import { MessageType, type ContentRequest, type ContentResponse, type MessageBridge } from '../../../src/shared/message'
+import { resetTaskCheckProgress } from '../../../src/app/check-progress'
+import type { FeeSearchRow } from '../../../src/api/fee-search-types'
+
+vi.mock('../../../src/shell/components/ThemeSelect.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      props: ['modelValue', 'options'],
+      emits: ['update:modelValue'],
+      setup(props, { emit }) {
+        return () =>
+          h(
+            'select',
+            {
+              value: props.modelValue,
+              onChange: (event: Event) => emit('update:modelValue', Number((event.target as HTMLSelectElement).value))
+            },
+            (props.options as Array<{ value: number; label: string }>).map(option =>
+              h('option', { value: option.value }, option.label)
+            )
+          )
+      }
+    })
+  }
+})
+
+vi.mock('../../../src/shell/components/TreeOptionSelect.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      props: ['modelValue', 'choices'],
+      emits: ['update:modelValue'],
+      setup() {
+        return () => h('div', { class: 'tree-mock' })
+      }
+    })
+  }
+})
+
+vi.mock('../../../src/shell/components/WDatePicker.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      props: ['modelValue'],
+      emits: ['update:modelValue'],
+      setup() {
+        return () => h('div', { class: 'date-mock' })
+      }
+    })
+  }
+})
+
+type MaybeRef<T> = T | { value: T }
+
+interface FeeSearchExpose {
+  doSearch: (pageIndex?: number) => Promise<void> | void
+  selectingAll: MaybeRef<boolean>
+  selectedCount: MaybeRef<number>
+  getSelectedRows: () => FeeSearchRow[]
+}
+
+function unwrapCount(v: MaybeRef<number>): number {
+  return typeof v === 'number' ? v : v.value
+}
+
+function unwrapBool(v: MaybeRef<boolean>): boolean {
+  return typeof v === 'boolean' ? v : v.value
+}
+
+let app: App | undefined
+let compExpose: FeeSearchExpose | null = null
+
+function vm(): FeeSearchExpose {
+  if (!compExpose) throw new Error('FeeSearchQuery 未挂载')
+  return compExpose
+}
+
+afterEach(() => {
+  app?.unmount()
+  app = undefined
+  compExpose = null
+  document.body.innerHTML = ''
+  resetTaskCheckProgress()
+  vi.clearAllMocks()
+})
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    await Promise.resolve()
+    await nextTick()
+  }
+}
+
+function button(label: string): HTMLButtonElement {
+  const found = Array.from(document.querySelectorAll('button')).find(
+    node => node.textContent?.trim().includes(label)
+  )
+  if (!found) throw new Error(`Missing button with label containing ${label}`)
+  return found
+}
+
+function mockFeeRow(index: number): FeeSearchRow {
+  return {
+    sn: index,
+    feeId: `fee-guid-${index}`,
+    caseId: `case-guid-${index}`,
+    procId: `proc-guid-${index}`,
+    caseVolume: `PA${2511250 + index}`,
+    caseVolumeCustomer: `P2022${1560 + index}`,
+    caseStatus: '发知',
+    applyType: '发知',
+    businessType: 'PCT实件进，未通知',
+    noticeStatus: '未通知',
+    requestStatus: '未请款',
+    receiveStatus: '未收款',
+    payStatus: '已缴费',
+    feeType: '合作所代理',
+    appNo: `2025-${55520 + index}`,
+    amount: 2018.89,
+    currency: 'USD',
+    rate: 113.3333,
+    targetAmount: 228807.47,
+    targetCurrency: 'JPY',
+    reviewStage: '',
+    appDate: '2025-01-01',
+    requestNo: '',
+    paymentNo: '',
+    ctrlProc: '后补译文',
+    feeClass: 'A',
+    feeClassName: '代理费',
+    createTime: '2025-01-01',
+    payDueDate: '2025-02-01',
+    caseName: '测试案件',
+    customerName: '美的工业技',
+    applicant: '广东美芝制',
+    recieveAmount: '',
+    billNo: '',
+    invoiceNo: '',
+    requestDate: '',
+    payDate: '',
+    receiveDueDate: '',
+    receiveDate: '',
+    finishDate: '',
+    feeCustomer: '',
+    flowUser: '',
+    raw: {}
+  }
+}
+
+describe('FeeSearchQuery selection tests', () => {
+  it('多页默认全选所有：查询成功后自动并发勾选所有页的数据，支持取消全选所有与重新全选所有', async () => {
+    const total = 25
+    const pageSize = 10
+    const requestedPages: number[] = []
+
+    const bridge: MessageBridge = {
+      request: vi.fn(async (message: ContentRequest): Promise<ContentResponse> => {
+        if (message.type === MessageType.SearchFee) {
+          const pageIndex = message.payload.query.pageIndex
+          requestedPages.push(pageIndex)
+          const start = (pageIndex - 1) * pageSize
+          const end = Math.min(start + pageSize, total)
+          const rows: FeeSearchRow[] = []
+          for (let i = start + 1; i <= end; i++) {
+            rows.push(mockFeeRow(i))
+          }
+          return {
+            type: MessageType.SearchFeeResult,
+            payload: {
+              ok: true,
+              data: {
+                total,
+                rows,
+                summary: {
+                  pageAgentFee: 0,
+                  pageOfficialFee: 0,
+                  pageThirdPartyFee: 0
+                }
+              }
+            }
+          }
+        }
+        if (message.type === MessageType.SearchFeeAmount) {
+          return {
+            type: MessageType.SearchFeeAmountResult,
+            payload: { ok: true, data: { FeeList: [] } }
+          }
+        }
+        return {
+          type: MessageType.Error,
+          payload: { message: `Unhandled ${message.type}` }
+        }
+      })
+    }
+
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+
+    app = createApp({
+      setup() {
+        return () =>
+          h(FeeSearchQuery, {
+            ref: (el: unknown) => {
+              compExpose = el as FeeSearchExpose | null
+            },
+            bridge,
+            userId: 'user-1',
+            canSearch: true
+          })
+      }
+    })
+    app.directive('hint', () => {})
+    app.provide('bridge', bridge)
+    app.mount(root)
+    await settle()
+
+    // 触发查询
+    await vm().doSearch(1)
+    await settle()
+    for (let i = 0; i < 50 && unwrapBool(vm().selectingAll); i++) {
+      await new Promise(r => setTimeout(r, 10))
+      await settle()
+    }
+
+    // 验证：3 页（1, 2, 3）都被请求
+    expect(requestedPages).toContain(1)
+    expect(requestedPages).toContain(2)
+    expect(requestedPages).toContain(3)
+
+    // 验证：默认开始全选所有，总数 25 条已全选
+    const currentSelectedCount = () => unwrapCount(vm().selectedCount)
+    expect(currentSelectedCount()).toBe(25)
+    expect(vm().getSelectedRows().length).toBe(25)
+
+    // 验证：「取消全选所有」按钮可清空所有选择
+    const deselectBtn = button('取消全选所有')
+    expect(deselectBtn.disabled).toBe(false)
+    deselectBtn.click()
+    await settle()
+
+    expect(currentSelectedCount()).toBe(0)
+    expect(vm().getSelectedRows().length).toBe(0)
+
+    // 验证：「全选所有」按钮可重新选回所有 25 条
+    const selectAllBtn = button('全选所有')
+    expect(selectAllBtn.disabled).toBe(false)
+    selectAllBtn.click()
+    await settle()
+
+    expect(currentSelectedCount()).toBe(25)
+    expect(vm().getSelectedRows().length).toBe(25)
+
+    // 验证：「取消本页」仅取消当前第 1 页的 10 条（剩余 15 条依然被选中）
+    const deselectCurrentPageBtn = button('取消本页')
+    deselectCurrentPageBtn.click()
+    await settle()
+
+    expect(currentSelectedCount()).toBe(15)
+
+    // 验证：「全选本页」重新勾上当前页的 10 条
+    const selectCurrentPageBtn = button('全选本页')
+    selectCurrentPageBtn.click()
+    await settle()
+
+    expect(currentSelectedCount()).toBe(25)
+
+    // 验证：「清空选择」清空全部
+    const clearBtn = button('清空选择')
+    clearBtn.click()
+    await settle()
+
+    expect(currentSelectedCount()).toBe(0)
+  })
+
+  it('单页默认全选所有：查询结果条数小于等于 pageSize 时直接全部勾选', async () => {
+    const total = 5
+    const requestedPages: number[] = []
+
+    const bridge: MessageBridge = {
+      request: vi.fn(async (message: ContentRequest): Promise<ContentResponse> => {
+        if (message.type === MessageType.SearchFee) {
+          const pageIndex = message.payload.query.pageIndex
+          requestedPages.push(pageIndex)
+          const rows: FeeSearchRow[] = []
+          for (let i = 1; i <= total; i++) {
+            rows.push(mockFeeRow(i))
+          }
+          return {
+            type: MessageType.SearchFeeResult,
+            payload: {
+              ok: true,
+              data: {
+                total,
+                rows,
+                summary: {
+                  pageAgentFee: 0,
+                  pageOfficialFee: 0,
+                  pageThirdPartyFee: 0
+                }
+              }
+            }
+          }
+        }
+        if (message.type === MessageType.SearchFeeAmount) {
+          return { type: MessageType.SearchFeeAmountResult, payload: { ok: true, data: { FeeList: [] } } }
+        }
+        return { type: MessageType.Error, payload: { message: `Unhandled ${message.type}` } }
+      })
+    }
+
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+
+    app = createApp({
+      setup() {
+        return () =>
+          h(FeeSearchQuery, {
+            ref: (el: unknown) => {
+              compExpose = el as FeeSearchExpose | null
+            },
+            bridge,
+            userId: 'user-1',
+            canSearch: true
+          })
+      }
+    })
+    app.directive('hint', () => {})
+    app.provide('bridge', bridge)
+    app.mount(root)
+    await settle()
+
+    await vm().doSearch(1)
+    await settle()
+
+    // 仅请求了第 1 页
+    expect(requestedPages).toEqual([1])
+
+    const currentSelectedCount = () => unwrapCount(vm().selectedCount)
+    expect(currentSelectedCount()).toBe(5)
+    expect(vm().getSelectedRows().length).toBe(5)
+  })
+
+  it('默认全选安全机制：排除已请款记录，点击「全选所有」可强制全选全部记录', async () => {
+    const total = 10
+
+    const bridge: MessageBridge = {
+      request: vi.fn(async (message: ContentRequest): Promise<ContentResponse> => {
+        if (message.type === MessageType.SearchFee) {
+          const rows: FeeSearchRow[] = []
+          for (let i = 1; i <= total; i++) {
+            const r = mockFeeRow(i)
+            // 前 3 项标记为「已请款」，其余 7 项为「未请款」
+            if (i <= 3) r.requestStatus = '已请款'
+            rows.push(r)
+          }
+          return {
+            type: MessageType.SearchFeeResult,
+            payload: {
+              ok: true,
+              data: {
+                total,
+                rows,
+                summary: { pageAgentFee: 0, pageOfficialFee: 0, pageThirdPartyFee: 0 }
+              }
+            }
+          }
+        }
+        if (message.type === MessageType.SearchFeeAmount) {
+          return { type: MessageType.SearchFeeAmountResult, payload: { ok: true, data: { FeeList: [] } } }
+        }
+        return { type: MessageType.Error, payload: { message: `Unhandled ${message.type}` } }
+      })
+    }
+
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+
+    app = createApp({
+      setup() {
+        return () =>
+          h(FeeSearchQuery, {
+            ref: (el: unknown) => {
+              compExpose = el as FeeSearchExpose | null
+            },
+            bridge,
+            userId: 'user-1',
+            canSearch: true
+          })
+      }
+    })
+    app.directive('hint', () => {})
+    app.provide('bridge', bridge)
+    app.mount(root)
+    await settle()
+
+    await vm().doSearch(1)
+    await settle()
+
+    const currentSelectedCount = () => unwrapCount(vm().selectedCount)
+    // 默认全选应排除 3 项已请款记录，勾选 7 项未请款记录
+    expect(currentSelectedCount()).toBe(7)
+
+    // 用户点击「全选所有」按钮强制全选所有记录
+    const selectAllBtn = button('全选所有')
+    selectAllBtn.click()
+    await settle()
+
+    // 强制全选后为 10 项
+    expect(currentSelectedCount()).toBe(10)
+  })
+})

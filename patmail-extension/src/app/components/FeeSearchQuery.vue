@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { FileSearchTimeoutMs } from '../../api/file-search-params'
+import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary } from '../../api/dictionaries/picker-catalog'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
 import type { FeeApplicantItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
+import { sortFeeRows } from '../../billing/fee-model'
+import { runPagedFetch } from '../page-pool'
+import { paintTaskCheckProgress, resetTaskCheckProgress, type TaskCheckStatus, taskCheckProgress } from '../check-progress'
 import type { HistoryQueryOption } from '../../api/query-history'
 import {
   FEE_COMMON_CELLS,
@@ -547,13 +550,40 @@ const selectedFeeIds = computed(() =>
 )
 const allKnownRows = ref<Map<string, FeeSearchRow>>(new Map())
 
-const selectedRowsList = computed(() =>
-  selectedFeeIds.value.map(id => allKnownRows.value.get(id)).filter((r): r is FeeSearchRow => Boolean(r))
-)
+const selectedRowsList = computed(() => {
+  const list = selectedFeeIds.value.map(id => allKnownRows.value.get(id)).filter((r): r is FeeSearchRow => Boolean(r))
+  return sortFeeRows(list)
+})
 
 watch(selectedRowsList, rows => {
   emit('selection-change', rows)
 }, { deep: true })
+
+const currentSearchGeneration = ref(0)
+const selectingAll = ref(false)
+const failedPages = ref<number[]>([])
+const selectionNotice = ref('')
+const lastQuery = ref<FeeSearchQuery | null>(null)
+const cachedPages = ref<Set<number>>(new Set())
+
+const paging = { startedAt: 0, total: 0, done: 0 }
+function paintPaging(status: TaskCheckStatus): void {
+  paintTaskCheckProgress(paging.done, paging.total, paging.startedAt, status, '翻页')
+}
+function tickPage(): void {
+  paging.done += 1
+  paintPaging(paging.done >= paging.total ? 'done' : 'run')
+}
+
+const pagingHint = computed(() => {
+  if (!selectingAll.value) return ''
+  return taskCheckProgress.eta ? `（全选所有中，预计 ${taskCheckProgress.eta} 完成）` : '（全选所有中…）'
+})
+
+function isRowUnrequested(row: FeeSearchRow): boolean {
+  const s = String(row.requestStatus || '').trim()
+  return !s.includes('已请款')
+}
 
 function applyValuesPatch(patch: Record<string, string>): void {
   const prevCaseType = values.value.case_type
@@ -590,6 +620,201 @@ function selectCurrentPage(select: boolean): void {
 function clearAllSelected(): void {
   selectedIds.value = {}
   quickFeeSelectMode.value = ''
+  selectionNotice.value = ''
+}
+
+function deselectAllPages(): void {
+  clearAllSelected()
+}
+
+async function selectAllPages(unrequestedOnly = false): Promise<void> {
+  const b = activeBridge()
+  const res = result.value
+  const q = lastQuery.value
+  if (!res || res.total === 0 || selectingAll.value) return
+
+  const gen = currentSearchGeneration.value
+  let excludedCount = 0
+
+  // 1. 先把当前页及已缓存的所有行进行勾选
+  for (const row of res.rows) {
+    allKnownRows.value.set(row.feeId, row)
+  }
+  for (const row of allKnownRows.value.values()) {
+    if (unrequestedOnly && !isRowUnrequested(row)) {
+      selectedIds.value[row.feeId] = false
+      excludedCount++
+    } else {
+      selectedIds.value[row.feeId] = true
+    }
+  }
+  cachedPages.value.add(pageIndex.value)
+
+  // 2. 如果所有页已缓存完成或只有 1 页，直接结束
+  const allPageIndices = Array.from({ length: totalPages.value }, (_, i) => i + 1)
+  const pagesToFetch = allPageIndices.filter(p => !cachedPages.value.has(p))
+  if (pagesToFetch.length === 0 || totalPages.value <= 1 || res.total <= res.rows.length) {
+    paging.startedAt = Date.now()
+    paging.total = Math.max(1, totalPages.value)
+    paging.done = Math.max(1, totalPages.value)
+    paintPaging('done')
+    if (excludedCount > 0) {
+      selectionNotice.value = `默认勾选 ${selectedCount.value} 项未请款费用（已自动排除 ${excludedCount} 项已请款记录；如需全部请款可点「全选所有」）。`
+    }
+    return
+  }
+
+  if (!b || !q) return
+
+  selectingAll.value = true
+  selectionNotice.value = ''
+  failedPages.value = []
+
+  try {
+    paging.startedAt = Date.now()
+    paging.total = pagesToFetch.length
+    paging.done = 0
+    paintPaging('run')
+
+    const fetchSinglePage = async (page: number) => {
+      try {
+        const resp = await b.request({
+          type: MessageType.SearchFee,
+          payload: {
+            query: { ...q, pageIndex: page, pageSize: pageSize.value },
+            timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value),
+            batch: true
+          }
+        })
+        if (resp.type === MessageType.SearchFeeResult && resp.payload.ok) {
+          return { ok: true as const, rows: resp.payload.data.rows }
+        }
+        const msg = resp.type === MessageType.SearchFeeResult && !resp.payload.ok
+          ? resp.payload.error.message
+          : resp.type === MessageType.Error ? resp.payload.message : ''
+        return { ok: false as const, session: /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(msg) }
+      } catch {
+        return { ok: false as const, session: false }
+      }
+    }
+
+    let missed = await runPagedFetch<FeeSearchRow>(
+      pagesToFetch,
+      fetchSinglePage,
+      {
+        concurrency: 6,
+        onPage: (page, rows) => {
+          if (gen !== currentSearchGeneration.value) return
+          cachedPages.value.add(page)
+          for (const row of rows) {
+            allKnownRows.value.set(row.feeId, row)
+            if (unrequestedOnly && !isRowUnrequested(row)) {
+              selectedIds.value[row.feeId] = false
+              excludedCount++
+            } else {
+              selectedIds.value[row.feeId] = true
+            }
+          }
+          tickPage()
+        }
+      }
+    )
+
+    if (missed.length && gen === currentSearchGeneration.value) {
+      missed = await runPagedFetch<FeeSearchRow>(
+        missed,
+        fetchSinglePage,
+        {
+          concurrency: 6,
+          onPage: (page, rows) => {
+            if (gen !== currentSearchGeneration.value) return
+            cachedPages.value.add(page)
+            for (const row of rows) {
+              allKnownRows.value.set(row.feeId, row)
+              if (unrequestedOnly && !isRowUnrequested(row)) {
+                selectedIds.value[row.feeId] = false
+                excludedCount++
+              } else {
+                selectedIds.value[row.feeId] = true
+              }
+            }
+            tickPage()
+          }
+        }
+      )
+    }
+
+    if (gen !== currentSearchGeneration.value) return
+
+    failedPages.value = missed
+    paintPaging(missed.length ? 'fail' : 'done')
+    if (missed.length) {
+      selectionNotice.value = `全选所有有 ${missed.length} 页没读到（第 ${missed.slice(0, 5).join('、')} 页）。已勾上的不受影响，点「重试没读到的页」补齐。`
+    } else if (excludedCount > 0) {
+      selectionNotice.value = `默认勾选 ${selectedCount.value} 项未请款费用（已自动排除 ${excludedCount} 项已请款记录；如需全部请款可点「全选所有」）。`
+    }
+  } finally {
+    if (gen === currentSearchGeneration.value) {
+      selectingAll.value = false
+    }
+  }
+}
+
+async function retryFailedPages(): Promise<void> {
+  const b = activeBridge()
+  const q = lastQuery.value
+  const pages = failedPages.value
+  if (!b || !q || selectingAll.value || !pages.length) return
+  selectingAll.value = true
+  try {
+    paging.startedAt = Date.now()
+    paging.total = pages.length
+    paging.done = 0
+    paintPaging('run')
+    const fetchSinglePage = async (page: number) => {
+      try {
+        const resp = await b.request({
+          type: MessageType.SearchFee,
+          payload: {
+            query: { ...q, pageIndex: page, pageSize: pageSize.value },
+            timeoutMs: fileSearchTimeoutMs(queryTimeoutMs.value),
+            batch: true
+          }
+        })
+        if (resp.type === MessageType.SearchFeeResult && resp.payload.ok) {
+          return { ok: true as const, rows: resp.payload.data.rows }
+        }
+        const msg = resp.type === MessageType.SearchFeeResult && !resp.payload.ok
+          ? resp.payload.error.message
+          : resp.type === MessageType.Error ? resp.payload.message : ''
+        return { ok: false as const, session: /登录|会话已变化|尚未确认|尚未连接|标签页已失效/.test(msg) }
+      } catch {
+        return { ok: false as const, session: false }
+      }
+    }
+    const missed = await runPagedFetch<FeeSearchRow>(
+      pages,
+      fetchSinglePage,
+      {
+        concurrency: 6,
+        onPage: (page, rows) => {
+          cachedPages.value.add(page)
+          for (const row of rows) {
+            allKnownRows.value.set(row.feeId, row)
+            selectedIds.value[row.feeId] = true
+          }
+          tickPage()
+        }
+      }
+    )
+    failedPages.value = missed
+    paintPaging(missed.length ? 'fail' : 'done')
+    selectionNotice.value = missed.length
+      ? `还有 ${missed.length} 页没读到（第 ${missed.slice(0, 5).join('、')} 页），可以再点一次重试。`
+      : '没读到的页都补齐了。'
+  } finally {
+    selectingAll.value = false
+  }
 }
 
 // 对齐 FeeSearch.js L653-671: "只选官费" / "只选代理费" 按当前页 fee_class_name 批量勾选
@@ -642,10 +867,17 @@ async function doSearch(page = 1): Promise<void> {
     return
   }
 
+  const gen = ++currentSearchGeneration.value
   pageIndex.value = page
   searchState.value = 'loading'
   searchMessage.value = ''
   quickFeeSelectMode.value = ''
+  selectionNotice.value = ''
+  if (page === 1) {
+    selectedIds.value = {}
+    allKnownRows.value.clear()
+    cachedPages.value.clear()
+  }
   totalAmountInfo.value = {
     originalAgentFee: 0,
     discountAgentFee: 0,
@@ -654,6 +886,7 @@ async function doSearch(page = 1): Promise<void> {
   }
 
   const q = buildCurrentQuery(page, pageSize.value)
+  lastQuery.value = { ...q }
 
   try {
     const resp = await b.request({
@@ -663,6 +896,8 @@ async function doSearch(page = 1): Promise<void> {
         timeoutMs: queryTimeoutMs.value
       }
     })
+
+    if (gen !== currentSearchGeneration.value) return
 
     if (resp.type === MessageType.Error) {
       searchState.value = 'error'
@@ -682,16 +917,23 @@ async function doSearch(page = 1): Promise<void> {
       for (const row of data.rows) {
         allKnownRows.value.set(row.feeId, row)
       }
+      cachedPages.value.add(page)
       if (data.total === 0 || data.rows.length === 0) {
         searchState.value = 'empty'
+        clearAllSelected()
       } else {
         searchState.value = 'success'
+        if (page === 1) {
+          // 默认全选未请款费用（保护财务避免重复请款）
+          void selectAllPages(true)
+        }
       }
 
       emit('searched', q)
       void fetchTotalAmounts(q)
     }
   } catch (e: unknown) {
+    if (gen !== currentSearchGeneration.value) return
     searchState.value = 'error'
     searchMessage.value = e instanceof Error ? e.message : '查询异常中断'
   }
@@ -772,6 +1014,9 @@ function resetForm(): void {
   result.value = null
   selectedIds.value = {}
   allKnownRows.value.clear()
+  cachedPages.value.clear()
+  failedPages.value = []
+  selectionNotice.value = ''
   totalAmountInfo.value = {
     originalAgentFee: 0,
     discountAgentFee: 0,
@@ -779,6 +1024,7 @@ function resetForm(): void {
     thirdPartyFee: 0
   }
   searchState.value = 'idle'
+  resetTaskCheckProgress()
 }
 
 function changePage(delta: number): void {
@@ -1224,6 +1470,7 @@ watch(
 
 onBeforeUnmount(() => {
   templateLoads.dispose()
+  resetTaskCheckProgress()
 })
 
 // 对齐 FeeSearch.js L637-650: 显示全部 vs 仅显示选中项
@@ -1246,6 +1493,9 @@ defineExpose({
     applyValuesPatch(patch)
   },
   doSearch,
+  selectAllPages,
+  deselectAllPages,
+  selectingAll,
   selectedCount,
   selectedFeeIds,
   selectedRowsList
@@ -1806,10 +2056,16 @@ defineExpose({
       <div class="section-heading">
         <span class="sheet-count">共 {{ result?.total ?? 0 }} 条费用记录</span>
         <div class="table-actions">
-          <button type="button" class="ghost tiny" :disabled="!result" @click="selectCurrentPage(true)">全选本页</button>
-          <button type="button" class="ghost tiny" :disabled="!result" @click="selectCurrentPage(false)">取消本页</button>
-          <button type="button" class="ghost tiny" :disabled="selectedCount === 0" @click="clearAllSelected">清空选择</button>
+          <button type="button" class="ghost tiny" :disabled="!result || selectingAll" @click="selectAllPages()">
+            {{ selectingAll ? (pagingHint || '正在全选…') : '全选所有' }}
+          </button>
+          <button type="button" class="ghost tiny" :disabled="!result || selectedCount === 0 || selectingAll" @click="deselectAllPages">取消全选所有</button>
+          <button type="button" class="ghost tiny" :disabled="!result || selectingAll" @click="selectCurrentPage(true)">全选本页</button>
+          <button type="button" class="ghost tiny" :disabled="!result || selectingAll" @click="selectCurrentPage(false)">取消本页</button>
+          <button type="button" class="ghost tiny" :disabled="selectedCount === 0 || selectingAll" @click="clearAllSelected">清空选择</button>
+          <button v-if="failedPages.length > 0 && !selectingAll" type="button" class="ghost tiny warn-btn" @click="retryFailedPages">重试没读到的页</button>
           <span v-if="selectedCount > 0" class="hint">已勾选 {{ selectedCount }} 项</span>
+          <span v-if="selectionNotice" class="hint warn-hint">{{ selectionNotice }}</span>
           <label class="page-size-selector">
             每页条数
             <ThemeSelect v-model="pageSize" :options="pageSizeOptions" @update:model-value="onPageSizeChange" />
@@ -2203,6 +2459,8 @@ defineExpose({
 .fee-results-section > .section-heading, .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .page-size-selector { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8a7290; }
 .page-size-selector :deep(.theme-select), .query-timeout :deep(.theme-select) { width: 92px; }
+.warn-hint { color: #c95276; font-size: 12px; }
+.warn-btn { border-color: #f3c2d4; color: #b8436e; }
 
 .fee-table-container { overflow-x: auto; min-width: 0; }
 .fee-data-table { width: 100%; white-space: nowrap; }
