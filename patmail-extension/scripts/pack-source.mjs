@@ -31,7 +31,7 @@ if (present.some(name => name.toLowerCase().endsWith('.pem'))) {
   process.exit(1)
 }
 
-const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, ...present], {
+const packed = spawnSync(process.env.TAR || 'tar', ['-a', '-c', '-f', output, '--exclude=sme-customers.json', ...present], {
   cwd: root,
   encoding: 'utf8',
 })
@@ -45,6 +45,10 @@ if (listed.status !== 0) {
   process.exit(listed.status ?? 1)
 }
 const names = listed.stdout.split(/\r?\n/).filter(Boolean)
+if (names.some(name => /(?:^|[\\/])sme-customers\.json$/i.test(name))) {
+  console.error('源码包意外包含本地客户快照，已停止。')
+  process.exit(1)
+}
 const blocked = forbiddenDeliveryNames(names)
 if (blocked.length > 0) {
   console.error(`源码包含有不能交付的文件名 ${blocked.length} 个，已停止。`)

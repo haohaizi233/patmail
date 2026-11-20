@@ -20,13 +20,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const checked = spawnSync(process.execPath, [join(root, 'scripts', 'verify-dist.mjs'), '--delivery'], {
+const args = process.argv.slice(2)
+const mode = args.includes('--public') ? '--public' : '--delivery'
+const checked = spawnSync(process.execPath, [join(root, 'scripts', 'verify-dist.mjs'), mode], {
   cwd: root,
   stdio: 'inherit',
 })
 if (checked.status !== 0) process.exit(checked.status ?? 1)
 const reportDir = join(root, 'test-results', 'ci')
-const args = process.argv.slice(2)
 const tagIndex = args.indexOf('--tag')
 const tagArgument =
   tagIndex >= 0 ? args[tagIndex + 1] : process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : ''
@@ -80,6 +81,7 @@ const git = command => {
 const report = {
   generatedAt: new Date().toISOString(),
   version: manifest.version,
+  distribution: mode === '--public' ? 'public' : 'internal',
   tag: tagArgument || null,
   commit: git('git rev-parse HEAD'),
   branch: git('git rev-parse --abbrev-ref HEAD'),

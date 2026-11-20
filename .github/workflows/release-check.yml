@@ -2,9 +2,9 @@
 # 明确不做：Chrome Web Store 发布、CRX 签名、访问/轮换签名私钥（历史 dist.pem 只作风险登记）。
 name: Release Check
 
-# 发布校验必须提供真实客户快照，不能使用 CI 的空占位名单。
+# GitHub 发布包不包含任何客户快照数据。
 env:
-  SME_SNAPSHOT_STUB: "0"
+  SME_SNAPSHOT_STUB: "1"
 
 on:
   workflow_dispatch:
@@ -54,21 +54,20 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libarchive-tools
           TAR=bsdtar pnpm pack:source
-          TAR=bsdtar pnpm pack:delivery
+          TAR=bsdtar pnpm pack:delivery --public
           TAR=bsdtar pnpm verify:archive
       - name: 发布前校验（版本 / 摘要 / SHA-256 / 产物名称）
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: node scripts/release-check.mjs ${RELEASE_TAG:+--tag $RELEASE_TAG}
+        run: node scripts/release-check.mjs --public ${RELEASE_TAG:+--tag $RELEASE_TAG}
       - name: 上传发布校验产物
-        if: always()
+        if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        continue-on-error: true
         with:
           name: release-bundle
           path: |
-            patmail-extension/test-results/patmail-source.zip
-            patmail-extension/test-results/patmail-delivery.zip
+            patmail-extension/test-results/delivery/patmail-source.zip
+            patmail-extension/test-results/delivery/patmail-delivery.zip
             patmail-extension/test-results/ci
-            patmail-extension/test-results/coverage
+          if-no-files-found: error
           retention-days: 7

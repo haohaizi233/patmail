@@ -79,7 +79,7 @@ patmail-extension/test-results/
 `test-results/` 由 `.gitignore`（仓库根与 patmail-extension）排除，不进入提交。
 
 普通 CI / E2E 显式设置 `SME_SNAPSHOT_STUB=1`，允许无客户数据的检出生成、校验空占位快照。`GITHUB_ACTIONS` 本身不提供豁免。
-Release Check 设置 `SME_SNAPSHOT_STUB=0`，需要先提供真实客户快照；`pack:delivery` 和 `release:check` 始终调用 `verify-dist.mjs --delivery`，即使环境设置了占位豁免，也拒绝空名单。
+GitHub Release Check 使用干净检出和 `SME_SNAPSHOT_STUB=1`。使用 `--public` 打包、校验时只接受标准空快照，源码包排除本机客户快照。内部交付使用默认的 `pack:delivery` 和 `release:check`，继续拒绝空名单。
 
 ## 7. 报告口径（Phase 10）
 

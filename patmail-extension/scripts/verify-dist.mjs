@@ -25,6 +25,7 @@ import { forbiddenDeliveryName } from './delivery-guard.mjs'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(root, 'dist')
 const reportDir = join(root, 'test-results', 'ci')
+const publicRelease = process.argv.includes('--public')
 
 const REQUIRED_FILES = [
   'manifest.json',
@@ -134,7 +135,21 @@ if (existsSync(smeSnapshotPath)) {
   } catch {
     fail('assets/sme-customers.json 不是合法 JSON')
   }
-  if (snapshot) {
+  if (publicRelease) {
+    const fields = snapshot && Object.keys(snapshot).sort().join(',')
+    if (
+      fields !== 'count,customers,stub,takenAt' ||
+      snapshot.stub !== true ||
+      snapshot.count !== 0 ||
+      snapshot.takenAt !== '' ||
+      !Array.isArray(snapshot.customers) ||
+      snapshot.customers.length !== 0
+    ) {
+      fail('公开发布只允许标准空客户快照。请在干净检出中启用 SME_SNAPSHOT_STUB=1 重新构建。')
+    } else {
+      note('公开发布客户快照：空占位，无本地客户记录')
+    }
+  } else if (snapshot) {
     const isStub = snapshot.stub === true || (Array.isArray(snapshot.customers) && snapshot.customers.length === 0)
     if (isStub) {
       const message =
