@@ -2,6 +2,8 @@
 
 2026-11-22（新加坡时间）从干净的 `main` 工作区执行 `git fetch origin`。本地 HEAD 与 `origin/main` 均为 `cbcd746b5e09a27259071baee093223d33ccf948`。实施分支为 `codex/patmail-phase3`，基线分支保留。
 
+从新加坡时间当日零点至上述基线，主线有 24 个提交。验收覆盖其累积后的工作流和本轮 Phase 3 改动。费用模板删除竞态来自 `001040c`，复现后在本轮独立修复。
+
 | 指标 | 基线 |
 | --- | --- |
 | 源码文件 | 523 |
@@ -9,8 +11,12 @@
 | 运行时循环 | 0 |
 | 未解析内部导入 | 0 |
 | 架构违规 | 0 |
-| 本地最近构建产物 | 448 个文件 |
-| 远端本次运行读取 | GitHub 匿名 API 限流，待重查 |
+| 基线构建产物 | 448 个文件（远端 `dist-report.json`，与本地留存一致） |
+| 基线测试（CI JUnit） | 单元 1,980，集成 71，回归 139，失败 0 |
+| 覆盖率（完整基线 CI） | 行 79.23%、语句 73.30%、函数 77.47%、分支 64.84% |
+| 基线远端门禁 | [CI #252](https://github.com/haohaizi233/patmail/actions/runs/45014075666)、[E2E Full #219](https://github.com/haohaizi233/patmail/actions/runs/45014075785)、[Security #223](https://github.com/haohaizi233/patmail/actions/runs/45014075763) 均成功 |
+
+覆盖率取自基线 E2E Full 工作流的 `report-coverage` 产物，以实际 `coverage-summary.json` 为准。
 
 ## 实施顺序与验证点
 
