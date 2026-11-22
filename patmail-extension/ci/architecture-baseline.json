@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generatedAt": "2026-11-22T07:38:39.910Z",
+    "generatedAt": "2026-11-22T07:44:06.125Z",
     "note": "架构重构棘轮基线：只允许随着迁移减少直至归零，严禁新增任何违规或循环依赖。"
   },
   "cycleCount": 0,
@@ -9,11 +9,6 @@
     "agent-domain-bypass:background/agent.ts->customer/pct-recipients.ts",
     "agent-domain-bypass:background/agent.ts->customer/workflow-mail.ts",
     "agent-domain-bypass:background/agent.ts->mail/assemble.ts",
-    "agent-domain-bypass:background/agent.ts->workflow/reviewer-resolver.ts",
-    "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/fee-model.ts",
-    "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/pbc-rates.ts",
-    "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/template-assets.ts",
-    "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/templates.ts",
-    "billing-page-direct:app/pages/BillingWorkflowPage.vue->recovery/client.ts"
+    "agent-domain-bypass:background/agent.ts->workflow/reviewer-resolver.ts"
   ]
 }

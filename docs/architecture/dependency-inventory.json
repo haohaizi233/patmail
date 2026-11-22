@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T07:38:39.906Z",
-  "fileCount": 493,
+  "scannedAt": "2026-11-22T07:44:06.123Z",
+  "fileCount": 503,
   "summary": {
-    "totalEdges": 2159,
-    "runtimeInternalEdges": 1538,
-    "typeOnlyEdges": 492,
+    "totalEdges": 2195,
+    "runtimeInternalEdges": 1548,
+    "typeOnlyEdges": 518,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -77,6 +77,9 @@
       "hague": 5
     },
     "app/composables": {
+      "application/billing": 2,
+      "billing": 2,
+      "infrastructure": 1,
       "customer": 4,
       "app": 1,
       "workflow": 2,
@@ -94,8 +97,6 @@
       "app/composables": 22,
       "floating": 5,
       "app/components": 26,
-      "recovery": 5,
-      "billing": 4,
       "api": 6,
       "case-contact": 1,
       "customer": 26,
@@ -105,6 +106,7 @@
       "app": 14,
       "utils": 4,
       "hague": 17,
+      "recovery": 4,
       "background": 1,
       "app/services": 1,
       "app/assets": 1,
@@ -115,6 +117,9 @@
       "shared": 2,
       "api": 1,
       "utils": 2
+    },
+    "application/billing": {
+      "billing": 3
     },
     "automation": {
       "shared": 1,
@@ -194,6 +199,11 @@
       "api": 2,
       "background": 1,
       "automation": 2
+    },
+    "infrastructure": {
+      "application/billing": 1,
+      "billing": 3,
+      "recovery": 1
     },
     "jihua": {
       "background": 1
@@ -812,6 +822,11 @@
       "module": "app/components"
     },
     {
+      "file": "app/composables/useBillingWorkflow.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
       "file": "app/composables/useOaSession.ts",
       "layer": "Presentation",
       "module": "app/composables"
@@ -1015,6 +1030,46 @@
       "file": "app/services/full-page-bridge.ts",
       "layer": "Presentation",
       "module": "app/services"
+    },
+    {
+      "file": "application/billing/billing-contracts.ts",
+      "layer": "Application",
+      "module": "application/billing"
+    },
+    {
+      "file": "application/billing/billing-service.ts",
+      "layer": "Application",
+      "module": "application/billing"
+    },
+    {
+      "file": "application/billing/billing-validation.ts",
+      "layer": "Application",
+      "module": "application/billing"
+    },
+    {
+      "file": "application/billing/ports/billing-recovery-port.ts",
+      "layer": "Application",
+      "module": "application/billing"
+    },
+    {
+      "file": "application/billing/ports/billing-template-port.ts",
+      "layer": "Application",
+      "module": "application/billing"
+    },
+    {
+      "file": "application/billing/ports/download-port.ts",
+      "layer": "Application",
+      "module": "application/billing"
+    },
+    {
+      "file": "application/billing/ports/exchange-rate-port.ts",
+      "layer": "Application",
+      "module": "application/billing"
+    },
+    {
+      "file": "application/billing/ports/spreadsheet-port.ts",
+      "layer": "Application",
+      "module": "application/billing"
     },
     {
       "file": "automation/acceptance-context.ts",
@@ -1922,6 +1977,11 @@
       "module": "hague"
     },
     {
+      "file": "infrastructure/billing/billing-adapters.ts",
+      "layer": "BusinessModule",
+      "module": "infrastructure"
+    },
+    {
       "file": "jihua/client.ts",
       "layer": "BusinessModule",
       "module": "jihua"
@@ -2772,51 +2832,6 @@
       "to": "workflow/reviewer-resolver.ts",
       "line": 16,
       "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
-    },
-    {
-      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->recovery/client.ts",
-      "rule": "D-presentation-no-direct-infra",
-      "severity": "ratchet",
-      "from": "app/pages/BillingWorkflowPage.vue",
-      "to": "recovery/client.ts",
-      "line": 8,
-      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
-    },
-    {
-      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/fee-model.ts",
-      "rule": "D-presentation-no-direct-infra",
-      "severity": "ratchet",
-      "from": "app/pages/BillingWorkflowPage.vue",
-      "to": "billing/fee-model.ts",
-      "line": 11,
-      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
-    },
-    {
-      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/pbc-rates.ts",
-      "rule": "D-presentation-no-direct-infra",
-      "severity": "ratchet",
-      "from": "app/pages/BillingWorkflowPage.vue",
-      "to": "billing/pbc-rates.ts",
-      "line": 22,
-      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
-    },
-    {
-      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/templates.ts",
-      "rule": "D-presentation-no-direct-infra",
-      "severity": "ratchet",
-      "from": "app/pages/BillingWorkflowPage.vue",
-      "to": "billing/templates.ts",
-      "line": 28,
-      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
-    },
-    {
-      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/template-assets.ts",
-      "rule": "D-presentation-no-direct-infra",
-      "severity": "ratchet",
-      "from": "app/pages/BillingWorkflowPage.vue",
-      "to": "billing/template-assets.ts",
-      "line": 38,
-      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
     }
   ]
 }

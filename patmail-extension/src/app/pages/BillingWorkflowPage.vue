@@ -1,41 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import FileSearchPanel from '../../floating/FileSearchPanel.vue'
 import FeeSearchQuery from '../components/FeeSearchQuery.vue'
-import { useWorkspace } from '../composables/useWorkspace'
-import { createRecoveryClient } from '../../recovery/client'
-import type { SelectedPatentFile } from '../../mail/types'
-import type { FeeSearchRow } from '../../api/fee-search-types'
-import {
-  billInfoFromFile,
-  missingCurrencies,
-  isMideaPctCustomer,
-  isPctCase,
-  isUnrequestedFee,
-  matchedBillDate,
-  pctFeeProblem,
-  pctSelectionProblem,
-  type BillInfo
-} from '../../billing/fee-model'
-import {
-  PBC_INDEX_URL,
-  fetchPbcRates,
-  normalizeCurrency,
-  type PbcRates
-} from '../../billing/pbc-rates'
-import {
-  BILLING_TEMPLATES,
-  defaultHeaders,
-  fillBillingTemplate,
-  mideaForeignGroups,
-  formatLocalDate,
-  type BillingInput,
-  type BillingOptions,
-  type BillingTemplateId
-} from '../../billing/templates'
-import { loadBillingTemplate } from '../../billing/template-assets'
+import { useBillingWorkflow } from '../composables/useBillingWorkflow'
 
 const props = withDefaults(
   defineProps<{
@@ -49,567 +17,78 @@ defineEmits<{
   back: []
 }>()
 
-const { connection } = useWorkspace()
-const confirmedScope = computed(() => {
-  const { easyOrigin, operatorId, sessionStatus } = connection.value
-  return sessionStatus === 'authenticated' && easyOrigin && operatorId
-    ? JSON.stringify([easyOrigin, operatorId]) : ''
-})
-const billingScope = ref('')
-const billingOwner = ref({ origin: '', userId: '' })
-const restoring = ref(false)
-const ready = computed(() => !restoring.value && Boolean(billingScope.value && confirmedScope.value === billingScope.value))
-
-// ---------------------------------------------------------------- 先选模板 → 智能预填查询条件
-const selectedTemplateId = ref<BillingTemplateId>('general-foreign')
-const currentTemplate = computed(() =>
-  BILLING_TEMPLATES.find(t => t.id === selectedTemplateId.value) ?? BILLING_TEMPLATES[0]
-)
-
-const headerValues = ref<Record<string, string>>(defaultHeaders('general-foreign'))
-const billingOptions = ref<BillingOptions>({ ...BILLING_TEMPLATES[0].queryPreset.defaultOptions })
-
-// ---------------------------------------------------------------- 步骤控制
-type Step = 1 | 2 | 3
-const currentStep = ref<Step>(1)
-const stepNotice = ref('')
-const noticeInResults = ref(false)
-const stepNavigation = ref<HTMLElement | null>(null)
-
-async function advanceFromResults(target: 2 | 3): Promise<void> {
-  setStep(target, true)
-  if (currentStep.value !== target) return
-  await nextTick()
-  stepNavigation.value?.scrollIntoView({ block: 'start' })
-}
-
-function setStep(target: Step, fromResults = false): void {
-  noticeInResults.value = fromResults
-  const issue = target === 1 || (target === 2 && currentStep.value === 3)
-    ? '' : fileSelectionIssue.value || (target === 3 ? feeSelectionIssue.value : '')
-  if (issue) {
-    stepNotice.value = issue
-    return
-  }
-  stepNotice.value = ''
-  currentStep.value = target
-  if (target === 2) {
-    syncFeeQueryIfNeeded(false)
-  } else if (target === 3) {
-    initStep3()
-  }
-}
-
-// ---------------------------------------------------------------- 步骤 1：文件管理与账单识别
-const filePanelRef = ref<InstanceType<typeof FileSearchPanel> | null>(null)
-const fileSelection = ref<Record<string, SelectedPatentFile>>({})
-const recoveredBills = ref<Record<string, BillInfo[]>>({})
-const fileSelectionIssue = computed(() => filePanelRef.value?.getBillingSelectionIssue() ?? '')
-
-// 按所选模板自动预填文件管理条件（文件描述在树加载后自动换算为当前站点实时 GUID）
-const fileSeed = ref<Record<string, string>>({ ...BILLING_TEMPLATES[0].queryPreset.fileFields })
-const fileSeedToken = ref(1)
-
-const billMap = computed<Record<string, BillInfo[]>>(() => {
-  if (!Object.keys(fileSelection.value).length) return recoveredBills.value
-  const result: Record<string, BillInfo[]> = {}
-  for (const file of Object.values(fileSelection.value)) {
-    const bill = billInfoFromFile(file)
-    if (!bill || !bill.caseVolume) continue
-    if (!result[bill.caseVolume]) result[bill.caseVolume] = []
-    result[bill.caseVolume].push(bill)
-  }
-  return result
-})
-
-const recognizedBillsCount = computed(() =>
-  Object.values(billMap.value).reduce((sum, list) => sum + list.length, 0)
-)
-
-const autoExtractedVolumes = computed(() => Object.keys(billMap.value))
-
-const customVolumeInput = ref('')
-const extraVolumes = ref<string[]>([])
-const excludedVolumes = ref<string[]>([])
-
-const activeVolumes = computed<string[]>(() => {
-  const excluded = new Set(excludedVolumes.value)
-  const set = new Set<string>([...autoExtractedVolumes.value, ...extraVolumes.value])
-  return [...set].filter(vol => Boolean(vol) && !excluded.has(vol))
-})
-
-function addCustomVolume(): void {
-  const text = customVolumeInput.value.trim()
-  if (!text) return
-  const parts = text.split(/[\s,;\n\r]+/).map(s => s.trim()).filter(Boolean)
-  for (const p of parts) {
-    excludedVolumes.value = excludedVolumes.value.filter(v => v !== p)
-    if (!extraVolumes.value.includes(p)) extraVolumes.value.push(p)
-  }
-  customVolumeInput.value = ''
-}
-
-function removeVolume(volume: string): void {
-  if (extraVolumes.value.includes(volume)) {
-    extraVolumes.value = extraVolumes.value.filter(v => v !== volume)
-  }
-  if (autoExtractedVolumes.value.includes(volume) && !excludedVolumes.value.includes(volume)) {
-    excludedVolumes.value = [...excludedVolumes.value, volume]
-  }
-}
-
-function restoreExcludedVolumes(): void {
-  excludedVolumes.value = []
-}
-
-function triggerSelectAllBills(): void {
-  if (filePanelRef.value) {
-    void filePanelRef.value.selectAllPages(true)
-  }
-}
-
-// ---------------------------------------------------------------- 步骤 2：费用查询联动
-const feeQueryRef = ref<InstanceType<typeof FeeSearchQuery> | null>(null)
-const feeInitialValues = ref<Record<string, string>>({
-  case_volume: '',
-  ...BILLING_TEMPLATES[0].queryPreset.feeFields
-})
-const feeInitialToken = ref(1)
-const selectedFeeRows = ref<FeeSearchRow[]>([])
-const lastAppliedFeeSyncKey = ref('')
-const isMideaPct = computed(() => selectedTemplateId.value === 'midea-pct')
-const defaultSelectionExclusion = computed(() => isMideaPct.value
-  ? (row: FeeSearchRow) => {
-      if (!row.customerName.trim()) return '客户名称缺失'
-      if (!isMideaPctCustomer(row.customerName)) return '不属于美的客户'
-      return pctFeeProblem(row)
-    }
-  : undefined)
-const pctCandidates = computed(() => {
-  const candidates = new Map<string, FeeSearchRow[]>()
-  if (!isMideaPct.value) return candidates
-  for (const row of feeQueryRef.value?.getKnownRows() ?? []) {
-    if (!isMideaPctCustomer(row.customerName) || !isUnrequestedFee(row) || pctFeeProblem(row)) continue
-    const name = row.customerName.trim()
-    const rows = candidates.get(name) ?? []
-    rows.push(row)
-    candidates.set(name, rows)
-  }
-  return candidates
-})
-const pctSelectedCustomer = computed(() => isMideaPct.value ? selectedFeeRows.value[0]?.customerName.trim() ?? '' : '')
-const pctExceptions = computed(() => {
-  if (!isMideaPct.value) return []
-  return Array.from(feeQueryRef.value?.getKnownRows() ?? []).flatMap(row => {
-    if (!isPctCase(row) || !isUnrequestedFee(row) ||
-        (row.customerName.trim() && !isMideaPctCustomer(row.customerName))) return []
-    const reason = pctFeeProblem(row) || (row.customerName.trim() ? '' : 'EASY 客户名称缺失')
-    return reason ? [{ row, reason }] : []
-  })
-})
-const pctExportExceptions = computed(() => pctSelectedCustomer.value
-  ? pctExceptions.value.filter(({ row }) => !row.customerName.trim() || row.customerName.trim() === pctSelectedCustomer.value)
-  : [])
-const confirmPctExceptions = ref(false)
-watch([selectedFeeRows, pctExportExceptions], () => { confirmPctExceptions.value = false })
-function selectPctCustomer(rows: FeeSearchRow[]): void {
-  feeQueryRef.value?.replaceBillingSelection(rows)
-  stepNotice.value = ''
-}
-const feeSelectionIssue = computed(() => {
-  if (feeQueryRef.value?.selectionPending) return '费用还在读取，请等待完成。'
-  if (feeQueryRef.value?.selectionIncomplete) return '费用查询未完成，请返回步骤 2 重试或重新查询。'
-  if (!selectedFeeRows.value.length) return '步骤 2 还没有勾选费用。请先在费用查询表格中勾选要请款的费用行。'
-  if (!ready.value) return '请先确认 EASY 登录会话。'
-  if (lastAppliedFeeSyncKey.value !== buildFeeSyncKey()) return '请款范围已变化，请返回步骤 2 重新查询。'
-  return isMideaPct.value ? pctSelectionProblem(selectedFeeRows.value) : ''
-})
-
-function buildFeeSyncKey(): string {
-  return `${selectedTemplateId.value}\u0001${[...activeVolumes.value].sort().join('\n')}`
-}
-
-/**
- * 仅在模板切换或步骤 1 提取文号发生变化（或用户显式点击同步）时写入步骤 2 条件，
- * 避免从步骤 3 返回步骤 2 时覆盖用户手工调整的查询条件。
- */
-function syncFeeQueryIfNeeded(force: boolean): void {
-  const syncKey = buildFeeSyncKey()
-  if (!force && syncKey === lastAppliedFeeSyncKey.value) return
-  lastAppliedFeeSyncKey.value = syncKey
-  const volumeText = activeVolumes.value.join('\n')
-  const presetFields = currentTemplate.value.queryPreset.feeFields
-  feeInitialValues.value = {
-    ...presetFields,
-    case_volume: volumeText
-  }
-  selectedFeeRows.value = []
-  feeInitialToken.value += 1
-}
-
-function onFeeSelectionChange(rows: FeeSearchRow[]): void {
-  selectedFeeRows.value = rows
-}
-
-// 切换模板时自动更新文件管理预填、费用查询预填、表头默认值及默认审核/银行费
-watch(selectedTemplateId, nextId => {
-  if (restoring.value) return
-  const tpl = BILLING_TEMPLATES.find(t => t.id === nextId) ?? BILLING_TEMPLATES[0]
-  headerValues.value = defaultHeaders(nextId)
-  billingOptions.value = { ...tpl.queryPreset.defaultOptions }
-  fileSeed.value = { ...tpl.queryPreset.fileFields }
-  fileSeedToken.value += 1
-  syncFeeQueryIfNeeded(true)
-  if (currentStep.value === 3) currentStep.value = 2
-})
-
-watch(activeVolumes, () => {
-  if (!restoring.value && currentStep.value !== 1) syncFeeQueryIfNeeded(false)
-})
-
-watch(fileSelection, files => {
-  if (Object.keys(files).length) recoveredBills.value = {}
-})
-
-function onFileSearch(): void {
-  if (!restoring.value && !Object.keys(fileSelection.value).length) recoveredBills.value = {}
-}
-
-// ---------------------------------------------------------------- 步骤 3：请款单导出与央行汇率
-const ratesLoading = ref(false)
-const ratesDate = ref('')
-const ratesSourceUrl = ref('')
-const pbcPerCny = ref<Record<string, number>>({})
-const customRates = ref<Record<string, number>>({})
-const clearedRates = ref<Record<string, boolean>>({})
-const ratesError = ref('')
-let ratesCheckedOn = ''
-const manualRateDate = ref('')
-const usesManualRate = computed(() => selectedFeeRows.value.some(row =>
-  Boolean(customRates.value[normalizeCurrency(row.currency)])))
-const missingRateCodes = computed(() => missingCurrencies(selectedFeeRows.value, effectiveRates.value))
-
-const effectiveRates = computed<Record<string, number>>(() => {
-  const out: Record<string, number> = { CNY: 1 }
-  for (const [code, val] of Object.entries(pbcPerCny.value)) {
-    if (!clearedRates.value[code] && Number.isFinite(val) && val > 0) out[code] = val
-  }
-  for (const [code, val] of Object.entries(customRates.value)) {
-    if (!clearedRates.value[code] && Number.isFinite(val) && val > 0) out[code] = val
-  }
-  return out
-})
-
-const involvedCurrencies = computed(() => {
-  const codes = new Set<string>()
-  for (const row of selectedFeeRows.value) {
-    const c = normalizeCurrency(row.currency)
-    if (c) codes.add(c)
-  }
-  for (const c of ['USD', 'EUR', 'JPY', 'GBP', 'CHF', 'HKD']) codes.add(c)
-  return [...codes].filter(c => c !== 'CNY')
-})
-const needsForeignRates = computed(() => selectedFeeRows.value.some(row => normalizeCurrency(row.currency) !== 'CNY'))
-
-function formatRate(val: number): string {
-  return val < 0.1 ? val.toFixed(6) : val.toFixed(4)
-}
-
-async function loadPbcRates(): Promise<void> {
-  if (ratesLoading.value) return
-  ratesLoading.value = true
-  ratesCheckedOn = formatLocalDate()
-  ratesError.value = ''
-  ratesDate.value = ''
-  ratesSourceUrl.value = ''
-  pbcPerCny.value = {}
-  try {
-    const data: PbcRates = await fetchPbcRates()
-    ratesDate.value = data.date
-    ratesSourceUrl.value = data.sourceUrl
-    pbcPerCny.value = { ...data.perCny }
-  } catch (err) {
-    ratesError.value = `${err instanceof Error ? err.message : '中国人民银行汇率获取失败'}（不会使用离线估算值，请点击重试或在下方手工填写准确汇率）`
-  } finally {
-    ratesLoading.value = false
-  }
-}
-
-function updateRate(code: string, value: string): void {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    delete customRates.value[code]
-    clearedRates.value[code] = true
-    return
-  }
-  const num = Number(trimmed)
-  if (Number.isFinite(num) && num > 0) {
-    delete clearedRates.value[code]
-    customRates.value[code] = num
-  } else {
-    delete customRates.value[code]
-    clearedRates.value[code] = true
-  }
-}
-
-function resetRate(code: string): void {
-  delete customRates.value[code]
-  delete clearedRates.value[code]
-}
-
-function initStep3(): void {
-  if (needsForeignRates.value && ratesCheckedOn !== formatLocalDate()) {
-    void loadPbcRates()
-  }
-}
-
-// 对账汇总信息
-const reconciliationInfo = computed(() => {
-  const caseSet = new Set<string>()
-  let unrequestedCount = 0
-  let requestedCount = 0
-  for (const row of selectedFeeRows.value) {
-    if (row.caseVolume) caseSet.add(row.caseVolume)
-    if (isUnrequestedFee(row)) unrequestedCount++
-    else requestedCount++
-  }
-  const allCases = [...caseSet]
-  const matchedCases: string[] = []
-  const unmatchedCases: string[] = []
-  const mideaGroups = selectedTemplateId.value === 'midea-foreign' ? mideaForeignGroups(selectedFeeRows.value) : null
-  for (const vol of allCases) {
-    const groups = mideaGroups?.filter(group => group.caseVolume === vol)
-    if (groups ? groups.length && groups.every(group => matchedBillDate(group, billMap.value[vol])) : billMap.value[vol]?.length) {
-      matchedCases.push(vol)
-    }
-    else unmatchedCases.push(vol)
-  }
-  return {
-    totalRows: selectedFeeRows.value.length,
-    totalCases: allCases.length,
-    unrequestedCount,
-    requestedCount,
-    matchedCasesCount: matchedCases.length,
-    unmatchedCases
-  }
-})
-
-// 执行导出
-const exporting = ref(false)
-const exportResultNotice = ref('')
-const exportWarnings = ref<string[]>([])
-const confirmExistingFees = ref(false)
-const canAdvanceFromFees = computed(() => selectedFeeRows.value.length > 0 &&
-  !feeQueryRef.value?.selectionPending && !feeQueryRef.value?.selectionIncomplete)
-const exportDisabled = computed(() => exporting.value || ratesLoading.value ||
-  Boolean(fileSelectionIssue.value || feeSelectionIssue.value) ||
-  (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
-  (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value))
-watch(selectedFeeRows, () => {
-  confirmExistingFees.value = false
-  exportResultNotice.value = ''
-  exportWarnings.value = []
-})
-const exportParameters = computed(() => ({
-  headers: { ...headerValues.value },
-  options: { ...billingOptions.value },
-  rates: { ...effectiveRates.value },
-  rateSourceUrl: ratesSourceUrl.value,
-  rateDate: usesManualRate.value
-    ? `手工 ${manualRateDate.value}${ratesDate.value ? ` / 央行 ${ratesDate.value}` : ''}`
-    : ratesDate.value || formatLocalDate()
-}))
-
-async function doExportExcel(): Promise<void> {
-  if (exporting.value) return
-  const issue = fileSelectionIssue.value || feeSelectionIssue.value
-  if (issue) {
-    exportResultNotice.value = issue
-    return
-  }
-  if (reconciliationInfo.value.requestedCount && !confirmExistingFees.value) {
-    exportResultNotice.value = '请确认已立单或状态待核对的费用后再导出。'
-    return
-  }
-  if (pctExportExceptions.value.length && !confirmPctExceptions.value) {
-    exportResultNotice.value = '请先核对本客户待处理的 PCT 费用。'
-    return
-  }
-  if (needsForeignRates.value && ratesCheckedOn !== formatLocalDate()) {
-    void loadPbcRates()
-    exportResultNotice.value = '已开始刷新汇率，请等待完成后再导出。'
-    return
-  }
-  if (ratesLoading.value) return
-  if (missingRateCodes.value.length) {
-    exportResultNotice.value = `缺少以下币种的汇率：${missingRateCodes.value.join('、')}，请重试或手工填写。`
-    return
-  }
-  if (usesManualRate.value && (!manualRateDate.value || manualRateDate.value > formatLocalDate())) {
-    exportResultNotice.value = '请填写有效的手工汇率基准日期。'
-    return
-  }
-
-  const templateId = selectedTemplateId.value
-  const rows = selectedFeeRows.value
-  const bills = billMap.value
-  const parameters = exportParameters.value
-  const input: BillingInput = { ...parameters, rows, bills, today: new Date() }
-  const account = connection.value.operatorId
-  const origin = connection.value.easyOrigin
-  exporting.value = true
-  exportResultNotice.value = '正在生成 Excel 请款表…'
-  exportWarnings.value = []
-
-  try {
-    const rawBytes = await loadBillingTemplate(templateId)
-    const result = await fillBillingTemplate(templateId, rawBytes, input)
-    if (selectedTemplateId.value !== templateId || selectedFeeRows.value !== rows ||
-        connection.value.operatorId !== account || connection.value.easyOrigin !== origin ||
-        billMap.value !== bills || parameters !== exportParameters.value || fileSelectionIssue.value || feeSelectionIssue.value ||
-        (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
-        (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value)) {
-      exportResultNotice.value = '生成期间请款范围或导出参数已变化，请核对后重新导出。'
-      return
-    }
-
-    exportWarnings.value = result.warnings
-
-    const blob = new Blob([result.bytes as BlobPart], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = result.fileName
-    try {
-      document.body.appendChild(link)
-      link.click()
-    } finally {
-      link.remove()
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
-    }
-
-    exportResultNotice.value = `请款单已成功导出并触发下载：${result.fileName}（共填入 ${result.blockCount} 个事项块/案卷）。`
-  } catch (err) {
-    exportResultNotice.value = err instanceof Error ? err.message : '请款表生成失败'
-  } finally {
-    exporting.value = false
-  }
-}
-
-watch(() => props.isActive, active => {
-  if (active && currentStep.value === 3) initStep3()
-})
-
-const recovery = createRecoveryClient()
-let persistTimer: ReturnType<typeof setTimeout> | undefined
-let lastSnapshot = ''
-let disposed = false
-let restoreGeneration = 0
-const recoveryNotice = ref('')
-
-function billingSnapshot() {
-  return {
-    version: 1, template: selectedTemplateId.value, step: currentStep.value,
-    headers: headerValues.value, options: billingOptions.value,
-    extra: extraVolumes.value, excluded: excludedVolumes.value, volumeInput: customVolumeInput.value,
-    bills: billMap.value, syncKey: lastAppliedFeeSyncKey.value,
-    rates: customRates.value, clearedRates: clearedRates.value, rateDate: manualRateDate.value,
-    fees: feeQueryRef.value?.billingSnapshot()
-  }
-}
-
-function flushBilling(): void {
-  clearTimeout(persistTimer)
-  const scope = billingScope.value
-  if (!scope || restoring.value || !feeQueryRef.value) return
-  const serialized = JSON.stringify(billingSnapshot())
-  if (serialized === lastSnapshot) return
-  lastSnapshot = serialized
-  void recovery.put('billing-desk', scope, JSON.parse(serialized) as unknown).catch(() => {
-    if (billingScope.value !== scope) return
-    if (lastSnapshot === serialized) lastSnapshot = ''
-    recoveryNotice.value = '请款草稿未能保存，刷新前请保留当前页面。'
-  })
-}
-
-watch(billingSnapshot, () => {
-  if (!billingScope.value || restoring.value) return
-  clearTimeout(persistTimer)
-  persistTimer = setTimeout(flushBilling, 120)
-}, { deep: true })
-
-watch(confirmedScope, async scope => {
-  if (!scope || scope === billingScope.value) return
-  const generation = ++restoreGeneration
-  const stillCurrent = () => !disposed && generation === restoreGeneration
-  flushBilling()
-  restoring.value = true
-  billingScope.value = scope
-  billingOwner.value = { origin: connection.value.easyOrigin, userId: connection.value.operatorId }
-  lastSnapshot = ''
-  recoveryNotice.value = ''
-  currentStep.value = 1
-  selectedTemplateId.value = 'general-foreign'
-  headerValues.value = defaultHeaders('general-foreign')
-  billingOptions.value = { ...BILLING_TEMPLATES[0].queryPreset.defaultOptions }
-  fileSeed.value = { ...BILLING_TEMPLATES[0].queryPreset.fileFields }
-  fileSelection.value = {}
-  recoveredBills.value = {}
-  extraVolumes.value = []
-  excludedVolumes.value = []
-  customVolumeInput.value = ''
-  customRates.value = {}
-  clearedRates.value = {}
-  manualRateDate.value = ''
-  confirmExistingFees.value = false
-  stepNotice.value = ''
-  syncFeeQueryIfNeeded(true)
-  const state = await recovery.get('billing-desk', scope).catch(() => {
-    if (stillCurrent()) recoveryNotice.value = '请款草稿暂时无法读取。'
-    return null
-  }) as ReturnType<typeof billingSnapshot> | null
-  if (!stillCurrent()) return
-  if (state?.version === 1 && BILLING_TEMPLATES.some(item => item.id === state.template)) {
-    selectedTemplateId.value = state.template
-    headerValues.value = state.headers
-    billingOptions.value = state.options
-    fileSeed.value = { ...currentTemplate.value.queryPreset.fileFields }
-    fileSeedToken.value += 1
-    extraVolumes.value = state.extra
-    excludedVolumes.value = state.excluded
-    customVolumeInput.value = state.volumeInput
-    recoveredBills.value = state.bills
-    customRates.value = state.rates
-    clearedRates.value = state.clearedRates
-    manualRateDate.value = state.rateDate
-    syncFeeQueryIfNeeded(true)
-    // Only restore selections for the same template and exact case scope.
-    await nextTick()
-    if (!stillCurrent()) return
-    if (state.fees && state.syncKey === buildFeeSyncKey()) {
-      feeQueryRef.value?.restoreBillingSnapshot(state.fees)
-    }
-    currentStep.value = state.step === 2 || state.step === 3 ? state.step : 1
-    if (currentStep.value === 3) initStep3()
-    await nextTick()
-  }
-  if (!stillCurrent()) return
-  restoring.value = false
-}, { immediate: true })
-
-function onBillingVisibility(): void {
-  if (document.visibilityState === 'hidden') flushBilling()
-}
-document.addEventListener('visibilitychange', onBillingVisibility)
-window.addEventListener('pagehide', flushBilling)
-onBeforeUnmount(() => {
-  flushBilling()
-  disposed = true
-  document.removeEventListener('visibilitychange', onBillingVisibility)
-  window.removeEventListener('pagehide', flushBilling)
-})
+const {
+  billingTemplates: BILLING_TEMPLATES,
+  pbcIndexUrl: PBC_INDEX_URL,
+  formatLocalDate,
+  confirmedScope,
+  billingScope,
+  billingOwner,
+  restoring,
+  ready,
+  selectedTemplateId,
+  currentTemplate,
+  headerValues,
+  billingOptions,
+  currentStep,
+  stepNotice,
+  noticeInResults,
+  stepNavigation,
+  advanceFromResults,
+  setStep,
+  filePanelRef,
+  fileSelection,
+  fileSeed,
+  fileSeedToken,
+  recognizedBillsCount,
+  customVolumeInput,
+  excludedVolumes,
+  activeVolumes,
+  addCustomVolume,
+  removeVolume,
+  restoreExcludedVolumes,
+  triggerSelectAllBills,
+  onFileSearch,
+  feeQueryRef,
+  feeInitialValues,
+  feeInitialToken,
+  selectedFeeRows,
+  isMideaPct,
+  defaultSelectionExclusion,
+  pctCandidates,
+  pctSelectedCustomer,
+  pctExceptions,
+  pctExportExceptions,
+  confirmPctExceptions,
+  selectPctCustomer,
+  feeSelectionIssue,
+  syncFeeQueryIfNeeded,
+  onFeeSelectionChange,
+  ratesLoading,
+  ratesDate,
+  ratesSourceUrl,
+  pbcPerCny,
+  customRates,
+  clearedRates,
+  ratesError,
+  manualRateDate,
+  usesManualRate,
+  effectiveRates,
+  involvedCurrencies,
+  formatRate,
+  loadPbcRates,
+  updateRate,
+  resetRate,
+  reconciliationInfo,
+  exporting,
+  exportResultNotice,
+  exportWarnings,
+  confirmExistingFees,
+  canAdvanceFromFees,
+  exportDisabled,
+  doExportExcel,
+  recoveryNotice
+} = useBillingWorkflow({ isActive: () => props.isActive })
 </script>
 
 <template>
