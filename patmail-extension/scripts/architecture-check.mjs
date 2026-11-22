@@ -56,6 +56,9 @@ const AGENT_FORBIDDEN_BUSINESS_MODULES = new Set([
 const MAIL_UI_PROTECTED_FILES = new Set([
   'app/pages/TasksPage.vue',
   'app/components/WorkflowMailEntry.vue',
+  'app/components/FileManageMail.vue',
+  'app/components/LimitMonitorQuery.vue',
+  'app/pages/LimitsPage.vue',
   'floating/MailWorkspace.vue',
 ])
 
@@ -64,6 +67,8 @@ const MAIL_FORBIDDEN_IN_UI = new Set([
   'mail/planner.ts',
   'mail/fingerprint.ts',
   'customer/limit-mail-submit.ts',
+  'customer/file-manage-submit.ts',
+  'customer/file-manage-plan.ts',
   'customer/workflow-mail.ts',
   'customer/pct-recipients.ts',
   'workflow/reviewer-resolver.ts',
@@ -93,6 +98,7 @@ const HAGUE_FORBIDDEN_DIAGNOSTICS = new Set([
 
 export const COMPOSITION_ROOTS = new Map([
   ['app/composables/useBillingWorkflow.ts', new Set(['infrastructure/billing/billing-adapters.ts'])],
+  ['app/composables/useMailSubmission.ts', new Set(['infrastructure/mail/mail-letter-gateway-adapter.ts'])],
   ['background/agent.ts', new Set(['infrastructure/mail/easy-mail-gateway-adapter.ts'])],
 ])
 
@@ -559,7 +565,11 @@ function expandTransitiveTargets(directTarget, barrelReexports) {
 }
 
 function isProtectedMailUiFile(file) {
-  return MAIL_UI_PROTECTED_FILES.has(file) || /^(?:app\/pages|floating)\/.*Mail.*\.vue$/.test(file)
+  return (
+    MAIL_UI_PROTECTED_FILES.has(file) ||
+    /^(?:app\/(?:pages|components)|floating)\/.*Mail.*\.vue$/.test(file) ||
+    file.startsWith('app/composables/')
+  )
 }
 
 function isBillingPageFile(file) {

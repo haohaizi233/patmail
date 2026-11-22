@@ -13,6 +13,7 @@ describe('MV3 and protocol runtime boundaries', () => {
     expect(inventory.unresolvedImports ?? []).toEqual([])
     expect([...COMPOSITION_ROOTS.keys()].sort()).toEqual([
       'app/composables/useBillingWorkflow.ts',
+      'app/composables/useMailSubmission.ts',
       'background/agent.ts',
     ])
   })

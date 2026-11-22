@@ -6,7 +6,8 @@ import type { LimitMonitorResult, LimitMonitorRow } from '../../api/limit-monito
 import { isLimitMonitorType, type LimitMonitorQuery } from '../../api/limit-monitor-params'
 import { MAILED_UNFINISHED_REVIEW, SKIP_SEND_REVIEW } from '../../customer/pct-flow-status'
 import { clonePctTask, readWorkflowTask, writeWorkflowTask } from '../../customer/pct-sheet'
-import { limitMailItems, limitMailLetterLabel, limitMailProcIds, limitMailSubmitShouldHalt, runLimitMailSubmit, runMailLetterPool, selectionNeedsAddressChoice, type LimitMailSubmitResult } from '../../customer/limit-mail-submit'
+import { deadlineMailIds, deadlineMailLabel, needsDeadlineAddressChoice, planDeadlineMail } from '../../application/mail/mail-letter-usecases'
+import { useMailSubmission } from '../composables/useMailSubmission'
 import { beginProgress, classifySubmitText, clipCompany, confirmDialog, endProgress, logProgress, noteProgress, openSummary, progressSummaryLine, tallyProgress, warnBusinessRecipients } from '../dialog'
 import { splitCaseVolumes } from '../../customer/volume-list'
 import { isQueryGuid } from '../../query/query-validator'
@@ -70,7 +71,7 @@ const pageSize = ref(10)
 const selected = ref<string[]>([])
 const confirmedIds = ref<string[]>([])
 const closedIds = ref(new Set<string>())
-const hasIprGap = computed(() => selectionNeedsAddressChoice(
+const hasIprGap = computed(() => needsDeadlineAddressChoice(
   rows.value,
   props.sheetRows ?? [],
   selected.value,
@@ -596,7 +597,7 @@ async function onSubmitAsk(address?: string): Promise<void> {
     message.value = '还没有默认审核人。请到发文映射里设置。'
     return
   }
-  const planned = limitMailItems({
+  const planned = planDeadlineMail({
     reviewerId,
     procIds,
     rows: rows.value,
@@ -611,7 +612,7 @@ async function onSubmitAsk(address?: string): Promise<void> {
     return
   }
   message.value = `正在创建发文并提交给默认审核人${rules.value?.defaultReviewer?.name ?? ''}。`
-  const involved = rows.value.filter(row => planned.items.some(item => limitMailProcIds(item).includes(row.procId)))
+  const involved = rows.value.filter(row => planned.items.some(item => deadlineMailIds(item).includes(row.procId)))
   beginProgress(submitTitle(address), planned.items.length + 1)
   const abnormal: Array<{ caseVolume: string; procLabel: string }> = []
   const sent = new Set<string>()
@@ -622,36 +623,38 @@ async function onSubmitAsk(address?: string): Promise<void> {
   try {
     if (width > 1 && involved.length) await markSendGates(involved, true)
     let finished = 0
-    const { halted, unstarted } = await runMailLetterPool(planned.items, width, async (item) => {
-      const letterRows = involved.filter(entry => limitMailProcIds(item).includes(entry.procId))
-      const label = limitMailLetterLabel(item, id => letterRows.find(entry => entry.procId === id)?.caseVolume ?? '')
-      logProgress(`正在核对 ${label} 的发文流程。`)
-      if (width <= 1 && letterRows.length) await markSendGates(letterRows, true)
-      logProgress(`正在处理 ${label}。`)
-      const got: LimitMailSubmitResult[] = []
-      const text = await runLimitMailSubmit(bridge, props.userId, [item], gates.value, result => got.push(result))
-      const kind = classifySubmitText(text)
-      tallyProgress(kind, limitMailProcIds(item).length)
-      if (kind !== 'success') noteProgress(kind, label, text)
-      if (kind === 'abnormal') {
-        for (const row of letterRows) abnormal.push({ caseVolume: row.caseVolume, procLabel: row.ctrlProc })
+    const { halted, unstarted } = await useMailSubmission(bridge).submitDeadlines(props.userId, planned.items, width, {
+      async gates(item) {
+        const letterRows = involved.filter(entry => deadlineMailIds(item).includes(entry.procId))
+        const label = deadlineMailLabel(item, id => letterRows.find(entry => entry.procId === id)?.caseVolume ?? '')
+        logProgress(`正在核对 ${label} 的发文流程。`)
+        if (width <= 1 && letterRows.length) await markSendGates(letterRows, true)
+        logProgress(`正在处理 ${label}。`)
+        return gates.value
+      },
+      receipt(item, text, got) {
+        const letterRows = involved.filter(entry => deadlineMailIds(item).includes(entry.procId))
+        const label = deadlineMailLabel(item, id => letterRows.find(entry => entry.procId === id)?.caseVolume ?? '')
+        const kind = classifySubmitText(text)
+        tallyProgress(kind, deadlineMailIds(item).length)
+        if (kind !== 'success') noteProgress(kind, label, text)
+        if (kind === 'abnormal') {
+          for (const row of letterRows) abnormal.push({ caseVolume: row.caseVolume, procLabel: row.ctrlProc })
+        }
+        const volumes = new Map(letterRows.map(row => [row.procId, row.caseVolume]))
+        for (const result of got) {
+          summaryRows.push([
+            volumes.get(result.procId) ?? result.procId,
+            clipCompany(item.customerName),
+            result.to || '',
+            result.cc || ''
+          ])
+          if (result.to && /请认真核对/.test(result.message)) cautionRows.push([volumes.get(result.procId) ?? result.procId, result.to])
+        }
+        finished += 1
+        text.split('\n').forEach((line, lineIndex) => logProgress(lineIndex === 0 ? `${label}：${line}` : line, finished))
+        for (const result of got) if (result.state === 'submitted') sent.add(result.procId.toLowerCase())
       }
-      const volumes = new Map(letterRows.map(row => [row.procId, row.caseVolume]))
-      for (const result of got) {
-        summaryRows.push([
-          volumes.get(result.procId) ?? result.procId,
-          clipCompany(item.customerName),
-          result.to || '',
-          result.cc || ''
-        ])
-        if (result.to && /请认真核对/.test(result.message)) cautionRows.push([volumes.get(result.procId) ?? result.procId, result.to])
-      }
-      finished += 1
-      text.split('\n').forEach((line, lineIndex) => logProgress(lineIndex === 0 ? `${label}：${line}` : line, finished))
-      if (kind === 'success') {
-        for (const id of limitMailProcIds(item)) sent.add(id.toLowerCase())
-      }
-      return limitMailSubmitShouldHalt(text)
     })
     if (sent.size) {
       const keep = (id: string) => !sent.has(id.toLowerCase())
@@ -663,9 +666,9 @@ async function onSubmitAsk(address?: string): Promise<void> {
     }
     if (halted) {
       for (const item of unstarted) {
-        const skipLabel = limitMailLetterLabel(item, id => rows.value.find(entry => entry.procId === id)?.caseVolume ?? '')
+        const skipLabel = deadlineMailLabel(item, id => rows.value.find(entry => entry.procId === id)?.caseVolume ?? '')
         const reason = '上一封结果无法确认，这一件没有开始。'
-        tallyProgress('skipped', limitMailProcIds(item).length)
+        tallyProgress('skipped', deadlineMailIds(item).length)
         noteProgress('skipped', skipLabel, reason)
         logProgress(`${skipLabel}：跳过。${reason}`)
       }

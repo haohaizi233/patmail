@@ -9,10 +9,11 @@ import type { PatentFile } from '../../api/file-search-types'
 import type { MailSender } from '../../customer/mailset'
 import { customerMailStyleLabel, summarizeBoundQuery } from '../../customer/mail-flow'
 import { downloadNameText, type FileDownloadSelection } from '../../mail/download-name'
-import { FILE_MANAGE_BATCH, planFileManageLetters, senderAddress, type FileManageFile, type FileManageLetterPlan } from '../../customer/file-manage-plan'
+import { type FileManageFile, type FileManageLetterPlan } from '../../customer/file-manage-plan'
 import { fileManageRunStatus } from '../../customer/file-manage-runs'
-import { fileIdsOf, fileManageSubmitShouldHalt, runFileManageSubmit, type FileManageSubmitItem } from '../../customer/file-manage-submit'
-import { runMailLetterPool } from '../../customer/limit-mail-submit'
+import type { FileManageSubmitItem } from '../../customer/file-manage-submit'
+import { fileMailIds, fileMailSenderAddress, planFileMail, prepareFileMail, splitFileMailBatch } from '../../application/mail/mail-letter-usecases'
+import { useMailSubmission } from '../composables/useMailSubmission'
 import type { CustomerQueryProfile } from '../../customer/types'
 import type { MailSignatureItem } from '../../mail/easy/signature-read'
 import { defaultSignatureChoice, signatureChoices } from '../../mail/signature-catalog'
@@ -59,7 +60,7 @@ const pickedSender = computed(() => {
   if (!saved || !isQueryGuid(saved.mailsetId)) return null
   const live = props.senders.find(item => item.id.toLowerCase() === saved.mailsetId.toLowerCase())
   if (custom && !live) return null
-  const address = senderAddress(live ?? { label: saved.label })
+  const address = fileMailSenderAddress(live ?? { label: saved.label })
   return address ? { id: saved.mailsetId, ...address, label: saved.label } : null
 })
 const reviewer = computed(() => {
@@ -251,7 +252,7 @@ function rebuild(files: FileManageFile[]): void {
   const profile = customer.value
   if (!profile) return
   foundFiles.value = files
-  const planned = planFileManageLetters({
+  const planned = planFileMail({
     customerName: profile.name,
     mailStyle: profile.fileMailStyle === 'single_file' ? 'single_file' : 'merge_by_customer_description',
     files,
@@ -351,27 +352,13 @@ function signatureToken(): string {
 }
 
 function itemOf(letter: FileManageLetterPlan): FileManageSubmitItem | null {
-  const sender = pickedSender.value
-  const person = reviewer.value
-  const signature = signatureToken()
-  if (!sender || !person || !signature || !letter.mailTypeId || !letter.subject || letter.blocked) return null
-  const fileId = letter.files[0]?.fileId ?? ''
-  if (!fileId) return null
-  return {
-    fileId,
-    fileIds: letter.files.map(file => file.fileId),
-    fileNames: letter.files.map(file => file.fileName),
-    mailTypeId: letter.mailTypeId,
-    mailStyle: customer.value?.fileMailStyle === 'single_file' ? '2' : '1',
-    subject: letter.subject,
-    senderId: sender.id,
-    senderName: sender.name,
-    senderEmail: sender.email,
-    reviewerId: person.userId,
-    reviewerName: person.name,
-    signature,
+  return prepareFileMail(letter, {
+    sender: pickedSender.value,
+    reviewer: reviewer.value,
+    signature: signatureToken(),
+    singleFile: customer.value?.fileMailStyle === 'single_file',
     addresses: customer.value?.fileMailConfig ? { to: customer.value.fileMailConfig.to, cc: customer.value.fileMailConfig.cc } : undefined
-  }
+  })
 }
 
 function letterLabel(letter: FileManageLetterPlan): string {
@@ -387,9 +374,10 @@ function toggleReady(on: boolean): void {
   picked.value = on ? readyLetters.value.map(item => item.key) : []
 }
 
-async function rememberRun(item: FileManageSubmitItem, letter: FileManageLetterPlan | undefined, text: string): Promise<void> {
-  const scope = scopeFromConnection(connection.value)
-  const name = customer.value?.name.trim()
+async function rememberRun(
+  item: FileManageSubmitItem, letter: FileManageLetterPlan | undefined, text: string,
+  scope: ReturnType<typeof scopeFromConnection>, name: string | undefined,
+): Promise<void> {
   if (!scope || !name) return
   const subject = (item.subject || (letter ? letterLabel(letter) : '')).slice(0, 500)
   const note = text.replace(/\s+/g, ' ').trim().slice(0, 200)
@@ -400,7 +388,7 @@ async function rememberRun(item: FileManageSubmitItem, letter: FileManageLetterP
       run: {
         customerName: name.slice(0, 120),
         subject,
-        fileCount: Math.max(1, Math.min(100, fileIdsOf(item).length)),
+        fileCount: Math.max(1, Math.min(100, fileMailIds(item).length)),
         status: fileManageRunStatus(text),
         note
       }
@@ -420,43 +408,47 @@ async function submit(): Promise<void> {
     notice.value = readyLetters.value.length ? '先勾选要发的。' : '没有可以创建的发文。先看下面每一封为什么停住。'
     return
   }
-  const batch = queued.slice(0, FILE_MANAGE_BATCH)
-  const left = queued.length - batch.length
+  const { batch, overflow } = splitFileMailBatch(queued)
+  const scope = scopeFromConnection(connection.value)
+  const customerName = customer.value?.name.trim()
   sending.value = true
-  beginProgress('提交到 EASY', batch.length + (left ? 1 : 0))
+  beginProgress('提交到 EASY', batch.length + (overflow.length ? 1 : 0))
   try {
     let finished = 0
-    const { halted, unstarted } = await runMailLetterPool(batch, concurrency.value, async (item) => {
-      const letter = letters.value.find(entry => entry.files.some(file => file.fileId.toLowerCase() === item.fileId.toLowerCase()))
-      const label = letter ? letterLabel(letter) : '这一封'
-      logProgress(`正在处理 ${label}。`)
-      const text = await runFileManageSubmit(bridge, connection.value.operatorId, [item])
-      const kind = classifySubmitText(text)
-      tallyProgress(kind, fileIdsOf(item).length)
-      if (kind !== 'success') noteProgress(kind, label, text)
-      finished += 1
-      text.split('\n').forEach((line, lineIndex) => logProgress(lineIndex === 0 ? `${label}：${line}` : line, finished))
-      const next = { ...outcomes.value }
-      for (const fileId of fileIdsOf(item)) next[fileId.toLowerCase()] = text
-      outcomes.value = next
-      await rememberRun(item, letter, text)
-      return fileManageSubmitShouldHalt(text)
+    const { halted, unstarted } = await useMailSubmission(bridge).submitFiles(connection.value.operatorId, batch, concurrency.value, {
+      start(item) {
+        const letter = letters.value.find(entry => entry.files.some(file => file.fileId.toLowerCase() === item.fileId.toLowerCase()))
+        logProgress(`正在处理 ${letter ? letterLabel(letter) : '这一封'}。`)
+      },
+      async receipt(item, text) {
+        const letter = letters.value.find(entry => entry.files.some(file => file.fileId.toLowerCase() === item.fileId.toLowerCase()))
+        const label = letter ? letterLabel(letter) : '这一封'
+        const kind = classifySubmitText(text)
+        tallyProgress(kind, fileMailIds(item).length)
+        if (kind !== 'success') noteProgress(kind, label, text)
+        finished += 1
+        text.split('\n').forEach((line, lineIndex) => logProgress(lineIndex === 0 ? `${label}：${line}` : line, finished))
+        const next = { ...outcomes.value }
+        for (const fileId of fileMailIds(item)) next[fileId.toLowerCase()] = text
+        outcomes.value = next
+        await rememberRun(item, letter, text, scope, customerName)
+      }
     })
     if (halted) {
       for (const item of unstarted) {
         const letter = letters.value.find(entry => entry.files.some(file => file.fileId.toLowerCase() === item.fileId.toLowerCase()))
         const skipLabel = letter ? letterLabel(letter) : '这一封'
         const reason = '上一封结果无法确认，这一件没有开始。'
-        tallyProgress('skipped', fileIdsOf(item).length)
+        tallyProgress('skipped', fileMailIds(item).length)
         noteProgress('skipped', skipLabel, reason)
         logProgress(`${skipLabel}：跳过。${reason}`)
       }
     }
-    for (const item of queued.slice(FILE_MANAGE_BATCH)) {
+    for (const item of overflow) {
       const letter = letters.value.find(entry => entry.files.some(file => file.fileId.toLowerCase() === item.fileId.toLowerCase()))
       const skipLabel = letter ? letterLabel(letter) : '这一封'
       const reason = '超过一次 20 封的上限，这次没有开始。'
-      tallyProgress('skipped', fileIdsOf(item).length)
+      tallyProgress('skipped', fileMailIds(item).length)
       noteProgress('skipped', skipLabel, reason)
       logProgress(`${skipLabel}：跳过。${reason}`)
     }
