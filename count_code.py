@@ -1249,8 +1249,8 @@ def scan_project(root: Path, *, analyze_complexity: bool = True) -> dict:
                         }
                     )
 
-    largest_files.sort(key=lambda x: x["total"], reverse=True)
-    complexity_hotspots.sort(key=lambda x: x["complexity"], reverse=True)
+    largest_files.sort(key=lambda item: (-item["total"], item["path"]))
+    complexity_hotspots.sort(key=lambda item: (-item["complexity"], item["path"], item["lineno"]))
 
     ordered_modules = {
         key: dict(by_module[key])
@@ -1285,7 +1285,7 @@ def scan_project(root: Path, *, analyze_complexity: bool = True) -> dict:
         },
         "by_module": ordered_modules,
         "by_suite": ordered_suites,
-        "largest_files": largest_files[:LARGEST_FILES_LIMIT],
+        "largest_files": largest_files,
         "complexity_hotspots": complexity_hotspots[:COMPLEXITY_HOTSPOT_LIMIT],
         "project_surface": collect_project_surface(root),
         "history_delta": None,
@@ -1681,6 +1681,7 @@ def save_report_json(result: dict, output_path: str | Path) -> Path:
         path = Path.cwd() / path
     path.parent.mkdir(parents=True, exist_ok=True)
     serializable = ensure_report_result(result)
+    serializable["largest_files"] = serializable["largest_files"][:LARGEST_FILES_LIMIT]
     path.write_text(
         json.dumps(serializable, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
