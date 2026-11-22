@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T08:22:27.692Z",
+  "scannedAt": "2026-11-22T08:39:25.001Z",
   "fileCount": 516,
   "summary": {
-    "totalEdges": 2256,
-    "runtimeInternalEdges": 1584,
-    "typeOnlyEdges": 543,
+    "totalEdges": 2268,
+    "runtimeInternalEdges": 1586,
+    "typeOnlyEdges": 551,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -105,7 +105,7 @@
       "workflow": 7,
       "app": 14,
       "utils": 4,
-      "hague": 17,
+      "hague": 18,
       "recovery": 4,
       "background": 1,
       "app/services": 1,
@@ -2051,7 +2051,7 @@
     },
     {
       "file": "infrastructure/billing/billing-adapters.ts",
-      "layer": "BusinessModule",
+      "layer": "Infrastructure",
       "module": "infrastructure"
     },
     {

@@ -35,10 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
-      - name: Typecheck / Lint / Format
-        run: node scripts/ci-check.mjs --steps typecheck,lint,format
-      - name: Architecture boundary gate
-        run: pnpm architecture:check
+      - name: Typecheck / Architecture / Lint / Format
+        run: node scripts/ci-check.mjs --steps typecheck,architecture,lint,format
       - name: Offline documentation gate
         run: pnpm docs:check
       - name: 上传静态检查报告

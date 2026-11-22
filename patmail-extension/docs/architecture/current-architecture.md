@@ -45,12 +45,12 @@ flowchart LR
 
 统计口径来源于扩展内真实 AST 静态扫描器 `patmail-extension/scripts/architecture-check.mjs`（区分运行时依赖与 `import type` 纯类型依赖，包含 Vue SFC `<script>`/`<script setup>` 与动态 `import()`）：
 
-| 指标 | 基线（`17ff27d` 初扫） | 当前（`e350b99`） | 变化说明 |
+| 指标 | 基线（`17ff27d` 初扫） | 复审修复后 | 变化说明 |
 | --- | --- | --- | --- |
 | 扫描源码文件数（`src/`） | 493 | 516 | 新增 Application、Ports、Infrastructure、Agent 模块及网关 |
-| 总导入边（`totalEdges`） | 2,159 | 2,256 | 新增端口与适配层清晰契约 |
-| 内部运行时边（`runtimeInternalEdges`） | 1,538 | 1,584 | 拆分 `agent/tools/*` 与 `application/*` 带来的显式模块化边 |
-| 纯类型边（`typeOnlyEdges`） | 492 | 543 | Ports / Contracts 全面优先使用 `import type` |
+| 总导入边（`totalEdges`） | 2,159 | 2,268 | 新增端口与适配层清晰契约 |
+| 内部运行时边（`runtimeInternalEdges`） | 1,538 | 1,586 | 拆分 `agent/tools/*` 与 `application/*` 带来的显式模块化边 |
+| 纯类型边（`typeOnlyEdges`） | 492 | 551 | Ports / Contracts 全面优先使用 `import type` |
 | 运行时循环依赖（`cycleCount`） | 0 | 0 | 保持全仓库 0 运行时循环 |
 | 棘轮违规总数（`ratchetViolationIds`） | 10 | **0** | 全部清零（Billing 5 条 + Agent 5 条） |
 
@@ -59,8 +59,8 @@ flowchart LR
 | 层级 | 文件数 | 代表目录 / 模块 |
 | --- | --- | --- |
 | `Presentation` | 131 | `app/`、`floating/`、`popup/`、`shell/` |
-| `BusinessModule` | 209 | `customer/`、`mail/`、`workflow/`、`hague/`（编排与业务服务）、`query/`、`automation/` |
-| `Infrastructure` | 93 | `background/`、`content/`、`storage/`、`browser-download/`、`infrastructure/`、`api/` |
+| `BusinessModule` | 208 | `customer/`、`mail/`、`workflow/`、`hague/`（编排与业务服务）、`query/`、`automation/` |
+| `Infrastructure` | 94 | `background/`、`content/`、`storage/`、`browser-download/`、`infrastructure/`、`api/` |
 | `Shared` | 34 | `shared/`、`utils/`、`schema/` |
 | `Agent` | 27 | `agent/`（含拆分后的 `agent/tools/*`） |
 | `Domain` | 12 | `domain/` 及纯计算/契约文件（如 `billing/fee-model.ts`、`hague/draft-plan.ts`、`hague/plan-identity.ts`、`hague/draft-contract.ts` 等） |

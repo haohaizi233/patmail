@@ -6,9 +6,9 @@
 - **背景（Context）**：纯人工审查无法阻止跨层隐式回退，且 MV3 + Vue SFC 混合环境包含 `<script setup>`、静态与纯类型 import，简单正则容易产生大量误报或漏报。
 - **决策（Decision）**：引入 `patmail-extension/scripts/architecture-check.mjs`，结合 TypeScript Compiler AST 与 `@vue/compiler-sfc` 建立依赖清单、跨层规则 `A..F` 与只减不增棘轮基线 `ci/architecture-baseline.json`，在 Vitest (`tests/architecture/*`) 与 GitHub Actions CI 中强制门禁。
 - **备选方案（Alternatives Considered）**：引入外部依赖工具 `dependency-cruiser` —— 会增加第三方构建链与授权合规负担，且对 Vue SFC 及 Chrome API 运行时信号不够贴合。
-- **后果（Consequences）**：零新增外部依赖，CI 在 5 秒内完成全仓 500+ 文件检查；代价是新增边界规则时需同步更新 `architecture-check.mjs` 清单分类。
+- **后果（Consequences）**：零新增外部依赖，CI 扫描扩展的 500+ 个源码文件并保留架构报告；代价是新增边界规则时需同步更新 `architecture-check.mjs` 清单分类。
 - **涉及代码**：`patmail-extension/scripts/architecture-check.mjs`、`patmail-extension/ci/architecture-baseline.json`、`patmail-extension/tests/architecture/*.test.ts`、`/.github/workflows/ci.yml`。
-- **测试证据**：`pnpm architecture:check` 持续通过（5 个测试文件 / 8 条用例，0 硬错误，0 遗留违规，0 运行时循环）。
+- **测试证据**：`pnpm architecture:check` 持续通过（5 个测试文件 / 11 条用例，0 硬错误，0 遗留违规，0 运行时循环）。
 
 ---
 
@@ -28,7 +28,7 @@
 
 - **状态**：已采纳并执行（Commit `12213d3`）
 - **背景（Context）**：浏览器端工作簿在内存生成并触发 `Blob` / `<a download>` 后，仅意味着“浏览下载已发起”，并不等同于文件已在系统下载目录落盘完成；若统一返回简单布尔值易误导上层恢复与用户认知。
-- **决策（Decision）**：在 `billing-contracts.ts` 定义 `ExportOutcome` 六态：`generated`、`download_started`、`download_completed`、`download_interrupted`、`unknown`、`failed`。规定 `createBrowserBlobDownloadAdapter` 固定返回 `download_started`，仅由 `createVerifiedChromeDownloadAdapter` 轮询验证 Chrome 下载状态后再返回 `download_completed` / `download_interrupted` / `unknown`。
+- **决策（Decision）**：在 `billing-contracts.ts` 定义 `ExportOutcome` 六态：`generated`、`download_started`、`download_completed`、`download_interrupted`、`unknown`、`failed`。规定 `createBrowserBlobDownloadAdapter` 固定返回 `download_started`，仅由 `createVerifiedChromeDownloadAdapter` 查询 Chrome 下载状态后再返回 `download_completed` / `download_interrupted` / `unknown`。
 - **备选方案（Alternatives Considered）**：沿用单一 `ok: boolean` 或假定触发 Blob 后即 `completed` —— 会混淆“浏览器已受理下载”和“磁盘写入已验证完成”。
 - **后果（Consequences）**：接口语义清晰、可测试，消除假完成状态上报；调用方可按状态差异决定提示或恢复文案。
 - **涉及代码**：`patmail-extension/src/application/billing/billing-contracts.ts`、`patmail-extension/src/application/billing/billing-service.ts`、`patmail-extension/src/infrastructure/billing/billing-adapters.ts`。
@@ -62,10 +62,10 @@
 
 ## ADR-006：Hague 保护性执行网关隔离只读 `inspect`、写入与 AST 诊断
 
-- **状态**：已采纳并执行（Commit `e350b99`）
+- **状态**：已采纳并执行（Commit `e350b99` 定义端口，`917295e` 接入工作台）
 - **背景（Context）**：WIPO eHague 自动化涉及断点续传、`uncertain` 态保护、单次重试预算、`planIdentity` SHA-256 指纹及纯研究态 AST 分析；若调用方直接拼装低层通道，极易绕过检查点保护或将 AST 诊断引入生产流程。
-- **决策（Decision）**：抽象 `HagueGateway`、`HagueCheckpointStorePort`、`HagueDiagnosticsPort`（仅通过 `import type { AstAnalysis }` 引用分析结果类型）与 `createDraftRunnerHost` 工厂方法：将 `inspect` 与写操作 `execute` 在接口层明确分离，保留原 `runDraftPlan` 所有状态保护与异常策略。
+- **决策（Decision）**：抽象 `HagueGateway`、`HagueCheckpointStorePort`、`HagueDiagnosticsPort`（仅通过 `import type { AstAnalysis }` 引用分析结果类型）与 `createDraftRunnerHost` 工厂方法：将 `inspect` 与写操作 `execute` 在接口层明确分离，由 `HaguePage.vue` 在真实草稿执行入口装配 HTTP 或页面传输及检查点端口。保留原 `runDraftPlan` 的状态保护与异常策略。
 - **备选方案（Alternatives Considered）**：一次性将 `draft-runner.ts` 全盘重写为类方法 —— 风险极高，易损坏既有 70+ 海牙协议与 JSF 测试的精细异步控制。
 - **后果（Consequences）**：为海牙新通道/新适配提供稳定隔离层；保持 MV3、Web Locks、Session Gate、Creation Pool 及全套 `uncertain`/SHA-256 语义完整不变。
-- **涉及代码**：`patmail-extension/src/hague/gateway.ts`、`patmail-extension/src/hague/draft-runner.ts`。
+- **涉及代码**：`patmail-extension/src/hague/gateway.ts`、`patmail-extension/src/hague/draft-runner.ts`、`patmail-extension/src/app/pages/HaguePage.vue`。
 - **测试证据**：`tests/unit/hague/hague-gateway.test.ts` 与全量 `tests/unit/hague/`（77 文件 / 523 用例）100% 通过。

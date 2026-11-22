@@ -12,6 +12,7 @@ const server=await createServer({server:{host:'127.0.0.1',port:0}})
 await server.listen()
 const browser=await chromium.launch({executablePath:process.env.HAGUE_TEST_CHROME,headless:true})
 const context=await browser.newContext({viewport:{width:1440,height:1000}})
+context.setDefaultTimeout(15_000)
 await context.route(/^https?:/,route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort())
 try{
  const page=await context.newPage()
@@ -28,10 +29,27 @@ try{
   const applicant={name:'Example Ltd.',address:'No. 1, Nanshan District',city:'Shenzhen',region:'Guangdong',postalCode:'518000',country:'China'}
   const source=JSON.stringify({GetCaseApplicant:[{TableRows:[{applicant_name_en:applicant.name,contact_address_en:applicant.address,city:'深圳市',province:'广东省',postcode:'518000',country_zh_cn:'中国'},{applicant_name_en:'Second Ltd.',contact_address_en:'No. 2, Xuhui District, Shanghai',city:'徐汇区',province:'上海市',postcode:'200233',country_zh_cn:'中国'}]}],GetCaseInventor:[{TableRows:[{inventor_name_cn:'张三'},{inventor_name_cn:'陈丽偲',first_name_en:'Lisi',last_name_en:'CHEN',inventor_name_en:'Lisi CHEN'}]}],GetCaseInfo:[{CaseInfo:[{remark:'海牙指定欧盟、日本；公开情况：6个月'}]}]})
   const commands=[],storage={},destinations=new Map([[7,'portfolio']]);let nextTab=100,nextReference=123;const references=new Map()
+  const recoveryHeads = new Map()
   window.__draftCommands=commands
   window.__draftStorage=storage
   Object.assign(window.chrome??(window.chrome={}),{runtime:{id:'fixture',lastError:null,onMessage:{addListener(){},removeListener(){}},sendMessage(message,callback){
    if(message.channel==='patmail-call')message=message.message
+   if (message.type === 'PATMAIL_RECOVERY_RPC') {
+    const { op, slot, scope, payload, expectedRevision } = message.request
+    const key = JSON.stringify([slot, scope])
+    let value = recoveryHeads.get(key) ?? { payload: null, revision: 0 }
+    if (op === 'put') {
+     if (expectedRevision !== value.revision) return Promise.resolve({ ok: false, error: '恢复版本冲突。' })
+     value = { payload: structuredClone(payload), revision: value.revision + 1 }
+     recoveryHeads.set(key, value)
+    } else if (op !== 'get') {
+     return Promise.resolve({ ok: false, error: '恢复操作无效。' })
+    }
+    return Promise.resolve({ ok: true, value: structuredClone(value) })
+   }
+   if (message.channel === 'PATMAIL_HAGUE_HTTP' && message.action === 'waitIdle') {
+    return Promise.resolve({ ok: true })
+   }
    if(message.channel==='PATMAIL_HAGUE_SESSION'){
     if(message.action==='listTabs')callback({ok:true,tabs:[{id:7,title:'WIPO fixture'}]})
     else setTimeout(()=>callback(window.__verifyUnavailable?{ok:false,error:'登录探测网络暂不可用',code:'unavailable'}:window.__verifyFailure?{ok:false,error:'eHague 登录已失效，请重新登录。',code:'unauthenticated'}:{ok:true,session:{tabId:message.tabId??7,title:'WIPO fixture',documentId:'doc',verifiedAt:Date.now()-16000,expiresAt:Date.now()+284000}}),window.__verifyDelay??0)
@@ -81,6 +99,8 @@ try{
  await page.getByRole('option',{name:'6 路',exact:true}).click()
  await transportSelect.click()
  await page.getByRole('option',{name:'页面填写',exact:true}).click()
+ // This fixture simulates page commands and Summary printing.
+ await page.getByRole('button',{name:'导出图纸',exact:true,pressed:true}).click()
  const dispatchImport=async()=>{
   await page.evaluate(({doc,jpeg,rootName})=>{
    const file=(rel,base64)=>{const f=new File([Uint8Array.from(atob(base64),c=>c.charCodeAt(0))],rel.split('/').pop());Object.defineProperty(f,'webkitRelativePath',{value:rel,configurable:true});return f}
@@ -99,13 +119,13 @@ try{
  assert.equal(await page.locator('.hague-cases button').count(),0)
  await dispatchImport()
  await importDialog.getByRole('button',{name:'导入材料',exact:true}).click()
- await page.getByText('等待 eHague 登录验证',{exact:false}).first().waitFor()
- await page.getByRole('button',{name:'连接并检测登录',exact:true}).click()
+ await page.getByRole('button',{name:'重新检测',exact:true}).click()
  const create=page.getByRole('button',{name:'填写并保存本案草稿',exact:true})
  await create.waitFor();assert.equal(await create.isEnabled(),true)
  await create.click()
  await page.getByRole('button',{name:'再次创建本案草稿',exact:true}).waitFor({timeout:30000})
  const commands=await page.evaluate(()=>window.__draftCommands)
+ assert.equal(commands[0].op,'inspect')
  const upload=commands.filter(c=>c.op==='upload')
  assert.equal(upload.length,16)
  assert.deepEqual(upload.map(c=>c.name),[1,2].flatMap(n=>Array.from({length:8},(_,i)=>`${n}.${i+1}.jpg`)))
@@ -153,7 +173,7 @@ try{
  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='已存草稿打包 ZIP'&&!b.disabled))
  assert.equal(await page.getByRole('button',{name:'批量填写并存草稿',exact:true}).isEnabled(),true)
  assert.match(await page.locator('.hague-draft-scope').innerText(),/不代表原站当前仍存在/)
- assert.match(await page.locator('.hague-draft-scope').innerText(),/仅打包本列表.*历史保存记录/)
+ assert.match(await page.locator('.hague-draft-scope').innerText(),/打包本列表.*历史保存记录.*不包含待保存案件/)
  assert.match(await page.locator('.hague-draft-scope').innerText(),/材料有修改.*不会自动更新/)
  assert.equal(await page.evaluate(()=>window.__draftCommands.length),beforeRestore)
  assert.equal(await page.getByRole('button',{name:'已存草稿打包 ZIP',exact:true}).isEnabled(),true)
@@ -200,7 +220,7 @@ try{
  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='批量填写并存草稿'&&!b.disabled))
  const beforeUnknown=await page.evaluate(()=>window.__draftCommands.length)
  const rebuildUnknown=page.getByRole('button',{name:'将异常另建草稿',exact:true})
- assert.equal(await rebuildUnknown.count(),1)
+ await rebuildUnknown.waitFor()
  await rebuildUnknown.click()
  const unknownDialog=page.getByRole('dialog',{name:'确认重新创建草稿',exact:true})
  assert.match(await unknownDialog.innerText(),/旧操作结果尚未确认/)
@@ -214,13 +234,14 @@ try{
  assert.equal(await page.evaluate(()=>window.__draftStorage[window.__unknownKey].status),'saved')
  assert.match(await page.getByRole('dialog',{name:'草稿处理完成',exact:true}).innerText(),/旧操作结果尚未确认/)
  await page.getByRole('button',{name:'我知道了',exact:true}).click()
- // A failed auxiliary login probe must not abort a running draft while its prior proof is valid.
- await page.evaluate(()=>{window.__commandDelay=100})
+ // A transient validation failure preserves a still-valid proof when starting a draft.
+ await page.getByRole('button',{name:'重新检测',exact:true}).click()
+ await page.locator('.oa-session-card .theme-select-badge').filter({hasText:'已验证'}).waitFor()
+ await page.evaluate(()=>{window.__commandDelay=100;window.__verifyUnavailable=true;window.__verifyDelay=800})
  const beforeTransient=await page.evaluate(()=>window.__draftCommands.length)
  await page.getByRole('button',{name:'再次创建本案草稿',exact:true}).click();await confirmRecreate()
  await page.waitForFunction(n=>window.__draftCommands.slice(n).some(c=>c.op==='applicant'),beforeTransient)
- await page.evaluate(()=>{window.__verifyUnavailable=true;window.__verifyDelay=800})
- await page.getByRole('button',{name:'连接并检测登录',exact:true}).click()
+ assert.equal(await page.getByRole('button',{name:'重新检测',exact:true}).isDisabled(),true)
  await page.locator('.hague-status').filter({hasText:'草稿批次已结束：成功 1，异常 0，跳过 0。'}).waitFor({timeout:30000})
  assert.equal(await page.locator('.oa-session-card .theme-select-badge').innerText(),'已验证')
  await page.getByRole('button',{name:'我知道了',exact:true}).click()
@@ -243,6 +264,8 @@ try{
  assert.equal(await page.locator('.hague-cases button').filter({hasText:'暂未填写，查看原因'}).count(),8)
  assert.equal(await page.evaluate(()=>window.__draftCommands.length),beforeSkipped)
  await page.getByRole('button',{name:'我知道了',exact:true}).click()
+ await page.getByRole('button',{name:'重新检测',exact:true}).click()
+ await page.locator('.oa-session-card .theme-select-badge').filter({hasText:'已验证'}).waitFor()
  await page.evaluate(()=>{window.__verifyDelay=800})
  await page.getByRole('button',{name:'批量填写并存草稿',exact:true}).click()
  await page.locator('.hague-status').filter({hasText:'正在验证 eHague 登录态'}).waitFor()
