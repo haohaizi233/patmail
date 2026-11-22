@@ -272,6 +272,130 @@ export function createBillingRecoveryAdapter(): BillingRecoveryPort<BillingDeskS
   }
 }
 
+type BillingDownloadRecord = {
+  state: 'requested' | 'started' | 'completed' | 'interrupted' | 'cancelled'
+  id?: number
+  at: number
+}
+
+export interface BillingDownloadTracking {
+  get(key: string): Promise<unknown>
+  put(key: string, record: BillingDownloadRecord): Promise<void>
+  lock<T>(key: string, work: () => Promise<T>): Promise<T>
+}
+
+function downloadRecord(value: unknown): BillingDownloadRecord | null {
+  if (value === null || value === undefined) return null
+  if (
+    typeof value !== 'object' ||
+    !('state' in value) ||
+    !('at' in value) ||
+    typeof value.at !== 'number' ||
+    (value.state !== 'requested' &&
+      value.state !== 'started' &&
+      value.state !== 'completed' &&
+      value.state !== 'interrupted' &&
+      value.state !== 'cancelled')
+  ) {
+    throw new Error('下载恢复记录无效。')
+  }
+  const id = 'id' in value ? value.id : undefined
+  if (
+    value.state !== 'requested' &&
+    value.state !== 'cancelled' &&
+    (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0)
+  ) {
+    throw new Error('下载恢复编号无效。')
+  }
+  return { state: value.state, at: value.at, ...(typeof id === 'number' ? { id } : {}) }
+}
+
+/** Browser download IDs live across extension pages and service-worker restarts. */
+export function createTrackedBillingDownloadAdapter(
+  verifier: ChromeDownloadsVerifier,
+  storage: BillingDownloadTracking,
+): DownloadPort {
+  const delegate = createVerifiedChromeDownloadAdapter(verifier)
+  return {
+    async download(request) {
+      const job = request.job
+      if (!job) return delegate.download(request)
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(job.parameters))
+      const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+      const key = JSON.stringify(['phase3-download', job.scope, fingerprint])
+      return storage.lock(key, async () => {
+        const unknown = (id?: number): ExportOutcome => ({
+          status: 'unknown',
+          ...(id === undefined ? {} : { downloadId: id }),
+          reason: '这份请款表已有待确认的下载，请先核对浏览器下载记录。',
+        })
+        let prior: BillingDownloadRecord | null
+        try {
+          prior = downloadRecord(await storage.get(key))
+        } catch {
+          return { status: 'failed', reason: '无法读取请款下载账本，未发起下载。' }
+        }
+        if (job.isStale?.()) return { status: 'failed', reason: '请款范围或账号已变化，未发起下载。' }
+        if (prior?.state === 'completed' && prior.id !== undefined && Date.now() - prior.at < 86_400_000) {
+          return terminalOutcomeFromState('complete', request, prior.id) ?? unknown(prior.id)
+        }
+        if (prior?.state === 'requested' || prior?.state === 'started') {
+          if (prior.id === undefined) return unknown()
+          const id = prior.id
+          try {
+            const [item] = await verifier.search({ id })
+            const terminal = item && terminalOutcomeFromState(item.state, request, id, item.error)
+            if (!terminal) return unknown(id)
+            await storage.put(key, {
+              state: item.state === 'complete' ? 'completed' : 'interrupted',
+              id,
+              at: Date.now(),
+            })
+            return terminal
+          } catch {
+            return unknown(id)
+          }
+        }
+        try {
+          await storage.put(key, { state: 'requested', at: Date.now() })
+        } catch {
+          return { status: 'failed', reason: '无法记录请款下载意图，未发起下载。' }
+        }
+        let id: number | undefined
+        let notDispatched = false
+        const tracked = createVerifiedChromeDownloadAdapter({
+          ...verifier,
+          async download(options) {
+            if (job.isStale?.()) {
+              notDispatched = true
+              throw new Error('请款范围或账号已变化，未发起下载。')
+            }
+            id = await verifier.download(options)
+            await storage.put(key, { state: 'started', id, at: Date.now() }).catch(() => undefined)
+            return id
+          },
+        })
+        const result = await tracked.download(request)
+        if (notDispatched) {
+          // Only release an intent when this page can prove the call never happened.
+          await storage.put(key, { state: 'cancelled', at: Date.now() }).catch(() => undefined)
+          return result
+        }
+        if (id !== undefined && (result.status === 'download_completed' || result.status === 'download_interrupted')) {
+          await storage
+            .put(key, {
+              state: result.status === 'download_completed' ? 'completed' : 'interrupted',
+              id,
+              at: Date.now(),
+            })
+            .catch(() => undefined)
+        }
+        return result.status === 'failed' ? unknown(id) : result
+      })
+    },
+  }
+}
+
 export interface DefaultBillingServiceOverrides {
   downloads?: DownloadPort
   verifier?: ChromeDownloadsVerifier
@@ -279,11 +403,20 @@ export interface DefaultBillingServiceOverrides {
 }
 
 export function createDefaultBillingService(overrides?: DefaultBillingServiceOverrides): BillingApplicationService {
+  const verifier = createChromeExtensionDownloadsVerifier()
+  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
+  const recovery = createRecoveryClient()
   const downloads =
     overrides?.downloads ??
     (overrides?.verifier
       ? createVerifiedChromeDownloadAdapter(overrides.verifier, { settleTimeoutMs: overrides.settleTimeoutMs })
-      : createBrowserBlobDownloadAdapter())
+      : verifier && locks
+        ? createTrackedBillingDownloadAdapter(verifier, {
+            get: key => recovery.get('billing-desk', key),
+            put: (key, record) => recovery.put('billing-desk', key, record),
+            lock: (key, work) => locks.request(key, work),
+          })
+        : createBrowserBlobDownloadAdapter())
   return new BillingApplicationService({
     templates: createBillingTemplateAdapter(),
     spreadsheet: createBillingSpreadsheetAdapter(),

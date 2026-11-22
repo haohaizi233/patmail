@@ -1,5 +1,5 @@
 import type { PbcRates } from '../../billing/pbc-rates'
-import type { BillingInput, BillingTemplateId } from '../../billing/templates'
+import { formatLocalDate, type BillingInput, type BillingTemplateId } from '../../billing/templates'
 import type { BillingDeskSnapshot, ExportBillingCommand, ExportOutcome } from './billing-contracts'
 import { validateBillingExportPreconditions } from './billing-validation'
 import type { BillingRecoveryPort } from './ports/billing-recovery-port'
@@ -49,9 +49,7 @@ export class BillingApplicationService {
     }
   }
 
-  async exportBilling(
-    command: ExportBillingCommand,
-  ): Promise<{ outcome: ExportOutcome; needsRateRefresh?: boolean }> {
+  async exportBilling(command: ExportBillingCommand): Promise<{ outcome: ExportOutcome; needsRateRefresh?: boolean }> {
     const validation = validateBillingExportPreconditions(command)
     if (!validation.ok) {
       return {
@@ -89,6 +87,25 @@ export class BillingApplicationService {
       mimeType: XLSX_MIME_TYPE,
       blockCount: result.blockCount,
       warnings: result.warnings,
+      ...(command.downloadScope
+        ? {
+            job: {
+              scope: command.downloadScope,
+              parameters: JSON.stringify({
+                template: command.templateId,
+                input: {
+                  ...input,
+                  today: formatLocalDate(input.today),
+                  rows: input.rows.map(({ raw, ...row }) => ({
+                    ...row,
+                    raw: Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))),
+                  })),
+                },
+              }),
+              isStale: command.isStale,
+            },
+          }
+        : {}),
     })
 
     return { outcome: downloadOutcome }

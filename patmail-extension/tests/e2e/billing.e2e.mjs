@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { TextWriter, Uint8ArrayReader, ZipReader } from '@zip.js/zip.js'
-import { distDir, fixturePagePath } from './support/paths.mjs'
+import { distDir, fixturePagePath, tmpPath } from './support/paths.mjs'
 import { easyFixtureUrl, installEasyMock } from './support/easy-mock.mjs'
 import { extensionWorker, launchExtensionContext, waitForContentScript } from './support/browser.mjs'
 import { createReporter } from './support/report.mjs'
@@ -14,7 +15,13 @@ const guideSource = await readFile(new URL('../../docs/workflows/请款.md', imp
 const guideDiagrams = (guideSource.match(/^```mermaid$/gm) ?? []).length
 assert.ok(guideDiagrams >= 1, '请款.md must contain at least one mermaid diagram')
 
-const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 } })
+const downloadPath = await mkdtemp(tmpPath('billing-download-'))
+const profile = await mkdtemp(tmpPath('billing-profile-'))
+await mkdir(join(profile, 'Default'))
+await writeFile(join(profile, 'Default', 'Preferences'), JSON.stringify({
+  download: { default_directory: downloadPath, prompt_for_download: false },
+}))
+const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 }, userDataDir: profile })
 const mock = await installEasyMock(context, { fixtureHtml: fixture, profile: 'extension' })
 const goerCaseId = '7C842A11-A2E8-467D-9079-D3C766928198'
 const goerFeeId = 'goer-translation'
@@ -88,6 +95,18 @@ try {
 
   const app = await context.newPage()
   await app.goto(`chrome-extension://${extensionId}/app.html#/workflow`)
+  // The isolated Chromium normally uses Playwright's GUID naming policy.
+  // Exercise Chrome's native filename and terminal receipt in a fixture-only directory.
+  const cdp = await context.newCDPSession(app)
+  await cdp.send('Browser.setDownloadBehavior', { behavior: 'default', eventsEnabled: true })
+  const completedDownload = async stem => {
+    await app.getByRole('status').filter({ hasText: '已导出并确认下载完成' }).waitFor({ timeout: 10_000 })
+    const items = await app.evaluate(() => chrome.downloads.search({ state: 'complete' }))
+    const found = items.filter(item => item.filename.includes(stem))
+    assert.equal(found.length, 1)
+    assert.match(found[0].filename.split(/[\\/]/).at(-1), new RegExp(`^${stem}-\\d{8}\\.xlsx$`))
+    return found[0]
+  }
   await app.getByText('测试员', { exact: true }).waitFor({ timeout: 15_000 })
 
   // 工作台卡片「请款」→ 请款工作流（默认格尔涉外模板 + 步骤 1）
@@ -181,12 +200,11 @@ try {
   await app.getByRole('status').filter({ hasText: '请款表模板读取失败（HTTP 503）' }).waitFor()
   assert.match(await app.locator('.export-execute-card .summary-line').innerText(), /待填入费用：2 笔/)
   assert.equal(await topExport.isEnabled(), true)
-  const pendingDownload = app.waitForEvent('download', { timeout: 10_000 })
   await topExport.click()
-  const download = await pendingDownload
-  assert.match(download.suggestedFilename(), /^美的PCT费用清单-\d{8}\.xlsx$/)
-  assert.equal(await download.failure(), null)
-  const workbook = await readFile(await download.path())
+  const download = await completedDownload('美的PCT费用清单')
+  const workbook = await readFile(download.filename)
+  await topExport.click()
+  assert.equal((await completedDownload('美的PCT费用清单')).id, download.id, 'same export must reuse the browser download')
   assert.equal(workbook.subarray(0, 4).toString('hex'), '504b0304')
   const pctZip = new ZipReader(new Uint8ArrayReader(workbook))
   try {
@@ -215,11 +233,10 @@ try {
   await navigation.getByRole('button', { name: /进入请款单导出.*已选 2 笔/ }).waitFor()
   assert.equal(wordCountRequests, 1)
   await feeResultNext.click()
-  const goerDownload = app.waitForEvent('download', { timeout: 10_000 })
   await topExport.click()
-  const goer = await goerDownload
-  assert.match(goer.suggestedFilename(), /^格尔涉外请款单-\d{8}\.xlsx$/)
-  const zip = new ZipReader(new Uint8ArrayReader(await readFile(await goer.path())))
+  const goer = await completedDownload('格尔涉外请款单')
+  assert.notEqual(goer.id, download.id)
+  const zip = new ZipReader(new Uint8ArrayReader(await readFile(goer.filename)))
   try {
     const entries = await zip.getEntries()
     const sheet = await entries.find(entry => entry.filename === 'xl/worksheets/sheet1.xml').getData(new TextWriter())
