@@ -2,10 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { FeeSearchRow } from '../../../src/api/fee-search-types'
-import {
-  BillingApplicationService,
-  formatExportOutcomeNotice,
-} from '../../../src/application/billing/billing-service'
+import { BillingApplicationService, formatExportOutcomeNotice } from '../../../src/application/billing/billing-service'
 import {
   buildBillingSyncKey,
   buildMideaPctDefaultExclusion,
@@ -25,7 +22,9 @@ import {
 import type { ExportOutcome } from '../../../src/application/billing/billing-contracts'
 import {
   createBrowserBlobDownloadAdapter,
+  createChromeExtensionDownloadsVerifier,
   createVerifiedChromeDownloadAdapter,
+  type ChromeDownloadDelta,
 } from '../../../src/infrastructure/billing/billing-adapters'
 import { defaultHeaders, fillBillingTemplate, type BillingTemplateId } from '../../../src/billing/templates'
 import { XlsxBook } from '../../../src/billing/xlsx-engine'
@@ -230,8 +229,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       const newBook = await XlsxBook.open(outcome.bytes)
       expect(newBook.sheets.map(s => s.name)).toEqual(baseBook.sheets.map(s => s.name))
 
-      const targetSheetName =
-        scenario.id === 'midea-foreign' ? baseBook.sheets[1].name : baseBook.sheets[0].name
+      const targetSheetName = scenario.id === 'midea-foreign' ? baseBook.sheets[1].name : baseBook.sheets[0].name
       const baseSheet = baseBook.sheet(targetSheetName)
       const newSheet = newBook.sheet(targetSheetName)
       for (const ref of scenario.cellsToCompare) {
@@ -289,7 +287,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       warnings: [],
     })
     expect(blobOutcome.status).toBe('download_started')
-    expect(formatExportOutcomeNotice(blobOutcome)).toContain('已成功导出并触发下载：test.xlsx')
+    expect(formatExportOutcomeNotice(blobOutcome)).toContain('已生成并触发浏览器下载（尚未确认落盘完成）：test.xlsx')
 
     const completeAdapter = createVerifiedChromeDownloadAdapter({
       download: () => Promise.resolve(42),
@@ -303,6 +301,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       warnings: [],
     })
     expect(completedOutcome.status).toBe('download_completed')
+    expect(formatExportOutcomeNotice(completedOutcome)).toContain('已导出并确认下载完成：ok.xlsx')
 
     const interruptedAdapter = createVerifiedChromeDownloadAdapter({
       download: () => Promise.resolve(43),
@@ -344,6 +343,120 @@ describe('BillingApplicationService Golden Master & Ports', () => {
     })
     expect(unreadableOutcome).toMatchObject({ status: 'unknown', downloadId: 45 })
 
+    // Event-driven chrome.downloads.onChanged tracking + cleanup guarantees
+    const listeners = new Set<(delta: ChromeDownloadDelta) => void>()
+    const onChangedAdapter = createVerifiedChromeDownloadAdapter(
+      {
+        download: () => Promise.resolve(101),
+        search: () => Promise.resolve([{ state: 'in_progress' }]),
+        onChanged: {
+          addListener: cb => {
+            listeners.add(cb)
+          },
+          removeListener: cb => {
+            listeners.delete(cb)
+          },
+        },
+      },
+      { settleTimeoutMs: 500 },
+    )
+    const pendingComplete = onChangedAdapter.download({
+      bytes: new Uint8Array([9]),
+      fileName: 'async-ok.xlsx',
+      mimeType: 'application/octet-stream',
+      blockCount: 1,
+      warnings: [],
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(listeners.size).toBe(1)
+    for (const cb of listeners) cb({ id: 999, state: { current: 'interrupted' } })
+    for (const cb of listeners) cb({ id: 101, state: { current: 'complete' } })
+    expect(await pendingComplete).toMatchObject({ status: 'download_completed', downloadId: 101 })
+    expect(listeners.size).toBe(0)
+
+    const onChangedInterrupted = createVerifiedChromeDownloadAdapter(
+      {
+        download: () => Promise.resolve(102),
+        search: () => Promise.resolve([{ state: 'in_progress' }]),
+        onChanged: {
+          addListener: cb => {
+            listeners.add(cb)
+          },
+          removeListener: cb => {
+            listeners.delete(cb)
+          },
+        },
+      },
+      { settleTimeoutMs: 500 },
+    )
+    const pendingInterrupt = onChangedInterrupted.download({
+      bytes: new Uint8Array([9]),
+      fileName: 'async-fail.xlsx',
+      mimeType: 'application/octet-stream',
+      blockCount: 1,
+      warnings: [],
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    for (const cb of listeners) {
+      cb({ id: 102, state: { current: 'interrupted' }, error: { current: 'DISK_FULL' } })
+    }
+    expect(await pendingInterrupt).toEqual({ status: 'download_interrupted', reason: '下载中断：DISK_FULL' })
+    expect(listeners.size).toBe(0)
+
+    const timeoutAdapter = createVerifiedChromeDownloadAdapter(
+      {
+        download: () => Promise.resolve(103),
+        search: () => Promise.resolve([{ state: 'in_progress' }]),
+        onChanged: {
+          addListener: cb => {
+            listeners.add(cb)
+          },
+          removeListener: cb => {
+            listeners.delete(cb)
+          },
+        },
+      },
+      { settleTimeoutMs: 15 },
+    )
+    const timeoutOutcome = await timeoutAdapter.download({
+      bytes: new Uint8Array([9]),
+      fileName: 'timeout.xlsx',
+      mimeType: 'application/octet-stream',
+      blockCount: 1,
+      warnings: [],
+    })
+    expect(timeoutOutcome).toMatchObject({ status: 'unknown', downloadId: 103 })
+    expect(listeners.size).toBe(0)
+
+    const fastRaceAdapter = createVerifiedChromeDownloadAdapter(
+      {
+        download: () => Promise.resolve(104),
+        search: () => Promise.resolve([{ state: 'complete' }]),
+        onChanged: {
+          addListener: cb => {
+            listeners.add(cb)
+          },
+          removeListener: cb => {
+            listeners.delete(cb)
+          },
+        },
+      },
+      { settleTimeoutMs: 500 },
+    )
+    expect(
+      await fastRaceAdapter.download({
+        bytes: new Uint8Array([9]),
+        fileName: 'fast.xlsx',
+        mimeType: 'application/octet-stream',
+        blockCount: 1,
+        warnings: [],
+      }),
+    ).toMatchObject({ status: 'download_completed', downloadId: 104 })
+    expect(listeners.size).toBe(0)
+    expect(createChromeExtensionDownloadsVerifier()).toBeNull()
+
     createObjectURL.mockRestore()
     revokeObjectURL.mockRestore()
     clickSpy.mockRestore()
@@ -369,11 +482,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
     expect(Object.keys(bills)).toEqual(['PA2411768CN-EP'])
     expect(computeActiveCaseVolumes(['PA1', 'PA2'], ['PA3'], ['PA2'])).toEqual(['PA1', 'PA3'])
 
-    const effective = computeEffectiveExchangeRates(
-      { USD: 7.1, EUR: 7.8 },
-      { USD: 7.15 },
-      { EUR: true },
-    )
+    const effective = computeEffectiveExchangeRates({ USD: 7.1, EUR: 7.8 }, { USD: 7.15 }, { EUR: true })
     expect(effective).toEqual({ CNY: 1, USD: 7.15 })
 
     const rows = [

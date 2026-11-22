@@ -57,49 +57,192 @@ export function createBrowserBlobDownloadAdapter(): DownloadPort {
   }
 }
 
+export interface ChromeDownloadDelta {
+  id: number
+  state?: { current?: string }
+  error?: { current?: string }
+}
+
 export interface ChromeDownloadsVerifier {
   download(options: { url: string; filename: string; saveAs?: boolean }): Promise<number>
   search(query: { id: number }): Promise<Array<{ state: 'in_progress' | 'interrupted' | 'complete'; error?: string }>>
+  onChanged?: {
+    addListener(callback: (delta: ChromeDownloadDelta) => void): void
+    removeListener(callback: (delta: ChromeDownloadDelta) => void): void
+  }
+}
+
+export interface VerifiedDownloadOptions {
+  settleTimeoutMs?: number
+}
+
+const DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS = 15_000
+
+function terminalOutcomeFromState(
+  state: string,
+  request: BillingDownloadRequest,
+  downloadId: number,
+  errorText?: string,
+): ExportOutcome | null {
+  if (state === 'complete') {
+    return {
+      status: 'download_completed',
+      downloadId,
+      fileName: request.fileName,
+      blockCount: request.blockCount,
+      warnings: request.warnings,
+    }
+  }
+  if (state === 'interrupted') {
+    return {
+      status: 'download_interrupted',
+      reason: errorText ? `下载中断：${errorText}` : '浏览器下载已中断，请重试。',
+    }
+  }
+  return null
 }
 
 /**
- * 可验证终态的 Chrome Downloads 适配器：仅在查询到终态 `complete` 时才返回 `download_completed`。
+ * 构建 Chrome Downloads 校验器：在扩展运行时包装 chrome.downloads 及其 onChanged 事件。
  */
-export function createVerifiedChromeDownloadAdapter(verifier: ChromeDownloadsVerifier): DownloadPort {
+export function createChromeExtensionDownloadsVerifier(): ChromeDownloadsVerifier | null {
+  if (typeof chrome === 'undefined' || typeof chrome.downloads?.download !== 'function' || typeof chrome.downloads?.search !== 'function') {
+    return null
+  }
+  return {
+    download: options => chrome.downloads.download(options),
+    search: async query => {
+      const items = await chrome.downloads.search(query)
+      return items.map(item => ({
+        state: item.state,
+        ...(item.error ? { error: String(item.error) } : {}),
+      }))
+    },
+    ...(chrome.downloads.onChanged
+      ? {
+          onChanged: {
+            addListener: cb => chrome.downloads.onChanged.addListener(cb),
+            removeListener: cb => chrome.downloads.onChanged.removeListener(cb),
+          },
+        }
+      : {}),
+  }
+}
+
+/**
+ * 可验证终态的 Chrome Downloads 适配器：
+ * - 若提供 `onChanged`，在 `download()` 前注册监听并以 `search({ id })` 兜底消除快完成竞态
+ * - 仅在确认终态 `complete` 时返回 `download_completed`，超时仍返回 `unknown`（保留 `downloadId`）
+ */
+export function createVerifiedChromeDownloadAdapter(
+  verifier: ChromeDownloadsVerifier,
+  options?: VerifiedDownloadOptions,
+): DownloadPort {
+  const settleTimeoutMs = Math.max(1, options?.settleTimeoutMs ?? DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS)
+
   return {
     async download(request: BillingDownloadRequest): Promise<ExportOutcome> {
       const blob = new Blob([request.bytes as BlobPart], { type: request.mimeType })
       const url = URL.createObjectURL(blob)
       let downloadId: number | undefined
+      let listener: ((delta: ChromeDownloadDelta) => void) | undefined
+      let timer: ReturnType<typeof setTimeout> | undefined
+
+      const cleanupWatchers = () => {
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          timer = undefined
+        }
+        if (listener && verifier.onChanged) {
+          verifier.onChanged.removeListener(listener)
+          listener = undefined
+        }
+      }
+
       try {
+        const bufferedById = new Map<number, ChromeDownloadDelta>()
+        let onLiveDelta: ((delta: ChromeDownloadDelta) => void) | undefined
+        if (verifier.onChanged) {
+          listener = delta => {
+            if (downloadId === undefined) {
+              bufferedById.set(delta.id, delta)
+              return
+            }
+            if (delta.id === downloadId) onLiveDelta?.(delta)
+          }
+          verifier.onChanged.addListener(listener)
+        }
+
         downloadId = await verifier.download({ url, filename: request.fileName, saveAs: false })
-        const items = await verifier.search({ id: downloadId })
-        const item = items[0]
-        if (!item) {
-          return { status: 'unknown', downloadId, reason: '未在浏览器下载记录中查询到刚发起的导出任务。' }
-        }
-        if (item.state === 'complete') {
-          return {
-            status: 'download_completed',
-            downloadId,
-            fileName: request.fileName,
-            blockCount: request.blockCount,
-            warnings: request.warnings,
+        const activeId = downloadId
+
+        if (!verifier.onChanged) {
+          const items = await verifier.search({ id: activeId })
+          const item = items[0]
+          if (!item) {
+            return { status: 'unknown', downloadId: activeId, reason: '未在浏览器下载记录中查询到刚发起的导出任务。' }
           }
+          return (
+            terminalOutcomeFromState(item.state, request, activeId, item.error) ?? {
+              status: 'download_started',
+              downloadId: activeId,
+              fileName: request.fileName,
+              blockCount: request.blockCount,
+              warnings: request.warnings,
+            }
+          )
         }
-        if (item.state === 'interrupted') {
-          return {
-            status: 'download_interrupted',
-            reason: item.error ? `下载中断：${item.error}` : '浏览器下载已中断，请重试。',
+
+        return await new Promise<ExportOutcome>(resolve => {
+          let settled = false
+          const finish = (outcome: ExportOutcome) => {
+            if (settled) return
+            settled = true
+            cleanupWatchers()
+            resolve(outcome)
           }
-        }
-        return {
-          status: 'download_started',
-          downloadId,
-          fileName: request.fileName,
-          blockCount: request.blockCount,
-          warnings: request.warnings,
-        }
+
+          onLiveDelta = delta => {
+            const state = delta.state?.current
+            if (!state) return
+            const outcome = terminalOutcomeFromState(state, request, activeId, delta.error?.current)
+            if (outcome) finish(outcome)
+          }
+
+          const earlyDelta = bufferedById.get(activeId)
+          if (earlyDelta) {
+            onLiveDelta(earlyDelta)
+            if (settled) return
+          }
+
+          timer = setTimeout(() => {
+            finish({
+              status: 'unknown',
+              downloadId: activeId,
+              reason: '等待浏览器下载终态超时，请在浏览器下载记录中核对结果。',
+            })
+          }, settleTimeoutMs)
+
+          void verifier.search({ id: activeId }).then(
+            items => {
+              if (settled) return
+              const item = items[0]
+              if (!item) {
+                finish({ status: 'unknown', downloadId: activeId, reason: '未在浏览器下载记录中查询到刚发起的导出任务。' })
+                return
+              }
+              const terminal = terminalOutcomeFromState(item.state, request, activeId, item.error)
+              if (terminal) finish(terminal)
+            },
+            () => {
+              finish({
+                status: 'unknown',
+                downloadId: activeId,
+                reason: '浏览器已接收导出任务，暂时无法核对下载结果。',
+              })
+            },
+          )
+        })
       } catch (err) {
         if (downloadId !== undefined) {
           return { status: 'unknown', downloadId, reason: '浏览器已接收导出任务，暂时无法核对下载结果。' }
@@ -109,6 +252,7 @@ export function createVerifiedChromeDownloadAdapter(verifier: ChromeDownloadsVer
           reason: err instanceof Error ? err.message : '浏览器下载发起失败',
         }
       } finally {
+        cleanupWatchers()
         setTimeout(() => URL.revokeObjectURL(url), 10_000)
       }
     },
@@ -129,12 +273,23 @@ export function createBillingRecoveryAdapter(): BillingRecoveryPort<BillingDeskS
   }
 }
 
-export function createDefaultBillingService(): BillingApplicationService {
+export interface DefaultBillingServiceOverrides {
+  downloads?: DownloadPort
+  verifier?: ChromeDownloadsVerifier
+  settleTimeoutMs?: number
+}
+
+export function createDefaultBillingService(overrides?: DefaultBillingServiceOverrides): BillingApplicationService {
+  const downloads =
+    overrides?.downloads ??
+    (overrides?.verifier
+      ? createVerifiedChromeDownloadAdapter(overrides.verifier, { settleTimeoutMs: overrides.settleTimeoutMs })
+      : createBrowserBlobDownloadAdapter())
   return new BillingApplicationService({
     templates: createBillingTemplateAdapter(),
     spreadsheet: createBillingSpreadsheetAdapter(),
     exchangeRates: createPbcExchangeRateAdapter(),
-    downloads: createBrowserBlobDownloadAdapter(),
+    downloads,
     recovery: createBillingRecoveryAdapter(),
   })
 }
