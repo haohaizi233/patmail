@@ -7,6 +7,7 @@ import { AGENT_DEADLINE_KEEP, AGENT_FILE_KEEP, createAgentSession, loadMemory, o
 import { helpText, resolveSlash } from '../agent/slash'
 import { formatDraft, type DeadlineRow, type ToolContext } from '../agent/tools'
 import { extractTargetVolumes, MailApplicationService } from '../application/mail/mail-service'
+import { createEasyMailGateway } from '../infrastructure/mail/easy-mail-gateway-adapter'
 import { isWriteSwitchOpen } from '../settings/write-switch'
 import { workflowPreview } from '../workflow/preview-chart'
 import { MAIL_FLOW_TYPE } from '../workflow/contracts'
@@ -366,7 +367,10 @@ async function listHistory(forward: PageForward, surface: string): Promise<strin
 async function listReviewers(host: WorkspaceHost, forward: PageForward): Promise<string> {
   const session = signedIn(host)
   if ('error' in session) return session.error
-  return mailService.checkReviewers({ operatorId: session.operatorId, forward })
+  return mailService.checkReviewers({
+    operatorId: session.operatorId,
+    gateway: createEasyMailGateway(forward)
+  })
 }
 
 async function listProcesses(forward: PageForward, kind: string, searchKey: string): Promise<string> {
@@ -454,7 +458,7 @@ async function submitEasy(
     deadlines,
     caseVolume,
     account: () => loadAccount(host.area, session.origin, session.operatorId),
-    forward
+    gateway: createEasyMailGateway(forward)
   })
   return outcome.message
 }

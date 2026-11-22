@@ -8,8 +8,6 @@ import { selectionFingerprint } from '../../mail/fingerprint'
 import { planDrafts } from '../../mail/planner'
 import type { MailDraftPreview, SelectedPatentFile } from '../../mail/types'
 import { isQueryGuid } from '../../query/query-validator'
-import { isRecord } from '../../shared/guards'
-import { isMessage, MessageType } from '../../shared/message'
 import { resolveReviewer } from '../../workflow/reviewer-resolver'
 import type { WorkflowNode } from '../../workflow/types'
 import type {
@@ -25,12 +23,6 @@ import type {
   SubmitLimitMailCommand,
   SubmitLimitMailOutcome,
 } from './mail-contracts'
-
-function forwardErrorText(value: unknown): string | null {
-  if (isRecord(value) && typeof value.error === 'string') return value.error
-  if (!isMessage(value)) return 'EASY 没有返回可识别的结果。'
-  return null
-}
 
 export function extractTargetVolumes(raw: string, bucket: readonly SelectedPatentFile[]): string[] {
   const typed = raw
@@ -230,14 +222,9 @@ export class MailApplicationService {
   }
 
   async checkReviewers(command: CheckReviewersCommand): Promise<string> {
-    const found = await command.forward({ type: MessageType.ListFlowReviewers })
-    const error = forwardErrorText(found)
-    if (error) return error
-    if (!isMessage(found) || found.type !== MessageType.ListFlowReviewersResult) {
-      return '审核人没有返回。'
-    }
-    if (!found.payload.ok) return found.payload.error.message
-    const reviewers = found.payload.data.reviewers
+    const listed = await command.gateway.listReviewers()
+    if (!listed.ok) return listed.message
+    const reviewers = listed.reviewers
     const node: WorkflowNode = {
       listId: 'account',
       seq: 1,
@@ -295,15 +282,8 @@ export class MailApplicationService {
         held.push(row.caseVolume || row.procId)
         continue
       }
-      const gate = await command.forward({
-        type: MessageType.ReadCaseBusFlow,
-        payload: { caseId: row.caseId, procId: row.procId },
-      })
-      const state =
-        isMessage(gate) && gate.type === MessageType.CaseBusFlowResult && gate.payload.ok
-          ? gate.payload.data.gate
-          : 'pending'
-      if (state === 'open' || state === 'done') openIds.push(row.procId)
+      const flow = await command.gateway.readCaseFlow({ caseId: row.caseId, procId: row.procId })
+      if (flow.ok && (flow.gate === 'open' || flow.gate === 'done')) openIds.push(row.procId)
       else held.push(row.caseVolume || row.procId)
     }
 
@@ -341,21 +321,18 @@ export class MailApplicationService {
       return { ok: false, status: 'rejected', message: planned.message }
     }
 
-    const found = await command.forward({
-      type: MessageType.SubmitLimitMail,
-      payload: { userId: command.operatorId, items: planned.items },
+    const receipt = await command.gateway.submitLimitMail({
+      operatorId: command.operatorId,
+      items: planned.items,
     })
-    const error = forwardErrorText(found)
-    if (error) {
-      return { ok: false, status: 'failed', message: error }
-    }
-    if (!isMessage(found) || found.type !== MessageType.SubmitLimitMailResult) {
-      return { ok: false, status: 'failed', message: '提交没有返回。' }
+    if (receipt.status !== 'ok') {
+      return { ok: false, status: receipt.status, message: receipt.message }
     }
 
-    const summary = summarizeLimitMailSubmit(found.payload.results, found.payload.stopped)
+    const summary = summarizeLimitMailSubmit(receipt.results, receipt.stopped)
     if (!summary.startsWith('已提交')) {
-      return { ok: false, status: 'rejected', message: summary }
+      const hasUnknown = receipt.results.some(item => item.state === 'unknown')
+      return { ok: false, status: hasUnknown ? 'unknown' : 'rejected', message: summary }
     }
     return { ok: true, status: 'submitted', message: `已提交到 EASY。${summary}` }
   }

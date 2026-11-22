@@ -2,9 +2,7 @@ import type { CustomerQueryProfile, PctTaskRow } from '../../customer/types'
 import type { PctRecipientMode } from '../../customer/pct-recipients'
 import type { AssembledMail, RuleFill } from '../../mail/assemble'
 import type { MailRuleBundle, SelectedPatentFile, SelectionSnapshot } from '../../mail/types'
-import type { ContentRequest } from '../../shared/message'
-
-export type MailForwardPort = (message: ContentRequest) => Promise<unknown>
+import type { EasyMailGateway } from './ports/easy-mail-gateway'
 
 export interface MailAccountSnapshot {
   customers: CustomerQueryProfile[]
@@ -101,7 +99,7 @@ export interface PlanSelectionDraftsCommand {
 
 export interface CheckReviewersCommand {
   operatorId: string
-  forward: MailForwardPort
+  gateway: EasyMailGateway
 }
 
 export interface SubmitLimitMailCommand {
@@ -111,10 +109,10 @@ export interface SubmitLimitMailCommand {
   deadlines: LimitDeadlineRef[]
   caseVolume: string
   account: MailAccountSnapshot | (() => Promise<MailAccountSnapshot>)
-  forward: MailForwardPort
+  gateway: EasyMailGateway
 }
 
-export type SubmitLimitMailOutcomeStatus = 'submitted' | 'blocked' | 'held' | 'rejected' | 'failed'
+export type SubmitLimitMailOutcomeStatus = 'submitted' | 'blocked' | 'held' | 'rejected' | 'unknown' | 'failed'
 
 export interface SubmitLimitMailOutcome {
   ok: boolean

@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { extractTargetVolumes, MailApplicationService } from '../../../src/application/mail/mail-service'
+import type { EasyMailGateway } from '../../../src/application/mail/ports/easy-mail-gateway'
 import type { CustomerQueryProfile } from '../../../src/customer/types'
 import type { MailRuleBundle } from '../../../src/mail/types'
-import { MessageType } from '../../../src/shared/message'
 
 const VALID_REVIEWER_GUID = '11111111-1111-4111-8111-111111111111'
 const VALID_OPERATOR_GUID = '22222222-2222-4222-8222-222222222222'
@@ -114,26 +114,34 @@ describe('MailApplicationService', () => {
   })
 
   it('checks flow reviewers without triggering submission', async () => {
+    const submitSpy = vi.fn<EasyMailGateway['submitLimitMail']>()
+    const gateway: EasyMailGateway = {
+      listReviewers: vi.fn(() =>
+        Promise.resolve({
+          ok: true as const,
+          reviewers: [{ id: VALID_OPERATOR_GUID, name: '当前操作人' }],
+        }),
+      ),
+      readCaseFlow: vi.fn(),
+      submitLimitMail: submitSpy,
+    }
     const summary = await service.checkReviewers({
       operatorId: VALID_OPERATOR_GUID,
-      forward: () =>
-        Promise.resolve({
-          type: MessageType.ListFlowReviewersResult,
-          payload: {
-            ok: true,
-            data: {
-              message: 'ok',
-              reviewers: [{ id: VALID_OPERATOR_GUID, name: '当前操作人' }],
-            },
-          },
-        }),
+      gateway,
     })
     expect(summary).toContain('审核人共 1 人')
     expect(summary).toContain('当前登录人在名单里')
     expect(summary).toContain('这一步没有提交审核')
+    expect(submitSpy).not.toHaveBeenCalled()
   })
 
-  it('enforces write switch, configured defaultReviewer, and CaseBusFlow gate before submitting', async () => {
+  it('enforces write switch, configured defaultReviewer, CaseBusFlow gate, and unknown non-retry', async () => {
+    const noopSubmitSpy = vi.fn<EasyMailGateway['submitLimitMail']>()
+    const noopGateway: EasyMailGateway = {
+      listReviewers: vi.fn(),
+      readCaseFlow: vi.fn(() => Promise.resolve({ ok: true as const, gate: 'pending' as const })),
+      submitLimitMail: noopSubmitSpy,
+    }
     const closed = await service.submitLimitMailForReview({
       operatorId: VALID_OPERATOR_GUID,
       writeSwitchOpen: false,
@@ -141,7 +149,7 @@ describe('MailApplicationService', () => {
       deadlines: [{ procId: VALID_PROC_GUID, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' }],
       caseVolume: '',
       account: { customers: [makeCustomer()], rules: makeRules() },
-      forward: () => Promise.resolve({}),
+      gateway: noopGateway,
     })
     expect(closed).toEqual({ ok: false, status: 'blocked', message: '写开关已关闭，没有提交到 EASY。' })
 
@@ -152,7 +160,7 @@ describe('MailApplicationService', () => {
       deadlines: [{ procId: VALID_PROC_GUID, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' }],
       caseVolume: '',
       account: { customers: [makeCustomer()], rules: makeRules('') },
-      forward: () => Promise.resolve({}),
+      gateway: noopGateway,
     })
     expect(missingReviewer).toEqual({
       ok: false,
@@ -167,16 +175,26 @@ describe('MailApplicationService', () => {
       deadlines: [{ procId: VALID_PROC_GUID, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' }],
       caseVolume: '',
       account: { customers: [makeCustomer()], rules: makeRules() },
-      forward: () =>
-        Promise.resolve({
-          type: MessageType.CaseBusFlowResult,
-          payload: { ok: true, data: { gate: 'pending' } },
-        }),
+      gateway: noopGateway,
     })
     expect(heldOutcome.status).toBe('held')
     expect(heldOutcome.message).toContain('这些事项还在审核里')
+    expect(noopSubmitSpy).not.toHaveBeenCalled()
 
-    let submittedPayload: unknown = null
+    let submittedItems: Array<{ reviewerId?: string }> = []
+    const okSubmitSpy = vi.fn<EasyMailGateway['submitLimitMail']>(request => {
+      submittedItems = request.items
+      return Promise.resolve({
+        status: 'ok' as const,
+        stopped: false,
+        results: [{ procId: VALID_PROC_GUID, mailId: 'mail-1', state: 'submitted' as const, message: 'ok' }],
+      })
+    })
+    const okGateway: EasyMailGateway = {
+      listReviewers: vi.fn(),
+      readCaseFlow: vi.fn(() => Promise.resolve({ ok: true as const, gate: 'open' as const })),
+      submitLimitMail: okSubmitSpy,
+    }
     const okOutcome = await service.submitLimitMailForReview({
       operatorId: VALID_OPERATOR_GUID,
       writeSwitchOpen: true,
@@ -184,30 +202,33 @@ describe('MailApplicationService', () => {
       deadlines: [{ procId: VALID_PROC_GUID, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' }],
       caseVolume: 'PA2511001PCT',
       account: { customers: [makeCustomer()], rules: makeRules() },
-      forward: msg => {
-        if (msg.type === MessageType.ReadCaseBusFlow) {
-          return Promise.resolve({
-            type: MessageType.CaseBusFlowResult,
-            payload: { ok: true, data: { gate: 'open' } },
-          })
-        }
-        submittedPayload = msg.payload
-        return Promise.resolve({
-          type: MessageType.SubmitLimitMailResult,
-          payload: {
-            stopped: false,
-            results: [{ procId: VALID_PROC_GUID, mailId: 'mail-1', state: 'submitted', message: 'ok' }],
-          },
-        })
-      },
+      gateway: okGateway,
     })
     expect(okOutcome.ok).toBe(true)
     expect(okOutcome.status).toBe('submitted')
     expect(okOutcome.message).toContain('已提交到 EASY')
     expect(okOutcome.message).toContain('默认审核人')
-    expect((submittedPayload as { items: Array<{ reviewerId?: string }> }).items[0]?.reviewerId).toBe(
-      VALID_REVIEWER_GUID,
+    expect(submittedItems[0]?.reviewerId).toBe(VALID_REVIEWER_GUID)
+
+    const unknownSubmitSpy = vi.fn<EasyMailGateway['submitLimitMail']>(() =>
+      Promise.resolve({ status: 'unknown' as const, message: '提交没有返回。' }),
     )
+    const unknownGateway: EasyMailGateway = {
+      listReviewers: vi.fn(),
+      readCaseFlow: vi.fn(() => Promise.resolve({ ok: true as const, gate: 'open' as const })),
+      submitLimitMail: unknownSubmitSpy,
+    }
+    const unknownOutcome = await service.submitLimitMailForReview({
+      operatorId: VALID_OPERATOR_GUID,
+      writeSwitchOpen: true,
+      files: [],
+      deadlines: [{ procId: VALID_PROC_GUID, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' }],
+      caseVolume: 'PA2511001PCT',
+      account: { customers: [makeCustomer()], rules: makeRules() },
+      gateway: unknownGateway,
+    })
+    expect(unknownOutcome).toEqual({ ok: false, status: 'unknown', message: '提交没有返回。' })
+    expect(unknownSubmitSpy).toHaveBeenCalledTimes(1)
 
     let loaded = false
     const noMatchOutcome = await service.submitLimitMailForReview({
@@ -220,7 +241,7 @@ describe('MailApplicationService', () => {
         loaded = true
         return Promise.resolve({ customers: [makeCustomer()], rules: makeRules() })
       },
-      forward: () => Promise.resolve({}),
+      gateway: noopGateway,
     })
     expect(noMatchOutcome).toEqual({
       ok: false,

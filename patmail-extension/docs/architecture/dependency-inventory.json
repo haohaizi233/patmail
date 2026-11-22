@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T09:30:14.595Z",
-  "fileCount": 516,
+  "scannedAt": "2026-11-22T09:35:13.893Z",
+  "fileCount": 518,
   "summary": {
-    "totalEdges": 2273,
-    "runtimeInternalEdges": 1589,
-    "typeOnlyEdges": 553,
+    "totalEdges": 2277,
+    "runtimeInternalEdges": 1590,
+    "typeOnlyEdges": 556,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -127,7 +127,6 @@
       "customer": 3,
       "mail": 4,
       "query": 1,
-      "shared": 2,
       "workflow": 1
     },
     "automation": {
@@ -147,6 +146,7 @@
       "api": 5,
       "agent": 10,
       "application/mail": 1,
+      "infrastructure": 1,
       "settings": 4,
       "workflow": 4,
       "shared": 18,
@@ -214,7 +214,8 @@
     "infrastructure": {
       "application/billing": 1,
       "billing": 3,
-      "recovery": 1
+      "recovery": 1,
+      "shared": 2
     },
     "jihua": {
       "background": 1
@@ -1138,6 +1139,11 @@
       "module": "application/mail"
     },
     {
+      "file": "application/mail/ports/easy-mail-gateway.ts",
+      "layer": "Application",
+      "module": "application/mail"
+    },
+    {
       "file": "automation/acceptance-context.ts",
       "layer": "BusinessModule",
       "module": "automation"
@@ -2054,6 +2060,11 @@
     },
     {
       "file": "infrastructure/billing/billing-adapters.ts",
+      "layer": "Infrastructure",
+      "module": "infrastructure"
+    },
+    {
+      "file": "infrastructure/mail/easy-mail-gateway-adapter.ts",
       "layer": "Infrastructure",
       "module": "infrastructure"
     },
