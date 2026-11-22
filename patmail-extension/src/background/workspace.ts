@@ -19,6 +19,16 @@ import { readSmeCustomerList } from '../customer/sme-customers'
 import { customerMode, modeLabel, preferredModeOrigin, originMatchesMode, setCustomerMode as saveCustomerMode } from '../settings/customer-mode'
 import { planTrustedTask } from '../automation/task-planner'
 import type { AutomationTask } from '../automation/types'
+import { createRecoveryClient } from '../recovery/client'
+import { isWriteSwitchOpen } from '../settings/write-switch'
+import { createLimitMailWriteGuard } from './limit-mail-write-guard'
+import { dispatchRecoveryRequest } from './recovery'
+
+const mailJournal = createRecoveryClient(dispatchRecoveryRequest)
+const guardLimitMail = createLimitMailWriteGuard({
+  load: scope => mailJournal.get('limit-mail', scope),
+  save: (scope, marks) => mailJournal.put('limit-mail', scope, marks),
+})
 
 export interface WorkspacePayload {
   ok: boolean
@@ -487,6 +497,8 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     }
   }
   if (action.action === 'forward') {
+    const initialMailAccount = action.message.type === MessageType.SubmitLimitMail
+      ? freezeAccount(host.connection.context) : null
     if (action.message.type === MessageType.LoadDictionary && action.message.payload.kind === 'customerList') {
       const local = await readSmeCustomerList(action.message.payload.force)
       if (local) {
@@ -523,7 +535,10 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
         return workspaceResult({ ok: false, message: '当前登录人还没确认，没有提交。', connection: host.connection.context })
       }
       if (outbound.type === MessageType.SubmitLimitMail) {
-        const account = await readAccount(host)
+        if (!initialMailAccount || initialMailAccount.easyTabId !== target.tabId ||
+            !sameAccountContext(host.connection.context, initialMailAccount) ||
+            !sameOperatorId(outbound.payload.userId, initialMailAccount.operatorId)) return staleResult(host)
+        const account = await readAccount(host, initialMailAccount)
         if (!account) return staleResult(host)
         const reviewerId = account.rules?.defaultReviewer?.userId ?? ''
         if (!isConfirmedOperator(reviewerId)) {
@@ -543,7 +558,18 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     const frozen = freezeAccount(host.connection.context)
     const version = host.connection.context.connectionVersion
     try {
-      const response = await host.sendToTab(target.tabId, stripSearchContinuation(outbound))
+      const response = outbound.type === MessageType.SubmitLimitMail && initialMailAccount
+        ? await guardLimitMail(
+          JSON.stringify(['phase3-write', initialMailAccount.easyOrigin, initialMailAccount.operatorId.toLowerCase()]),
+          outbound.payload.items,
+          () => sameAccountContext(host.connection.context, initialMailAccount),
+          () => isWriteSwitchOpen(),
+          items => host.sendToTab(target.tabId, {
+            type: MessageType.SubmitLimitMail,
+            payload: { userId: initialMailAccount.operatorId, items },
+          }),
+        )
+        : await host.sendToTab(target.tabId, stripSearchContinuation(outbound))
       if (frozen && !sameAccountContext(host.connection.context, frozen)) {
         return workspaceResult({ ok: false, message: '账号已经变化，这次查询结果已丢弃。', connection: host.connection.context })
       }

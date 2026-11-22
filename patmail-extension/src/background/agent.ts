@@ -7,13 +7,14 @@ import { AGENT_DEADLINE_KEEP, AGENT_FILE_KEEP, createAgentSession, loadMemory, o
 import { helpText, resolveSlash } from '../agent/slash'
 import { formatDraft, type DeadlineRow, type ToolContext } from '../agent/tools'
 import { extractTargetVolumes, MailApplicationService } from '../application/mail/mail-service'
-import { createEasyMailGateway } from '../infrastructure/mail/easy-mail-gateway-adapter'
+import { createEasyMailGateway, MailWriteNotDispatched } from '../infrastructure/mail/easy-mail-gateway-adapter'
 import { isWriteSwitchOpen } from '../settings/write-switch'
 import { workflowPreview } from '../workflow/preview-chart'
 import { MAIL_FLOW_TYPE } from '../workflow/contracts'
 import { isQueryGuid } from '../query/query-validator'
 import { isConfirmedOperator } from '../automation/operator'
 import { isRecord } from '../shared/guards'
+import { freezeAccount, sameAccountContext } from '../shared/connection'
 import type { ProcessKind } from '../api/mail-process'
 import { loadAccount, type LocalArea } from './account-data'
 import { handleWorkspaceMessage, type WorkspaceHost } from './workspace'
@@ -149,7 +150,10 @@ function toolContext(host: WorkspaceHost, memory: AgentMemoryState, signal: Abor
   const bucket: SelectedPatentFile[] = [...(memory.work?.files ?? [])]
   const deadlines: DeadlineRow[] = (memory.work?.deadlines ?? []).map(row => ({ ...row }))
   const forward = async (message: ContentRequest): Promise<unknown> => {
-      if (signal.aborted) throw new LlmError('REQUEST_TIMEOUT', '已停下。')
+      if (signal.aborted) {
+        if (message.type === MessageType.SubmitLimitMail) throw new MailWriteNotDispatched('已在派发前停止提交。')
+        throw new LlmError('REQUEST_TIMEOUT', '已停下。')
+      }
       const pending = handleWorkspaceMessage({ type: MessageType.Workspace, payload: { action: 'forward', message } }, host)
       const response = await new Promise<Awaited<ReturnType<typeof handleWorkspaceMessage>>>((resolve, reject) => {
         const stop = (): void => {
@@ -451,6 +455,8 @@ async function submitEasy(
   const session = signedIn(host)
   if ('error' in session) return session.error
   if (deadlines.length === 0) return '先查期限，这一轮还没有可提交的事项。'
+  const accountContext = freezeAccount(host.connection.context)
+  if (!accountContext) return 'EASY 账号绑定尚未确认，没有提交。'
   const outcome = await mailService.submitLimitMailForReview({
     operatorId: session.operatorId,
     writeSwitchOpen,
@@ -458,7 +464,12 @@ async function submitEasy(
     deadlines,
     caseVolume,
     account: () => loadAccount(host.area, session.origin, session.operatorId),
-    gateway: createEasyMailGateway(forward)
+    gateway: createEasyMailGateway(message => {
+      if (!sameAccountContext(host.connection.context, accountContext)) {
+        return Promise.reject(new MailWriteNotDispatched('EASY 账号或标签页已变化，没有派发。'))
+      }
+      return forward(message)
+    })
   })
   return outcome.message
 }

@@ -118,4 +118,11 @@ export interface SubmitLimitMailOutcome {
   ok: boolean
   status: SubmitLimitMailOutcomeStatus
   message: string
+  batch?: {
+    submitted: number
+    rejected: number
+    created: number
+    unknown: number
+    items: Array<{ procId: string; mailId: string; state: 'submitted' | 'failed' | 'created' | 'unknown' }>
+  }
 }

@@ -33,6 +33,7 @@ const authority = new RecoveryAuthority(async () => {
   if (!store) throw new Error('恢复账本不可用。')
   return openRecoveryLedger(store)
 })
+export const dispatchRecoveryRequest = (request: RecoveryRequest) => authority.dispatch(request)
 /** Return false for other messages; respond asynchronously only to our validated extension-page RPC. */
 export function handleRecoveryMessage(message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (reply: unknown) => void, connection?: EasyConnectionContext): boolean {
   if (!message || typeof message !== 'object' || (message as { type?: unknown }).type !== RECOVERY_RPC) return false
