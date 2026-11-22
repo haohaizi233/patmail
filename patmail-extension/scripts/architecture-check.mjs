@@ -99,28 +99,30 @@ export const COMPOSITION_ROOTS = new Map([
 function loadTsconfigPathAliases(extensionRoot) {
   const tsconfigPath = join(extensionRoot, 'tsconfig.json')
   if (!existsSync(tsconfigPath)) return []
-  try {
-    const parsed = JSON.parse(readFileSync(tsconfigPath, 'utf8'))
-    const paths = parsed?.compilerOptions?.paths
-    const baseUrl = parsed?.compilerOptions?.baseUrl
-      ? resolve(extensionRoot, parsed.compilerOptions.baseUrl)
-      : extensionRoot
-    if (!paths || typeof paths !== 'object') return []
-    const rules = []
-    for (const [pattern, targets] of Object.entries(paths)) {
-      if (!Array.isArray(targets) || !targets.length) continue
-      const starIndex = pattern.indexOf('*')
-      rules.push({
-        prefix: starIndex >= 0 ? pattern.slice(0, starIndex) : pattern,
-        suffix: starIndex >= 0 ? pattern.slice(starIndex + 1) : '',
-        wildcard: starIndex >= 0,
-        targets: targets.map(target => ({ baseUrl, target })),
-      })
-    }
-    return rules
-  } catch {
-    return []
+  const parsed = ts.getParsedCommandLineOfConfigFile(
+    tsconfigPath,
+    {},
+    {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic: diagnostic => {
+        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+      },
+    },
+  )
+  const options = parsed?.options
+  const baseUrl = options?.baseUrl ?? options?.pathsBasePath ?? extensionRoot
+  const rules = []
+  for (const [pattern, targets] of Object.entries(options?.paths ?? {})) {
+    const starIndex = pattern.indexOf('*')
+    rules.push({
+      prefix: starIndex >= 0 ? pattern.slice(0, starIndex) : pattern,
+      suffix: starIndex >= 0 ? pattern.slice(starIndex + 1) : '',
+      wildcard: starIndex >= 0,
+      targets: targets.map(target => ({ baseUrl, target })),
+    })
   }
+  // Match TypeScript: exact keys win, followed by the wildcard with the longest prefix.
+  return rules.sort((a, b) => Number(a.wildcard) - Number(b.wildcard) || b.prefix.length - a.prefix.length)
 }
 
 function walkSourceFiles(dir, out = []) {
@@ -130,7 +132,7 @@ function walkSourceFiles(dir, out = []) {
     if (entry.isDirectory()) {
       if (entry.name === 'assets' || entry.name === 'node_modules') continue
       walkSourceFiles(full, out)
-    } else if (/\.(ts|js|mjs|vue)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+    } else if (/\.(?:[cm]?[tj]s|[tj]sx|vue)$/.test(entry.name) && !/\.d\.[cm]?ts$/.test(entry.name)) {
       out.push(full)
     }
   }
@@ -138,27 +140,42 @@ function walkSourceFiles(dir, out = []) {
 }
 
 function stripViteImportSuffix(specifier) {
-  return specifier.replace(/\?(?:raw|url|inline|worker)(?:&.*)?$/, '').split('#')[0]
+  return specifier.split(/[?#]/, 1)[0]
 }
 
 function resolveCandidateFile(base, srcRoot) {
+  const substitutions = [
+    base.replace(/\.js$/, '.ts'),
+    base.replace(/\.jsx$/, '.tsx'),
+    base.replace(/\.mjs$/, '.mts'),
+    base.replace(/\.cjs$/, '.cts'),
+  ].filter(candidate => candidate !== base)
   const candidates = [
+    ...substitutions,
     base,
     `${base}.ts`,
     `${base}.mts`,
+    `${base}.cts`,
+    `${base}.tsx`,
     `${base}.js`,
     `${base}.mjs`,
+    `${base}.cjs`,
+    `${base}.jsx`,
     `${base}.vue`,
+    `${base}.d.ts`,
     join(base, 'index.ts'),
     join(base, 'index.mts'),
+    join(base, 'index.cts'),
+    join(base, 'index.tsx'),
     join(base, 'index.js'),
     join(base, 'index.mjs'),
+    join(base, 'index.cjs'),
+    join(base, 'index.jsx'),
+    join(base, 'index.d.ts'),
   ]
   for (const candidate of candidates) {
     if (existsSync(candidate) && statSync(candidate).isFile()) {
-      const relPath = relative(srcRoot, candidate).replaceAll('\\', '/')
-      if (!relPath.startsWith('..')) return relPath
-      return `../${relPath}`
+      return relative(srcRoot, candidate).replaceAll('\\', '/')
     }
   }
   return null
@@ -171,7 +188,12 @@ function resolveImportTarget(fromFile, specifier, srcRoot, tsAliases = []) {
   }
   for (const rule of tsAliases) {
     if (rule.wildcard) {
-      if (!clean.startsWith(rule.prefix) || !clean.endsWith(rule.suffix)) continue
+      if (
+        clean.length < rule.prefix.length + rule.suffix.length ||
+        !clean.startsWith(rule.prefix) ||
+        !clean.endsWith(rule.suffix)
+      )
+        continue
       const matched = clean.slice(rule.prefix.length, clean.length - rule.suffix.length)
       for (const entry of rule.targets) {
         const replaced = entry.target.includes('*') ? entry.target.replace('*', matched) : entry.target
@@ -242,10 +264,37 @@ function detectLayer(file) {
   return 'BusinessModule'
 }
 
-function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals, unresolvedImports, tsAliases) {
-  const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+function scanScriptAst(
+  file,
+  srcRoot,
+  code,
+  lineOffset,
+  edges,
+  runtimeSignals,
+  unresolvedImports,
+  tsAliases,
+  scriptLang,
+) {
+  const scriptFile = scriptLang ? `${file}.${scriptLang}` : file
+  const sf = ts.createSourceFile(scriptFile, code, ts.ScriptTarget.Latest, true)
   const from = relative(srcRoot, file).replaceAll('\\', '/')
   const literal = ts.isStringLiteralLike
+  const exportedBindings = new Set()
+  for (const statement of sf.statements) {
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.moduleSpecifier &&
+      !statement.isTypeOnly &&
+      statement.exportClause &&
+      ts.isNamedExports(statement.exportClause)
+    ) {
+      for (const element of statement.exportClause.elements) {
+        if (!element.isTypeOnly) exportedBindings.add((element.propertyName ?? element.name).text)
+      }
+    } else if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) {
+      exportedBindings.add(statement.expression.text)
+    }
+  }
 
   const addEdge = (specifier, kind, isTypeOnly, node) => {
     const { internalSpecifier, target } = resolveImportTarget(file, specifier, srcRoot, tsAliases)
@@ -273,7 +322,15 @@ function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals, u
         const elems = clause.namedBindings.elements
         if (elems.length > 0 && elems.every(el => el.isTypeOnly)) isTypeOnly = true
       }
-      addEdge(node.moduleSpecifier.text, 'static-import', isTypeOnly, node)
+      const bindings = clause?.namedBindings
+      const forwardsBinding =
+        !isTypeOnly &&
+        (exportedBindings.has(clause?.name?.text) ||
+          (bindings &&
+            (ts.isNamespaceImport(bindings)
+              ? exportedBindings.has(bindings.name.text)
+              : bindings.elements.some(element => !element.isTypeOnly && exportedBindings.has(element.name.text)))))
+      addEdge(node.moduleSpecifier.text, forwardsBinding ? 're-export' : 'static-import', isTypeOnly, node)
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && literal(node.moduleSpecifier)) {
       const clause = node.exportClause
       const isTypeOnly =
@@ -314,22 +371,27 @@ function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals, u
           line: line + 1 + lineOffset,
         })
       }
-    } else if (ts.isPropertyAccessExpression(node)) {
-      const text = node.getText(sf)
-      if (
-        /^MessageType\.[A-Za-z0-9_]+$/.test(text) ||
-        /^chrome\.(?:runtime|tabs|storage|downloads)\.[A-Za-z0-9_]+$/.test(text)
+    } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const owner = ts.isIdentifier(node.expression) ? node.expression.text : ''
+      const key = ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : literal(node.argumentExpression)
+          ? node.argumentExpression.text
+          : ''
+      let type
+      if (owner === 'MessageType') type = 'message-type'
+      else if (owner === 'chrome' || ((owner === 'window' || owner === 'globalThis') && key === 'chrome')) {
+        type = 'chrome-api'
+      } else if (
+        owner === 'document' ||
+        owner === 'window' ||
+        (owner === 'globalThis' && /^(?:document|window)$/.test(key))
       ) {
+        type = 'dom-api'
+      }
+      if (type) {
         const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
-        runtimeSignals.push({
-          from,
-          type: text.startsWith('MessageType.') ? 'message-type' : 'chrome-api',
-          detail: text,
-          line: line + 1 + lineOffset,
-        })
-      } else if (/^(?:document|window)\.[A-Za-z0-9_]+$/.test(text)) {
-        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
-        runtimeSignals.push({ from, type: 'dom-api', detail: text, line: line + 1 + lineOffset })
+        runtimeSignals.push({ from, type, detail: node.getText(sf), line: line + 1 + lineOffset })
       }
     }
     ts.forEachChild(node, visit)
@@ -422,7 +484,17 @@ export function scanProjectDependencies(extensionRoot = scriptRoot) {
           })
           continue
         }
-        scanScriptAst(file, srcRoot, block.content, lineOffset, edges, runtimeSignals, unresolvedImports, tsAliases)
+        scanScriptAst(
+          file,
+          srcRoot,
+          block.content,
+          lineOffset,
+          edges,
+          runtimeSignals,
+          unresolvedImports,
+          tsAliases,
+          block.lang ?? 'js',
+        )
       }
     } else {
       scanScriptAst(file, srcRoot, source, 0, edges, runtimeSignals, unresolvedImports, tsAliases)
@@ -724,7 +796,7 @@ export function evaluateArchitecture(inventory) {
   }
   for (const signal of inventory.runtimeSignals) {
     if (!signal.from.startsWith('application/')) continue
-    if (signal.type === 'chrome-api' || signal.type === 'message-type') {
+    if (signal.type === 'chrome-api' || signal.type === 'message-type' || signal.type === 'dom-api') {
       pushViolation({
         id: `application-runtime-signal:${signal.from}:${signal.detail}`,
         rule: 'H-application-no-transport-leak',

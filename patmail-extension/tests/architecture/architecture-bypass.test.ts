@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   evaluateArchitecture,
@@ -36,6 +36,58 @@ function runtimeEdge(from: string, to: string, kind: 'static-import' | 're-expor
 }
 
 describe('architecture gate negative & bypass resistance tests', () => {
+  it('resolves inherited JSONC aliases with exact and longest-prefix precedence', () => {
+    withFixture(
+      {
+        'config/base.json': `{
+        // TypeScript config comments and trailing commas are valid.
+        "compilerOptions": {
+          "paths": {
+            "@/*": ["../src/shared/*"],
+            "@/billing/*": ["../src/infrastructure/billing/*"],
+            "@/exact": ["../src/infrastructure/billing/adapter.mts"],
+          },
+        },
+      }`,
+        'tsconfig.json': '{"extends":"./config/base.json"}',
+        'src/app/pages/Future.vue': `<script setup lang="ts">
+        import '@/billing/adapter.mjs?raw#section'
+        import '@/exact'
+      </script>`,
+        'src/shared/billing/adapter.mjs': 'export {}',
+        'src/shared/exact.ts': 'export {}',
+        'src/infrastructure/billing/adapter.mts': 'export {}',
+      },
+      root => {
+        const inventory = scanProjectDependencies(root)
+        expect(inventory.unresolvedImports).toEqual([])
+        expect(inventory.edges.map(edge => edge.to)).toEqual(Array(2).fill('infrastructure/billing/adapter.mts'))
+        expect(evaluateArchitecture(inventory).filter(v => v.rule === 'K-composition-root-registry')).toHaveLength(2)
+      },
+    )
+  })
+
+  it('checks module variants and records browser dependencies through global and bracket access', () => {
+    withFixture(
+      {
+        'src/application/leak.mts': `import './service.cjs'
+        globalThis.chrome?.offscreen?.createDocument({})
+        chrome['downloads'].search({})
+        globalThis.document.querySelector('main')
+      `,
+        'src/application/service.cts': "import './leak.mjs'",
+      },
+      root => {
+        const inventory = scanProjectDependencies(root)
+        expect(inventory.unresolvedImports).toEqual([])
+        expect(inventory.cycles).toEqual([['application/leak.mts', 'application/service.cts']])
+        expect(evaluateArchitecture(inventory).filter(v => v.rule === 'H-application-no-transport-leak')).toHaveLength(
+          3,
+        )
+      },
+    )
+  })
+
   it('blocks newly added pages and unregistered composables from importing infrastructure or billing engines', () => {
     const violations = evaluateArchitecture(
       makeInventory({
@@ -70,7 +122,11 @@ describe('architecture gate negative & bypass resistance tests', () => {
       mkdirSync(join(tmpRoot, 'src', 'app', 'pages'), { recursive: true })
       mkdirSync(join(tmpRoot, 'src', 'mail'), { recursive: true })
       writeFileSync(join(tmpRoot, 'src', 'mail', 'assemble.ts'), 'export function assembleMail() { return null }\n')
-      writeFileSync(join(tmpRoot, 'src', 'mail', 'index.ts'), "export { assembleMail } from './assemble'\n")
+      writeFileSync(join(tmpRoot, 'src', 'mail', 'index.ts'), "export { assembleMail } from './bindings'\n")
+      writeFileSync(
+        join(tmpRoot, 'src', 'mail', 'bindings.ts'),
+        "import { assembleMail as assemble } from './assemble'\nexport { assemble as assembleMail }\n",
+      )
       writeFileSync(
         join(tmpRoot, 'src', 'agent', 'tools', 'bypass.ts'),
         "import { assembleMail } from '../../mail'\nexport const run = assembleMail\n",
@@ -175,3 +231,17 @@ describe('architecture gate negative & bypass resistance tests', () => {
     }
   })
 })
+
+function withFixture(files: Record<string, string>, run: (root: string) => void) {
+  const root = mkdtempSync(join(tmpdir(), 'patmail-arch-'))
+  try {
+    for (const [relative, contents] of Object.entries(files)) {
+      const path = join(root, relative)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, contents)
+    }
+    run(root)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
