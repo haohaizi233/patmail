@@ -19,6 +19,7 @@ import {
   findMissingRates,
   hasForeignCurrencyRows,
   isValidBillingTemplateId,
+  validateBillingExportPreconditions,
   validateBillingFeeSelection,
 } from '../../application/billing/billing-validation'
 import type { BillInfo } from '../../billing/fee-model'
@@ -386,30 +387,43 @@ export function useBillingWorkflow(options: {
       (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
       (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value)
 
+    const exportCommand = {
+      templateId,
+      rows,
+      bills,
+      parameters,
+      fileSelectionIssue: fileSelectionIssue.value,
+      feeSelectionIssue: feeSelectionIssue.value,
+      reconciliationRequestedCount: reconciliationInfo.value.requestedCount,
+      confirmExistingFees: confirmExistingFees.value,
+      pctExportExceptionsCount: pctExportExceptions.value.length,
+      confirmPctExceptions: confirmPctExceptions.value,
+      needsForeignRates: needsForeignRates.value,
+      ratesCheckedOn,
+      ratesLoading: ratesLoading.value,
+      missingRateCodes: missingRateCodes.value,
+      usesManualRate: usesManualRate.value,
+      manualRateDate: manualRateDate.value,
+      isStale,
+    }
+
+    const precheck = validateBillingExportPreconditions(exportCommand)
+    if (!precheck.ok) {
+      if (precheck.needsRateRefresh) {
+        void loadPbcRates()
+      }
+      if (precheck.reason) {
+        exportResultNotice.value = precheck.reason
+      }
+      return
+    }
+
     exporting.value = true
     exportResultNotice.value = '正在生成 Excel 请款表…'
     exportWarnings.value = []
 
     try {
-      const { outcome, needsRateRefresh } = await service.exportBilling({
-        templateId,
-        rows,
-        bills,
-        parameters,
-        fileSelectionIssue: fileSelectionIssue.value,
-        feeSelectionIssue: feeSelectionIssue.value,
-        reconciliationRequestedCount: reconciliationInfo.value.requestedCount,
-        confirmExistingFees: confirmExistingFees.value,
-        pctExportExceptionsCount: pctExportExceptions.value.length,
-        confirmPctExceptions: confirmPctExceptions.value,
-        needsForeignRates: needsForeignRates.value,
-        ratesCheckedOn,
-        ratesLoading: ratesLoading.value,
-        missingRateCodes: missingRateCodes.value,
-        usesManualRate: usesManualRate.value,
-        manualRateDate: manualRateDate.value,
-        isStale,
-      })
+      const { outcome, needsRateRefresh } = await service.exportBilling(exportCommand)
 
       if (needsRateRefresh) {
         void loadPbcRates()

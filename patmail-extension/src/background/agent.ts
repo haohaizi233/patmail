@@ -447,14 +447,13 @@ async function submitEasy(
   const session = signedIn(host)
   if ('error' in session) return session.error
   if (deadlines.length === 0) return '先查期限，这一轮还没有可提交的事项。'
-  const account = await loadAccount(host.area, session.origin, session.operatorId)
   const outcome = await mailService.submitLimitMailForReview({
     operatorId: session.operatorId,
     writeSwitchOpen,
     files: bucket,
     deadlines,
     caseVolume,
-    account: { customers: account.customers, rules: account.rules },
+    account: () => loadAccount(host.area, session.origin, session.operatorId),
     forward
   })
   return outcome.message

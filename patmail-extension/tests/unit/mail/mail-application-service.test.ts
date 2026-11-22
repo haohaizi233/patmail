@@ -208,5 +208,25 @@ describe('MailApplicationService', () => {
     expect((submittedPayload as { items: Array<{ reviewerId?: string }> }).items[0]?.reviewerId).toBe(
       VALID_REVIEWER_GUID,
     )
+
+    let loaded = false
+    const noMatchOutcome = await service.submitLimitMailForReview({
+      operatorId: VALID_OPERATOR_GUID,
+      writeSwitchOpen: true,
+      files: [],
+      deadlines: [{ procId: VALID_PROC_GUID, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' }],
+      caseVolume: 'OTHER999',
+      account: () => {
+        loaded = true
+        return Promise.resolve({ customers: [makeCustomer()], rules: makeRules() })
+      },
+      forward: () => Promise.resolve({}),
+    })
+    expect(noMatchOutcome).toEqual({
+      ok: false,
+      status: 'blocked',
+      message: '这一轮期限结果里没有这些文号。先按文号查期限。',
+    })
+    expect(loaded).toBe(false)
   })
 })

@@ -128,13 +128,15 @@ export class MailApplicationService {
       return { ok: false, status: 'blocked', message: '这一轮期限结果里没有这些文号。先按文号查期限。' }
     }
 
+    const account = typeof command.account === 'function' ? await command.account() : command.account
+
     // 默认审核人始终读取发文规则中的 defaultReviewer（不改为当前操作登录人）。
-    const reviewerId = command.account.rules?.defaultReviewer?.userId ?? ''
+    const reviewerId = account.rules?.defaultReviewer?.userId ?? ''
     if (!isQueryGuid(reviewerId)) {
       return { ok: false, status: 'blocked', message: '还没有默认审核人。请到发文映射里设置。' }
     }
 
-    const sheets = command.account.customers.flatMap(profile => profile.pctTask?.rows ?? [])
+    const sheets = account.customers.flatMap(profile => profile.pctTask?.rows ?? [])
     const openIds: string[] = []
     const held: string[] = []
     for (const row of picked) {
@@ -166,7 +168,7 @@ export class MailApplicationService {
       const sheet = sheets.find(
         item => item.ourVolume.trim().toLowerCase() === row.caseVolume.trim().toLowerCase(),
       )
-      const owner = command.account.customers.find(profile =>
+      const owner = account.customers.find(profile =>
         profile.pctTask?.rows.some(
           item => item.ourVolume === sheet?.ourVolume && item.customerName === sheet?.customerName,
         ),
@@ -174,7 +176,7 @@ export class MailApplicationService {
       return owner?.pctTask?.recipientMode === 'lead'
     })
 
-    const senderId = command.account.rules?.defaultSender?.mailsetId ?? ''
+    const senderId = account.rules?.defaultSender?.mailsetId ?? ''
     const planned = limitMailItems({
       reviewerId,
       procIds: openIds,

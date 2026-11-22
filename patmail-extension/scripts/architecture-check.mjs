@@ -110,7 +110,12 @@ function topModule(file) {
 }
 
 function detectLayer(file) {
-  if (file.startsWith('app/') || file.startsWith('floating/') || file.startsWith('popup/') || file.startsWith('shell/')) {
+  if (
+    file.startsWith('app/') ||
+    file.startsWith('floating/') ||
+    file.startsWith('popup/') ||
+    file.startsWith('shell/')
+  ) {
     return 'Presentation'
   }
   if (file.startsWith('agent/') || file === 'background/agent.ts') {
@@ -122,10 +127,25 @@ function detectLayer(file) {
   if (file.startsWith('domain/') || CORE_DOMAIN_FILES.has(file)) {
     return 'Domain'
   }
-  if (file.startsWith('background/') || file.startsWith('content/') || file.startsWith('api/') || file.startsWith('recovery/') || file.startsWith('storage/') || file.startsWith('browser-download/') || file === 'billing/xlsx-engine.ts' || file === 'billing/template-assets.ts' || file === 'billing/pbc-rates.ts') {
+  if (
+    file.startsWith('background/') ||
+    file.startsWith('content/') ||
+    file.startsWith('api/') ||
+    file.startsWith('recovery/') ||
+    file.startsWith('storage/') ||
+    file.startsWith('browser-download/') ||
+    file === 'billing/xlsx-engine.ts' ||
+    file === 'billing/template-assets.ts' ||
+    file === 'billing/pbc-rates.ts'
+  ) {
     return 'Infrastructure'
   }
-  if (file.startsWith('shared/') || file.startsWith('utils/') || file.startsWith('schema/') || file.startsWith('settings/')) {
+  if (
+    file.startsWith('shared/') ||
+    file.startsWith('utils/') ||
+    file.startsWith('schema/') ||
+    file.startsWith('settings/')
+  ) {
     return 'Shared'
   }
   return 'BusinessModule'
@@ -161,17 +181,34 @@ function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals) {
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       addEdge(node.moduleSpecifier.text, 're-export', Boolean(node.isTypeOnly), node)
     } else if (ts.isCallExpression(node)) {
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments.length > 0 && ts.isStringLiteral(node.arguments[0])) {
+      if (
+        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        node.arguments.length > 0 &&
+        ts.isStringLiteral(node.arguments[0])
+      ) {
         addEdge(node.arguments[0].text, 'dynamic-import', false, node)
-      } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require' && node.arguments.length > 0 && ts.isStringLiteral(node.arguments[0])) {
+      } else if (
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'require' &&
+        node.arguments.length > 0 &&
+        ts.isStringLiteral(node.arguments[0])
+      ) {
         addEdge(node.arguments[0].text, 'require', false, node)
       } else if (ts.isPropertyAccessExpression(node.expression) && node.expression.getText(sf) === 'import.meta.glob') {
         const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
-        runtimeSignals.push({ from, type: 'vite-glob', detail: node.arguments[0]?.getText(sf) ?? '', line: line + 1 + lineOffset })
+        runtimeSignals.push({
+          from,
+          type: 'vite-glob',
+          detail: node.arguments[0]?.getText(sf) ?? '',
+          line: line + 1 + lineOffset,
+        })
       }
     } else if (ts.isPropertyAccessExpression(node)) {
       const text = node.getText(sf)
-      if (/^MessageType\.[A-Za-z0-9_]+$/.test(text) || /^chrome\.(?:runtime|tabs|storage|downloads)\.[A-Za-z0-9_]+$/.test(text)) {
+      if (
+        /^MessageType\.[A-Za-z0-9_]+$/.test(text) ||
+        /^chrome\.(?:runtime|tabs|storage|downloads)\.[A-Za-z0-9_]+$/.test(text)
+      ) {
         const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
         runtimeSignals.push({
           from,
@@ -253,10 +290,24 @@ export function scanProjectDependencies(extensionRoot = scriptRoot) {
     if (file.endsWith('.vue')) {
       const { descriptor } = parseSfc(source)
       if (descriptor.script) {
-        scanScriptAst(file, srcRoot, descriptor.script.content, descriptor.script.loc.start.line - 1, edges, runtimeSignals)
+        scanScriptAst(
+          file,
+          srcRoot,
+          descriptor.script.content,
+          descriptor.script.loc.start.line - 1,
+          edges,
+          runtimeSignals,
+        )
       }
       if (descriptor.scriptSetup) {
-        scanScriptAst(file, srcRoot, descriptor.scriptSetup.content, descriptor.scriptSetup.loc.start.line - 1, edges, runtimeSignals)
+        scanScriptAst(
+          file,
+          srcRoot,
+          descriptor.scriptSetup.content,
+          descriptor.scriptSetup.loc.start.line - 1,
+          edges,
+          runtimeSignals,
+        )
       }
     } else {
       scanScriptAst(file, srcRoot, source, 0, edges, runtimeSignals)
@@ -386,7 +437,8 @@ export function evaluateArchitecture(inventory) {
         from: edge.from,
         to: edge.to,
         line: edge.line,
-        reason: 'BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施',
+        reason:
+          'BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施',
       })
     }
   }
@@ -522,7 +574,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     `Architecture check: ${report.fileCount} files, ${report.runtimeInternalEdges} runtime edges, ${report.cycleCount} cycles, ${report.hardErrors.length} hard errors, ${report.remainingRatchetViolations.length} tracked legacy violations.`,
   )
   if (report.staleBaselineIds.length > 0) {
-    console.log(`提示：已清理 ${report.staleBaselineIds.length} 项历史违规，请运行 node scripts/architecture-check.mjs --write-baseline 收紧基线。`)
+    console.log(
+      `提示：已清理 ${report.staleBaselineIds.length} 项历史违规，请运行 node scripts/architecture-check.mjs --write-baseline 收紧基线。`,
+    )
   }
   if (!report.passed) {
     for (const v of [...report.hardErrors, ...report.newRatchetViolations]) {

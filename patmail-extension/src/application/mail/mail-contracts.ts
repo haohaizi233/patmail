@@ -48,7 +48,7 @@ export interface SubmitLimitMailCommand {
   files: SelectedPatentFile[]
   deadlines: LimitDeadlineRef[]
   caseVolume: string
-  account: MailAccountSnapshot
+  account: MailAccountSnapshot | (() => Promise<MailAccountSnapshot>)
   forward: MailForwardPort
 }
 
