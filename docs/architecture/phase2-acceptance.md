@@ -1,6 +1,6 @@
 # PatMail Phase 2 验收与安全披露报告（Acceptance）
 
-> 参考基线：`76bf0e34cd62c58c1a3e35c5e61a98acf35dc93a`  
+> 参考基线：`76bf0e34cd62c58c1a3e35c5e61a98acf35dc93a`\
 > 代码验证提交：`a1300dd`（Phase 1–6 全量重整完成）
 
 ## 一、自动化门禁与实测结果

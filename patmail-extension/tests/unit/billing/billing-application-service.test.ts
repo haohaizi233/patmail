@@ -457,6 +457,67 @@ describe('BillingApplicationService Golden Master & Ports', () => {
     expect(listeners.size).toBe(0)
     expect(createChromeExtensionDownloadsVerifier()).toBeNull()
 
+    for (const searchFailure of [false, true]) {
+      const adapter = createVerifiedChromeDownloadAdapter(
+        {
+          download: () => Promise.resolve(105),
+          search: () => (searchFailure ? Promise.reject(new Error('status unavailable')) : Promise.resolve([])),
+          onChanged: {
+            addListener: cb => {
+              listeners.add(cb)
+            },
+            removeListener: cb => {
+              listeners.delete(cb)
+            },
+          },
+        },
+        { settleTimeoutMs: 1000 },
+      )
+      const pending = adapter.download({
+        bytes: new Uint8Array([9]),
+        fileName: 'slow.xlsx',
+        mimeType: 'application/octet-stream',
+        blockCount: 1,
+        warnings: [],
+      })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(listeners.size).toBe(1)
+      for (const cb of listeners) cb({ id: 105, state: { current: 'complete' } })
+      expect(await pending).toMatchObject({ status: 'download_completed', downloadId: 105 })
+    }
+
+    const earlyAdapter = createVerifiedChromeDownloadAdapter(
+      {
+        download: () => {
+          for (const cb of listeners) {
+            cb({ id: 106, state: { current: 'complete' } })
+            cb({ id: 106 })
+          }
+          return Promise.resolve(106)
+        },
+        search: () => Promise.resolve([]),
+        onChanged: {
+          addListener: cb => {
+            listeners.add(cb)
+          },
+          removeListener: cb => {
+            listeners.delete(cb)
+          },
+        },
+      },
+      { settleTimeoutMs: 100 },
+    )
+    expect(
+      await earlyAdapter.download({
+        bytes: new Uint8Array([9]),
+        fileName: 'early.xlsx',
+        mimeType: 'application/octet-stream',
+        blockCount: 1,
+        warnings: [],
+      }),
+    ).toMatchObject({ status: 'download_completed', downloadId: 106 })
+    expect(listeners.size).toBe(0)
+
     createObjectURL.mockRestore()
     revokeObjectURL.mockRestore()
     clickSpy.mockRestore()

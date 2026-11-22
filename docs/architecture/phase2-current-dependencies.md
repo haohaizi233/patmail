@@ -1,6 +1,6 @@
 # PatMail Phase 2 真实依赖图审计（Current Dependencies）
 
-> 参考基线：`76bf0e34cd62c58c1a3e35c5e61a98acf35dc93a`  
+> 参考基线：`76bf0e34cd62c58c1a3e35c5e61a98acf35dc93a`\
 > 当前重构 HEAD：`a1300dd`（Phase 2 代码重整完成）
 
 ## 一、扫描工具与识别能力
@@ -22,7 +22,7 @@
 | 纯类型边（`typeOnlyEdges`） | 551 | **561** | `EasyMailGateway`、`HagueDiagnostics` 与各端口持续采用 `import type` 隔离 |
 | 未解析内部导入（`unresolvedImportCount`） | 未纳入（9 条 `?raw`/`?url`/`?inline` 曾呈现 `to: null`） | **0** | stripping Vite 资源后缀后内部导入 100% 可解析 |
 | 运行时循环依赖（`cycleCount`） | 0 | **0** | 目标作用域与全仓库继续保持 0 运行时循环 |
-| 棘轮/硬错误架构违规 | 0 | **0** | 规则从 `A–F` 扩展到 `A–K`（全硬错误 `error` 约束），全部 0 违规 |
+| 棘轮/硬错误架构违规 | 0 | **0** | 规则从 `A–F` 扩展到 `A–K`（Rule C 保留棘轮策略），全部 0 违规 |
 
 ### 当前分层分布（523 个文件）
 

@@ -9,7 +9,7 @@
    - 通过带访问标记的 BFS 递归解析，对所有规则检查目标模块及其经 barrel（如 `mail/index.ts`）间接暴露的真实模块（如 `mail/assemble.ts`），防止通过桶文件转口绕过规则（已在 Commit `c8a4075` 中实测拦截了 `MailWorkspace.vue -> mail/index.ts -> assemble/planner/fingerprint` 隐式耦合）。
 2. **Vite 后缀与 TypeScript 路径别名解析**：
    - 解析内部 specifier 时自动剥离 `?raw`、`?url`、`?inline`、`?worker` 后缀及锚点；
-   - 解析 `tsconfig.json` `compilerOptions.paths` 别名。
+   - 用 TypeScript 读取支持注释和继承的 `tsconfig.json`，按精确键和最长通配前缀解析别名，并扫描 `.mts`、`.cts`、`.tsx` 等模块变体。
 3. **未解析内部导入识别（`unresolvedImports`）**：
    - 任何以 `.` 开头或匹配 `tsconfig.paths` 且无法映射至真实磁盘文件的静态/动态导入与 SFC `<script src>`，不再悄然忽略，而是进入 Rule J 硬阻断清单。
 4. **`import type` 安全免误报**：
@@ -26,7 +26,7 @@
 | **Rule E** (`E-no-cycles`) | `error` | 目标严格域（`application/`、`domain/`、`agent/tools/`、`billing/`、`hague/protocol/`、`hague/gateway.ts`、`background/message-registry.ts`）保持 0 运行时循环 | 防止通过 Barrel 或互引破坏分层单向性 |
 | **Rule F** (`F-runtime-isolation`) | `error` | MV3 `background/*` 与 `content/*` / `*.vue` 双向严禁运行时互导 | 保证 Service Worker 与 DOM/Content Script 隔离 |
 | **Rule G** (`G-mail-ui-through-application`) | `error` | `TasksPage.vue`、`WorkflowMailEntry.vue`、`MailWorkspace.vue` 及所有匹配 `(app/pages\|floating)/.*Mail.*\.vue` 的界面禁止直连或经 barrel 导入 `mail/{assemble,planner,fingerprint}.ts`、`customer/{limit-mail-submit,workflow-mail,pct-recipients}.ts`、`workflow/reviewer-resolver.ts` | 保证受治发文 UI 与 Agent 共享单一 `MailApplicationService` 业务入口 |
-| **Rule H** (`H-application-no-transport-leak`) | `error` | `application/*` 禁止导入 `shared/message.ts`、`shared/guards.ts`、`infrastructure/*`、`background/*`、`content/*`，并禁止直接调用 `chrome.*` / `MessageType.*` | 保证 Application 层保持传输无关性与可离线单测 |
+| **Rule H** (`H-application-no-transport-leak`) | `error` | `application/*` 禁止导入 `shared/message.ts`、`shared/guards.ts`、`infrastructure/*`、`background/*`、`content/*`，并禁止直接访问 Chrome / DOM 全局及 `MessageType`，含常见全局和方括号写法 | 保证 Application 层保持传输无关性与可离线单测 |
 | **Rule I** (`I-hague-protocol-vs-diagnostics`) | `error` | 海牙生产驱动与编排模块禁止导入 `hague/diagnostics/ast/*`、`diagnostics/{reports,replay,fixtures,export}.ts`、`research/*`；`hague/protocol/*` 严禁导入**任何** `hague/diagnostics/*` | 防止研究/回放工具或 `diagnostics/ast` 反向渗入生产驱动，同时放行 `protocol/*` 内核与只读 `store/errors` |
 | **Rule J** (`J-no-unresolved-internal-imports`) | `error` | 存在任何未解析内部相对/别名导入即阻断 | 防止因拼写/路径变更导致静态检查盲区漏放跨层引用 |
 | **Rule K** (`K-composition-root-registry`) | `error` | 除 `infrastructure/*` 内部外，仅 `COMPOSITION_ROOTS` 白名单登记文件允许运行时导入对应 `infrastructure/*` 适配器 | 防止扩展其它任意层私自实例化基础设施适配器 |

@@ -1,6 +1,6 @@
 # PatMail Phase 2 渐进式迁移结果明细（Migration Results）
 
-> 基线提交：`76bf0e34cd62c58c1a3e35c5e61a98acf35dc93a`  
+> 基线提交：`76bf0e34cd62c58c1a3e35c5e61a98acf35dc93a`\
 > 治理提交系列：`b23e77f` -> `a4fd686` -> `8b49675` -> `c8a4075` -> `89e24ce` -> `a1300dd`
 
 ## 一、增量提交明细
@@ -25,7 +25,7 @@
 
 ### 2. 请款下载终态监听机制（`src/infrastructure/billing/billing-adapters.ts`）
 
-- 当传入带 `onChanged` 的 `ChromeDownloadsVerifier` 时，适配器在调用 `verifier.download()` **之前**注册监听器并缓冲早到事件，拿到 `downloadId` 后立即调用 `search({ id })` 覆盖快完成竞态；
+- 当传入带 `onChanged` 的 `ChromeDownloadsVerifier` 时，适配器在调用 `verifier.download()` **之前**注册监听器并缓冲早到事件，拿到 `downloadId` 后立即调用 `search({ id })` 覆盖快完成竞态。临时查不到记录或查询失败时，继续等待终态事件到时限；
 - `complete` -> `download_completed`（提示 `"请款单已导出并确认下载完成：..."`）；
 - `interrupted` -> `download_interrupted`（含中断错误码，不伪报完成）；
 - 超时或无法查询 -> `{ status: 'unknown', downloadId, reason }`，保留 ID 供追溯，并在 `finally` 与 `finish()` 中确保清理定时器及监听器；

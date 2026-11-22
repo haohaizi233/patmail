@@ -208,9 +208,7 @@ export class MailApplicationService {
     const usable = named ? bucket.filter(file => file.customerName.includes(named)) : bucket
     const files = usable.length > 0 ? usable : bucket
     const label = named || files[0]?.customerName || ''
-    const customer = command.account.customers.find(
-      item => item.name === label || (label && item.name.includes(label)),
-    )
+    const customer = command.account.customers.find(item => item.name === label || (label && item.name.includes(label)))
     if (!customer) {
       return { ok: false, message: `插件里没有对上客户「${label || '未命名'}」。` }
     }
@@ -260,8 +258,7 @@ export class MailApplicationService {
       parallel: false,
       needAllAudit: false,
       reviewers,
-      reviewerFormat:
-        reviewers.length > 0 && reviewers.every(item => isQueryGuid(item.id)) ? 'structured' : 'unknown',
+      reviewerFormat: reviewers.length > 0 && reviewers.every(item => isQueryGuid(item.id)) ? 'structured' : 'unknown',
     }
     const decided = resolveReviewer(command.operatorId, node)
     const verdict = decided.status === 'matched' ? '当前登录人在名单里。' : decided.reason
@@ -319,9 +316,7 @@ export class MailApplicationService {
     }
 
     const lead = picked.every(row => {
-      const sheet = sheets.find(
-        item => item.ourVolume.trim().toLowerCase() === row.caseVolume.trim().toLowerCase(),
-      )
+      const sheet = sheets.find(item => item.ourVolume.trim().toLowerCase() === row.caseVolume.trim().toLowerCase())
       const owner = account.customers.find(profile =>
         profile.pctTask?.rows.some(
           item => item.ourVolume === sheet?.ourVolume && item.customerName === sheet?.customerName,
@@ -348,15 +343,21 @@ export class MailApplicationService {
       operatorId: command.operatorId,
       items: planned.items,
     })
+    if (receipt.status === 'unknown') {
+      return { ok: false, status: 'unknown', message: `提交结果未确认，请先在 EASY 核对。${receipt.message}` }
+    }
     if (receipt.status !== 'ok') {
       return { ok: false, status: receipt.status, message: receipt.message }
     }
 
     const summary = summarizeLimitMailSubmit(receipt.results, receipt.stopped)
-    if (!summary.startsWith('已提交')) {
-      const hasUnknown = receipt.results.some(item => item.state === 'unknown')
-      return { ok: false, status: hasUnknown ? 'unknown' : 'rejected', message: summary }
+    const confirmed = receipt.results.some(item => item.state === 'submitted')
+    const unknownCount = receipt.results.filter(item => item.state === 'unknown').length
+    if (unknownCount) {
+      const prefix = confirmed ? `${summary}另有 ` : ''
+      return { ok: false, status: 'unknown', message: `${prefix}${unknownCount} 件提交结果未确认，请先在 EASY 核对。` }
     }
+    if (!confirmed) return { ok: false, status: 'rejected', message: summary }
     return { ok: true, status: 'submitted', message: `已提交到 EASY。${summary}` }
   }
 }

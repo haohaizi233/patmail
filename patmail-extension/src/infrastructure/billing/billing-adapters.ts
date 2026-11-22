@@ -106,7 +106,11 @@ function terminalOutcomeFromState(
  * 构建 Chrome Downloads 校验器：在扩展运行时包装 chrome.downloads 及其 onChanged 事件。
  */
 export function createChromeExtensionDownloadsVerifier(): ChromeDownloadsVerifier | null {
-  if (typeof chrome === 'undefined' || typeof chrome.downloads?.download !== 'function' || typeof chrome.downloads?.search !== 'function') {
+  if (
+    typeof chrome === 'undefined' ||
+    typeof chrome.downloads?.download !== 'function' ||
+    typeof chrome.downloads?.search !== 'function'
+  ) {
     return null
   }
   return {
@@ -164,6 +168,8 @@ export function createVerifiedChromeDownloadAdapter(
         let onLiveDelta: ((delta: ChromeDownloadDelta) => void) | undefined
         if (verifier.onChanged) {
           listener = delta => {
+            const state = delta.state?.current
+            if (state !== 'complete' && state !== 'interrupted') return
             if (downloadId === undefined) {
               bufferedById.set(delta.id, delta)
               return
@@ -223,25 +229,18 @@ export function createVerifiedChromeDownloadAdapter(
             })
           }, settleTimeoutMs)
 
-          void verifier.search({ id: activeId }).then(
-            items => {
-              if (settled) return
-              const item = items[0]
-              if (!item) {
-                finish({ status: 'unknown', downloadId: activeId, reason: '未在浏览器下载记录中查询到刚发起的导出任务。' })
-                return
-              }
-              const terminal = terminalOutcomeFromState(item.state, request, activeId, item.error)
-              if (terminal) finish(terminal)
-            },
-            () => {
-              finish({
-                status: 'unknown',
-                downloadId: activeId,
-                reason: '浏览器已接收导出任务，暂时无法核对下载结果。',
-              })
-            },
-          )
+          // search closes the early-completion race. If unavailable, the live event still
+          // has until the deadline to confirm the result.
+          void Promise.resolve()
+            .then(() => verifier.search({ id: activeId }))
+            .then(
+              ([item]) => {
+                if (settled || !item) return
+                const terminal = terminalOutcomeFromState(item.state, request, activeId, item.error)
+                if (terminal) finish(terminal)
+              },
+              () => undefined,
+            )
         })
       } catch (err) {
         if (downloadId !== undefined) {

@@ -51,14 +51,17 @@ export function createEasyMailGateway(forward: MailForwardPort): EasyMailGateway
       }
     },
 
-    async submitLimitMail(request: { operatorId: string; items: LimitMailSubmitItem[] }): Promise<LimitMailSubmitReceipt> {
+    async submitLimitMail(request: {
+      operatorId: string
+      items: LimitMailSubmitItem[]
+    }): Promise<LimitMailSubmitReceipt> {
       const found = await forward({
         type: MessageType.SubmitLimitMail,
         payload: { userId: request.operatorId, items: request.items },
       })
       if (isRecord(found) && typeof found.error === 'string') {
-        const isTimeout = /没有在时限内返回/.test(found.error)
-        return { status: isTimeout ? 'unknown' : 'failed', message: found.error }
+        // The bridge uses this envelope both before dispatch and after losing a reply.
+        return { status: 'unknown', message: found.error }
       }
       if (!isMessage(found)) {
         return { status: 'unknown', message: 'EASY 没有返回可识别的结果。' }

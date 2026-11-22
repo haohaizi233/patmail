@@ -68,6 +68,16 @@ describe('createEasyMailGateway', () => {
     expect(timeoutReceipt).toEqual({ status: 'unknown', message: '原站没有在时限内返回。' })
     expect(timeoutForward).toHaveBeenCalledTimes(1)
 
+    const lostReply = '绑定的 EASY 标签页已失效。'
+    const lostForward = vi.fn(() => Promise.resolve({ error: lostReply }))
+    expect(
+      await createEasyMailGateway(lostForward).submitLimitMail({
+        operatorId: VALID_OPERATOR_GUID,
+        items: sampleItems,
+      }),
+    ).toEqual({ status: 'unknown', message: lostReply })
+    expect(lostForward).toHaveBeenCalledTimes(1)
+
     const wrongShapeForward = vi.fn(() => Promise.resolve({ type: MessageType.Pong, payload: { ok: true } }))
     const wrongShapeReceipt = await createEasyMailGateway(wrongShapeForward).submitLimitMail({
       operatorId: VALID_OPERATOR_GUID,
@@ -85,9 +95,7 @@ describe('createEasyMailGateway', () => {
         },
       }),
     )
-    expect(
-      await okGateway.submitLimitMail({ operatorId: VALID_OPERATOR_GUID, items: sampleItems }),
-    ).toEqual({
+    expect(await okGateway.submitLimitMail({ operatorId: VALID_OPERATOR_GUID, items: sampleItems })).toEqual({
       status: 'ok',
       stopped: false,
       results: [{ procId: VALID_PROC_GUID, mailId: 'mail-1', state: 'submitted', message: 'ok' }],

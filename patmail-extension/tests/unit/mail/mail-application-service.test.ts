@@ -27,9 +27,7 @@ function makeRules(defaultReviewerId = VALID_REVIEWER_GUID): MailRuleBundle {
       version: 1,
     },
     body: { template: '您好', supplement: '', version: 1 },
-    defaultReviewer: defaultReviewerId
-      ? { userId: defaultReviewerId, name: '默认审核人甲' }
-      : null,
+    defaultReviewer: defaultReviewerId ? { userId: defaultReviewerId, name: '默认审核人甲' } : null,
     defaultSender: null,
   }
 }
@@ -71,13 +69,18 @@ describe('MailApplicationService', () => {
   const service = new MailApplicationService()
 
   it('extracts deduplicated target volumes from raw text or file bucket', () => {
-    expect(
-      extractTargetVolumes('P001, P002；P001\nP003', []),
-    ).toEqual(['P001', 'P002', 'P003'])
+    expect(extractTargetVolumes('P001, P002；P001\nP003', [])).toEqual(['P001', 'P002', 'P003'])
     expect(
       extractTargetVolumes('', [
         { fileId: 'f1', fileName: 'a.pdf', fileDescription: '', customerName: '', caseVolume: 'PA01' },
-        { fileId: 'f2', fileName: 'b.pdf', fileDescription: '', customerName: '', customerVolume: 'CL02', caseVolume: 'PA02' },
+        {
+          fileId: 'f2',
+          fileName: 'b.pdf',
+          fileDescription: '',
+          customerName: '',
+          customerVolume: 'CL02',
+          caseVolume: 'PA02',
+        },
       ]),
     ).toEqual(['PA01', 'CL02'])
   })
@@ -227,8 +230,40 @@ describe('MailApplicationService', () => {
       account: { customers: [makeCustomer()], rules: makeRules() },
       gateway: unknownGateway,
     })
-    expect(unknownOutcome).toEqual({ ok: false, status: 'unknown', message: '提交没有返回。' })
+    expect(unknownOutcome).toEqual({
+      ok: false,
+      status: 'unknown',
+      message: '提交结果未确认，请先在 EASY 核对。提交没有返回。',
+    })
     expect(unknownSubmitSpy).toHaveBeenCalledTimes(1)
+
+    const secondProcId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const mixedSubmitSpy = vi.fn<EasyMailGateway['submitLimitMail']>(() =>
+      Promise.resolve({
+        status: 'ok',
+        stopped: false,
+        results: [
+          { procId: VALID_PROC_GUID, mailId: 'mail-1', state: 'submitted', message: 'ok' },
+          { procId: secondProcId, mailId: '', state: 'unknown', message: '回执断开' },
+        ],
+      }),
+    )
+    const mixed = await service.submitLimitMailForReview({
+      operatorId: VALID_OPERATOR_GUID,
+      writeSwitchOpen: true,
+      files: [],
+      deadlines: [
+        { procId: VALID_PROC_GUID, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' },
+        { procId: secondProcId, caseId: VALID_CASE_GUID, caseVolume: 'PA2511001PCT' },
+      ],
+      caseVolume: 'PA2511001PCT',
+      account: { customers: [makeCustomer()], rules: makeRules() },
+      gateway: { ...okGateway, submitLimitMail: mixedSubmitSpy },
+    })
+    expect(mixed).toMatchObject({ ok: false, status: 'unknown' })
+    expect(mixed.message).toContain('已提交 1 件')
+    expect(mixed.message).toContain('另有 1 件提交结果未确认')
+    expect(mixedSubmitSpy).toHaveBeenCalledTimes(1)
 
     let loaded = false
     const noMatchOutcome = await service.submitLimitMailForReview({
