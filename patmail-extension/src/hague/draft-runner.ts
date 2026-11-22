@@ -33,6 +33,7 @@ export function draftSteps(plan:DraftPlan):Step[] {
  return steps
 }
 interface Host {caseRunId?:string;refreshAuthentication?():Promise<boolean>;transport?:'http'|'page';call(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext):Promise<DraftReceipt>;save(value:DraftCheckpoint):Promise<void>;update?(value:DraftCheckpoint):void;recover?(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext):Promise<DraftRecovery>}
+export type DraftRunnerHost = Host
 export function draftPlanKey(plan:DraftPlan):string {
  const body=JSON.stringify({...plan,designs:plan.designs.map(d=>({...d,images:d.images.map(i=>({number:i.number,legend:i.legend,file:{name:i.file.name,size:i.file.size,lastModified:i.file.lastModified}}))}))})
  let hash=2166136261

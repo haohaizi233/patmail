@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T08:00:31.255Z",
-  "fileCount": 515,
+  "scannedAt": "2026-11-22T08:02:51.605Z",
+  "fileCount": 516,
   "summary": {
-    "totalEdges": 2252,
+    "totalEdges": 2256,
     "runtimeInternalEdges": 1584,
-    "typeOnlyEdges": 539,
+    "typeOnlyEdges": 543,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -1951,6 +1951,11 @@
     },
     {
       "file": "hague/easy.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/gateway.ts",
       "layer": "BusinessModule",
       "module": "hague"
     },
