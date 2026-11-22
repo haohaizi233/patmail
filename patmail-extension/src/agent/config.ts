@@ -2,7 +2,7 @@
 export const AGENT_CONFIG_KEY = 'patmail.agent.config.v1'
 
 export interface AgentConfig {
-  /** OpenAI 兼容接口根地址，含版本段，例如 http://host:8588/v1。 */
+  /** OpenAI 兼容接口根地址，含版本段，例如 https://model.example/v1。 */
   baseUrl: string
   /** 同时放在 Authorization: Bearer 和 x-api-key 两个请求头里。 */
   apiKey: string
@@ -11,50 +11,50 @@ export interface AgentConfig {
   maxTokens: number
   /** 思考型模型的思考链开关。关掉可以省 token、直接出正文。 */
   thinking: boolean
+  /** Exact endpoint explicitly approved by the operator for business data. */
+  approvedEndpoint?: string
 }
 
 export const AGENT_CONFIG_DEFAULT: AgentConfig = {
-  baseUrl: 'http://43.138.138.200:8588/v1',
-  // 内网模型服务的密钥同样只放本机 .env，构建时注入，源码里不留明文。
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
-  apiKey: import.meta.env.VITE_AGENT_DEFAULT_KEY ?? '',
+  baseUrl: '',
+  apiKey: '',
   model: 'Qwen3.6-35B-A3B-oQ4-fp16-mtp',
   maxTokens: 8192,
   thinking: false
 }
 
-/** 主模型连不上时用的小米 MiMo。地址和密钥不进设置页。 */
-export const AGENT_FALLBACK: Pick<AgentConfig, 'baseUrl' | 'apiKey' | 'model'> = {
-  baseUrl: 'https://api.xiaomimimo.com/v1',
-  // 密钥只放本机 .env（已被 .gitignore 忽略），构建时注入，源码里不留。
-  // 注意：打包后的 JS 里仍是明文，拿到 dist 就能读出来；这一步只保证仓库干净。
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- 存量豁免：外部 XML/JSON any 数据流，类型收口待后续
-  apiKey: import.meta.env.VITE_AGENT_FALLBACK_KEY ?? '',
-  model: 'mimo-v2.6-pro'
+export function parseAgentEndpoint(value: string): URL | null {
+  if (value.length > 300 || !/^https?:\/\/[^/]/i.test(value) || /[\s\\?#]/.test(value)) return null
+  try {
+    const url = new URL(value)
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return null
+    return url
+  } catch {
+    return null
+  }
 }
 
-export function endpointOrigin(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, '')
-}
-
-export function usesFallbackEndpoint(config: Pick<AgentConfig, 'baseUrl'>): boolean {
-  return endpointOrigin(config.baseUrl) === endpointOrigin(AGENT_FALLBACK.baseUrl)
-}
-
-/** 保留这一轮的思考开关和长度上限，只换备用地址、密钥和模型。 */
-export function fallbackAgentConfig(primary: AgentConfig): AgentConfig {
-  return { ...primary, ...AGENT_FALLBACK }
+export function agentConnectionIssue(config: AgentConfig): string {
+  const url = parseAgentEndpoint(config.baseUrl)
+  if (!url) return '请在系统设置填写合法的模型地址。'
+  if (url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+    return '非本机回环的模型地址必须使用 HTTPS。请向部署方获取可用的地址。'
+  }
+  if (!config.apiKey.trim()) return '请在系统设置填写个人模型 API Key。'
+  if (config.approvedEndpoint !== config.baseUrl) return '请在系统设置确认当前模型数据接收端点。'
+  return ''
 }
 
 /** 配置由后台自己读取，不信任页面消息里的地址和密钥。 */
 export function isAgentConfig(value: unknown): value is AgentConfig {
   if (typeof value !== 'object' || value === null) return false
   const config = value as Record<string, unknown>
-  return typeof config.baseUrl === 'string' && /^https?:\/\/[^\s]+$/i.test(config.baseUrl) && config.baseUrl.length <= 300 &&
+  return typeof config.baseUrl === 'string' && (config.baseUrl === '' || parseAgentEndpoint(config.baseUrl) !== null) &&
     typeof config.apiKey === 'string' && config.apiKey.length <= 200 &&
     typeof config.model === 'string' && config.model.trim().length > 0 && config.model.length <= 200 &&
     typeof config.maxTokens === 'number' && Number.isSafeInteger(config.maxTokens) && config.maxTokens >= 0 && config.maxTokens <= 1_048_576 &&
-    typeof config.thinking === 'boolean'
+    typeof config.thinking === 'boolean' &&
+    (config.approvedEndpoint === undefined || config.approvedEndpoint === config.baseUrl)
 }
 
 /** 旧默认 1024 会把思考和正文一起截断。后来抬到 1048576 又会把整段窗口占满。这两个数都收回到现在的默认。 */
@@ -68,11 +68,12 @@ export function normalizeAgentConfig(value: unknown): AgentConfig {
   const record = value as Record<string, unknown>
   const next: AgentConfig = {
     baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl.trim().replace(/\/+$/, '') : '',
-    apiKey: typeof record.apiKey === 'string' ? record.apiKey : '',
+    apiKey: typeof record.apiKey === 'string' ? record.apiKey.trim() : '',
     model: typeof record.model === 'string' ? record.model.trim() : '',
     maxTokens: storedMaxTokens(record.maxTokens),
     thinking: typeof record.thinking === 'boolean' ? record.thinking : false
   }
+  if (next.baseUrl && record.approvedEndpoint === next.baseUrl) next.approvedEndpoint = next.baseUrl
   return isAgentConfig(next) ? next : AGENT_CONFIG_DEFAULT
 }
 

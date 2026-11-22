@@ -626,6 +626,36 @@ describe('agent loop', () => {
     expect(turn.reply).toContain('没有提交')
   })
 
+  it('removes credentials from tool memory and activity details before displaying them', async () => {
+    const apiKey = 'fixture-tool-log-model-marker'
+    const context: ToolContext = {
+      ...idleContext,
+      draftMail: async () => `核对结果\nCookie: separate-tool-session\n模型凭据：${apiKey}`,
+    }
+    const details: string[] = []
+    const outbound: string[] = []
+    let calls = 0
+    const complete: Complete = async (_config, options) => {
+      calls += 1
+      outbound.push(...options.messages.filter(message => message.role === 'tool').map(message => message.content))
+      if (calls !== 1) return outcome('已核对。')
+      return {
+        usage: null,
+        raw: {},
+        choices: [{ content: '', reasoning: '', finishReason: 'tool_calls', toolCalls: [
+          { id: 'draft', type: 'function', function: { name: 'draft_mail', arguments: '{"customerName":"甲公司"}' } },
+        ] }],
+      }
+    }
+    await runAgentTurn({ ...config, apiKey }, EMPTY_MEMORY, '起草发文', context, complete, undefined,
+      (_label, _thought, detail) => { if (detail) details.push(detail) })
+    for (const channel of [details, outbound]) {
+      const text = channel.join('\n')
+      expect(text).toContain('核对结果')
+      expect(text).not.toMatch(/fixture-tool-log-model-marker|separate-tool-session/)
+    }
+  })
+
   it('submits only after submit_easy succeeds, and still finishes the turn', async () => {
     let phase = 0
     const ctx: ToolContext = {

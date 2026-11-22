@@ -1,4 +1,4 @@
-import { fallbackAgentConfig, usesFallbackEndpoint, type AgentConfig } from './config'
+import { agentConnectionIssue, type AgentConfig } from './config'
 
 /** OpenAI 兼容的对话消息。tool 相关字段供后续 agent 循环使用，本次接入先走纯文本。 */
 export interface ChatMessage {
@@ -72,19 +72,10 @@ export function llmFailureKind(error: LlmError): LlmFailureKind {
   return 'other'
 }
 
-/** 主模型没接上、超时、被限流或没返回有效内容时换备用。认证失败、上下文过长和用户停下不换。 */
-export function shouldFallbackModel(error: LlmError): boolean {
-  if (error.message === '已停下。') return false
-  const kind = llmFailureKind(error)
-  if (kind === 'timeout' || kind === 'transient' || kind === 'upstream' || kind === 'rate_limit') return true
-  if (error.status !== undefined && error.status >= 500) return true
-  return error.code === 'INVALID_RESPONSE'
-}
-
 /** 小米 MiMo 用 thinking / api-key；本地 Qwen 用 chat_template_kwargs。 */
 export function modelDialect(config: AgentConfig): 'qwen' | 'mimo' {
   try {
-    if (new URL(config.baseUrl).hostname.endsWith('xiaomimimo.com')) return 'mimo'
+    if (new URL(config.baseUrl).hostname === 'api.xiaomimimo.com') return 'mimo'
   } catch {
     // 地址不合法时仍按主模型的请求格式发。
   }
@@ -105,6 +96,26 @@ export interface ChatOptions {
   signal?: AbortSignal
   /** 有这个回调时走流式响应，思考链会边生成边送回来。 */
   onDelta?: (partial: ChatDelta) => void
+}
+
+export function redactModelCredentials(text: string, apiKey: string): string {
+  const scrubbed = apiKey ? text.replaceAll(apiKey, '[已隐藏]') : text
+  return scrubbed
+    .replace(/(^|[\r\n])(\s*(?:authorization|cookie|set-cookie|x-api-key|api-key)\s*:)\s*[^\r\n]*/gi, '$1$2 [已隐藏]')
+    .replace(/("(?:authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|password)"\s*:\s*")((?:\\.|[^"\\])*)"/gi, '$1[已隐藏]"')
+}
+
+function redactChoice(choice: ChatDelta, apiKey: string): ChatDelta {
+  return {
+    content: redactModelCredentials(choice.content, apiKey),
+    reasoning: redactModelCredentials(choice.reasoning, apiKey),
+  }
+}
+
+function redactToolCalls(calls: AssistantToolCall[], apiKey: string): AssistantToolCall[] {
+  return calls.map(call => ({
+    ...call, function: { ...call.function, arguments: redactModelCredentials(call.function.arguments, apiKey) },
+  }))
 }
 
 function endpointOf(baseUrl: string): string {
@@ -256,6 +267,9 @@ function parseToolCalls(raw: unknown): AssistantToolCall[] {
 
 /** 单次（非流式）chat/completions 调用。地址与密钥只来自后台读取的配置。 */
 export async function chatCompletion(config: AgentConfig, options: ChatOptions): Promise<ChatOutcome> {
+  if (options.signal?.aborted) throw new LlmError('REQUEST_TIMEOUT', '已停下。')
+  const issue = agentConnectionIssue(config)
+  if (issue) throw new LlmError('HTTP_ERROR', issue, 403)
   const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
   const controller = new AbortController()
   let timedOut = false
@@ -269,14 +283,20 @@ export async function chatCompletion(config: AgentConfig, options: ChatOptions):
     const response = await fetcher(endpointOf(config.baseUrl), {
       method: 'POST',
       headers: requestHeaders(config),
+      credentials: 'omit',
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
       body: JSON.stringify({
-        model: config.model,
+        model: redactModelCredentials(config.model, config.apiKey),
         messages: options.messages.map(message => ({
           role: message.role,
-          content: message.content,
+          content: redactModelCredentials(message.content, config.apiKey),
           ...(message.toolCallId === undefined ? {} : { tool_call_id: message.toolCallId }),
           ...(message.toolCalls === undefined || message.toolCalls.length === 0 ? {} : {
-            tool_calls: message.toolCalls.map(call => ({ id: call.id, type: call.type, function: call.function }))
+            tool_calls: redactToolCalls(message.toolCalls, config.apiKey).map(call => ({
+              id: call.id, type: call.type,
+              function: call.function,
+            }))
           })
         })),
         ...(options.tools === undefined || options.tools.length === 0 ? {} : { tools: options.tools }),
@@ -289,12 +309,12 @@ export async function chatCompletion(config: AgentConfig, options: ChatOptions):
     })
     if (!response.ok) {
       const body = await response.text().catch(() => '')
-      const brief = body.slice(0, 300).replace(/\s+/g, ' ').trim()
-      throw new LlmError('HTTP_ERROR', `模型服务返回 HTTP ${response.status}${brief ? `：${brief}` : '。'}`, response.status)
+      const contextLimit = response.status === 400 && /context length|maximum context|too many tokens|context_length_exceeded/i.test(body)
+      throw new LlmError('HTTP_ERROR', `模型服务返回 HTTP ${response.status}。`, contextLimit ? 413 : response.status)
     }
     if (options.onDelta && response.body) {
-      const choice = await readChatStream(response, options.onDelta)
-      return { choices: [choice], usage: null, raw: null }
+      const choice = await readChatStream(response, delta => options.onDelta?.(redactChoice(delta, config.apiKey)))
+      return { choices: [{ ...choice, ...redactChoice(choice, config.apiKey), toolCalls: redactToolCalls(choice.toolCalls, config.apiKey) }], usage: null, raw: null }
     }
     const body = await response.text()
     let parsed: unknown
@@ -303,7 +323,7 @@ export async function chatCompletion(config: AgentConfig, options: ChatOptions):
     } catch {
       throw new LlmError('INVALID_RESPONSE', '模型服务响应不是有效 JSON。')
     }
-    const record = parsed as Record<string, unknown>
+    const record = typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {}
     if (!Array.isArray(record.choices) || record.choices.length === 0) {
       throw new LlmError('INVALID_RESPONSE', '模型服务响应里没有 choices。')
     }
@@ -319,13 +339,12 @@ export async function chatCompletion(config: AgentConfig, options: ChatOptions):
       const content = typeof message.content === 'string' ? message.content : ''
       const reasoning = typeof message.reasoning_content === 'string' ? message.reasoning_content : ''
       return {
-        content,
-        reasoning,
+        ...redactChoice({ content, reasoning }, config.apiKey),
         finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : '',
-        toolCalls: parseToolCalls(message.tool_calls)
+        toolCalls: redactToolCalls(parseToolCalls(message.tool_calls), config.apiKey)
       }
     })
-    return { choices, usage, raw: parsed }
+    return { choices, usage, raw: { model: typeof record.model === 'string' ? redactModelCredentials(record.model, config.apiKey) : undefined } }
   } catch (error) {
     if (error instanceof LlmError) throw error
     if (options.signal?.aborted && !timedOut) throw new LlmError('REQUEST_TIMEOUT', '已停下。')
@@ -336,38 +355,4 @@ export async function chatCompletion(config: AgentConfig, options: ChatOptions):
     clearTimeout(timer)
     options.signal?.removeEventListener('abort', onExternalAbort)
   }
-}
-
-/**
- * 这一轮先打主模型。主模型不通就换备用，并在本轮后续请求里继续用备用。
- * 下一轮要重新 bind，好让主模型恢复后还能先试主模型。
- * 已经开始吐字的请求不改接备用，避免两段回答粘在一起。
- */
-export function bindModelFallback(hooks?: { onSwitch?: () => void }): (config: AgentConfig, options: ChatOptions) => Promise<ChatOutcome> {
-  let sticky = false
-  let told = false
-  return async (config, options) => {
-    if (sticky) return chatCompletion(fallbackAgentConfig(config), options)
-    if (usesFallbackEndpoint(config)) return chatCompletion(config, options)
-    let streamed = false
-    const watched: ChatOptions = options.onDelta
-      ? { ...options, onDelta: partial => { streamed = true; options.onDelta?.(partial) } }
-      : options
-    try {
-      return await chatCompletion(config, watched)
-    } catch (error) {
-      if (streamed || !(error instanceof LlmError) || !shouldFallbackModel(error)) throw error
-      sticky = true
-      if (!told) {
-        told = true
-        hooks?.onSwitch?.()
-      }
-      return chatCompletion(fallbackAgentConfig(config), options)
-    }
-  }
-}
-
-/** 单次调用的备用。对话一轮用 bindModelFallback，避免每一步都先撞主模型。 */
-export function chatCompletionWithFallback(config: AgentConfig, options: ChatOptions): Promise<ChatOutcome> {
-  return bindModelFallback()(config, options)
 }

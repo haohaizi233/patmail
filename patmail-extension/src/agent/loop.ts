@@ -1,7 +1,7 @@
 import { HAGUE_ARBITRATION_SYSTEM, type HAGUE_ARBITRATION_SKILL } from './hague-skill'
 import { activityDetail } from './trace'
 import type { AgentConfig } from './config'
-import { chatCompletion, LlmError, llmFailureKind, type AssistantToolCall, type ChatChoice, type ChatMessage, type ChatOutcome } from './llm'
+import { chatCompletion, LlmError, llmFailureKind, redactModelCredentials, type AssistantToolCall, type ChatChoice, type ChatMessage, type ChatOutcome } from './llm'
 import { applySummary, contextChars, dropOldTurns, factsForPrompt, foldDigest, modelAnswer, needsCompression, OVERFLOW_RETRY_CHARS, projectOldToolText, splitForCompression, trimToolResults, visibleHistory, type AgentMemoryState, type AgentWork, type MemoryTurn } from './memory'
 import { readArbitrationDecisions } from '../customer/pct-workbook'
 import { planFromCalls, remainingWork, type WorkStep } from './plan'
@@ -428,7 +428,7 @@ function absorbWork(current: AgentMemoryState, returned: AgentMemoryState, name:
 }
 
 /** 每个工具调用都回一条结果。只读查询同一波一起跑，写操作仍按顺序。重复查询和无此工具在这里停。 */
-async function runToolBatch(state: AgentMemoryState, calls: AssistantToolCall[], traces: ToolTrace[], unknownStreak: number, ctx: ToolContext, userText: string, onActivity?: (label: string, thought?: string, detail?: string) => void, compacted = false): Promise<ToolBatch> {
+async function runToolBatch(state: AgentMemoryState, calls: AssistantToolCall[], traces: ToolTrace[], unknownStreak: number, ctx: ToolContext, userText: string, apiKey: string, onActivity?: (label: string, thought?: string, detail?: string) => void, compacted = false): Promise<ToolBatch> {
   let next = state
   const seen = traces.map(trace => ({ ...trace }))
   let unknown = unknownStreak
@@ -501,7 +501,7 @@ async function runToolBatch(state: AgentMemoryState, calls: AssistantToolCall[],
       const prior = reused.get(call.id)
       const result = prior ? { text: prior.text, memory: base, ok: prior.ok } : executed.get(call.id)
       if (!result) continue
-      const text = result.text
+      const text = redactModelCredentials(result.text, apiKey)
       const memory = prior ? next : absorbWork(next, result.memory, call.function.name)
       const ok = result.ok
       const note = isUnknownTool(text) ? '' : repeatNote(seen, call.function.name, args, text)
@@ -746,7 +746,7 @@ export async function runAgentTurn(config: AgentConfig, memory: AgentMemoryState
       if (config.thinking) appendThought(journal, choice.reasoning ?? '')
       state = { ...state, turns: [...state.turns, { role: 'assistant', content: choice.content, toolCalls: choice.toolCalls }] }
       const expected = plan[0]
-      const batch = await runToolBatch(state, choice.toolCalls, traces, unknownStreak, ctx, content, watch, compacted)
+      const batch = await runToolBatch(state, choice.toolCalls, traces, unknownStreak, ctx, content, config.apiKey, watch, compacted)
       state = batch.state
       traces.splice(0, traces.length, ...batch.traces)
       unknownStreak = batch.unknownStreak

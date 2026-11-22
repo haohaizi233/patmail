@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { bindModelFallback, chatCompletion, LlmError, llmFailureKind, modelDialect, servedModel } from '../../../src/agent/llm'
-import { AGENT_CONFIG_DEFAULT, AGENT_FALLBACK, fallbackAgentConfig, isAgentConfig, normalizeAgentConfig } from '../../../src/agent/config'
+import { chatCompletion, LlmError, llmFailureKind, modelDialect, servedModel } from '../../../src/agent/llm'
+import { AGENT_CONFIG_DEFAULT, isAgentConfig, normalizeAgentConfig } from '../../../src/agent/config'
 
-const config = { ...AGENT_CONFIG_DEFAULT, maxTokens: 100 }
+const endpoint = 'https://model.example.test/v1'
+const config = { ...AGENT_CONFIG_DEFAULT, baseUrl: endpoint, approvedEndpoint: endpoint, apiKey: 'fixture-personal-model-key', maxTokens: 100 }
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -20,6 +21,13 @@ describe('agent config', () => {
     expect(normalizeAgentConfig({ ...AGENT_CONFIG_DEFAULT, maxTokens: 64 }).maxTokens).toBe(64)
     expect(normalizeAgentConfig({ ...AGENT_CONFIG_DEFAULT, maxTokens: 16384 }).maxTokens).toBe(16384)
   })
+
+  it('keeps a legacy personal config without granting egress approval', () => {
+    const legacy = normalizeAgentConfig({ ...config, approvedEndpoint: undefined })
+    expect(legacy).toMatchObject({ baseUrl: endpoint, apiKey: config.apiKey, model: config.model })
+    expect(legacy.approvedEndpoint).toBeUndefined()
+    expect(AGENT_CONFIG_DEFAULT).toMatchObject({ baseUrl: '', apiKey: '' })
+  })
 })
 
 describe('llm failure kinds', () => {
@@ -35,6 +43,36 @@ describe('llm failure kinds', () => {
 })
 
 describe('chatCompletion', () => {
+  it('blocks unapproved, cleartext and missing-key requests before network dispatch', async () => {
+    let requests = 0
+    const fetcher = (async () => { requests++; return jsonResponse({}) }) as typeof fetch
+    for (const candidate of [
+      { ...config, approvedEndpoint: undefined },
+      { ...config, baseUrl: 'https://another.example.test/v1' },
+      { ...config, baseUrl: 'https://model.example.test/v1?' },
+      { ...config, baseUrl: 'http://model.example.test/v1', approvedEndpoint: 'http://model.example.test/v1' },
+      { ...config, apiKey: '' },
+    ]) {
+      await expect(chatCompletion(candidate, { messages: [], fetcher })).rejects.toBeInstanceOf(LlmError)
+    }
+    expect(requests).toBe(0)
+  })
+
+  it('allows a directly approved loopback and redacts request payload credentials', async () => {
+    const local = 'http://127.0.0.1:8787/v1'
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      expect(url).toBe(`${local}/chat/completions`)
+      expect(init?.body).toContain('public support context')
+      expect(init?.body).not.toContain(config.apiKey)
+      expect(init?.body).not.toContain('separate-session-value')
+      return jsonResponse({ choices: [{ message: { content: 'available' } }] })
+    }) as typeof fetch
+    await expect(chatCompletion({ ...config, baseUrl: local, approvedEndpoint: local }, {
+      messages: [{ role: 'user', content: `public support context ${config.apiKey}\nCookie: separate-session-value` }],
+      fetcher,
+    })).resolves.toMatchObject({ choices: [{ content: 'available' }] })
+  })
+
   it('posts to baseUrl/chat/completions with x-api-key and bearer headers', async () => {
     let capturedUrl = ''
     let capturedInit: RequestInit | undefined
@@ -45,8 +83,9 @@ describe('chatCompletion', () => {
       return jsonResponse({ choices: [{ message: { role: 'assistant', content: '你好' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2 } })
     }) as typeof fetch
     const outcome = await chatCompletion(config, { messages: [{ role: 'user', content: '你好' }], fetcher })
-    expect(capturedUrl).toBe('http://43.138.138.200:8588/v1/chat/completions')
+    expect(capturedUrl).toBe(`${endpoint}/chat/completions`)
     expect(capturedInit?.method).toBe('POST')
+    expect(capturedInit).toMatchObject({ credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' })
     const headers = new Headers(capturedInit?.headers)
     expect(headers.get('x-api-key')).toBe(config.apiKey)
     expect(headers.get('authorization')).toBe(`Bearer ${config.apiKey}`)
@@ -162,47 +201,46 @@ describe('chatCompletion', () => {
       expect(String(url)).toBe('https://api.xiaomimimo.com/v1/chat/completions')
       return jsonResponse({ choices: [{ message: { content: '我是备用。' }, finish_reason: 'stop' }] })
     }) as typeof fetch
-    const backup = fallbackAgentConfig({ ...config, thinking: true })
+    const mimoEndpoint = 'https://api.xiaomimimo.com/v1'
+    const backup = { ...config, baseUrl: mimoEndpoint, approvedEndpoint: mimoEndpoint, model: 'mimo-v2.6-pro', thinking: true }
     expect(modelDialect(backup)).toBe('mimo')
     expect(backup.model).toBe('mimo-v2.6-pro')
     const outcome = await chatCompletion(backup, { messages: [{ role: 'user', content: '你好' }], fetcher })
     const body = JSON.parse(captured) as Record<string, unknown>
-    expect(body.model).toBe(AGENT_FALLBACK.model)
+    expect(body.model).toBe(backup.model)
     expect(body.thinking).toEqual({ type: 'enabled' })
     expect(body.max_completion_tokens).toBe(100)
     expect(body.chat_template_kwargs).toBeUndefined()
     expect(body.max_tokens).toBeUndefined()
-    expect(headers?.get('api-key')).toBe(AGENT_FALLBACK.apiKey)
-    expect(headers?.get('authorization')).toBe(`Bearer ${AGENT_FALLBACK.apiKey}`)
+    expect(headers?.get('api-key')).toBe(backup.apiKey)
+    expect(headers?.get('authorization')).toBe(`Bearer ${backup.apiKey}`)
     expect(outcome.choices[0]?.content).toBe('我是备用。')
   })
 })
 
-describe('model fallback', () => {
-  it('uses the backup after the primary is unreachable and keeps it for the rest of the turn', async () => {
-    const models: string[] = []
-    let primaryCalls = 0
-    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
-      const body = JSON.parse(String(init?.body)) as { model: string; thinking?: { type: string } }
-      models.push(body.model)
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
-      if (String(url).includes('43.138.138.200')) {
-        primaryCalls += 1
-        return new Response('bad gateway', { status: 502 })
-      }
-      expect(body.thinking).toEqual({ type: 'disabled' })
-      return jsonResponse({ choices: [{ message: { content: '备用接上了' }, finish_reason: 'stop' }] })
+describe('model connection failures', () => {
+  it('does not hand off a failed request to another service', async () => {
+    const requests: Array<string | URL | Request> = []
+    const fetcher = (async (url: string | URL | Request) => {
+      requests.push(url)
+      return new Response('bad gateway', { status: 502 })
     }) as typeof fetch
-    const notices: string[] = []
-    const chat = bindModelFallback({ onSwitch: () => notices.push('switched') })
-    const first = await chat(config, { messages: [{ role: 'user', content: '你好' }], fetcher })
-    const second = await chat(config, { messages: [{ role: 'user', content: '再来' }], fetcher })
-    expect(first.choices[0]?.content).toBe('备用接上了')
-    expect(second.choices[0]?.content).toBe('备用接上了')
-    expect(primaryCalls).toBe(1)
-    expect(models).toEqual([config.model, 'mimo-v2.6-pro', 'mimo-v2.6-pro'])
-    expect(notices).toEqual(['switched'])
+    await expect(chatCompletion(config, { messages: [{ role: 'user', content: '你好' }], fetcher }))
+      .rejects.toMatchObject({ code: 'HTTP_ERROR', status: 502 })
+    expect(requests).toEqual([`${endpoint}/chat/completions`])
+  })
+
+  it('redacts echoed credentials and keeps raw error responses out of activity', async () => {
+    const authLine = ['Authorization:', 'Bearer', 'fixture-other-value'].join(' ')
+    const response = jsonResponse({
+      choices: [{ message: { content: `echo ${config.apiKey}\n${authLine}` } }],
+    })
+    const fetcher = (async () => response) as typeof fetch
+    const outcome = await chatCompletion(config, { messages: [], fetcher })
+    expect(outcome.choices[0]?.content).not.toMatch(/fixture-personal-model-key|fixture-other-value/)
+    const rejected = (async () => new Response('private business response body', { status: 401 })) as typeof fetch
+    await expect(chatCompletion(config, { messages: [], fetcher: rejected }))
+      .rejects.toMatchObject({ message: '模型服务返回 HTTP 401。' })
   })
 
   it('does not switch when the primary rejects the key or the user stops', async () => {
@@ -211,7 +249,7 @@ describe('model fallback', () => {
       calls += 1
       return new Response('unauthorized', { status: 401 })
     }) as typeof fetch
-    await expect(bindModelFallback()(config, { messages: [{ role: 'user', content: 'hi' }], fetcher: denied })).rejects.toSatisfy((error: unknown) => {
+    await expect(chatCompletion(config, { messages: [{ role: 'user', content: 'hi' }], fetcher: denied })).rejects.toSatisfy((error: unknown) => {
       return error instanceof LlmError && error.status === 401
     })
     expect(calls).toBe(1)
@@ -222,10 +260,10 @@ describe('model fallback', () => {
       throw new DOMException('aborted', 'AbortError')
     }) as typeof fetch
     const signal = AbortSignal.abort()
-    await expect(bindModelFallback()(config, { messages: [{ role: 'user', content: 'hi' }], fetcher: stopped, signal })).rejects.toSatisfy((error: unknown) => {
+    await expect(chatCompletion(config, { messages: [{ role: 'user', content: 'hi' }], fetcher: stopped, signal })).rejects.toSatisfy((error: unknown) => {
       return error instanceof LlmError && error.message === '已停下。'
     })
-    expect(calls).toBe(2)
+    expect(calls).toBe(1)
   })
 
   it('does not switch after the primary has already started streaming', async () => {
@@ -246,7 +284,7 @@ describe('model fallback', () => {
       })
       return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
     }) as typeof fetch
-    await expect(bindModelFallback()(config, {
+    await expect(chatCompletion(config, {
       messages: [{ role: 'user', content: 'hi' }],
       fetcher,
       onDelta: () => {}
