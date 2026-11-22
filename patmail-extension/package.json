@@ -13,6 +13,7 @@
     "cdp:status": "node scripts/cdp-observer.mjs status",
     "cdp:stop": "node scripts/cdp-observer.mjs stop",
     "typecheck": "vue-tsc --noEmit",
+    "architecture:check": "node scripts/architecture-check.mjs && vitest run tests/architecture",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",

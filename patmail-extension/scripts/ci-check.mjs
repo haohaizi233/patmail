@@ -26,6 +26,7 @@ const vitest = level =>
 // 顺序即执行顺序；GitHub Actions 按名字拆 Job，本地 ci:check 串行跑完。
 const STEPS = [
   { name: 'typecheck', command: 'pnpm typecheck', description: 'TypeScript/Vue 静态类型检查' },
+  { name: 'architecture', command: 'pnpm architecture:check', description: '架构分层边界与依赖方向门禁' },
   { name: 'lint', command: 'pnpm lint', description: 'ESLint 基线棘轮门禁' },
   { name: 'format', command: 'pnpm format:check', description: 'Prettier 格式检查' },
   { name: 'unit', command: vitest('unit'), description: '单元测试' },

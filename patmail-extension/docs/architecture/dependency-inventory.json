@@ -1,0 +1,2822 @@
+{
+  "scannedAt": "2026-11-22T07:38:39.906Z",
+  "fileCount": 493,
+  "summary": {
+    "totalEdges": 2159,
+    "runtimeInternalEdges": 1538,
+    "typeOnlyEdges": 492,
+    "externalImports": [
+      "@babel/parser",
+      "@zip.js/zip.js",
+      "dompurify",
+      "marked",
+      "mermaid",
+      "saxes",
+      "sql.js",
+      "sql.js/dist/sql-wasm.wasm?url",
+      "vue"
+    ],
+    "cycleCount": 0
+  },
+  "cycles": [],
+  "matrix": {
+    "agent": {
+      "workflow": 2,
+      "customer": 2,
+      "api": 1,
+      "shared": 1
+    },
+    "api": {
+      "hague": 3,
+      "automation": 3,
+      "customer": 12,
+      "settings": 1,
+      "billing": 1,
+      "mail": 14,
+      "workflow": 4,
+      "query": 12,
+      "case-contact": 2,
+      "schema": 1,
+      "utils": 1,
+      "shared": 2
+    },
+    "app": {
+      "recovery": 2,
+      "settings": 2,
+      "utils": 1,
+      "app/services": 1,
+      "app/composables": 1,
+      "app/components": 4,
+      "app/pages": 16,
+      "customer": 4,
+      "shell": 3,
+      "agent": 1,
+      "api": 1,
+      "floating": 1,
+      "app/styles": 1
+    },
+    "app/components": {
+      "agent": 8,
+      "app": 17,
+      "customer": 30,
+      "shared": 19,
+      "utils": 2,
+      "shell": 34,
+      "mail": 16,
+      "app/composables": 8,
+      "app/docs": 4,
+      "api": 20,
+      "billing": 2,
+      "query": 14,
+      "recovery": 5,
+      "settings": 5,
+      "app/services": 2,
+      "floating": 2,
+      "browser-download": 1,
+      "workflow": 4,
+      "hague": 5
+    },
+    "app/composables": {
+      "customer": 4,
+      "app": 1,
+      "workflow": 2,
+      "shared": 3,
+      "settings": 1,
+      "utils": 1
+    },
+    "app/docs": {
+      "agent": 1
+    },
+    "app/pages": {
+      "shell": 45,
+      "automation": 3,
+      "shared": 13,
+      "app/composables": 22,
+      "floating": 5,
+      "app/components": 26,
+      "recovery": 5,
+      "billing": 4,
+      "api": 6,
+      "case-contact": 1,
+      "customer": 26,
+      "query": 4,
+      "settings": 8,
+      "workflow": 7,
+      "app": 14,
+      "utils": 4,
+      "hague": 17,
+      "background": 1,
+      "app/services": 1,
+      "app/assets": 1,
+      "jihua": 5,
+      "mail": 7
+    },
+    "app/services": {
+      "shared": 2,
+      "api": 1,
+      "utils": 2
+    },
+    "automation": {
+      "shared": 1,
+      "settings": 3,
+      "query": 6,
+      "api": 3,
+      "mail": 6,
+      "workflow": 1
+    },
+    "background": {
+      "automation": 24,
+      "customer": 8,
+      "mail": 4,
+      "storage": 1,
+      "query": 2,
+      "api": 4,
+      "agent": 10,
+      "settings": 4,
+      "workflow": 5,
+      "shared": 16,
+      "browser-download": 5,
+      "hague": 7,
+      "utils": 2,
+      "recovery": 2
+    },
+    "billing": {
+      "mail": 1
+    },
+    "browser-download": {
+      "utils": 2
+    },
+    "case-contact": {
+      "api": 3,
+      "query": 1
+    },
+    "content": {
+      "shared": 3,
+      "hague": 1,
+      "customer": 1,
+      "utils": 3,
+      "api": 3,
+      "query": 2,
+      "automation": 1,
+      "settings": 2,
+      "floating": 1
+    },
+    "customer": {
+      "api": 22,
+      "mail": 16,
+      "query": 17,
+      "shared": 6,
+      "settings": 4,
+      "workflow": 7,
+      "storage": 1,
+      "utils": 1
+    },
+    "floating": {
+      "shared": 17,
+      "api": 12,
+      "utils": 6,
+      "settings": 2,
+      "automation": 16,
+      "shell": 15,
+      "workflow": 3,
+      "app/composables": 4,
+      "mail": 4,
+      "app/components": 4,
+      "schema": 4,
+      "query": 21,
+      "customer": 1,
+      "app": 2,
+      "storage": 1
+    },
+    "hague": {
+      "app": 2,
+      "utils": 5,
+      "api": 2,
+      "background": 1,
+      "automation": 2
+    },
+    "jihua": {
+      "background": 1
+    },
+    "mail": {
+      "api": 11,
+      "query": 13,
+      "settings": 1,
+      "shared": 2,
+      "customer": 1,
+      "automation": 1
+    },
+    "popup": {
+      "api": 1,
+      "shared": 2,
+      "utils": 1
+    },
+    "query": {
+      "api": 13,
+      "storage": 1
+    },
+    "recovery": {
+      "utils": 1
+    },
+    "schema": {
+      "query": 3,
+      "api": 1
+    },
+    "settings": {
+      "api": 2,
+      "automation": 1,
+      "app/composables": 1,
+      "agent": 1
+    },
+    "shared": {
+      "api": 7,
+      "automation": 1,
+      "customer": 2,
+      "settings": 2,
+      "mail": 2,
+      "query": 1,
+      "agent": 1,
+      "workflow": 1
+    },
+    "shell": {
+      "query": 3,
+      "customer": 1
+    },
+    "storage": {
+      "customer": 1,
+      "query": 1
+    },
+    "utils": {
+      "shared": 9,
+      "browser-download": 1
+    },
+    "workflow": {
+      "customer": 2,
+      "query": 8,
+      "api": 3,
+      "utils": 2,
+      "recovery": 1,
+      "settings": 1,
+      "shared": 1
+    }
+  },
+  "files": [
+    {
+      "file": "agent/actions.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/api-docs.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/ask.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/config.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/hague-skill.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/llm.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/loop.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/markdown.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/memory.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/plan.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/rag-graph.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/rag-sqlite.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/rag-store.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/slash.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/trace.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/turn-policy.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "api/client.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/config.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/adapters.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/cache.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/guards.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/index.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/picker-catalog.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/reviewers.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/service.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/dictionaries/types.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/documented-call.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/download-failure.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/download-name-requests.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/download-tokens.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/fee-export.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/fee-form.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/fee-search-normalizer.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/fee-search-params.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/fee-search-types.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/file-download.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/file-search-normalizer.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/file-search-params.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/file-search-types.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/file-temp-name.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/filing-export.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/filing-form.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/filing-search-normalizer.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/filing-search-params.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/filing-search-types.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/ic-search-fields.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/ic-search.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/limit-form.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/limit-monitor-normalizer.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/limit-monitor-params.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/limit-monitor-types.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/mail-process.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/message-guards.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/process-list-search.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/query-history/guards.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/query-history/index.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/query-history/normalizer.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/query-history/service.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/query-history/surfaces.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/query-history/types.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/query-timeout.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/response-guards.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/session.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/stream-cache.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/stream-download.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/stream-file.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/transport.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "api/types.ts",
+      "layer": "Infrastructure",
+      "module": "api"
+    },
+    {
+      "file": "app/App.vue",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/agent-frame.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/assistant-job.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/check-progress.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/components/AgentAnswer.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/AgentDock.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/AppDialog.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/BindQueryBar.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/CheckRainbow.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/DocsDock.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/DocsMarkdown.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/EmptyGuide.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FeeCustomerPickerModal.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FeeExportModal.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FeeSearchQuery.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FileMailConfigEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FileManageMail.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FileSearchQuery.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FilingExportPanel.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FilingExportPreview.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/FilingSearchQuery.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/HagueDiagnostics.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/ImagePreview.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/LimitMonitorQuery.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/MermaidCanvas.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/MermaidDiagram.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/OaSessionCard.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/SplitScrollPane.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/WorkflowMailEntry.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/WorkflowWorkspace.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/BodyRuleEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/CustomerPolicyEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/DefaultReviewerEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/DefaultSenderEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/DescriptionMailTypeEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/MappingPagination.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/ProcedureMailTypeMapping.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/RecipientEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/SignatureEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/SubjectRuleEditor.vue",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/components/rules/useMappingRows.ts",
+      "layer": "Presentation",
+      "module": "app/components"
+    },
+    {
+      "file": "app/composables/useOaSession.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/composables/useQuerySurfaces.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/composables/useTopProgress.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/composables/useWorkflowCatalog.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/composables/useWorkflowChoices.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/composables/useWorkspace.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/dialog.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/docs/index.ts",
+      "layer": "Presentation",
+      "module": "app/docs"
+    },
+    {
+      "file": "app/docs/markdown.ts",
+      "layer": "Presentation",
+      "module": "app/docs"
+    },
+    {
+      "file": "app/docs/mermaid-theme.ts",
+      "layer": "Presentation",
+      "module": "app/docs"
+    },
+    {
+      "file": "app/docs/mermaid.ts",
+      "layer": "Presentation",
+      "module": "app/docs"
+    },
+    {
+      "file": "app/filing-pages.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/greeting.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/home-lines.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/home-report.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/main.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/page-pool.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/pages/AcceptancePage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/BillingWorkflowPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/CaseContactsPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/CustomersPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/DraftsPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/FeesPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/FilesPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/FilingsPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/HaguePage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/HomePage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/JihuaUploadPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/LimitsPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/RecordsPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/RulesPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/SettingsPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/SnapshotProbe.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/TasksPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/TemplatesPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/WorkflowPage.vue",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/pages/workflow-desk-state.ts",
+      "layer": "Presentation",
+      "module": "app/pages"
+    },
+    {
+      "file": "app/record-status.ts",
+      "layer": "Presentation",
+      "module": "app"
+    },
+    {
+      "file": "app/services/download-name-preview.ts",
+      "layer": "Presentation",
+      "module": "app/services"
+    },
+    {
+      "file": "app/services/file-search-page-cache.ts",
+      "layer": "Presentation",
+      "module": "app/services"
+    },
+    {
+      "file": "app/services/full-page-bridge.ts",
+      "layer": "Presentation",
+      "module": "app/services"
+    },
+    {
+      "file": "automation/acceptance-context.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/acceptance-runner.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/acceptance-trust.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/checkpoint-service.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/checkpoint.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/contract-capture.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/contract-evidence.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/coordinator.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/dry-run.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/easy-acceptance.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/evidence-evaluation.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/evidence-store.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/executor.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/file-description-resolver.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/file-search-snapshot.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/har-import.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/index.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/indexed-store.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/ledger.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/live-readonly-policy.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/logger.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/operator.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/query-dependency.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/readonly-contracts.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/recovery.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/repository.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/sha256.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/snapshot.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/stage-plan.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/state.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/task-builder.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/task-planner.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/task-service.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/task-transition.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/task-trust.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/task-validator.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/test-write.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/types.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "automation/verifiers.ts",
+      "layer": "BusinessModule",
+      "module": "automation"
+    },
+    {
+      "file": "background/account-data.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/agent.ts",
+      "layer": "Agent",
+      "module": "background"
+    },
+    {
+      "file": "background/authority.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/browser-download.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/document-export.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/easy-page-world.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/hague-activity.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/hague-draft.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/hague-http.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/hague-offline-pdf.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/hague-pdf.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/hague-session.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/index.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/jihua-page-world.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/native-download-target.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/recovery.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/scope.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/stream-download.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/workspace.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "billing/fee-model.ts",
+      "layer": "Domain",
+      "module": "billing"
+    },
+    {
+      "file": "billing/pbc-rates.ts",
+      "layer": "Infrastructure",
+      "module": "billing"
+    },
+    {
+      "file": "billing/template-assets.ts",
+      "layer": "Infrastructure",
+      "module": "billing"
+    },
+    {
+      "file": "billing/templates.ts",
+      "layer": "BusinessModule",
+      "module": "billing"
+    },
+    {
+      "file": "billing/xlsx-engine.ts",
+      "layer": "Infrastructure",
+      "module": "billing"
+    },
+    {
+      "file": "browser-download/native-navigation.ts",
+      "layer": "Infrastructure",
+      "module": "browser-download"
+    },
+    {
+      "file": "browser-download/store.ts",
+      "layer": "Infrastructure",
+      "module": "browser-download"
+    },
+    {
+      "file": "browser-download/target.ts",
+      "layer": "Infrastructure",
+      "module": "browser-download"
+    },
+    {
+      "file": "browser-download/types.ts",
+      "layer": "Infrastructure",
+      "module": "browser-download"
+    },
+    {
+      "file": "case-contact/load.ts",
+      "layer": "BusinessModule",
+      "module": "case-contact"
+    },
+    {
+      "file": "case-contact/query.ts",
+      "layer": "BusinessModule",
+      "module": "case-contact"
+    },
+    {
+      "file": "case-contact/xlsx.ts",
+      "layer": "BusinessModule",
+      "module": "case-contact"
+    },
+    {
+      "file": "content/attribute-reader.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/control-scanner.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/easy-page-world.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/index.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/injector.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/label-resolver.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/save-file.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/scanner.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/semantic-resolver.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "content/visibility.ts",
+      "layer": "Infrastructure",
+      "module": "content"
+    },
+    {
+      "file": "customer/case-arbitration.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/case-record.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/customer-list-load.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/customer-list.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/customer-page.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/file-mail-config.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/file-manage-plan.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/file-manage-runs.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/file-manage-submit.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/guards.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/ic-flow-lookup.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/index.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/limit-mail-submit.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/mail-flow.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/mail-inventor-column.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/mail-type-load.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/mail-type-path.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/mailset-load.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/mailset.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/pct-flow-status.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/pct-recipients.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/pct-sheet.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/pct-workbook.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/procedure-mapping-import.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/procedure-mapping.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/query-surfaces.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/repository.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/service.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/skills.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/sme-customers.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/types.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/volume-list.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/workflow-mail.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "customer/xlsx-table.ts",
+      "layer": "BusinessModule",
+      "module": "customer"
+    },
+    {
+      "file": "floating/App.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/AutomationPanel.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/ControlledExecutionPanel.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/DebugViewer.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/FileSearchPanel.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/FileTypeNodeRow.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/FileTypePicker.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/LimitQuerySection.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/LiveAcceptancePanel.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/MailExecutionPanel.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/MailWorkspace.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/QueryTemplateSection.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/SchemaQueryForm.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/WorkflowPanel.vue",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/copySnapshot.ts",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/main.ts",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "floating/usePanelDrag.ts",
+      "layer": "Presentation",
+      "module": "floating"
+    },
+    {
+      "file": "hague/action-state.ts",
+      "layer": "Domain",
+      "module": "hague"
+    },
+    {
+      "file": "hague/arbitration.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/concurrency.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/ast/analyzer.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/correlation/correlator.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/errors.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/evidence/evidence-model.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/fingerprint.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/fixtures.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/observer-adapter.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/protocol.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/protocol/jsf-diff.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/protocol/jsf-partial-response.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/protocol/jsf-semantics.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/protocol/jsf-state-machine.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/protocol/observed-components.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/replay.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/reports.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/schema.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/store.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/diagnostics/trace.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-batch.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-completion.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-contract.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-page.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-plan.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-recovery.ts",
+      "layer": "Domain",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-repairs.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-runner.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/draft-tabs.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/dropped-folders.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/easy.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/http-client.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/http-context.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/http-driver.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/legacy-doc.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/materials.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/plan-identity.ts",
+      "layer": "Domain",
+      "module": "hague"
+    },
+    {
+      "file": "hague/read-error.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/read-retry.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/reproductions.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/session-contract.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/session-gate.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/session.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/source.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/summary-css.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/summary-download.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/summary-evidence.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/workflow.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/workspace-recovery.ts",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "jihua/client.ts",
+      "layer": "BusinessModule",
+      "module": "jihua"
+    },
+    {
+      "file": "jihua/inventory.ts",
+      "layer": "BusinessModule",
+      "module": "jihua"
+    },
+    {
+      "file": "jihua/materials.ts",
+      "layer": "BusinessModule",
+      "module": "jihua"
+    },
+    {
+      "file": "jihua/repository.ts",
+      "layer": "BusinessModule",
+      "module": "jihua"
+    },
+    {
+      "file": "jihua/runner.ts",
+      "layer": "BusinessModule",
+      "module": "jihua"
+    },
+    {
+      "file": "jihua/transport.ts",
+      "layer": "BusinessModule",
+      "module": "jihua"
+    },
+    {
+      "file": "jihua/types.ts",
+      "layer": "BusinessModule",
+      "module": "jihua"
+    },
+    {
+      "file": "mail/assemble.ts",
+      "layer": "Domain",
+      "module": "mail"
+    },
+    {
+      "file": "mail/bill-detector.ts",
+      "layer": "Domain",
+      "module": "mail"
+    },
+    {
+      "file": "mail/deduplicate.ts",
+      "layer": "Domain",
+      "module": "mail"
+    },
+    {
+      "file": "mail/download-name.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/adapter.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/bcc.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/case-demand.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/contracts.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/create-service.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/gate.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/guards.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/index.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/mail-contacts.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/page-reads.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/read-service.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/runtime.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/save-service.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/signature-read.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/state.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/store.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/easy/types.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/fingerprint.ts",
+      "layer": "Domain",
+      "module": "mail"
+    },
+    {
+      "file": "mail/index.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/planner.ts",
+      "layer": "Domain",
+      "module": "mail"
+    },
+    {
+      "file": "mail/preview.ts",
+      "layer": "Domain",
+      "module": "mail"
+    },
+    {
+      "file": "mail/repository.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/body-builder.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/customer-policy.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/description-import.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/description-mapping.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/grouping.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/recipient-resolver.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/subject-builder.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/rules/validator.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/selection.ts",
+      "layer": "Domain",
+      "module": "mail"
+    },
+    {
+      "file": "mail/signature-catalog.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/signature-load.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "mail/types.ts",
+      "layer": "BusinessModule",
+      "module": "mail"
+    },
+    {
+      "file": "popup/App.vue",
+      "layer": "Presentation",
+      "module": "popup"
+    },
+    {
+      "file": "popup/main.ts",
+      "layer": "Presentation",
+      "module": "popup"
+    },
+    {
+      "file": "query/field-registry.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/filing-templates.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/form-layout.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/form-page.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/history-labels.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/history-list-cache.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/index.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/live-fields.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/load-coordinator.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/merge.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/option-fallback.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/option-pull-notes.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/option-tree.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/query-normalizer.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/query-scope.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/query-types.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/query-validator.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/query-xml.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/repository.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/scan-file-search-form.mjs",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/scan-filing-form.mjs",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/template-json.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "query/xml-parser.ts",
+      "layer": "BusinessModule",
+      "module": "query"
+    },
+    {
+      "file": "recovery/client.ts",
+      "layer": "Infrastructure",
+      "module": "recovery"
+    },
+    {
+      "file": "recovery/executions.ts",
+      "layer": "Infrastructure",
+      "module": "recovery"
+    },
+    {
+      "file": "recovery/file-query.ts",
+      "layer": "Infrastructure",
+      "module": "recovery"
+    },
+    {
+      "file": "recovery/wal-ledger.ts",
+      "layer": "Infrastructure",
+      "module": "recovery"
+    },
+    {
+      "file": "schema/dependencies.ts",
+      "layer": "Shared",
+      "module": "schema"
+    },
+    {
+      "file": "schema/file-type-tree.ts",
+      "layer": "Shared",
+      "module": "schema"
+    },
+    {
+      "file": "schema/index.ts",
+      "layer": "Shared",
+      "module": "schema"
+    },
+    {
+      "file": "schema/registry.ts",
+      "layer": "Shared",
+      "module": "schema"
+    },
+    {
+      "file": "schema/resolver.ts",
+      "layer": "Shared",
+      "module": "schema"
+    },
+    {
+      "file": "schema/types.ts",
+      "layer": "Shared",
+      "module": "schema"
+    },
+    {
+      "file": "schema/validators.ts",
+      "layer": "Shared",
+      "module": "schema"
+    },
+    {
+      "file": "services/api.ts",
+      "layer": "BusinessModule",
+      "module": "services"
+    },
+    {
+      "file": "settings/avatar.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/customer-mode.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/fit-avatar.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/mail-concurrency.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/mermaid-view-mode.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/use-account-avatar.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/use-agent-config.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/use-mail-concurrency.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/use-write-switch.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "settings/write-switch.ts",
+      "layer": "Shared",
+      "module": "settings"
+    },
+    {
+      "file": "shared/connection.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shared/document-export.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shared/download-progress.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shared/easy-page-world.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shared/guards.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shared/message.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shared/picker-modes.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shared/types.ts",
+      "layer": "Shared",
+      "module": "shared"
+    },
+    {
+      "file": "shell/App.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/assets.js",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/column-fit.ts",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/Avatar.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/BrandLogo.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/Bunny.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/Donut.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/MailTypeTreeNode.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/MailTypeTreeSelect.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/PageHead.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/Shell.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/ThemeSelect.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/TreeOptionNode.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/TreeOptionSelect.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/WDatePicker.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/hint.ts",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/components/theme-select.ts",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/data.js",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/main.js",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/CustomerPage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/FilePage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/FloatPage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/HomePage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/LimitPage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/RecordPage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/RulePage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/StatsPage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/pages/TaskPage.vue",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "shell/text-width.ts",
+      "layer": "Presentation",
+      "module": "shell"
+    },
+    {
+      "file": "storage/query-bundle.ts",
+      "layer": "Infrastructure",
+      "module": "storage"
+    },
+    {
+      "file": "utils/document-export.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/download-documents.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/download-job.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/download-outcome.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/idle.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/permit-pool.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/runtime.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/stream-download.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "utils/uuid.ts",
+      "layer": "Shared",
+      "module": "utils"
+    },
+    {
+      "file": "workflow/catalog-store.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/catalog.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/choices.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/contracts.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/filing-export.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/filing-rows.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/gate.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/guards.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/index.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/node-resolver.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/pct-config.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/planner.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/preview-chart.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/read-service.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/review.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/reviewer-resolver.ts",
+      "layer": "Domain",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/runtime.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/skills.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/state.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/store.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/submit-builder.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    },
+    {
+      "file": "workflow/types.ts",
+      "layer": "BusinessModule",
+      "module": "workflow"
+    }
+  ],
+  "violations": [
+    {
+      "id": "agent-domain-bypass:background/agent.ts->customer/limit-mail-submit.ts",
+      "rule": "C-agent-through-application",
+      "severity": "ratchet",
+      "from": "background/agent.ts",
+      "to": "customer/limit-mail-submit.ts",
+      "line": 9,
+      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
+    },
+    {
+      "id": "agent-domain-bypass:background/agent.ts->mail/assemble.ts",
+      "rule": "C-agent-through-application",
+      "severity": "ratchet",
+      "from": "background/agent.ts",
+      "to": "mail/assemble.ts",
+      "line": 11,
+      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
+    },
+    {
+      "id": "agent-domain-bypass:background/agent.ts->customer/workflow-mail.ts",
+      "rule": "C-agent-through-application",
+      "severity": "ratchet",
+      "from": "background/agent.ts",
+      "to": "customer/workflow-mail.ts",
+      "line": 12,
+      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
+    },
+    {
+      "id": "agent-domain-bypass:background/agent.ts->customer/pct-recipients.ts",
+      "rule": "C-agent-through-application",
+      "severity": "ratchet",
+      "from": "background/agent.ts",
+      "to": "customer/pct-recipients.ts",
+      "line": 13,
+      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
+    },
+    {
+      "id": "agent-domain-bypass:background/agent.ts->workflow/reviewer-resolver.ts",
+      "rule": "C-agent-through-application",
+      "severity": "ratchet",
+      "from": "background/agent.ts",
+      "to": "workflow/reviewer-resolver.ts",
+      "line": 16,
+      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
+    },
+    {
+      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->recovery/client.ts",
+      "rule": "D-presentation-no-direct-infra",
+      "severity": "ratchet",
+      "from": "app/pages/BillingWorkflowPage.vue",
+      "to": "recovery/client.ts",
+      "line": 8,
+      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
+    },
+    {
+      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/fee-model.ts",
+      "rule": "D-presentation-no-direct-infra",
+      "severity": "ratchet",
+      "from": "app/pages/BillingWorkflowPage.vue",
+      "to": "billing/fee-model.ts",
+      "line": 11,
+      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
+    },
+    {
+      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/pbc-rates.ts",
+      "rule": "D-presentation-no-direct-infra",
+      "severity": "ratchet",
+      "from": "app/pages/BillingWorkflowPage.vue",
+      "to": "billing/pbc-rates.ts",
+      "line": 22,
+      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
+    },
+    {
+      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/templates.ts",
+      "rule": "D-presentation-no-direct-infra",
+      "severity": "ratchet",
+      "from": "app/pages/BillingWorkflowPage.vue",
+      "to": "billing/templates.ts",
+      "line": 28,
+      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
+    },
+    {
+      "id": "billing-page-direct:app/pages/BillingWorkflowPage.vue->billing/template-assets.ts",
+      "rule": "D-presentation-no-direct-infra",
+      "severity": "ratchet",
+      "from": "app/pages/BillingWorkflowPage.vue",
+      "to": "billing/template-assets.ts",
+      "line": 38,
+      "reason": "BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施"
+    }
+  ]
+}
