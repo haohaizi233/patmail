@@ -1,6 +1,7 @@
 import {emitTrace,isDiagnosticModeEnabled} from './diagnostics/store'
 import {HagueDiagnosticError,normalizeDiagnosticError} from './diagnostics/errors'
-import {analyzeJavaScript,extractStaticActions,isStaticUiHandler,selectRemoteDefinition,type AstCall,type AstAnalysis} from './diagnostics/ast/analyzer.mjs'
+import {analyzeJavaScript,type AstCall,type AstAnalysis} from './protocol/ast-action-parser.mjs'
+import {extractSafeJsfAction} from './protocol/jsf-action-extractor'
 import { HagueHttpContext, type JsfAction, type HagueFetch } from './http-context'
 import { executeDraftPage } from './draft-page'
 import type { DraftCommand, DraftReceipt,DraftCheckpoint,DraftRecovery } from './draft-contract'
@@ -10,22 +11,10 @@ import {summaryEvidenceKey} from './summary-evidence'
 const unsupported=()=>new HagueDiagnosticError({errorCode:'PROTOCOL_UNSUPPORTED',errorStage:'ast',transportStatus:'not_dispatched',sideEffectMayHaveOccurred:false})
 /** AST extraction is read-only. Ambiguous or dynamic handlers never become writes. */
 export function jsfAction(script:string,element:HTMLElement,doc:Document,onAnalysis?:(report:AstAnalysis)=>void):JsfAction|null {
-  const options={elementId:element.id,formId:element.closest('form')?.id}
-  let actions=extractStaticActions(script,options)
-  let report=analyzeJavaScript(script)
-  const remote=/\b(selectOffice|processFile|refreshOptionsUI|refreshDesignUI|refreshDesignationUI)\s*\(/.exec(script)?.[1]
-  if(!actions.length&&remote){
-    const definitions=selectRemoteDefinition([...doc.scripts].map(s=>s.textContent??''),remote)
-    if(definitions!==undefined){actions=extractStaticActions(script,{...options,definitions});report=analyzeJavaScript(script,{definitions})}
-  }
-  try{onAnalysis?.(report)}catch{/* Diagnostic observers cannot affect extraction. */}
-  if(actions.length!==1){
-    if(script.trim()&&!isStaticUiHandler(script))throw unsupported()
-    return null
-  }
-  const {_kind,_line,_column,...action}=actions[0]
-  Object.defineProperty(action,'analysis',{enumerable:false,value:{scriptHash:report.scriptHash,fingerprint:report.fingerprint,callType:_kind,line:_line,column:_column,confidence:'static'}})
-  return action
+  return extractSafeJsfAction(script,element,doc,{
+    ...(onAnalysis?{onAnalysis}:{}),
+    createUnsupportedError:unsupported
+  })
 }
 
 /** Detached DOM is a protocol model only; actual page DOM and PrimeFaces globals stay untouched. */

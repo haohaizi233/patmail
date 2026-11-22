@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T09:35:13.893Z",
-  "fileCount": 518,
+  "scannedAt": "2026-11-22T09:39:14.898Z",
+  "fileCount": 520,
   "summary": {
-    "totalEdges": 2277,
-    "runtimeInternalEdges": 1590,
-    "typeOnlyEdges": 556,
+    "totalEdges": 2281,
+    "runtimeInternalEdges": 1593,
+    "typeOnlyEdges": 557,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -1996,6 +1996,16 @@
     {
       "file": "hague/plan-identity.ts",
       "layer": "Domain",
+      "module": "hague"
+    },
+    {
+      "file": "hague/protocol/ast-action-parser.mjs",
+      "layer": "BusinessModule",
+      "module": "hague"
+    },
+    {
+      "file": "hague/protocol/jsf-action-extractor.ts",
+      "layer": "BusinessModule",
       "module": "hague"
     },
     {

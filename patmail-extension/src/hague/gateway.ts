@@ -1,4 +1,4 @@
-import type { AstAnalysis } from './diagnostics/ast/analyzer.mjs'
+import type { AstAnalysis } from './protocol/ast-action-parser.mjs'
 import type { TraceContext } from './diagnostics/trace'
 import type { DraftCheckpoint, DraftCommand, DraftReceipt, DraftRecovery } from './draft-contract'
 import type { DraftRunnerHost } from './draft-runner'
