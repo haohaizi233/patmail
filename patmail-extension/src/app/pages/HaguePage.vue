@@ -22,6 +22,7 @@ import { taskCheckSnapshot } from '../check-progress'
 import { MessageType } from '../../shared/message'
 import { buildDraftPlan } from '../../hague/draft-plan'
 import { callDraftPage, runDraftPlan } from '../../hague/draft-runner'
+import { createDraftRunnerHost, type HagueGateway } from '../../hague/gateway'
 import { runDraftBatch, type DraftBatchProgress } from '../../hague/draft-batch'
 import { openDraftTab } from '../../hague/draft-tabs'
 import { createHttpChain, httpRestoreCommands, renderSavedSummary,renderSavedReproductions,runHagueSessionRead,exportPageReproductions } from '../../hague/http-client'
@@ -285,11 +286,26 @@ async function createDraftsLocked(targets: Row[], batch=false, asNew=false,resum
         }
         draftActive.value.add(row.folder.path)
         let http=draftTransport.value==='http'?createHttpChain(tabId,`hague-http-${crypto.randomUUID()}`,row.draft?.reference,httpRestoreCommands(plan,row.draft?.next??0),draftExportFormat.value,operation.signal):null
-        try{return await runDraftPlan(plan,workerTab,{
-          caseRunId:runIds.get(row.folder.path),
-          refreshAuthentication,
-          transport:draftTransport.value,
-          call:async(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext)=>{
+        try{
+          const gateway: HagueGateway = {
+            transport: draftTransport.value,
+            inspect: (reference, trace) => dispatch({op:'inspect'}, undefined, reference, trace),
+            execute: (command, context) => dispatch(command, context.documentId, context.reference, context.trace),
+            refreshAuthentication,
+            ...(http ? { recover: async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext)=>{
+              if(authenticationRefresh&&!await authenticationRefresh)return{outcome:'unknown' as const}
+              let fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
+              let result=await fresh.recover(command,checkpoint,trace)
+              if(result.diagnosticError?.errorCode==='AUTH_REDIRECT'&&await refreshAuthentication()){
+                fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
+                result=await fresh.recover(command,checkpoint,trace)
+              }
+              if(result.outcome!=='unknown'&&result.receipt?.ok)oa.noteAuthenticatedActivity(tabId)
+              if(result.outcome!=='unknown')http=fresh
+              return result
+            }} : {}),
+          }
+          async function dispatch(command:DraftCommand,documentId?:string,reference?:string,trace?:TraceContext){
             if(oa.checking.value&&!oa.verified.value&&!authenticationRefresh&&!await refreshAuthentication())throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'})
             if(authenticationRefresh&&!await authenticationRefresh)throw new HagueDiagnosticError({errorCode:'AUTH_REDIRECT',errorStage:'http'})
             if(command.op==='summary'&&draftExportReproductions.value){
@@ -299,22 +315,13 @@ async function createDraftsLocked(targets: Row[], batch=false, asNew=false,resum
             const receipt=await(http?http.call(command,trace):callDraftPage(workerTab,command,documentId,reference,trace))
             if(receipt.ok)oa.noteAuthenticatedActivity(tabId)
             return receipt
-          },
-          ...(http?{recover:async(command:DraftCommand,checkpoint:DraftCheckpoint,trace?:TraceContext)=>{
-            if(authenticationRefresh&&!await authenticationRefresh)return{outcome:'unknown' as const}
-            let fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
-            let result=await fresh.recover(command,checkpoint,trace)
-            if(result.diagnosticError?.errorCode==='AUTH_REDIRECT'&&await refreshAuthentication()){
-              fresh=createHttpChain(tabId,`hague-recovery-${crypto.randomUUID()}`,checkpoint.reference,[],draftExportFormat.value,operation.signal)
-              result=await fresh.recover(command,checkpoint,trace)
-            }
-            if(result.outcome!=='unknown'&&result.receipt?.ok)oa.noteAuthenticatedActivity(tabId)
-            if(result.outcome!=='unknown')http=fresh
-            return result
-          }}:{}),
-          save:value=>storeDraft(row,checkpointFor(row,value)),
-          update:value=>{pendingCurrent={...value,stage:`${row.folder.caseVolume} · ${value.stage}`};queueDraftDisplay();update(value)}
-        },controller?.signal,row.draft)}finally{draftActive.value.delete(row.folder.path)}
+          }
+          const host=createDraftRunnerHost(gateway,{
+            save:value=>storeDraft(row,checkpointFor(row,value)),
+            update:value=>{pendingCurrent={...value,stage:`${row.folder.caseVolume} · ${value.stage}`};queueDraftDisplay();update(value)}
+          },runIds.get(row.folder.path))
+          return await runDraftPlan(plan,workerTab,host,controller?.signal,row.draft)
+        }finally{draftActive.value.delete(row.folder.path)}
       }
     },controller.signal)
     flushDraftDisplay()
