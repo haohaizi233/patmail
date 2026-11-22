@@ -267,7 +267,8 @@ export async function loadPctSendGate(
   if (requireProc) {
     const wanted = procId.trim().toLowerCase()
     const info: unknown[] = Array.isArray(record.ProcInfo) ? record.ProcInfo : []
-    if (!Array.isArray(record.Eflow) || ![...info, ...record.Eflow].some(row =>
+    const flows: unknown[] | null = Array.isArray(record.Eflow) ? record.Eflow : null
+    if (!flows || ![...info, ...flows].some(row =>
       row && typeof row === 'object' &&
       text((row as Record<string, unknown>).proc_id).toLowerCase() === wanted)) {
       return apiError('INVALID_RESPONSE', '案件流程未能匹配所选事项。')

@@ -8,7 +8,9 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "build": "node scripts/ensure-sme-snapshot.mjs && node scripts/cdp-observer.mjs start && vue-tsc --noEmit && vite build && vite build --config vite.content.config.ts",
+    "build": "node scripts/ensure-sme-snapshot.mjs && node scripts/cdp-observer.mjs start && pnpm build:bundle",
+    "build:ci": "node scripts/ensure-sme-snapshot.mjs && pnpm build:bundle",
+    "build:bundle": "vue-tsc --noEmit && vite build && vite build --config vite.content.config.ts",
     "cdp:start": "node scripts/cdp-observer.mjs start",
     "cdp:status": "node scripts/cdp-observer.mjs status",
     "cdp:stop": "node scripts/cdp-observer.mjs stop",
