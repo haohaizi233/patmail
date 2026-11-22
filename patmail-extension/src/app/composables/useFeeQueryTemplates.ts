@@ -40,12 +40,15 @@ export interface UseFeeQueryTemplatesOptions {
 }
 
 export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
-  const templateLoads = new TemplateLoadCoordinator()
+  const templateLists = new TemplateLoadCoordinator()
+  const templateDetails = new TemplateLoadCoordinator()
+  let accountVersion = 0
   const templates = ref<HistoryQueryOption[]>([])
   const selectedTemplateId = ref('')
   const saveName = ref('')
   const saveNameDirty = ref(false)
   const loadingTemplates = ref(false)
+  const applyingTemplate = ref(false)
   const savingTemplate = ref(false)
   const deletingTemplate = ref(false)
   const templateMessage = ref('')
@@ -74,7 +77,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
       templateMessage.value = '请先确认 EASY 已登录。'
       return
     }
-    const ticket = templateLoads.begin()
+    const ticket = templateLists.begin()
     loadingTemplates.value = true
     templateMessage.value = ''
     try {
@@ -82,7 +85,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
         { type: MessageType.ListHistoryQueries, payload: { force, surface: 'fee' } },
         ticket.signal,
       )
-      if (!templateLoads.isCurrent(ticket.id)) return
+      if (!templateLists.isCurrent(ticket.id)) return
       if (resp.type !== MessageType.HistoryQueriesResult || !resp.payload.ok) {
         templates.value = []
         templateMessage.value =
@@ -98,16 +101,18 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
         templateMessage.value = '当前账号还没有费用查询模板。'
       }
     } catch {
-      if (templateLoads.isCurrent(ticket.id)) templateMessage.value = '读取费用模板失败。'
+      if (templateLists.isCurrent(ticket.id)) templateMessage.value = '读取费用模板失败。'
     } finally {
-      if (templateLoads.isCurrent(ticket.id)) loadingTemplates.value = false
+      if (templateLists.isCurrent(ticket.id)) loadingTemplates.value = false
     }
   }
 
   async function applyTemplate(id: string): Promise<void> {
-    selectedTemplateId.value = id
-    saveNameDirty.value = false
+    const ticket = templateDetails.begin()
+    applyingTemplate.value = false
     if (!id) {
+      selectedTemplateId.value = ''
+      saveNameDirty.value = false
       options.values.value = { ...options.defaultValues }
       options.checkedBoxes.value = {}
       options.selectedCustomers.value = []
@@ -119,15 +124,16 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
       return
     }
     const b = options.activeBridge()
-    if (!b) return
-    const ticket = templateLoads.begin()
+    if (!b || !options.canRead.value) return
+    applyingTemplate.value = true
+    saveNameDirty.value = false
     templateMessage.value = ''
     try {
       const resp = await b.request(
         { type: MessageType.GetHistoryQuery, payload: { queryId: id, surface: 'fee' } },
         ticket.signal,
       )
-      if (!templateLoads.isCurrent(ticket.id)) return
+      if (!templateDetails.isCurrent(ticket.id)) return
       if (resp.type !== MessageType.HistoryQueryResult || !resp.payload.ok) {
         templateMessage.value =
           resp.type === MessageType.HistoryQueryResult && !resp.payload.ok
@@ -140,6 +146,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
         templateMessage.value = parsed.error.message
         return
       }
+      selectedTemplateId.value = id
       options.values.value = { ...options.defaultValues, ...parsed.data.fields }
       options.checkedBoxes.value = { ...parsed.data.checks }
       options.selectedCustomers.value = parsed.data.customers
@@ -150,16 +157,21 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
       if (parsed.data.fields.case_type || parsed.data.fields.country) {
         options.onRefreshCtrlProc()
       }
-      const named = templates.value.find(item => item.id === id)
-      if (named && !saveNameDirty.value) saveName.value = named.name
+      if (!saveNameDirty.value) {
+        saveName.value = templates.value.find(item => item.id === id)?.name ?? resp.payload.data.name ?? ''
+      }
     } catch {
-      if (templateLoads.isCurrent(ticket.id)) templateMessage.value = '载入费用模板失败。'
+      if (templateDetails.isCurrent(ticket.id)) templateMessage.value = '载入费用模板失败。'
+    } finally {
+      if (templateDetails.isCurrent(ticket.id)) applyingTemplate.value = false
     }
   }
 
   async function saveTemplate(): Promise<void> {
     const b = options.activeBridge()
-    if (!b || savingTemplate.value) return
+    if (!b || !options.canRead.value || applyingTemplate.value || savingTemplate.value || deletingTemplate.value) return
+    const version = accountVersion
+    const selection = templateDetails.peek()
     const selected = templates.value.find(item => item.id === selectedTemplateId.value)
     const title = saveName.value.trim() || (selected ? selected.name.trim() : '')
     if (!title) {
@@ -201,6 +213,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
         type: MessageType.SaveHistoryQuery,
         payload: { title, queryId, queryXml, surface: 'fee' },
       })
+      if (version !== accountVersion) return
       if (resp.type !== MessageType.HistoryQuerySaved || !resp.payload.ok) {
         templateMessage.value =
           resp.type === MessageType.HistoryQuerySaved && !resp.payload.ok
@@ -211,9 +224,10 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
         return
       }
       await loadTemplates(true)
+      if (version !== accountVersion) return
       const created = templates.value.find(item => !before.has(item.id) && item.name === title)
       const saved = created ?? (queryId ? templates.value.find(item => item.id === queryId) : undefined)
-      if (saved) {
+      if (saved && templateDetails.isCurrent(selection)) {
         selectedTemplateId.value = saved.id
         saveName.value = saved.name
         saveNameDirty.value = false
@@ -224,15 +238,16 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
           ? '已更新原网站上的这份费用模板。'
           : '已在原网站新建这份费用模板。'
     } catch {
-      templateMessage.value = '保存费用模板失败。'
+      if (version === accountVersion) templateMessage.value = '保存费用模板失败。'
     } finally {
-      savingTemplate.value = false
+      if (version === accountVersion) savingTemplate.value = false
     }
   }
 
   async function deleteTemplate(): Promise<void> {
     const b = options.activeBridge()
-    if (!b || deletingTemplate.value || savingTemplate.value) return
+    if (!b || !options.canRead.value || applyingTemplate.value || deletingTemplate.value || savingTemplate.value) return
+    const version = accountVersion
     const current = templates.value.find(item => item.id === selectedTemplateId.value)
     if (!current || !isQueryGuid(current.id)) {
       templateMessage.value = '先选中原网站上的费用模板，再删除。'
@@ -244,7 +259,16 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
       confirmLabel: '删除',
       warn: true,
     })
-    if (!agreed) return
+    if (
+      !agreed ||
+      version !== accountVersion ||
+      !options.canRead.value ||
+      b !== options.activeBridge() ||
+      applyingTemplate.value ||
+      savingTemplate.value ||
+      deletingTemplate.value
+    )
+      return
     deletingTemplate.value = true
     templateMessage.value = '正在从原网站删除…'
     try {
@@ -252,6 +276,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
         type: MessageType.DeleteHistoryQuery,
         payload: { queryId: current.id, surface: 'fee' },
       })
+      if (version !== accountVersion) return
       if (resp.type !== MessageType.HistoryQueryDeleted || !resp.payload.ok) {
         templateMessage.value =
           resp.type === MessageType.HistoryQueryDeleted && !resp.payload.ok
@@ -261,15 +286,19 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
               : '原网站没有删除这份费用模板。'
         return
       }
-      selectedTemplateId.value = ''
-      saveName.value = ''
-      saveNameDirty.value = false
+      if (selectedTemplateId.value === current.id) {
+        templateDetails.cancel()
+        selectedTemplateId.value = ''
+        saveName.value = ''
+        saveNameDirty.value = false
+      }
       await loadTemplates(true)
+      if (version !== accountVersion) return
       templateMessage.value = '已从原网站删除这份费用模板。'
     } catch {
-      templateMessage.value = '删除费用模板失败。'
+      if (version === accountVersion) templateMessage.value = '删除费用模板失败。'
     } finally {
-      deletingTemplate.value = false
+      if (version === accountVersion) deletingTemplate.value = false
     }
   }
 
@@ -299,13 +328,18 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
     const file = input.files?.[0]
     input.value = ''
     if (!file) return
+    const ticket = templateDetails.begin()
+    applyingTemplate.value = true
     let text = ''
     try {
       text = await file.text()
     } catch {
-      templateMessage.value = '这份 JSON 文件没有读开。'
+      if (templateDetails.isCurrent(ticket.id)) templateMessage.value = '这份 JSON 文件没有读开。'
       return
+    } finally {
+      if (templateDetails.isCurrent(ticket.id)) applyingTemplate.value = false
     }
+    if (!templateDetails.isCurrent(ticket.id)) return
     const read = readTemplateJson(text, 'FeeSearch')
     if (!read.ok) {
       templateMessage.value = read.message
@@ -361,6 +395,14 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
   }
 
   function resetTemplatesForUser(): void {
+    accountVersion += 1
+    templateLists.cancel()
+    templateDetails.cancel()
+    loadingTemplates.value = false
+    applyingTemplate.value = false
+    savingTemplate.value = false
+    deletingTemplate.value = false
+    unknownTemplateFields.value = {}
     templates.value = []
     selectedTemplateId.value = ''
     saveName.value = ''
@@ -369,7 +411,9 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
   }
 
   function disposeTemplates(): void {
-    templateLoads.dispose()
+    accountVersion += 1
+    templateLists.dispose()
+    templateDetails.dispose()
   }
 
   return {
@@ -378,6 +422,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
     saveName,
     saveNameDirty,
     loadingTemplates,
+    applyingTemplate,
     savingTemplate,
     deletingTemplate,
     templateMessage,

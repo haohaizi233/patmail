@@ -5,8 +5,7 @@ export class TemplateLoadCoordinator {
   private controller: AbortController | null = null
 
   begin(): { id: number; signal: AbortSignal } {
-    this.controller?.abort()
-    this.serial += 1
+    this.cancel()
     this.controller = new AbortController()
     return { id: this.serial, signal: this.controller.signal }
   }
@@ -19,10 +18,14 @@ export class TemplateLoadCoordinator {
     return this.serial
   }
 
-  dispose(): void {
-    this.disposed = true
+  cancel(): void {
     this.serial += 1
     this.controller?.abort()
     this.controller = null
+  }
+
+  dispose(): void {
+    this.disposed = true
+    this.cancel()
   }
 }

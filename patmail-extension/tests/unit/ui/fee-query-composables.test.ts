@@ -4,7 +4,16 @@ import type { FeeSearchQuery } from '../../../src/api/fee-search-params'
 import type { FeeSearchResult, FeeSearchRow } from '../../../src/api/fee-search-types'
 import { cleanFeeRowForSnapshot, useFeeSelection } from '../../../src/app/composables/useFeeSelection'
 import { useFeeQueryTemplates, type SelectedCustomerRef } from '../../../src/app/composables/useFeeQueryTemplates'
+import { closeDialog } from '../../../src/app/dialog'
 import { MessageType, type MessageBridge } from '../../../src/shared/message'
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
 
 function makeFeeRow(index: number, overrides: Partial<FeeSearchRow> = {}): FeeSearchRow {
   return {
@@ -150,5 +159,74 @@ describe('useFeeSelection & useFeeQueryTemplates composables', () => {
     expect(tpl.templates.value).toEqual([])
     expect(tpl.selectedTemplateId.value).toBe('')
     tpl.disposeTemplates()
+  })
+
+  it('keeps list and detail requests independent and ignores stale details after clearing or changing account', async () => {
+    const list = deferred<unknown>()
+    const details = [deferred<unknown>(), deferred<unknown>(), deferred<unknown>()]
+    const request = vi.fn(({ type }: { type: string }) =>
+      type === MessageType.ListHistoryQueries
+        ? list.promise
+        : type === MessageType.GetHistoryQuery
+          ? details.shift()!.promise
+          : Promise.resolve({ type: MessageType.Error, payload: { message: 'unexpected' } }),
+    )
+    const bridge = { request } as unknown as MessageBridge
+    const [first, cleared, oldAccount] = details
+    const values = ref<Record<string, string>>({ bill_no: 'FORM-BEFORE-LOAD' })
+    const tpl = useFeeQueryTemplates({
+      defaultValues: { bill_no: '' },
+      values,
+      checkedBoxes: ref({}),
+      selectedCustomers: ref([]),
+      selectedRuleOutCustomers: ref([]),
+      canRead: ref(true),
+      activeBridge: () => bridge,
+      collectDisplayValues: () => ({}),
+      maybeExpandAdvanced: vi.fn(),
+      onCustomersLoaded: vi.fn(),
+      onRefreshCtrlProc: vi.fn(),
+    })
+    const detail = {
+      type: MessageType.HistoryQueryResult,
+      payload: { ok: true, data: { queryXml: '<xmlRoot><bill_no>INV-OLD</bill_no></xmlRoot>' } },
+    }
+    const loading = tpl.loadTemplates(true)
+    const selected = tpl.applyTemplate('first')
+    tpl.saveName.value = '不会覆盖旧模板'
+    await tpl.saveTemplate()
+    expect(request).toHaveBeenCalledTimes(2)
+    first.resolve(detail)
+    list.resolve({
+      type: MessageType.HistoryQueriesResult,
+      payload: { ok: true, data: [{ id: 'first', name: '模板' }] },
+    })
+    await Promise.all([loading, selected])
+    expect(tpl.loadingTemplates.value).toBe(false)
+    expect(tpl.templates.value).toHaveLength(1)
+    expect(values.value.bill_no).toBe('INV-OLD')
+
+    const beforeClear = tpl.applyTemplate('first')
+    await tpl.applyTemplate('')
+    cleared.resolve(detail)
+    await beforeClear
+    expect(values.value.bill_no).toBe('')
+
+    const beforeSwitch = tpl.applyTemplate('first')
+    tpl.unknownTemplateFields.value = { accountSpecific: 'previous' }
+    tpl.resetTemplatesForUser()
+    oldAccount.resolve(detail)
+    await beforeSwitch
+    expect(values.value.bill_no).toBe('')
+    expect(tpl.unknownTemplateFields.value).toEqual({})
+
+    const id = '12345678-1234-1234-1234-1234567890ab'
+    tpl.templates.value = [{ id, name: '旧账号模板', source: 'easy' }]
+    tpl.selectedTemplateId.value = id
+    const deletion = tpl.deleteTemplate()
+    tpl.resetTemplatesForUser()
+    closeDialog(true)
+    await deletion
+    expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ type: MessageType.DeleteHistoryQuery }))
   })
 })

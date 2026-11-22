@@ -886,31 +886,7 @@ async function fetchTotalAmounts(q: FeeSearchQuery, gen: number, signal: AbortSi
 }
 
 function resetForm(): void {
-  values.value = {
-    case_type: '',
-    pay_status: '',
-    is_close: '',
-    is_ahead_pub: '',
-    hearing_the_case: '',
-    sourcetype: '',
-    contact_type: '',
-    notice_status: '',
-    receive_account_id: '',
-    business_coop: '',
-    exists_invoice_no: '',
-    bill_no: '',
-    case_agency_precorditem: '',
-    case_agency: ''
-  }
-  checkedBoxes.value = {}
-  selectedCustomers.value = []
-  selectedRuleOutCustomers.value = []
-  applicantOptions.value = []
-  selectedTemplateId.value = ''
-  saveName.value = ''
-  saveNameDirty.value = false
-  unknownTemplateFields.value = {}
-  templateMessage.value = ''
+  void applyTemplate('')
   exportNotice.value = ''
   showTypeMode.value = 'all'
   invalidateSearch()
@@ -1047,10 +1023,10 @@ const {
   saveName,
   saveNameDirty,
   loadingTemplates,
+  applyingTemplate,
   savingTemplate,
   deletingTemplate,
   templateMessage,
-  unknownTemplateFields,
   templateJsonInput,
   templateLabel,
   loadTemplates,
@@ -1085,9 +1061,14 @@ const {
 
 watch(
   () => props.userId,
-  nextUser => {
-    invalidateSearch()
+  (nextUser, previousUser) => {
     resetTemplatesForUser()
+    if (previousUser) {
+      resetForm()
+      applyInitialValues()
+    } else {
+      invalidateSearch()
+    }
     if (nextUser) {
       void loadTemplates(false)
       if (!pickersReady.value && !loadingPickers.value) void loadPickers(false)
@@ -1613,10 +1594,10 @@ defineExpose({
           模板名称
           <input v-model="saveName" type="text" maxlength="80" placeholder="输入模板名称" @input="saveNameDirty = true" />
         </label>
-        <button class="ghost" type="button" :disabled="!canRead || savingTemplate" @click="saveTemplate">
+        <button class="ghost" type="button" :disabled="!canRead || applyingTemplate || savingTemplate || deletingTemplate" @click="saveTemplate">
           {{ savingTemplate ? '正在保存…' : '保存到网站' }}
         </button>
-        <button class="ghost" type="button" :disabled="!canRead || deletingTemplate || !selectedTemplateId" @click="deleteTemplate">
+        <button class="ghost" type="button" :disabled="!canRead || applyingTemplate || savingTemplate || deletingTemplate || !selectedTemplateId" @click="deleteTemplate">
           {{ deletingTemplate ? '正在删除…' : '删除原网站模板' }}
         </button>
         <button class="ghost" type="button" @click="exportTemplateJson">导出 JSON</button>
