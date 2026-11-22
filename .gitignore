@@ -51,3 +51,8 @@ scratch_*
 
 # JVM 崩溃日志（hs_err_pid*.log），排查用完即弃，不入仓
 hs_err_pid*.log
+
+# 代码量统计生成的报告与快照数据，仅保留本地排查
+code_report.html
+code_report.json
+
