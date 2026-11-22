@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary } from '../../api/dictionaries/picker-catalog'
-import { isUnrequestedFee, sortFeeRows } from '../../application/billing/billing-validation'
+import { isUnrequestedFee } from '../../application/billing/billing-validation'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
 import type { FeeApplicantItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
 import { runPagedFetch } from '../page-pool'
 import { paintTaskCheckProgress, resetTaskCheckProgress, type TaskCheckStatus, taskCheckProgress } from '../check-progress'
-import type { HistoryQueryOption } from '../../api/query-history'
 import {
   FEE_COMMON_CELLS,
   FEE_QUICK_CELLS,
@@ -17,23 +16,15 @@ import {
   FEE_STATIC_TREES,
   FEE_OPTION_KEYS,
   FEE_ADVANCED_KEYS,
-  FEE_CHECK_KEYS,
-  buildFeeQueryXml,
   feeCellKey,
-  isFeeSearchInputField,
-  parseFeeCustomerRefs,
-  readFeeQueryXml,
-  sanitizeFeeFieldValue,
   type FeeCell
 } from '../../api/fee-form'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
-import { isQueryGuid } from '../../query/query-validator'
-import { TemplateLoadCoordinator } from '../../query/load-coordinator'
-import { historyLabels } from '../../query/history-labels'
-import { downloadTemplateJson, readTemplateJson, templateJsonFileName, templateJsonText } from '../../query/template-json'
 import { MessageType, type MessageBridge } from '../../shared/message'
-import { confirmDialog, infoDialog } from '../dialog'
+import { infoDialog } from '../dialog'
 import { useWorkspace } from '../composables/useWorkspace'
+import { cleanFeeRowForSnapshot, useFeeSelection } from '../composables/useFeeSelection'
+import { useFeeQueryTemplates } from '../composables/useFeeQueryTemplates'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../../shell/components/WDatePicker.vue'
@@ -542,35 +533,44 @@ const pageSizeOptions = [
   { value: 100, label: '100 条/页' }
 ]
 
-// Row Selection
-const selectedIds = ref<Record<string, boolean>>({})
-const selectedCount = computed(() => Object.values(selectedIds.value).filter(Boolean).length)
-const selectedFeeIds = computed(() =>
-  Object.entries(selectedIds.value)
-    .filter(([, checked]) => checked)
-    .map(([id]) => id)
-)
-const allKnownRows = ref<Map<string, FeeSearchRow>>(new Map())
-
-const selectedRowsList = computed(() => {
-  const list = selectedFeeIds.value.map(id => allKnownRows.value.get(id)).filter((r): r is FeeSearchRow => Boolean(r))
-  return sortFeeRows(list)
-})
-
-watch(selectedRowsList, rows => {
-  emit('selection-change', rows)
-}, { deep: true })
-
-const currentSearchGeneration = ref(0)
-const selectingAll = ref(false)
-const failedPages = ref<number[]>([])
-const selectionNotice = ref('')
+// Row Selection & Pagination Tracking
 const lastQuery = ref<FeeSearchQuery | null>(null)
-const cachedPages = reactive(new Map<number, Set<string>>())
 let searchController = new AbortController()
-let unrequestedOnlyBatch = false
-const selectionPending = computed(() => selectingAll.value || searchState.value === 'loading')
-const selectionIncomplete = computed(() => failedPages.value.length > 0 || searchState.value === 'error')
+const currentSearchGeneration = ref(0)
+const {
+  selectedIds,
+  selectedCount,
+  selectedFeeIds,
+  allKnownRows,
+  selectedRowsList,
+  selectingAll,
+  failedPages,
+  selectionNotice,
+  cachedPages,
+  unrequestedOnlyBatch,
+  selectionPending,
+  selectionIncomplete,
+  displayRows,
+  totalPages,
+  isRowSelected,
+  toggleRow,
+  selectCurrentPage,
+  clearAllSelected,
+  deselectAllPages,
+  selectBulkRow,
+  applyQuickFeeSelect,
+  replaceBillingSelection,
+  resetSelectionState,
+} = useFeeSelection({
+  result,
+  lastQuery,
+  searchState,
+  showTypeMode,
+  pageSize,
+  quickFeeSelectMode,
+  getDefaultSelectionExclusion: () => props.defaultSelectionExclusion,
+  onSelectionChange: rows => emit('selection-change', rows),
+})
 
 const paging = { startedAt: 0, total: 0, done: 0 }
 function paintPaging(status: TaskCheckStatus): void {
@@ -607,39 +607,10 @@ watch(() => props.initialToken, () => {
   applyInitialValues()
 })
 
-function isRowSelected(row: FeeSearchRow): boolean {
-  return Boolean(selectedIds.value[row.feeId])
-}
-
-function toggleRow(row: FeeSearchRow, checked: boolean): void {
-  selectedIds.value[row.feeId] = checked
-}
-
-function selectCurrentPage(select: boolean): void {
-  if (!result.value) return
-  for (const row of result.value.rows) {
-    selectedIds.value[row.feeId] = select
-  }
-}
-
-function clearAllSelected(): void {
-  selectedIds.value = {}
-  quickFeeSelectMode.value = ''
-  selectionNotice.value = ''
-}
-
-function deselectAllPages(): void {
-  clearAllSelected()
-}
-
-function selectBulkRow(row: FeeSearchRow, unrequestedOnly: boolean): void {
-  selectedIds.value[row.feeId] = !unrequestedOnly || (isUnrequestedFee(row) && !props.defaultSelectionExclusion?.(row))
-}
-
 async function selectAllPages(unrequestedOnly = false): Promise<void> {
   const res = result.value
   if (!res?.total || selectionPending.value) return
-  unrequestedOnlyBatch = unrequestedOnly
+  unrequestedOnlyBatch.value = unrequestedOnly
   for (const row of allKnownRows.value.values()) selectBulkRow(row, unrequestedOnly)
   const pages = Array.from({ length: totalPages.value }, (_, i) => i + 1)
     .filter(page => !cachedPages.has(page))
@@ -658,7 +629,7 @@ async function readSelectionPages(pages: number[]): Promise<void> {
 
   const gen = currentSearchGeneration.value
   const signal = searchController.signal
-  const unrequestedOnly = unrequestedOnlyBatch
+  const unrequestedOnly = unrequestedOnlyBatch.value
   const announce = (missed: number[]) => {
     failedPages.value = missed
     paintPaging(missed.length ? 'fail' : 'done')
@@ -738,17 +709,6 @@ async function readSelectionPages(pages: number[]): Promise<void> {
   }
 }
 
-// 对齐 FeeSearch.js L653-671: "只选官费" / "只选代理费" 按当前页 fee_class_name 批量勾选
-function applyQuickFeeSelect(mode: 'O' | 'A'): void {
-  quickFeeSelectMode.value = mode
-  if (!result.value) return
-  const targetLabel = mode === 'O' ? '官费' : '代理费'
-  for (const row of result.value.rows) {
-    const matched = row.feeClass === mode || row.feeClassName === targetLabel
-    selectedIds.value[row.feeId] = matched
-  }
-}
-
 // Amount totals
 const totalAmountInfo = ref<{
   originalAgentFee: number
@@ -785,13 +745,9 @@ function invalidateSearch(): void {
   searchController.abort()
   searchController = new AbortController()
   if (selectingAll.value) resetTaskCheckProgress()
-  selectingAll.value = false
-  failedPages.value = []
+  resetSelectionState()
   lastQuery.value = null
   result.value = null
-  allKnownRows.value.clear()
-  cachedPages.clear()
-  clearAllSelected()
   pageIndex.value = 1
   searchState.value = 'idle'
   searchMessage.value = ''
@@ -866,7 +822,7 @@ async function doSearch(page = 1, newSearch = true): Promise<void> {
         if (newSearch) {
           void selectAllPages(true)
         } else if (failedPages.value.includes(page)) {
-          for (const row of data.rows) selectBulkRow(row, unrequestedOnlyBatch)
+          for (const row of data.rows) selectBulkRow(row, unrequestedOnlyBatch.value)
           failedPages.value = failedPages.value.filter(failed => failed !== page)
           if (!failedPages.value.length) selectionNotice.value = ''
         }
@@ -1024,24 +980,6 @@ function onFeeExported(message: string): void {
   exportNotice.value = message
 }
 
-// 历史查询条件（查询模板，与文件管理 / 期限监控同口径直连原站 SearchQueryHisList / Save / Delete）
-const templateLoads = new TemplateLoadCoordinator()
-const templates = ref<HistoryQueryOption[]>([])
-const selectedTemplateId = ref('')
-const saveName = ref('')
-const saveNameDirty = ref(false)
-const loadingTemplates = ref(false)
-const savingTemplate = ref(false)
-const deletingTemplate = ref(false)
-const templateMessage = ref('')
-const unknownTemplateFields = ref<Record<string, string>>({})
-const templateJsonInput = ref<HTMLInputElement | null>(null)
-
-const templateLabelMap = computed(() => historyLabels(templates.value))
-function templateLabel(item: HistoryQueryOption): string {
-  return templateLabelMap.value.get(item.id) ?? item.name
-}
-
 const DEFAULT_FEE_VALUES: Record<string, string> = {
   case_type: '',
   pay_status: '',
@@ -1056,7 +994,7 @@ const DEFAULT_FEE_VALUES: Record<string, string> = {
   exists_invoice_no: '',
   bill_no: '',
   case_agency_precorditem: '',
-  case_agency: ''
+  case_agency: '',
 }
 
 function collectDisplayValues(): Record<string, string> {
@@ -1069,7 +1007,7 @@ function collectDisplayValues(): Record<string, string> {
   }
   const allCells: FeeCell[] = [
     ...FEE_COMMON_CELLS,
-    ...FEE_ADVANCED_BLOCKS.flatMap(b => b.cells)
+    ...FEE_ADVANCED_BLOCKS.flatMap(b => b.cells),
   ]
   for (const cell of allCells) {
     if (cell.kind === 'named') {
@@ -1096,349 +1034,84 @@ function collectDisplayValues(): Record<string, string> {
   return labels
 }
 
-function collectDraftFields(): Record<string, string> {
-  const fields: Record<string, string> = {}
-  for (const [k, v] of Object.entries(values.value)) {
-    if (isFeeSearchInputField(k) && v.trim()) fields[k] = v.trim()
-  }
-  for (const [k, checked] of Object.entries(checkedBoxes.value)) {
-    if (FEE_CHECK_KEYS.has(k) && checked) fields[k] = 'on'
-  }
-  return fields
-}
-
 function maybeExpandAdvanced(fields: Record<string, string>, checks: Record<string, boolean>): void {
   const hasAdv = Object.entries(fields).some(([k, v]) => FEE_ADVANCED_KEYS.has(k) && v.trim())
     || Object.entries(checks).some(([k, v]) => FEE_ADVANCED_KEYS.has(k) && v)
   if (hasAdv) showAdvanced.value = true
 }
 
-async function loadTemplates(force: boolean): Promise<void> {
-  const b = activeBridge()
-  if (!canRead.value || !b) {
-    templateMessage.value = '请先确认 EASY 已登录。'
-    return
-  }
-  const ticket = templateLoads.begin()
-  loadingTemplates.value = true
-  templateMessage.value = ''
-  try {
-    const resp = await b.request({ type: MessageType.ListHistoryQueries, payload: { force, surface: 'fee' } }, ticket.signal)
-    if (!templateLoads.isCurrent(ticket.id)) return
-    if (resp.type !== MessageType.HistoryQueriesResult || !resp.payload.ok) {
-      templates.value = []
-      templateMessage.value = resp.type === MessageType.Error
-        ? resp.payload.message
-        : resp.type === MessageType.HistoryQueriesResult && !resp.payload.ok
-          ? resp.payload.error.message
-          : '费用模板没有读到。'
-      return
-    }
-    templates.value = resp.payload.data
-    if (resp.payload.data.length === 0) {
-      templateMessage.value = '当前账号还没有费用查询模板。'
-    }
-  } catch {
-    if (templateLoads.isCurrent(ticket.id)) templateMessage.value = '读取费用模板失败。'
-  } finally {
-    if (templateLoads.isCurrent(ticket.id)) loadingTemplates.value = false
-  }
-}
-
-async function applyTemplate(id: string): Promise<void> {
-  selectedTemplateId.value = id
-  saveNameDirty.value = false
-  if (!id) {
-    values.value = { ...DEFAULT_FEE_VALUES }
-    checkedBoxes.value = {}
-    selectedCustomers.value = []
-    selectedRuleOutCustomers.value = []
-    applicantOptions.value = []
-    unknownTemplateFields.value = {}
-    saveName.value = ''
-    templateMessage.value = ''
-    return
-  }
-  const b = activeBridge()
-  if (!b) return
-  const ticket = templateLoads.begin()
-  templateMessage.value = ''
-  try {
-    const resp = await b.request({ type: MessageType.GetHistoryQuery, payload: { queryId: id, surface: 'fee' } }, ticket.signal)
-    if (!templateLoads.isCurrent(ticket.id)) return
-    if (resp.type !== MessageType.HistoryQueryResult || !resp.payload.ok) {
-      templateMessage.value = resp.type === MessageType.HistoryQueryResult && !resp.payload.ok
-        ? resp.payload.error.message
-        : '这个费用模板没有打开。'
-      return
-    }
-    const parsed = readFeeQueryXml(resp.payload.data.queryXml)
-    if (!parsed.ok) {
-      templateMessage.value = parsed.error.message
-      return
-    }
-    values.value = { ...DEFAULT_FEE_VALUES, ...parsed.data.fields }
-    checkedBoxes.value = { ...parsed.data.checks }
-    selectedCustomers.value = parsed.data.customers
-    selectedRuleOutCustomers.value = parsed.data.ruleOutCustomers
-    unknownTemplateFields.value = { ...parsed.data.unknownFields }
-    maybeExpandAdvanced(parsed.data.fields, parsed.data.checks)
-    if (parsed.data.customers.length) {
-      void loadApplicantsForCustomers(parsed.data.customers.map(c => c.id).join(';'), true)
+// 历史查询条件（查询模板，与文件管理 / 期限监控同口径直连原站 SearchQueryHisList / Save / Delete）
+const {
+  templates,
+  selectedTemplateId,
+  saveName,
+  saveNameDirty,
+  loadingTemplates,
+  savingTemplate,
+  deletingTemplate,
+  templateMessage,
+  unknownTemplateFields,
+  templateJsonInput,
+  templateLabel,
+  loadTemplates,
+  applyTemplate,
+  saveTemplate,
+  deleteTemplate,
+  exportTemplateJson,
+  importTemplateJson,
+  resetTemplatesForUser,
+  disposeTemplates,
+} = useFeeQueryTemplates({
+  defaultValues: DEFAULT_FEE_VALUES,
+  values,
+  checkedBoxes,
+  selectedCustomers,
+  selectedRuleOutCustomers,
+  canRead,
+  activeBridge,
+  collectDisplayValues,
+  maybeExpandAdvanced,
+  onCustomersLoaded: customerIds => {
+    if (customerIds) {
+      void loadApplicantsForCustomers(customerIds, true)
     } else {
       applicantOptions.value = []
     }
-    if (parsed.data.fields.case_type || parsed.data.fields.country) {
-      void refreshCtrlProc()
-    }
-    const named = templates.value.find(item => item.id === id)
-    if (named && !saveNameDirty.value) saveName.value = named.name
-  } catch {
-    if (templateLoads.isCurrent(ticket.id)) templateMessage.value = '载入费用模板失败。'
-  }
-}
-
-async function saveTemplate(): Promise<void> {
-  const b = activeBridge()
-  if (!b || savingTemplate.value) return
-  const selected = templates.value.find(item => item.id === selectedTemplateId.value)
-  const title = saveName.value.trim() || (selected ? selected.name.trim() : '')
-  if (!title) {
-    templateMessage.value = '先填写模板名称。'
-    return
-  }
-  const nonEmptyFields: Record<string, string> = {}
-  for (const [k, v] of Object.entries(values.value)) {
-    if (isFeeSearchInputField(k) && v.trim()) nonEmptyFields[k] = v.trim()
-  }
-  const activeChecks: Record<string, boolean> = {}
-  for (const [k, checked] of Object.entries(checkedBoxes.value)) {
-    if (FEE_CHECK_KEYS.has(k) && checked) activeChecks[k] = true
-  }
-  if (!Object.keys(nonEmptyFields).length && !Object.keys(activeChecks).length && !selectedCustomers.value.length && !selectedRuleOutCustomers.value.length && !Object.keys(unknownTemplateFields.value).length) {
-    templateMessage.value = '先填写至少一项查询条件，再保存。'
-    return
-  }
-  const queryId = selected && isQueryGuid(selected.id) ? selected.id : ''
-  const before = new Set(templates.value.map(item => item.id))
-  const queryXml = buildFeeQueryXml({
-    fields: nonEmptyFields,
-    checks: activeChecks,
-    displayValues: collectDisplayValues(),
-    customers: selectedCustomers.value,
-    ruleOutCustomers: selectedRuleOutCustomers.value,
-    unknownFields: unknownTemplateFields.value
-  })
-  savingTemplate.value = true
-  templateMessage.value = '正在写入原网站的费用模板…'
-  try {
-    const resp = await b.request({
-      type: MessageType.SaveHistoryQuery,
-      payload: { title, queryId, queryXml, surface: 'fee' }
-    })
-    if (resp.type !== MessageType.HistoryQuerySaved || !resp.payload.ok) {
-      templateMessage.value = resp.type === MessageType.HistoryQuerySaved && !resp.payload.ok
-        ? resp.payload.error.message
-        : resp.type === MessageType.Error ? resp.payload.message : '原网站没有保存这份费用模板。'
-      return
-    }
-    await loadTemplates(true)
-    const created = templates.value.find(item => !before.has(item.id) && item.name === title)
-    const saved = created ?? (queryId ? templates.value.find(item => item.id === queryId) : undefined)
-    if (saved) {
-      selectedTemplateId.value = saved.id
-      saveName.value = saved.name
-      saveNameDirty.value = false
-    }
-    templateMessage.value = created
-      ? '已在原网站另存了这份新的费用模板。'
-      : queryId ? '已更新原网站上的这份费用模板。' : '已在原网站新建这份费用模板。'
-  } catch {
-    templateMessage.value = '保存费用模板失败。'
-  } finally {
-    savingTemplate.value = false
-  }
-}
-
-async function deleteTemplate(): Promise<void> {
-  const b = activeBridge()
-  if (!b || deletingTemplate.value || savingTemplate.value) return
-  const current = templates.value.find(item => item.id === selectedTemplateId.value)
-  if (!current || !isQueryGuid(current.id)) {
-    templateMessage.value = '先选中原网站上的费用模板，再删除。'
-    return
-  }
-  const agreed = await confirmDialog({
-    title: '删除原网站模板',
-    message: `会从原网站删掉「${templateLabel(current)}」。`,
-    confirmLabel: '删除',
-    warn: true
-  })
-  if (!agreed) return
-  deletingTemplate.value = true
-  templateMessage.value = '正在从原网站删除…'
-  try {
-    const resp = await b.request({
-      type: MessageType.DeleteHistoryQuery,
-      payload: { queryId: current.id, surface: 'fee' }
-    })
-    if (resp.type !== MessageType.HistoryQueryDeleted || !resp.payload.ok) {
-      templateMessage.value = resp.type === MessageType.HistoryQueryDeleted && !resp.payload.ok
-        ? resp.payload.error.message
-        : resp.type === MessageType.Error ? resp.payload.message : '原网站没有删除这份费用模板。'
-      return
-    }
-    selectedTemplateId.value = ''
-    saveName.value = ''
-    saveNameDirty.value = false
-    await loadTemplates(true)
-    templateMessage.value = '已从原网站删除这份费用模板。'
-  } catch {
-    templateMessage.value = '删除费用模板失败。'
-  } finally {
-    deletingTemplate.value = false
-  }
-}
-
-function exportTemplateJson(): void {
-  const fields = collectDraftFields()
-  const extras = Object.entries(unknownTemplateFields.value).filter(([, v]) => v.trim()).length
-  if (!Object.keys(fields).length && !extras) {
-    templateMessage.value = '先填写至少一项查询条件，再导出。'
-    return
-  }
-  const selected = templates.value.find(item => item.id === selectedTemplateId.value)
-  const from = saveName.value.trim() || (selected ? selected.name.trim() : '')
-  downloadTemplateJson(
-    templateJsonText('FeeSearch', {
-      fields,
-      displayValues: collectDisplayValues(),
-      unknownFields: unknownTemplateFields.value
-    }),
-    templateJsonFileName('FeeSearch', from)
-  )
-  templateMessage.value = `已导出当前条件的 JSON。${from ? `文件名带模板名「${from}」和时间戳` : '文件名只带查询面和时间戳；在「模板名称」里填上名字再导出，文件名就会带上'}，文件内容不含模板名，导入后自己命名保存。`
-}
-
-async function importTemplateJson(event: Event): Promise<void> {
-  const input = event.target
-  if (!(input instanceof HTMLInputElement)) return
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  let text = ''
-  try {
-    text = await file.text()
-  } catch {
-    templateMessage.value = '这份 JSON 文件没有读开。'
-    return
-  }
-  const read = readTemplateJson(text, 'FeeSearch')
-  if (!read.ok) {
-    templateMessage.value = read.message
-    return
-  }
-  const nextValues: Record<string, string> = { ...DEFAULT_FEE_VALUES }
-  const nextChecks: Record<string, boolean> = {}
-  let count = 0
-  for (const [k, v] of Object.entries(read.conditions.fields)) {
-    const cleaned = sanitizeFeeFieldValue(k, v)
-    if (!cleaned) continue
-    if (FEE_CHECK_KEYS.has(k)) {
-      const lower = cleaned.toLowerCase()
-      if (lower === 'on' || lower === 'true' || lower === '1') {
-        nextChecks[k] = true
-        count += 1
-      }
-    } else {
-      nextValues[k] = cleaned
-      count += 1
-    }
-  }
-  selectedCustomers.value = parseFeeCustomerRefs(nextValues.customer_id ?? '', read.conditions.displayValues.customer_id ?? '')
-  selectedRuleOutCustomers.value = parseFeeCustomerRefs(nextValues.ruleOutcustomer_id ?? '', read.conditions.displayValues.ruleOutcustomer_id ?? '')
-  if (selectedCustomers.value.length) {
-    nextValues.customer_id = selectedCustomers.value.map(c => c.id).join(';')
-  } else {
-    delete nextValues.customer_id
-  }
-  if (selectedRuleOutCustomers.value.length) {
-    nextValues.ruleOutcustomer_id = selectedRuleOutCustomers.value.map(c => c.id).join(';')
-  } else {
-    delete nextValues.ruleOutcustomer_id
-  }
-  values.value = nextValues
-  checkedBoxes.value = nextChecks
-  unknownTemplateFields.value = { ...read.conditions.unknownFields }
-  if (selectedCustomers.value.length) {
-    void loadApplicantsForCustomers(selectedCustomers.value.map(c => c.id).join(';'), true)
-  } else {
-    applicantOptions.value = []
-  }
-  if (nextValues.case_type || nextValues.country) {
+  },
+  onRefreshCtrlProc: () => {
     void refreshCtrlProc()
-  }
-  maybeExpandAdvanced(nextValues, nextChecks)
-  selectedTemplateId.value = ''
-  saveName.value = ''
-  saveNameDirty.value = false
-  templateMessage.value = `已导入 ${count} 个查询条件。可以继续追加或修改条件，最后自己填模板名称保存。`
-}
+  },
+})
 
 watch(
   () => props.userId,
   nextUser => {
     invalidateSearch()
-    templates.value = []
-    selectedTemplateId.value = ''
-    saveName.value = ''
-    saveNameDirty.value = false
-    templateMessage.value = ''
+    resetTemplatesForUser()
     if (nextUser) {
       void loadTemplates(false)
       if (!pickersReady.value && !loadingPickers.value) void loadPickers(false)
     }
   },
-  { immediate: true }
+  { immediate: true },
 )
 
 onBeforeUnmount(() => {
-  templateLoads.dispose()
+  disposeTemplates()
   searchController.abort()
   resetTaskCheckProgress()
 })
 
-// 对齐 FeeSearch.js L637-650: 显示全部 vs 仅显示选中项
-const displayRows = computed(() => {
-  if (!result.value) return []
-  if (showTypeMode.value === 'selected') {
-    return result.value.rows.filter(isRowSelected)
-  }
-  return result.value.rows
-})
-
-const totalPages = computed(() => {
-  if (!result.value || result.value.total === 0) return 1
-  return Math.ceil(result.value.total / (lastQuery.value?.pageSize ?? pageSize.value))
-})
-
 function billingSnapshot() {
-  const cleanRow = (row: FeeSearchRow): FeeSearchRow => {
-    const raw = Object.fromEntries(['word_count', 'fee_desc', 'out_bill_date', 'agency_name_cn', 'country', 'law_fee_date'].flatMap(key => {
-      const value = row.raw[key]
-      return typeof value === 'string' || typeof value === 'number' ? [[key, value]] : []
-    }))
-    return { ...row, raw }
-  }
   return {
     values: values.value, checks: checkedBoxes.value,
     customers: selectedCustomers.value, excludedCustomers: selectedRuleOutCustomers.value,
     pageIndex: pageIndex.value, pageSize: pageSize.value, query: lastQuery.value,
-    result: result.value && { ...result.value, rows: result.value.rows.map(cleanRow) },
-    rows: [...allKnownRows.value.values()].map(cleanRow), selectedIds: selectedFeeIds.value,
+    result: result.value && { ...result.value, rows: result.value.rows.map(cleanFeeRowForSnapshot) },
+    rows: [...allKnownRows.value.values()].map(cleanFeeRowForSnapshot), selectedIds: selectedFeeIds.value,
     pages: [...cachedPages].map(([page, ids]) => [page, [...ids]] as const),
-    failed: failedPages.value, unrequestedOnly: unrequestedOnlyBatch, pending: selectionPending.value,
-    incomplete: selectionIncomplete.value, totals: totalAmountInfo.value
+    failed: failedPages.value, unrequestedOnly: unrequestedOnlyBatch.value, pending: selectionPending.value,
+    incomplete: selectionIncomplete.value, totals: totalAmountInfo.value,
   }
 }
 
@@ -1452,7 +1125,7 @@ function restoreBillingSnapshot(state: ReturnType<typeof billingSnapshot>): void
   pageIndex.value = state.pageIndex
   lastQuery.value = state.query
   result.value = state.result
-  unrequestedOnlyBatch = state.unrequestedOnly
+  unrequestedOnlyBatch.value = state.unrequestedOnly
   totalAmountInfo.value = state.totals
   for (const row of state.rows) allKnownRows.value.set(row.feeId, row)
   selectedIds.value = Object.fromEntries(state.selectedIds.filter(id => allKnownRows.value.has(id)).map(id => [id, true]))
@@ -1472,11 +1145,7 @@ defineExpose({
   restoreBillingSnapshot,
   getSelectedRows: () => selectedRowsList.value,
   getKnownRows: () => allKnownRows.value.values(),
-  replaceBillingSelection(rows: FeeSearchRow[]) {
-    if (selectionPending.value || selectionIncomplete.value) return
-    selectedIds.value = Object.fromEntries(rows.filter(row => allKnownRows.value.has(row.feeId)).map(row => [row.feeId, true]))
-    selectionNotice.value = ''
-  },
+  replaceBillingSelection,
   setValues(patch: Record<string, string>) {
     applyValuesPatch(patch)
   },
@@ -1488,7 +1157,7 @@ defineExpose({
   selectingAll,
   selectedCount,
   selectedFeeIds,
-  selectedRowsList
+  selectedRowsList,
 })
 </script>
 

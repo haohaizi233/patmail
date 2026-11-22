@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T09:48:06.291Z",
-  "fileCount": 520,
+  "scannedAt": "2026-11-22T09:58:40.214Z",
+  "fileCount": 523,
   "summary": {
-    "totalEdges": 2281,
-    "runtimeInternalEdges": 1598,
-    "typeOnlyEdges": 558,
+    "totalEdges": 2295,
+    "runtimeInternalEdges": 1606,
+    "typeOnlyEdges": 561,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -65,11 +65,11 @@
       "utils": 2,
       "shell": 34,
       "mail": 15,
-      "app/composables": 8,
+      "app/composables": 11,
       "app/docs": 4,
       "api": 20,
       "application/billing": 1,
-      "query": 14,
+      "query": 10,
       "recovery": 5,
       "settings": 5,
       "app/services": 2,
@@ -80,13 +80,15 @@
       "application/mail": 1
     },
     "app/composables": {
-      "application/billing": 2,
+      "application/billing": 3,
       "billing": 2,
       "infrastructure": 1,
-      "customer": 4,
-      "app": 1,
+      "api": 1,
+      "query": 4,
+      "shared": 4,
+      "app": 2,
+      "customer": 5,
       "workflow": 2,
-      "shared": 3,
       "settings": 1,
       "utils": 1
     },
@@ -888,6 +890,16 @@
       "module": "app/composables"
     },
     {
+      "file": "app/composables/useFeeQueryTemplates.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/composables/useFeeSelection.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
       "file": "app/composables/useOaSession.ts",
       "layer": "Presentation",
       "module": "app/composables"
@@ -909,6 +921,11 @@
     },
     {
       "file": "app/composables/useWorkflowChoices.ts",
+      "layer": "Presentation",
+      "module": "app/composables"
+    },
+    {
+      "file": "app/composables/useWorkflowSheetStatus.ts",
       "layer": "Presentation",
       "module": "app/composables"
     },

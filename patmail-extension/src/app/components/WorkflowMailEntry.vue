@@ -9,7 +9,7 @@ import type { MailSender } from '../../customer/mailset'
 import { PCT_RESUME_KEY, PENDING_CUSTOMER_KEY } from '../../customer/mail-flow'
 import { fillSheetEmails } from '../../customer/customer-page'
 import { IC_LOOKUP_WIDTH } from '../../customer/ic-flow-lookup'
-import { MAILED_UNFINISHED_REVIEW, SKIP_SEND_REVIEW, reviewNeedsArbitration, type IcFlowHit } from '../../customer/pct-flow-status'
+import { MAILED_UNFINISHED_REVIEW, reviewNeedsArbitration, type IcFlowHit } from '../../customer/pct-flow-status'
 import { paintTaskCheckProgress, resetTaskCheckProgress, sessionInterrupted } from '../check-progress'
 import { needsRecipientArbitration, applyArbitrationReply, arbitrationAllowed, checkedSourceSheets, iprArbitrationWaves, isPctWorkbookSheet, missedSourceSheets, pctRowsFromWorkbook, shouldAutoArbitrate, type ArbitrationDecision } from '../../customer/pct-workbook'
 import { applyPctMailTypes, buildPctTask, clonePctTask, matchSheetCtrlProcs, PCT_WORKFLOW_TASK_KEY, procGapNotes, readWorkflowTask, recarryCustomerContacts, summarizePctTask, volumesOf, writeWorkflowTask } from '../../customer/pct-sheet'
@@ -27,6 +27,12 @@ import { assignColumnWidths } from '../../shell/column-fit'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import { sceneOwnerChanged, scopeFromConnection } from '../../shared/connection'
 import { useWorkspace } from '../composables/useWorkspace'
+import {
+  normalizeWorkflowVolumeKey,
+  useWorkflowSheetStatus,
+  workflowStatusShade,
+  type WorkflowIcHit,
+} from '../composables/useWorkflowSheetStatus'
 import { endProgress, logProgress, progressSummaryLine } from '../dialog'
 import { FILING_EXPORT_ID, FILE_MANAGE_ID, packagedPctWorkflow, pctRuntimeFrom, workflowSender, type WorkflowCatalog, type WorkflowDefinition } from '../../workflow/catalog'
 import FileManageMail from './FileManageMail.vue'
@@ -64,7 +70,7 @@ const limitPhase = ref<'idle' | 'run' | 'done' | 'fail'>('idle')
 const limitNote = ref('')
 const icPhase = ref<'idle' | 'run' | 'done' | 'fail'>('idle')
 const icNote = ref('')
-type IcHit = { found: boolean; gate: '' | 'open' | 'pending' | 'done'; uncontrolled?: true; skipSend?: true; unread?: true; statusUnread?: true }
+type IcHit = WorkflowIcHit
 type FlowAsk = { caseVolume: string; procLabel: string; customerVolume?: string; withRecord?: true }
 let icHits: Record<string, IcHit> = Object.create(null)
 let recordByVolume: Record<string, { customer: string; record: string }> = Object.create(null)
@@ -73,7 +79,6 @@ const PUBLISH_MS = 800
 let publishTimer = 0
 const limitByKey = reactive<Record<string, string>>({})
 const gapWaves = ref<string[]>([])
-const sheetPage = ref(1)
 const AUTO_ARBITRATE_KEY = 'patmail.autoArbitrate.v1'
 const ALLOW_MAILED_UNFINISHED_KEY = 'patmail.allowMailedUnfinished.v1'
 const ARBITRATE_IPR_ONLY_KEY = 'patmail.arbitrateIprOnly.v1'
@@ -155,92 +160,29 @@ const styleNotes = computed(() => {
   })
 })
 const procGaps = computed(() => procGapNotes(rows.value.filter(row => !props.rules?.procedureMappings?.some(item => item.procedure === row.procLabel)), runtime.value.procLabel))
-const outcomePack = computed(() => {
-  const empty = { text: '', bars: [] as Array<{ key: string; label: string; count: number; color: string; percent: number }> }
-  if (!rows.value.length) return empty
-  let pending = 0
-  let submitted = 0
-  let mailed = 0
-  let done = 0
-  let missing = 0
-  let unread = 0
-  let noProc = 0
-  let statusMiss = 0
-  let checking = 0
-  let abnormal = 0
-  let skipped = 0
-  for (const row of rows.value) {
-    const status = sheetStatus(row)
-    if (status.review === '异常') abnormal += 1
-    else if (status.found === '库里没有') missing += 1
-    else if (status.found === '没查成') unread += 1
-    else if (status.found === '正在查' || status.review === '…') checking += 1
-    else if (status.review === '还没提交审核') pending += 1
-    else if (status.review === '已提交审核') submitted += 1
-    else if (status.review === MAILED_UNFINISHED_REVIEW) mailed += 1
-    else if (status.review === SKIP_SEND_REVIEW) skipped += 1
-    else if (status.review === '已经审核通过') done += 1
-    else if (status.review === '没有这项处理事项') noProc += 1
-    else if (status.review === '状态没读到') statusMiss += 1
-    else if (icPhase.value === 'run') checking += 1
-    else missing += 1
-  }
-  const text = [
-    pending ? `还有 ${pending} 行待处理。提交时只发勾上的，一件一封。` : '没有待处理的行。',
-    submitted ? `已提交审核 ${submitted} 行。` : '',
-    mailed ? `${MAILED_UNFINISHED_REVIEW} ${mailed} 行。` : '',
-    skipped ? `${SKIP_SEND_REVIEW} ${skipped} 行。` : '',
-    done ? `已经审核通过 ${done} 行。` : '',
-    missing ? `库里没有 ${missing} 行。` : '',
-    unread ? `没查成 ${unread} 行。` : '',
-    noProc ? `没有这项处理事项 ${noProc} 行。` : '',
-    statusMiss ? `状态没读到 ${statusMiss} 行。` : '',
-    abnormal ? `异常 ${abnormal} 行。` : '',
-    checking ? `还有 ${checking} 行正在核对。` : ''
-  ].filter(Boolean).join('')
-  const bars = [
-    { key: 'pending', label: '待处理', count: pending, color: '#1d4ed8' },
-    { key: 'submitted', label: '已提交审核', count: submitted, color: '#9a6700' },
-    { key: 'mailed', label: MAILED_UNFINISHED_REVIEW, count: mailed, color: '#3e5670' },
-    { key: 'skipped', label: SKIP_SEND_REVIEW, count: skipped, color: '#7a3e86' },
-    { key: 'done', label: '已经审核通过', count: done, color: '#157a45' },
-    { key: 'missing', label: '库里没有', count: missing, color: '#c4234e' },
-    { key: 'unread', label: '没查成', count: unread, color: '#c4234e' },
-    { key: 'noProc', label: '没有这项处理事项', count: noProc, color: '#8b95a8' },
-    { key: 'statusMiss', label: '状态没读到', count: statusMiss, color: '#8b95a8' },
-    { key: 'abnormal', label: '异常', count: abnormal, color: '#9a6700' },
-    { key: 'checking', label: '正在核对', count: checking, color: '#b7c0d2' }
-  ].filter(item => item.count > 0)
-  const widest = Math.max(...bars.map(item => item.count), 1)
-  return {
-    text,
-    bars: bars.map(item => ({ ...item, percent: Math.max(2, Math.round(item.count / widest * 1000) / 10) }))
-  }
-})
-const outcome = computed(() => outcomePack.value.text)
-const outcomeBars = computed(() => outcomePack.value.bars)
-
 const unmatched = computed(() => rows.value.filter(row => !row.mailTypeId))
-const sheetPages = computed(() => Math.max(1, Math.ceil(rows.value.length / SHEET_PAGE_SIZE)))
-const sheetPageSafe = computed(() => Math.min(sheetPage.value, sheetPages.value))
-const sheetSeen = ref<number[]>([1])
-watch(sheetPageSafe, (page) => {
-  if (!sheetSeen.value.includes(page)) sheetSeen.value = [...sheetSeen.value, page]
+const {
+  sheetPages,
+  sheetPageSafe,
+  sheetSeen,
+  rowsOnSheetPage,
+  resetSheetPages,
+  setSheetPage,
+  sheetStatus,
+  rowsForArbitration,
+  flowByKey,
+  outcome,
+  outcomeBars,
+} = useWorkflowSheetStatus({
+  rows,
+  icPhase,
+  icEpoch,
+  getIcHits: () => icHits,
+  limitByKey,
+  abnormalKeys,
+  allowMailedUnfinished,
+  pageSize: SHEET_PAGE_SIZE,
 })
-
-function rowsOnSheetPage(page: number): PctTaskRow[] {
-  const start = (page - 1) * SHEET_PAGE_SIZE
-  return rows.value.slice(start, start + SHEET_PAGE_SIZE)
-}
-
-function resetSheetPages(): void {
-  sheetPage.value = 1
-  sheetSeen.value = [1]
-}
-
-function setSheetPage(page: number): void {
-  sheetPage.value = Math.min(Math.max(1, page), sheetPages.value)
-}
 
 const sheetHost = ref<HTMLElement | null>(null)
 const sheetColWidths = ref<number[]>([])
@@ -669,41 +611,11 @@ watch(() => connection.value.sessionStatus, (next, previous) => {
   resumeHeldCheck()
 })
 
-function volumeKey(value: string): string {
-  return value.replace(/\s/g, '').toUpperCase()
-}
-
-function statusShade(text: string): string {
-  if (text === '还没提交审核') return 'shade-open'
-  if (text === '已经审核通过') return 'shade-done'
-  if (text === MAILED_UNFINISHED_REVIEW) return 'shade-mailed'
-  if (text === SKIP_SEND_REVIEW) return 'shade-skip'
-  if (text === '已提交审核') return 'shade-pending'
-  if (text === '异常') return 'shade-abnormal'
-  if (text === '库里没有' || text === '没查成') return 'shade-missing'
-  return ''
-}
-
-function reviewLabel(gate: 'open' | 'pending' | 'done' | undefined, hit?: { uncontrolled?: true; skipSend?: true }): string {
-  if (hit?.skipSend) return SKIP_SEND_REVIEW
-  if (gate === 'pending') return '已提交审核'
-  if (gate === 'done' && hit?.uncontrolled) return MAILED_UNFINISHED_REVIEW
-  if (gate === 'done') return '已经审核通过'
-  if (gate === 'open') return '还没提交审核'
-  return '—'
-}
+const volumeKey = normalizeWorkflowVolumeKey
+const statusShade = workflowStatusShade
 
 function icKey(volume: string, procLabel: string): string {
   return `${volumeKey(volume)}\n${procLabel.trim()}`
-}
-
-/** 这一行用来对状态的文号：我方文号空着时用客户文号，进国家表里只有客户文号的行也能对上。 */
-function rowVolumeKey(row: PctTaskRow): string {
-  return row.ourVolume.trim() || row.customerVolume
-}
-
-function limitReview(row: PctTaskRow): string {
-  return limitByKey[icKey(rowVolumeKey(row), row.procLabel)] ?? ''
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
@@ -711,55 +623,6 @@ function sheetMemo(row: PctTaskRow): string {
   const status = sheetStatus(row)
   return `${status.found}\n${status.review}\n${row.ourVolume}\n${row.customerVolume}\n${row.ourVolumeCorrected ? 1 : 0}\n${row.customerVolumeCorrected ? 1 : 0}`
 }
-
-function sheetStatus(row: PctTaskRow): { found: string; review: string } {
-  const base = sheetReview(row)
-  if (abnormalKeys.value.has(icKey(rowVolumeKey(row), row.procLabel))) return { found: base.found || '有', review: '异常' }
-  return base
-}
-
-function rowsForArbitration(): PctTaskRow[] {
-  return rows.value.filter(row => reviewNeedsArbitration(sheetStatus(row).review, allowMailedUnfinished.value))
-}
-
-function sheetReview(row: PctTaskRow): { found: string; review: string } {
-  const published = icEpoch.value
-  const fromLimit = limitReview(row)
-  const hit = published >= 0 ? icHits[icKey(rowVolumeKey(row), row.procLabel)] : undefined
-  if (hit) {
-    if (hit.unread) return { found: '没查成', review: '—' }
-    if (hit.statusUnread) return { found: '有', review: '状态没读到' }
-    if (!hit.found) {
-      if (fromLimit && fromLimit !== '…') return { found: '有', review: fromLimit }
-      return { found: '库里没有', review: '—' }
-    }
-    const fromFlow = hit.gate ? reviewLabel(hit.gate, hit) : ''
-    if (fromLimit === '还没提交审核' && fromFlow === '已经审核通过') {
-      return { found: '有', review: fromLimit }
-    }
-    if (fromFlow === '还没提交审核' && (fromLimit === '已提交审核' || fromLimit === '已经审核通过')) {
-      return { found: '有', review: fromLimit }
-    }
-    if (fromFlow) return { found: '有', review: fromFlow }
-    if (fromLimit && fromLimit !== '…') return { found: '有', review: fromLimit }
-    return { found: '有', review: fromLimit === '…' ? '…' : '没有这项处理事项' }
-  }
-  if (fromLimit) return { found: '有', review: fromLimit }
-  if (icPhase.value === 'fail') return { found: '没查成', review: '—' }
-  if (icPhase.value === 'run') return { found: '正在查', review: '…' }
-  if (icPhase.value === 'done') return { found: '库里没有', review: '—' }
-  return { found: '', review: '' }
-}
-
-const flowByKey = computed(() => {
-  const out: Record<string, string> = {}
-  for (const row of rows.value) {
-    const review = sheetStatus(row).review
-    if (!review || review === '—' || review === '…') continue
-    out[icKey(rowVolumeKey(row), row.procLabel)] = review
-  }
-  return out
-})
 
 function flowAsk(our: string, proc: string, customer = '', withRecord = false): FlowAsk | null {
   const ours = our.trim()
