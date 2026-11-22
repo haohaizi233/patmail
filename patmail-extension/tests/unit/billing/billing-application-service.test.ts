@@ -331,6 +331,19 @@ describe('BillingApplicationService Golden Master & Ports', () => {
     })
     expect(unknownOutcome.status).toBe('unknown')
 
+    const unreadableAdapter = createVerifiedChromeDownloadAdapter({
+      download: () => Promise.resolve(45),
+      search: () => Promise.reject(new Error('status unavailable')),
+    })
+    const unreadableOutcome = await unreadableAdapter.download({
+      bytes: new Uint8Array([1]),
+      fileName: 'unreadable.xlsx',
+      mimeType: 'application/octet-stream',
+      blockCount: 1,
+      warnings: [],
+    })
+    expect(unreadableOutcome).toMatchObject({ status: 'unknown', downloadId: 45 })
+
     createObjectURL.mockRestore()
     revokeObjectURL.mockRestore()
     clickSpy.mockRestore()

@@ -29,7 +29,7 @@ export type ExportOutcome =
       warnings: string[]
     }
   | { status: 'download_interrupted'; reason: string }
-  | { status: 'unknown'; reason: string }
+  | { status: 'unknown'; reason: string; downloadId: number }
   | { status: 'failed'; reason: string }
 
 export interface PctExceptionItem {

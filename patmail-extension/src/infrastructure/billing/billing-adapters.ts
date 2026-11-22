@@ -70,12 +70,13 @@ export function createVerifiedChromeDownloadAdapter(verifier: ChromeDownloadsVer
     async download(request: BillingDownloadRequest): Promise<ExportOutcome> {
       const blob = new Blob([request.bytes as BlobPart], { type: request.mimeType })
       const url = URL.createObjectURL(blob)
+      let downloadId: number | undefined
       try {
-        const downloadId = await verifier.download({ url, filename: request.fileName, saveAs: false })
+        downloadId = await verifier.download({ url, filename: request.fileName, saveAs: false })
         const items = await verifier.search({ id: downloadId })
         const item = items[0]
         if (!item) {
-          return { status: 'unknown', reason: '未在浏览器下载记录中查询到刚发起的导出任务。' }
+          return { status: 'unknown', downloadId, reason: '未在浏览器下载记录中查询到刚发起的导出任务。' }
         }
         if (item.state === 'complete') {
           return {
@@ -100,6 +101,9 @@ export function createVerifiedChromeDownloadAdapter(verifier: ChromeDownloadsVer
           warnings: request.warnings,
         }
       } catch (err) {
+        if (downloadId !== undefined) {
+          return { status: 'unknown', downloadId, reason: '浏览器已接收导出任务，暂时无法核对下载结果。' }
+        }
         return {
           status: 'failed',
           reason: err instanceof Error ? err.message : '浏览器下载发起失败',
