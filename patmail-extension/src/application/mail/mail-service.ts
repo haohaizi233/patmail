@@ -1,4 +1,11 @@
-import { sheetRecipientNames, type PctRecipientMode } from '../../customer/pct-recipients'
+import {
+  arbitratedMark as formatArbitratedMark,
+  carriedMark as formatCarriedMark,
+  sheetDisplayName as formatSheetDisplayName,
+  sheetRecipientNames,
+  usesInventorSheet as matchesInventorSheet,
+  type PctRecipientMode,
+} from '../../customer/pct-recipients'
 import { limitMailItems, summarizeLimitMailSubmit } from '../../customer/limit-mail-submit'
 import type { CustomerQueryProfile, PctTaskRow } from '../../customer/types'
 import { groupWorkflowRows } from '../../customer/workflow-mail'
@@ -31,6 +38,22 @@ export function extractTargetVolumes(raw: string, bucket: readonly SelectedPaten
     .filter(Boolean)
   const fromFiles = bucket.map(file => file.customerVolume || file.caseVolume || '').filter(Boolean)
   return [...new Set(typed.length > 0 ? typed : fromFiles)].slice(0, 20)
+}
+
+export function sheetDisplayName(raw: string): string {
+  return formatSheetDisplayName(raw)
+}
+
+export function usesInventorSheet(customerName: string, specials: ReadonlySet<string>): boolean {
+  return matchesInventorSheet(customerName, specials)
+}
+
+export function carriedMark(name: string, carried: boolean | undefined): string {
+  return formatCarriedMark(name, carried)
+}
+
+export function arbitratedMark(name: string, arbitrated: boolean | undefined): string {
+  return formatArbitratedMark(name, arbitrated)
 }
 
 function workflowRowAddresses(

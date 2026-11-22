@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T09:39:14.898Z",
+  "scannedAt": "2026-11-22T09:48:06.291Z",
   "fileCount": 520,
   "summary": {
     "totalEdges": 2281,
-    "runtimeInternalEdges": 1593,
-    "typeOnlyEdges": 557,
+    "runtimeInternalEdges": 1598,
+    "typeOnlyEdges": 558,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -16,9 +16,11 @@
       "sql.js/dist/sql-wasm.wasm?url",
       "vue"
     ],
-    "cycleCount": 0
+    "cycleCount": 0,
+    "unresolvedImportCount": 0
   },
   "cycles": [],
+  "unresolvedImports": [],
   "matrix": {
     "agent": {
       "workflow": 2,
@@ -58,7 +60,7 @@
     "app/components": {
       "agent": 8,
       "app": 17,
-      "customer": 30,
+      "customer": 29,
       "shared": 19,
       "utils": 2,
       "shell": 34,
@@ -66,7 +68,7 @@
       "app/composables": 8,
       "app/docs": 4,
       "api": 20,
-      "billing": 2,
+      "application/billing": 1,
       "query": 14,
       "recovery": 5,
       "settings": 5,
@@ -156,7 +158,8 @@
       "recovery": 2
     },
     "billing": {
-      "mail": 1
+      "mail": 1,
+      "assets": 3
     },
     "browser-download": {
       "utils": 2
@@ -166,7 +169,7 @@
       "query": 1
     },
     "content": {
-      "shared": 3,
+      "shared": 4,
       "hague": 1,
       "customer": 1,
       "utils": 3,
@@ -174,7 +177,8 @@
       "query": 2,
       "automation": 1,
       "settings": 2,
-      "floating": 1
+      "floating": 2,
+      "shell": 1
     },
     "customer": {
       "api": 22,
@@ -195,7 +199,7 @@
       "shell": 15,
       "workflow": 3,
       "app/composables": 4,
-      "mail": 4,
+      "mail": 5,
       "app/components": 4,
       "schema": 4,
       "query": 21,
@@ -2000,7 +2004,7 @@
     },
     {
       "file": "hague/protocol/ast-action-parser.mjs",
-      "layer": "BusinessModule",
+      "layer": "Domain",
       "module": "hague"
     },
     {

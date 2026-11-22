@@ -58,6 +58,7 @@ it('tracks external Vue script blocks and billing infrastructure imports', () =>
       })
       expect(evaluateArchitecture(inventory)).toEqual([
         expect.objectContaining({ rule: 'D-presentation-no-direct-infra', to: 'infrastructure/billing/adapter.ts' }),
+        expect.objectContaining({ rule: 'K-composition-root-registry', to: 'infrastructure/billing/adapter.ts' }),
       ])
     },
   )

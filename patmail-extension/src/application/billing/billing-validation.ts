@@ -3,17 +3,26 @@ import {
   billInfoFromFile,
   isMideaPctCustomer,
   isPctCase,
-  isUnrequestedFee,
+  isUnrequestedFee as checkUnrequestedFee,
   matchedBillDate,
   missingCurrencies,
   pctFeeProblem,
   pctSelectionProblem,
+  sortFeeRows as orderFeeRows,
   type BillInfo,
 } from '../../billing/fee-model'
 import { normalizeCurrency } from '../../billing/pbc-rates'
 import { BILLING_TEMPLATES, formatLocalDate, mideaForeignGroups, type BillingTemplateId } from '../../billing/templates'
 import type { SelectedPatentFile } from '../../mail/types'
 import type { ExportBillingCommand, PctExceptionItem, ReconciliationSummary } from './billing-contracts'
+
+export function isUnrequestedFee(row: FeeSearchRow): boolean {
+  return checkUnrequestedFee(row)
+}
+
+export function sortFeeRows(rows: FeeSearchRow[]): FeeSearchRow[] {
+  return orderFeeRows(rows)
+}
 
 export function buildBillingSyncKey(templateId: BillingTemplateId, activeVolumes: readonly string[]): string {
   return `${templateId}\u0001${[...activeVolumes].sort().join('\n')}`

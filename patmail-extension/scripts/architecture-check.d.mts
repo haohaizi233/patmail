@@ -25,6 +25,13 @@ export interface ArchitectureViolation {
   reason: string
 }
 
+export interface UnresolvedInternalImport {
+  from: string
+  specifier: string
+  kind: ArchitectureEdge['kind']
+  line: number
+}
+
 export interface ProjectInventory {
   scannedAt: string
   srcRoot: string
@@ -36,8 +43,10 @@ export interface ProjectInventory {
     typeOnlyEdges: number
     externalImports: string[]
     cycleCount: number
+    unresolvedImportCount: number
   }
   cycles: string[][]
+  unresolvedImports?: UnresolvedInternalImport[]
   matrix: Record<string, Record<string, number>>
   edges: ArchitectureEdge[]
   runtimeSignals: ArchitectureSignal[]
@@ -57,6 +66,8 @@ export interface ArchitectureReport {
   staleBaselineIds: string[]
   passed: boolean
 }
+
+export const COMPOSITION_ROOTS: ReadonlyMap<string, ReadonlySet<string>>
 
 export function scanProjectDependencies(extensionRoot?: string): ProjectInventory
 export function evaluateArchitecture(inventory: ProjectInventory): ArchitectureViolation[]

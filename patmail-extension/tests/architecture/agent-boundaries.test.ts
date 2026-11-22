@@ -3,12 +3,11 @@ import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/arc
 import { agentToolSchemas } from '../../src/agent/tools'
 
 describe('agent layer boundaries', () => {
-  it('ensures Agent and background/agent.ts go through MailApplicationService with zero direct domain bypasses', () => {
+  it('ensures Agent, background/agent.ts and protected Mail UI go through MailApplicationService with zero direct domain bypasses', () => {
     const inventory = scanProjectDependencies()
-    const agentViolations = evaluateArchitecture(inventory).filter(
-      v => v.rule === 'C-agent-through-application',
-    )
-    expect(agentViolations).toEqual([])
+    const violations = evaluateArchitecture(inventory)
+    expect(violations.filter(v => v.rule === 'C-agent-through-application')).toEqual([])
+    expect(violations.filter(v => v.rule === 'G-mail-ui-through-application')).toEqual([])
   })
 
   it('keeps submit_easy schema aligned with default reviewer business policy', () => {

@@ -7,7 +7,7 @@
  *   - Type-only import / export
  *   - Vite import.meta.glob 与 Chrome Runtime 消息通道依赖
  *
- * 检查六项核心架构规则（支持历史例外棘轮控制，严禁新增违规与新增循环依赖）。
+ * 检查十一项核心架构规则（A-K，支持历史例外棘轮控制，严禁新增违规、未解析内部依赖与新增循环依赖）。
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -33,16 +33,16 @@ const CORE_DOMAIN_FILES = new Set([
   'hague/plan-identity.ts',
   'hague/draft-recovery.ts',
   'hague/action-state.ts',
+  'hague/protocol/ast-action-parser.mjs',
   'workflow/reviewer-resolver.ts',
 ])
 
-const BILLING_FORBIDDEN_IN_PAGE = new Set([
+const BILLING_ENGINE_MODULES = new Set([
   'billing/fee-model.ts',
   'billing/pbc-rates.ts',
   'billing/template-assets.ts',
   'billing/templates.ts',
   'billing/xlsx-engine.ts',
-  'recovery/client.ts',
 ])
 
 const AGENT_FORBIDDEN_BUSINESS_MODULES = new Set([
@@ -53,16 +53,75 @@ const AGENT_FORBIDDEN_BUSINESS_MODULES = new Set([
   'workflow/reviewer-resolver.ts',
 ])
 
-const ZERO_CYCLE_PREFIXES = ['application/', 'domain/', 'agent/tools/', 'billing/']
+const MAIL_UI_PROTECTED_FILES = new Set([
+  'app/pages/TasksPage.vue',
+  'app/components/WorkflowMailEntry.vue',
+  'floating/MailWorkspace.vue',
+])
+
+const MAIL_FORBIDDEN_IN_UI = new Set([
+  'mail/assemble.ts',
+  'mail/planner.ts',
+  'mail/fingerprint.ts',
+  'customer/limit-mail-submit.ts',
+  'customer/workflow-mail.ts',
+  'customer/pct-recipients.ts',
+  'workflow/reviewer-resolver.ts',
+])
+
+const ZERO_CYCLE_PREFIXES = ['application/', 'domain/', 'agent/tools/', 'billing/', 'hague/protocol/']
 const ZERO_CYCLE_FILES = new Set(['hague/gateway.ts', 'background/message-registry.ts'])
 
-const HAGUE_PRODUCTION_RUNNERS = new Set([
+const HAGUE_PRODUCTION_MODULES = new Set([
+  'hague/http-driver.ts',
+  'hague/http-context.ts',
   'hague/draft-runner.ts',
   'hague/draft-batch.ts',
+  'hague/draft-page.ts',
   'hague/plan-identity.ts',
   'hague/draft-recovery.ts',
   'hague/gateway.ts',
+  'hague/action-state.ts',
 ])
+
+const HAGUE_FORBIDDEN_DIAGNOSTICS = new Set([
+  'hague/diagnostics/reports.ts',
+  'hague/diagnostics/replay.ts',
+  'hague/diagnostics/fixtures.ts',
+  'hague/diagnostics/export.ts',
+])
+
+export const COMPOSITION_ROOTS = new Map([
+  ['app/composables/useBillingWorkflow.ts', new Set(['infrastructure/billing/billing-adapters.ts'])],
+  ['background/agent.ts', new Set(['infrastructure/mail/easy-mail-gateway-adapter.ts'])],
+])
+
+function loadTsconfigPathAliases(extensionRoot) {
+  const tsconfigPath = join(extensionRoot, 'tsconfig.json')
+  if (!existsSync(tsconfigPath)) return []
+  try {
+    const parsed = JSON.parse(readFileSync(tsconfigPath, 'utf8'))
+    const paths = parsed?.compilerOptions?.paths
+    const baseUrl = parsed?.compilerOptions?.baseUrl
+      ? resolve(extensionRoot, parsed.compilerOptions.baseUrl)
+      : extensionRoot
+    if (!paths || typeof paths !== 'object') return []
+    const rules = []
+    for (const [pattern, targets] of Object.entries(paths)) {
+      if (!Array.isArray(targets) || !targets.length) continue
+      const starIndex = pattern.indexOf('*')
+      rules.push({
+        prefix: starIndex >= 0 ? pattern.slice(0, starIndex) : pattern,
+        suffix: starIndex >= 0 ? pattern.slice(starIndex + 1) : '',
+        wildcard: starIndex >= 0,
+        targets: targets.map(target => ({ baseUrl, target })),
+      })
+    }
+    return rules
+  } catch {
+    return []
+  }
+}
 
 function walkSourceFiles(dir, out = []) {
   if (!existsSync(dir)) return out
@@ -78,16 +137,20 @@ function walkSourceFiles(dir, out = []) {
   return out
 }
 
-function resolveRelativeTarget(fromFile, specifier, srcRoot) {
-  if (!specifier.startsWith('.')) return null
-  const base = resolve(dirname(fromFile), specifier)
+function stripViteImportSuffix(specifier) {
+  return specifier.replace(/\?(?:raw|url|inline|worker)(?:&.*)?$/, '').split('#')[0]
+}
+
+function resolveCandidateFile(base, srcRoot) {
   const candidates = [
     base,
     `${base}.ts`,
+    `${base}.mts`,
     `${base}.js`,
     `${base}.mjs`,
     `${base}.vue`,
     join(base, 'index.ts'),
+    join(base, 'index.mts'),
     join(base, 'index.js'),
     join(base, 'index.mjs'),
   ]
@@ -99,6 +162,33 @@ function resolveRelativeTarget(fromFile, specifier, srcRoot) {
     }
   }
   return null
+}
+
+function resolveImportTarget(fromFile, specifier, srcRoot, tsAliases = []) {
+  const clean = stripViteImportSuffix(specifier)
+  if (clean.startsWith('.')) {
+    return { internalSpecifier: true, target: resolveCandidateFile(resolve(dirname(fromFile), clean), srcRoot) }
+  }
+  for (const rule of tsAliases) {
+    if (rule.wildcard) {
+      if (!clean.startsWith(rule.prefix) || !clean.endsWith(rule.suffix)) continue
+      const matched = clean.slice(rule.prefix.length, clean.length - rule.suffix.length)
+      for (const entry of rule.targets) {
+        const replaced = entry.target.includes('*') ? entry.target.replace('*', matched) : entry.target
+        const resolved = resolveCandidateFile(resolve(entry.baseUrl, replaced), srcRoot)
+        if (resolved) return { internalSpecifier: true, target: resolved }
+      }
+      return { internalSpecifier: true, target: null }
+    }
+    if (clean === rule.prefix) {
+      for (const entry of rule.targets) {
+        const resolved = resolveCandidateFile(resolve(entry.baseUrl, entry.target), srcRoot)
+        if (resolved) return { internalSpecifier: true, target: resolved }
+      }
+      return { internalSpecifier: true, target: null }
+    }
+  }
+  return { internalSpecifier: false, target: null }
 }
 
 function topModule(file) {
@@ -152,22 +242,26 @@ function detectLayer(file) {
   return 'BusinessModule'
 }
 
-function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals) {
+function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals, unresolvedImports, tsAliases) {
   const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const from = relative(srcRoot, file).replaceAll('\\', '/')
   const literal = ts.isStringLiteralLike
 
   const addEdge = (specifier, kind, isTypeOnly, node) => {
-    const to = resolveRelativeTarget(file, specifier, srcRoot)
+    const { internalSpecifier, target } = resolveImportTarget(file, specifier, srcRoot, tsAliases)
     const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
+    const resolvedLine = line + 1 + lineOffset
+    if (internalSpecifier && !target) {
+      unresolvedImports.push({ from, specifier, kind, line: resolvedLine })
+    }
     edges.push({
       from,
-      to,
+      to: target,
       specifier,
       kind,
       isTypeOnly,
-      line: line + 1 + lineOffset,
-      external: !specifier.startsWith('.'),
+      line: resolvedLine,
+      external: !internalSpecifier,
     })
   }
 
@@ -296,11 +390,13 @@ function findRuntimeCycles(nodes, runtimeEdges) {
 
 export function scanProjectDependencies(extensionRoot = scriptRoot) {
   const srcRoot = join(extensionRoot, 'src')
+  const tsAliases = loadTsconfigPathAliases(extensionRoot)
   const files = walkSourceFiles(srcRoot).sort()
   const relFiles = files.map(f => relative(srcRoot, f).replaceAll('\\', '/'))
 
   const edges = []
   const runtimeSignals = []
+  const unresolvedImports = []
 
   for (const file of files) {
     const source = readFileSync(file, 'utf8')
@@ -310,21 +406,26 @@ export function scanProjectDependencies(extensionRoot = scriptRoot) {
         if (!block) continue
         const lineOffset = block.loc.start.line - 1
         if (block.src) {
+          const from = relative(srcRoot, file).replaceAll('\\', '/')
+          const { internalSpecifier, target } = resolveImportTarget(file, block.src, srcRoot, tsAliases)
+          if (internalSpecifier && !target) {
+            unresolvedImports.push({ from, specifier: block.src, kind: 'sfc-script', line: lineOffset + 1 })
+          }
           edges.push({
-            from: relative(srcRoot, file).replaceAll('\\', '/'),
-            to: resolveRelativeTarget(file, block.src, srcRoot),
+            from,
+            to: target,
             specifier: block.src,
             kind: 'sfc-script',
             isTypeOnly: false,
             line: lineOffset + 1,
-            external: !block.src.startsWith('.'),
+            external: !internalSpecifier,
           })
           continue
         }
-        scanScriptAst(file, srcRoot, block.content, lineOffset, edges, runtimeSignals)
+        scanScriptAst(file, srcRoot, block.content, lineOffset, edges, runtimeSignals, unresolvedImports, tsAliases)
       }
     } else {
-      scanScriptAst(file, srcRoot, source, 0, edges, runtimeSignals)
+      scanScriptAst(file, srcRoot, source, 0, edges, runtimeSignals, unresolvedImports, tsAliases)
     }
   }
 
@@ -351,25 +452,66 @@ export function scanProjectDependencies(extensionRoot = scriptRoot) {
       typeOnlyEdges: edges.filter(edge => edge.isTypeOnly).length,
       externalImports: [...new Set(edges.filter(edge => edge.external).map(edge => edge.specifier))].sort(),
       cycleCount: cycles.length,
+      unresolvedImportCount: unresolvedImports.length,
     },
     cycles,
+    unresolvedImports,
     matrix,
     edges,
     runtimeSignals,
   }
 }
 
+function buildBarrelReexportMap(internalRuntime) {
+  const map = new Map()
+  for (const edge of internalRuntime) {
+    if (edge.kind !== 're-export') continue
+    if (!map.has(edge.from)) map.set(edge.from, new Set())
+    map.get(edge.from).add(edge.to)
+  }
+  return map
+}
+
+function expandTransitiveTargets(directTarget, barrelReexports) {
+  const expanded = new Set([directTarget])
+  const queue = [directTarget]
+  while (queue.length > 0) {
+    const current = queue.shift()
+    for (const next of barrelReexports.get(current) ?? []) {
+      if (expanded.has(next)) continue
+      expanded.add(next)
+      queue.push(next)
+    }
+  }
+  return expanded
+}
+
+function isProtectedMailUiFile(file) {
+  return MAIL_UI_PROTECTED_FILES.has(file) || /^(?:app\/pages|floating)\/.*Mail.*\.vue$/.test(file)
+}
+
+function isBillingPageFile(file) {
+  return file === 'app/pages/BillingWorkflowPage.vue' || /^app\/pages\/.*Billing.*\.vue$/.test(file)
+}
+
+function isHagueProductionModule(file) {
+  return HAGUE_PRODUCTION_MODULES.has(file) || file.startsWith('hague/protocol/')
+}
+
 export function evaluateArchitecture(inventory) {
   const violations = []
   const runtimeEdges = inventory.edges.filter(edge => !edge.isTypeOnly)
   const internalRuntime = runtimeEdges.filter(edge => edge.to && !edge.to.startsWith('..'))
+  const barrelReexports = buildBarrelReexportMap(internalRuntime)
+  const targetsOf = edge => expandTransitiveTargets(edge.to, barrelReexports)
+  const pushViolation = item => violations.push(item)
 
   // Rule A: Domain Purity
   for (const edge of runtimeEdges) {
     const isDomain = edge.from.startsWith('domain/') || CORE_DOMAIN_FILES.has(edge.from)
     if (!isDomain) continue
     if (edge.specifier === 'vue' || edge.specifier.startsWith('vue/')) {
-      violations.push({
+      pushViolation({
         id: `domain-vue:${edge.from}->${edge.specifier}`,
         rule: 'A-domain-purity',
         severity: 'error',
@@ -379,23 +521,26 @@ export function evaluateArchitecture(inventory) {
         reason: 'Domain 模块不得直接导入 Vue',
       })
     }
-    if (edge.to && /^(app|floating|popup|shell|background|content)\//.test(edge.to)) {
-      violations.push({
-        id: `domain-layer:${edge.from}->${edge.to}`,
-        rule: 'A-domain-purity',
-        severity: 'error',
-        from: edge.from,
-        to: edge.to,
-        line: edge.line,
-        reason: 'Domain 模块不得直接依赖 Presentation / Background / Content 运行时层',
-      })
+    if (!edge.to || edge.to.startsWith('..')) continue
+    for (const target of targetsOf(edge)) {
+      if (/^(app|floating|popup|shell|background|content)\//.test(target)) {
+        pushViolation({
+          id: `domain-layer:${edge.from}->${target}`,
+          rule: 'A-domain-purity',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: 'Domain 模块不得直接依赖 Presentation / Background / Content 运行时层',
+        })
+      }
     }
   }
   for (const signal of inventory.runtimeSignals) {
     const isDomain = signal.from.startsWith('domain/') || CORE_DOMAIN_FILES.has(signal.from)
     if (!isDomain) continue
     if (signal.type === 'chrome-api' || signal.type === 'dom-api') {
-      violations.push({
+      pushViolation({
         id: `domain-runtime-api:${signal.from}:${signal.detail}`,
         rule: 'A-domain-purity',
         severity: 'error',
@@ -410,16 +555,18 @@ export function evaluateArchitecture(inventory) {
   // Rule B: Application -> Presentation
   for (const edge of internalRuntime) {
     if (!edge.from.startsWith('application/')) continue
-    if (edge.to.endsWith('.vue') || /^(app|floating|popup|shell)\//.test(edge.to)) {
-      violations.push({
-        id: `app-to-ui:${edge.from}->${edge.to}`,
-        rule: 'B-application-no-ui',
-        severity: 'error',
-        from: edge.from,
-        to: edge.to,
-        line: edge.line,
-        reason: 'Application 服务不得依赖 Vue 组件或 Presentation 界面模块',
-      })
+    for (const target of targetsOf(edge)) {
+      if (target.endsWith('.vue') || /^(app|floating|popup|shell)\//.test(target)) {
+        pushViolation({
+          id: `app-to-ui:${edge.from}->${target}`,
+          rule: 'B-application-no-ui',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: 'Application 服务不得依赖 Vue 组件或 Presentation 界面模块',
+        })
+      }
     }
   }
 
@@ -427,33 +574,66 @@ export function evaluateArchitecture(inventory) {
   for (const edge of internalRuntime) {
     const isAgent = edge.from.startsWith('agent/') || edge.from === 'background/agent.ts'
     if (!isAgent) continue
-    if (AGENT_FORBIDDEN_BUSINESS_MODULES.has(edge.to)) {
-      violations.push({
-        id: `agent-domain-bypass:${edge.from}->${edge.to}`,
-        rule: 'C-agent-through-application',
-        severity: 'ratchet',
-        from: edge.from,
-        to: edge.to,
-        line: edge.line,
-        reason: 'Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现',
-      })
+    for (const target of targetsOf(edge)) {
+      if (AGENT_FORBIDDEN_BUSINESS_MODULES.has(target)) {
+        pushViolation({
+          id: `agent-domain-bypass:${edge.from}->${target}`,
+          rule: 'C-agent-through-application',
+          severity: 'ratchet',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: 'Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现',
+        })
+      }
     }
   }
 
-  // Rule D: Presentation -> Direct Billing Execution Infrastructure
+  // Rule D: Presentation -> Direct Billing Execution Infrastructure (Generalized)
   for (const edge of internalRuntime) {
-    if (edge.from !== 'app/pages/BillingWorkflowPage.vue') continue
-    if (BILLING_FORBIDDEN_IN_PAGE.has(edge.to) || edge.to.startsWith('infrastructure/')) {
-      violations.push({
-        id: `billing-page-direct:${edge.from}->${edge.to}`,
-        rule: 'D-presentation-no-direct-infra',
-        severity: 'ratchet',
-        from: edge.from,
-        to: edge.to,
-        line: edge.line,
-        reason:
-          'BillingWorkflowPage.vue 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖 Excel/汇率/恢复基础设施',
-      })
+    const isPresentationUi =
+      edge.from.startsWith('app/pages/') ||
+      edge.from.startsWith('app/components/') ||
+      edge.from.startsWith('floating/') ||
+      edge.from.startsWith('popup/') ||
+      edge.from.startsWith('shell/')
+    const isNonRootComposable = edge.from.startsWith('app/composables/') && !COMPOSITION_ROOTS.has(edge.from)
+    if (!isPresentationUi && !isNonRootComposable) continue
+
+    const checksBillingEngines =
+      edge.from.startsWith('app/pages/') ||
+      edge.from.startsWith('app/components/') ||
+      edge.from.startsWith('floating/') ||
+      isNonRootComposable
+    const checksBillingRecovery = isBillingPageFile(edge.from)
+
+    for (const target of targetsOf(edge)) {
+      if (target.startsWith('infrastructure/')) {
+        pushViolation({
+          id: `presentation-direct-infra:${edge.from}->${target}`,
+          rule: 'D-presentation-no-direct-infra',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason:
+            'Presentation 界面与非组合根 Composable 不得直接依赖 infrastructure 适配器，请通过组合根与 Application 层交互',
+        })
+      } else if (
+        (checksBillingEngines && BILLING_ENGINE_MODULES.has(target)) ||
+        (checksBillingRecovery && target === 'recovery/client.ts')
+      ) {
+        pushViolation({
+          id: `billing-page-direct:${edge.from}->${target}`,
+          rule: 'D-presentation-no-direct-infra',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason:
+            '页面与普通 Composable 应通过 useBillingWorkflow 调用 BillingApplicationService，不得直接依赖请款引擎或基础设施',
+        })
+      }
     }
   }
 
@@ -463,7 +643,7 @@ export function evaluateArchitecture(inventory) {
       file => ZERO_CYCLE_PREFIXES.some(prefix => file.startsWith(prefix)) || ZERO_CYCLE_FILES.has(file),
     )
     if (touchesStrictScope) {
-      violations.push({
+      pushViolation({
         id: `cycle:${cycle.join('<->')}`,
         rule: 'E-no-cycles',
         severity: 'error',
@@ -475,39 +655,139 @@ export function evaluateArchitecture(inventory) {
     }
   }
 
-  // Rule F: Cross-Runtime Isolation (MV3 + Hague Diagnostics AST)
+  // Rule F: Cross-Runtime Isolation (MV3 Service Worker / Content Script)
   for (const edge of internalRuntime) {
-    if (edge.from.startsWith('background/') && (edge.to.startsWith('content/') || edge.to.endsWith('.vue'))) {
-      violations.push({
-        id: `bg-to-dom:${edge.from}->${edge.to}`,
-        rule: 'F-runtime-isolation',
+    for (const target of targetsOf(edge)) {
+      if (edge.from.startsWith('background/') && (target.startsWith('content/') || target.endsWith('.vue'))) {
+        pushViolation({
+          id: `bg-to-dom:${edge.from}->${target}`,
+          rule: 'F-runtime-isolation',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: 'Service Worker (background/) 不得导入 Content Script 或 Vue 组件',
+        })
+      }
+      if (edge.from.startsWith('content/') && target.startsWith('background/')) {
+        pushViolation({
+          id: `content-to-bg:${edge.from}->${target}`,
+          rule: 'F-runtime-isolation',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: 'Content Script 不得直接导入 Service Worker 运行时模块，必须通过消息协议通信',
+        })
+      }
+    }
+  }
+
+  // Rule G: Protected Mail UI -> MailApplicationService Facade Enforcement
+  for (const edge of internalRuntime) {
+    if (!isProtectedMailUiFile(edge.from)) continue
+    for (const target of targetsOf(edge)) {
+      if (MAIL_FORBIDDEN_IN_UI.has(target)) {
+        pushViolation({
+          id: `mail-ui-bypass:${edge.from}->${target}`,
+          rule: 'G-mail-ui-through-application',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: '受治发文 UI 应通过 MailApplicationService 调用发文/收件人/审核人逻辑，不得直接耦合领域模块',
+        })
+      }
+    }
+  }
+
+  // Rule H: Application Layer Free of MV3 Transport, Infrastructure and UI Signals
+  for (const edge of internalRuntime) {
+    if (!edge.from.startsWith('application/')) continue
+    for (const target of targetsOf(edge)) {
+      if (
+        target === 'shared/message.ts' ||
+        target === 'shared/guards.ts' ||
+        /^(?:infrastructure|background|content)\//.test(target)
+      ) {
+        pushViolation({
+          id: `application-transport-leak:${edge.from}->${target}`,
+          rule: 'H-application-no-transport-leak',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: 'Application 层只能依赖领域与 Ports 抽象，不得耦合 Chrome 消息总线或基础设施实现',
+        })
+      }
+    }
+  }
+  for (const signal of inventory.runtimeSignals) {
+    if (!signal.from.startsWith('application/')) continue
+    if (signal.type === 'chrome-api' || signal.type === 'message-type') {
+      pushViolation({
+        id: `application-runtime-signal:${signal.from}:${signal.detail}`,
+        rule: 'H-application-no-transport-leak',
         severity: 'error',
-        from: edge.from,
-        to: edge.to,
-        line: edge.line,
-        reason: 'Service Worker (background/) 不得导入 Content Script 或 Vue 组件',
+        from: signal.from,
+        to: signal.detail,
+        line: signal.line,
+        reason: `Application 层不得直接访问扩展传输或浏览器 API（${signal.detail}）`,
       })
     }
-    if (edge.from.startsWith('content/') && edge.to.startsWith('background/')) {
-      violations.push({
-        id: `content-to-bg:${edge.from}->${edge.to}`,
-        rule: 'F-runtime-isolation',
-        severity: 'error',
-        from: edge.from,
-        to: edge.to,
-        line: edge.line,
-        reason: 'Content Script 不得直接导入 Service Worker 运行时模块，必须通过消息协议通信',
-      })
+  }
+
+  // Rule I: Hague Production & Protocol Kernel vs Diagnostics / Research Boundary
+  for (const edge of internalRuntime) {
+    if (!isHagueProductionModule(edge.from)) continue
+    for (const target of targetsOf(edge)) {
+      const hitsForbiddenDiag =
+        target.startsWith('hague/diagnostics/ast/') ||
+        HAGUE_FORBIDDEN_DIAGNOSTICS.has(target) ||
+        target.startsWith('hague/research/')
+      const protocolImportsAnyDiag = edge.from.startsWith('hague/protocol/') && target.startsWith('hague/diagnostics/')
+      if (hitsForbiddenDiag || protocolImportsAnyDiag) {
+        pushViolation({
+          id: `hague-diag-leak:${edge.from}->${target}`,
+          rule: 'I-hague-protocol-vs-diagnostics',
+          severity: 'error',
+          from: edge.from,
+          to: target,
+          line: edge.line,
+          reason: '海牙生产驱动与纯协议内核不得依赖旁路 AST/回放/研究诊断模块',
+        })
+      }
     }
-    if (HAGUE_PRODUCTION_RUNNERS.has(edge.from) && edge.to.startsWith('hague/diagnostics/ast/')) {
-      violations.push({
-        id: `hague-runner-to-ast:${edge.from}->${edge.to}`,
-        rule: 'F-runtime-isolation',
+  }
+
+  // Rule J: Zero Unresolved Internal / Relative Imports
+  for (const unresolved of inventory.unresolvedImports ?? []) {
+    pushViolation({
+      id: `unresolved-import:${unresolved.from}:${unresolved.line}:${unresolved.specifier}`,
+      rule: 'J-no-unresolved-internal-imports',
+      severity: 'error',
+      from: unresolved.from,
+      to: unresolved.specifier,
+      line: unresolved.line,
+      reason: `存在无法解析的内部/相对导入目标：${unresolved.specifier}`,
+    })
+  }
+
+  // Rule K: Composition Root Registry for Infrastructure Imports
+  for (const edge of internalRuntime) {
+    if (edge.from.startsWith('infrastructure/')) continue
+    const allowedTargets = COMPOSITION_ROOTS.get(edge.from)
+    for (const target of targetsOf(edge)) {
+      if (!target.startsWith('infrastructure/')) continue
+      if (allowedTargets?.has(target)) continue
+      pushViolation({
+        id: `unregistered-infra-importer:${edge.from}->${target}`,
+        rule: 'K-composition-root-registry',
         severity: 'error',
         from: edge.from,
-        to: edge.to,
+        to: target,
         line: edge.line,
-        reason: '海牙生产流程编排层不得直接依赖 AST 诊断分析器',
+        reason: '仅已登记的 Composition Root 可直接装配 infrastructure 适配器',
       })
     }
   }
@@ -528,6 +808,7 @@ export function checkArchitecture({ writeBaseline = false, writeDocs = false, ex
       fileCount: inventory.fileCount,
       summary: inventory.summary,
       cycles: inventory.cycles,
+      unresolvedImports: inventory.unresolvedImports,
       matrix: inventory.matrix,
       files: inventory.files,
       violations,
