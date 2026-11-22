@@ -1,18 +1,27 @@
-import { sheetRecipientNames } from '../../customer/pct-recipients'
+import { sheetRecipientNames, type PctRecipientMode } from '../../customer/pct-recipients'
 import { limitMailItems, summarizeLimitMailSubmit } from '../../customer/limit-mail-submit'
-import type { PctTaskRow } from '../../customer/types'
+import type { CustomerQueryProfile, PctTaskRow } from '../../customer/types'
 import { groupWorkflowRows } from '../../customer/workflow-mail'
-import { fillFromRules } from '../../mail/assemble'
-import type { SelectedPatentFile } from '../../mail/types'
+import { assembleMail, fillFromRules, type AssembledMail } from '../../mail/assemble'
+import { appendRecipientField } from '../../mail/easy/contracts'
+import { selectionFingerprint } from '../../mail/fingerprint'
+import { planDrafts } from '../../mail/planner'
+import type { MailDraftPreview, SelectedPatentFile } from '../../mail/types'
 import { isQueryGuid } from '../../query/query-validator'
 import { isRecord } from '../../shared/guards'
 import { isMessage, MessageType } from '../../shared/message'
 import { resolveReviewer } from '../../workflow/reviewer-resolver'
 import type { WorkflowNode } from '../../workflow/types'
 import type {
+  ApplyRulesToDraftCommand,
+  ApplyRulesToDraftResult,
   CheckReviewersCommand,
   DraftMailCommand,
   DraftMailResult,
+  PlanSelectionDraftsCommand,
+  PreviewAssembledMailCommand,
+  PreviewWorkflowRowsCommand,
+  PreviewWorkflowRowsResult,
   SubmitLimitMailCommand,
   SubmitLimitMailOutcome,
 } from './mail-contracts'
@@ -32,7 +41,149 @@ export function extractTargetVolumes(raw: string, bucket: readonly SelectedPaten
   return [...new Set(typed.length > 0 ? typed : fromFiles)].slice(0, 20)
 }
 
+function workflowRowAddresses(
+  group: readonly PctTaskRow[],
+  field: 'to' | 'cc',
+  specials: ReadonlySet<string>,
+  recipientMode: PctRecipientMode,
+): string {
+  return [
+    ...new Set(
+      group
+        .map(row => {
+          const resolved = sheetRecipientNames(row, specials, recipientMode)
+          return (field === 'to' ? row.mailTo || resolved.to : row.mailCc || resolved.cc).trim()
+        })
+        .filter(Boolean),
+    ),
+  ].join(';')
+}
+
+function workflowCustomerProfile(customers: readonly CustomerQueryProfile[], name: string): CustomerQueryProfile {
+  const saved = customers.find(item => item.enabled !== false && item.name.trim() === name.trim())
+  if (saved) return saved
+  const now = new Date().toISOString()
+  return {
+    id: 'sheet',
+    name: name.trim() || '表格里的客户',
+    baseTemplateId: 'sheet',
+    overrides: {},
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
 export class MailApplicationService {
+  /** 纯预览：根据客户规则与签名模板填充草稿字段（含孤立 PCT 行预设收件人），不产生写操作。 */
+  applyRulesToDraft(command: ApplyRulesToDraftCommand): ApplyRulesToDraftResult {
+    const filled = fillFromRules(
+      command.customer,
+      command.files,
+      command.rules,
+      command.operatorId,
+      command.signatureText,
+    )
+    const sole = command.customer.pctTask?.rows.length === 1 ? command.customer.pctTask.rows[0] : null
+    const keptTo = sole?.mailTo || (command.customer.pctTask?.rows.length === 1 ? command.customer.pctTask.mailTo : '')
+    const keptCc = sole?.mailCc || (command.customer.pctTask?.rows.length === 1 ? command.customer.pctTask.mailCc : '')
+    return {
+      ...filled,
+      to: keptTo ? appendRecipientField(keptTo, filled.to) : filled.to,
+      cc: keptCc ? appendRecipientField(keptCc, filled.cc) : filled.cc,
+    }
+  }
+
+  /** 纯预览：组装一封待核对的邮件预览，审核人统一取配置中的默认审核人。 */
+  previewAssembledMail(command: PreviewAssembledMailCommand): AssembledMail {
+    return assembleMail({
+      customer: command.customer,
+      mailTypeId: command.mailTypeId,
+      mailTypeName: command.mailTypeName,
+      files: command.files,
+      reviewer: command.reviewer !== undefined ? command.reviewer : (command.rules?.defaultReviewer ?? null),
+      sender: command.sender ?? null,
+      to: command.to,
+      cc: command.cc,
+      subject: command.subject,
+      body: command.body,
+    })
+  }
+
+  /** 纯预览：按显式工作流批次策略逐件组装 PCT 工作流预览卡片，与 Agent/UI 共用填表、收件人与默认审核人规则。 */
+  previewWorkflowRows(command: PreviewWorkflowRowsCommand): PreviewWorkflowRowsResult {
+    const batchPolicy = command.batchPolicy ?? 'per_row'
+    const unmatched = command.rows.filter(row => !row.mailTypeId)
+    const missing: string[] = []
+    if (!command.rows.length) missing.push('先传入表格。')
+    if (unmatched.length) missing.push('还有行没有对上发文类型，请在表格里点选。')
+    if (!command.sender) missing.push('还没有发件人，请选一个。')
+    if (missing.length || !command.sender) {
+      return { ok: false, status: missing.join(''), batchPolicy, items: [] }
+    }
+
+    const sender = command.sender
+    const reviewer = command.rules?.defaultReviewer ?? null
+    const items = command.rows.map(row => {
+      const group = [row]
+      const files: SelectedPatentFile[] = group.map(entry => ({
+        fileId: entry.ourVolume,
+        fileName: entry.ourVolume,
+        fileDescription: entry.procLabel,
+        customerName: entry.customerName,
+        caseVolume: entry.ourVolume,
+        customerVolume: entry.customerVolume,
+      }))
+      const current = workflowCustomerProfile(command.customers, row.customerName)
+      const filled = fillFromRules(current, files, command.rules, command.operatorId, command.signatureText)
+      const to = workflowRowAddresses(group, 'to', command.specials, command.recipientMode)
+      const cc = workflowRowAddresses(group, 'cc', command.specials, command.recipientMode)
+      const mail = assembleMail({
+        customer: current,
+        mailTypeId: row.mailTypeId ?? '',
+        mailTypeName: row.mailTypeLabel ?? '',
+        files,
+        to: to || filled.to,
+        cc: cc || filled.cc,
+        subject: filled.subject,
+        body: filled.body,
+        reviewer,
+        sender,
+      })
+      if ((to || filled.to) && !(to || filled.to).includes('@')) {
+        mail.gaps.push('收件人还是表格里的称呼。')
+      }
+      return { row, mail }
+    })
+
+    return { ok: true, status: '', batchPolicy, items }
+  }
+
+  /** 纯预览：按选定文件快照与规则版本号计算指纹并生成本地发文批次草稿。 */
+  planSelectionDrafts(command: PlanSelectionDraftsCommand): MailDraftPreview[] {
+    const files = command.files.map(file => ({
+      ...file,
+      ...(file.customerBinding ? { customerBinding: { ...file.customerBinding } } : {}),
+    }))
+    const fingerprint =
+      command.snapshot?.fingerprint ??
+      selectionFingerprint({
+        files,
+        revision: command.rules.revision,
+        userId: command.operatorId,
+        origin: command.origin,
+      })
+    const snapshot = command.snapshot ?? {
+      selectedAt: command.selectedAt ?? new Date().toISOString(),
+      files,
+      configVersion: command.rules.revision,
+      userId: command.operatorId,
+      origin: command.origin,
+      fingerprint,
+    }
+    return planDrafts(snapshot, command.rules, command.customers, command.operatorId)
+  }
+
   draftMail(command: DraftMailCommand): DraftMailResult {
     const bucket = command.files
     if (bucket.length === 0) {

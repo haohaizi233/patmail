@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T08:39:25.001Z",
+  "scannedAt": "2026-11-22T09:30:14.595Z",
   "fileCount": 516,
   "summary": {
-    "totalEdges": 2268,
-    "runtimeInternalEdges": 1586,
-    "typeOnlyEdges": 551,
+    "totalEdges": 2273,
+    "runtimeInternalEdges": 1589,
+    "typeOnlyEdges": 553,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -62,7 +62,7 @@
       "shared": 19,
       "utils": 2,
       "shell": 34,
-      "mail": 16,
+      "mail": 15,
       "app/composables": 8,
       "app/docs": 4,
       "api": 20,
@@ -74,7 +74,8 @@
       "floating": 2,
       "browser-download": 1,
       "workflow": 4,
-      "hague": 5
+      "hague": 5,
+      "application/mail": 1
     },
     "app/composables": {
       "application/billing": 2,
@@ -111,7 +112,8 @@
       "app/services": 1,
       "app/assets": 1,
       "jihua": 5,
-      "mail": 7
+      "mail": 5,
+      "application/mail": 1
     },
     "app/services": {
       "shared": 2,
@@ -123,7 +125,7 @@
     },
     "application/mail": {
       "customer": 3,
-      "mail": 1,
+      "mail": 4,
       "query": 1,
       "shared": 2,
       "workflow": 1
@@ -199,6 +201,7 @@
       "query": 21,
       "customer": 1,
       "app": 2,
+      "application/mail": 1,
       "storage": 1
     },
     "hague": {

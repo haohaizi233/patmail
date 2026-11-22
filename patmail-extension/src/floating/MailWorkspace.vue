@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { MailApplicationService } from '../application/mail/mail-service'
 import type { CustomerQueryProfile } from '../customer/types'
-import { planDrafts, selectionFingerprint, upsertMapping, type MailDraftPreview, type MailRuleBundle, type SelectedPatentFile, MailRuleRepository, emptyMailRules } from '../mail'
+import { upsertMapping, type MailDraftPreview, type MailRuleBundle, type SelectedPatentFile, MailRuleRepository, emptyMailRules } from '../mail'
 import type { MailExecutionState } from '../mail/easy/types'
 import AutomationPanel from './AutomationPanel.vue'
 import ControlledExecutionPanel from './ControlledExecutionPanel.vue'
@@ -125,18 +126,17 @@ async function importRules(): Promise<void> {
   })
   if (bundle.value.subject) message.value = message.value || '已导入当前账号的发文配置。'
 }
+const mailService = new MailApplicationService()
+
 function preview(): void {
   if (!bundle.value) return
-  const files = props.files.map(file => ({ ...file, ...(file.customerBinding ? { customerBinding: { ...file.customerBinding } } : {}) }))
-  const fingerprint = selectionFingerprint({ files, revision: bundle.value.revision, userId: owner.value, origin: accountOrigin.value })
-  drafts.value = planDrafts({
-    selectedAt: new Date().toISOString(),
-    files,
-    configVersion: bundle.value.revision,
-    userId: owner.value,
-    origin: accountOrigin.value,
-    fingerprint
-  }, bundle.value, customers.value, owner.value)
+  drafts.value = mailService.planSelectionDrafts({
+    files: props.files,
+    rules: bundle.value,
+    customers: customers.value,
+    operatorId: owner.value,
+    origin: accountOrigin.value
+  })
 }
 
 watch(() => [props.userId, accountOrigin.value], () => {

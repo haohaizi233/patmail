@@ -229,4 +229,170 @@ describe('MailApplicationService', () => {
     })
     expect(loaded).toBe(false)
   })
+
+  it('shares domain filling, recipient merging, and defaultReviewer rules across UI and Agent previews', () => {
+    const baseRules = makeRules()
+    const rulesWithRecipient: MailRuleBundle = {
+      ...baseRules,
+      policies: [
+        {
+          customerProfileId: 'cust-1',
+          sendMode: 'merge_by_customer_description',
+          enabled: true,
+          version: 1,
+          updatedAt: '2026-11-22T00:00:00Z',
+        },
+      ],
+      mappings: [
+        {
+          id: 'map-1',
+          fileDescriptionText: '受理通知书',
+          mailTypeId: VALID_MAIL_TYPE_GUID,
+          mailTypeName: '新申请受理',
+          enabled: true,
+          version: 1,
+          updatedAt: '2026-11-22T00:00:00Z',
+        },
+      ],
+      recipients: [
+        {
+          id: 'rec-1',
+          customerProfileId: 'cust-1',
+          name: '默认收件人',
+          to: ['client@example.com'],
+          cc: ['cc@example.com'],
+          enabled: true,
+          isDefault: true,
+          version: 1,
+          updatedAt: '2026-11-22T00:00:00Z',
+        },
+      ],
+    }
+    const customer = makeCustomer({
+      pctTask: {
+        workflowId: 'pct-reminder',
+        ctrlProcId: 'ctrl-1',
+        confirmedProcIds: [],
+        createdAt: '2026-11-22T00:00:00Z',
+        rows: [
+          {
+            ourVolume: 'PA2511001PCT',
+            customerVolume: 'CL-001',
+            customerName: '测试科技有限公司',
+            contactName: '张三',
+            iprName: '李四',
+            procLabel: '受理通知书',
+            mailTypeLabel: '新申请受理',
+            mailTypeId: VALID_MAIL_TYPE_GUID,
+            mailTo: 'override@example.com',
+          },
+        ],
+      },
+    })
+    const file = {
+      fileId: '33333333-3333-4333-8333-333333333331',
+      fileName: '受理通知书.pdf',
+      fileDescription: '受理通知书',
+      customerName: '测试科技有限公司',
+      caseVolume: 'PA2511001PCT',
+    }
+
+    const agentDraft = service.draftMail({
+      operatorId: VALID_OPERATOR_GUID,
+      files: [file],
+      customerName: '测试科技有限公司',
+      account: { customers: [customer], rules: rulesWithRecipient },
+    })
+    const uiDraft = service.applyRulesToDraft({
+      customer,
+      files: [file],
+      rules: rulesWithRecipient,
+      operatorId: VALID_OPERATOR_GUID,
+      signatureText: '顺颂商祺',
+    })
+
+    expect(agentDraft.ok).toBe(true)
+    if (agentDraft.ok) {
+      expect(uiDraft.subject).toBe(agentDraft.subject)
+    }
+    expect(uiDraft.to).toContain('override@example.com')
+    expect(uiDraft.to).toContain('client@example.com')
+    expect(uiDraft.body).toContain('顺颂商祺')
+
+    const assembled = service.previewAssembledMail({
+      customer,
+      mailTypeId: uiDraft.mailTypeId,
+      mailTypeName: uiDraft.mailTypeName,
+      files: [file],
+      to: uiDraft.to,
+      cc: uiDraft.cc,
+      subject: uiDraft.subject,
+      body: uiDraft.body,
+      rules: rulesWithRecipient,
+      sender: { mailsetId: 'ms-1', label: '主发件箱' },
+    })
+    expect(assembled.reviewerId).toBe(VALID_REVIEWER_GUID)
+    expect(assembled.reviewerName).toBe('默认审核人甲')
+    expect(assembled.gaps).toEqual([])
+
+    const wfMissingSender = service.previewWorkflowRows({
+      rows: customer.pctTask!.rows,
+      customers: [customer],
+      rules: rulesWithRecipient,
+      operatorId: VALID_OPERATOR_GUID,
+      signatureText: '顺颂商祺',
+      specials: new Set<string>(),
+      recipientMode: 'ipr',
+      sender: null,
+    })
+    expect(wfMissingSender.ok).toBe(false)
+    expect(wfMissingSender.status).toContain('还没有发件人')
+
+    const wfNameOnly = service.previewWorkflowRows({
+      rows: [{ ...customer.pctTask!.rows[0], mailTo: '' }],
+      customers: [customer],
+      rules: { ...rulesWithRecipient, recipients: [] },
+      operatorId: VALID_OPERATOR_GUID,
+      signatureText: '顺颂商祺',
+      specials: new Set<string>(),
+      recipientMode: 'ipr',
+      sender: { mailsetId: 'ms-1', label: '主发件箱' },
+    })
+    expect(wfNameOnly.ok).toBe(true)
+    expect(wfNameOnly.batchPolicy).toBe('per_row')
+    expect(wfNameOnly.items[0]?.mail.reviewerId).toBe(VALID_REVIEWER_GUID)
+    expect(wfNameOnly.items[0]?.mail.gaps).toContain('收件人还是表格里的称呼。')
+
+    const blockedDraft = service.planSelectionDrafts({
+      files: [{ ...file, customerProfileId: 'cust-1' }],
+      rules: rulesWithRecipient,
+      customers: [customer],
+      operatorId: VALID_OPERATOR_GUID,
+      origin: 'https://easy.example.test',
+    })
+    expect(blockedDraft).toHaveLength(1)
+    expect(blockedDraft[0]?.status).toBe('blocked')
+
+    const planned = service.planSelectionDrafts({
+      files: [
+        {
+          ...file,
+          customerProfileId: 'cust-1',
+          customerBinding: {
+            confirmed: true,
+            profileId: 'cust-1',
+            profileName: '测试科技有限公司',
+            sourceCustomerName: '测试科技有限公司',
+            source: 'explicit',
+          },
+        },
+      ],
+      rules: rulesWithRecipient,
+      customers: [customer],
+      operatorId: VALID_OPERATOR_GUID,
+      origin: 'https://easy.example.test',
+    })
+    expect(planned).toHaveLength(1)
+    expect(planned[0]?.mailTypeId).toBe(VALID_MAIL_TYPE_GUID)
+  })
 })

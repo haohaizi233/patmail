@@ -1,5 +1,7 @@
-import type { CustomerQueryProfile } from '../../customer/types'
-import type { MailRuleBundle, SelectedPatentFile } from '../../mail/types'
+import type { CustomerQueryProfile, PctTaskRow } from '../../customer/types'
+import type { PctRecipientMode } from '../../customer/pct-recipients'
+import type { AssembledMail, RuleFill } from '../../mail/assemble'
+import type { MailRuleBundle, SelectedPatentFile, SelectionSnapshot } from '../../mail/types'
 import type { ContentRequest } from '../../shared/message'
 
 export type MailForwardPort = (message: ContentRequest) => Promise<unknown>
@@ -36,6 +38,66 @@ export type DraftMailResult =
       ok: false
       message: string
     }
+
+export interface ApplyRulesToDraftCommand {
+  customer: CustomerQueryProfile
+  files: SelectedPatentFile[]
+  rules: MailRuleBundle | null
+  operatorId: string
+  signatureText?: string
+}
+
+export type ApplyRulesToDraftResult = RuleFill
+
+export interface PreviewAssembledMailCommand {
+  customer: CustomerQueryProfile | null
+  mailTypeId: string
+  mailTypeName: string
+  files: SelectedPatentFile[]
+  to: string
+  cc: string
+  subject: string
+  body: string
+  rules?: MailRuleBundle | null
+  reviewer?: { userId: string; name: string } | null
+  sender?: { mailsetId: string; label: string } | null
+}
+
+export type WorkflowBatchPolicy = 'per_row'
+
+export interface PreviewWorkflowRowsCommand {
+  rows: PctTaskRow[]
+  customers: CustomerQueryProfile[]
+  rules: MailRuleBundle | null
+  operatorId: string
+  signatureText: string
+  specials: ReadonlySet<string>
+  recipientMode: PctRecipientMode
+  sender: { mailsetId: string; label: string } | null
+  batchPolicy?: WorkflowBatchPolicy
+}
+
+export interface PreviewWorkflowRowItem {
+  row: PctTaskRow
+  mail: AssembledMail
+}
+
+export interface PreviewWorkflowRowsResult {
+  ok: boolean
+  status: string
+  batchPolicy: WorkflowBatchPolicy
+  items: PreviewWorkflowRowItem[]
+}
+
+export interface PlanSelectionDraftsCommand {
+  files: SelectedPatentFile[]
+  rules: MailRuleBundle
+  customers: CustomerQueryProfile[]
+  operatorId: string
+  origin: string
+  selectedAt?: string
+  snapshot?: SelectionSnapshot
+}
 
 export interface CheckReviewersCommand {
   operatorId: string

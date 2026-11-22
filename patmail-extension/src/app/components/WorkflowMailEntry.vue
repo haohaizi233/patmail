@@ -13,13 +13,13 @@ import { MAILED_UNFINISHED_REVIEW, SKIP_SEND_REVIEW, reviewNeedsArbitration, typ
 import { paintTaskCheckProgress, resetTaskCheckProgress, sessionInterrupted } from '../check-progress'
 import { needsRecipientArbitration, applyArbitrationReply, arbitrationAllowed, checkedSourceSheets, iprArbitrationWaves, isPctWorkbookSheet, missedSourceSheets, pctRowsFromWorkbook, shouldAutoArbitrate, type ArbitrationDecision } from '../../customer/pct-workbook'
 import { applyPctMailTypes, buildPctTask, clonePctTask, matchSheetCtrlProcs, PCT_WORKFLOW_TASK_KEY, procGapNotes, readWorkflowTask, recarryCustomerContacts, summarizePctTask, volumesOf, writeWorkflowTask } from '../../customer/pct-sheet'
+import { MailApplicationService } from '../../application/mail/mail-service'
 import type { CustomerQueryProfile, PctTaskRow } from '../../customer/types'
-import { arbitratedMark, carriedMark, sheetDisplayName, sheetRecipientNames, usesInventorSheet } from '../../customer/pct-recipients'
+import { arbitratedMark, carriedMark, sheetDisplayName, usesInventorSheet } from '../../customer/pct-recipients'
 import { inventorCustomerNames, isRunnableWorkflow, recipientModeOf } from '../../workflow/catalog'
 import { downloadXlsxSheets, readXlsxSheets } from '../../customer/xlsx-table'
-import { assembleMail, fillFromRules } from '../../mail'
 import type { AssembledMail } from '../../mail/assemble'
-import type { MailRuleBundle, SelectedPatentFile } from '../../mail/types'
+import type { MailRuleBundle } from '../../mail/types'
 import { joinCaseVolumes } from '../../customer/volume-list'
 import type { LimitMonitorRow } from '../../api/limit-monitor-types'
 import { isQueryGuid } from '../../query/query-validator'
@@ -408,17 +408,6 @@ function setRowType(volume: string, id: string): void {
   const name = props.mailTypes.find(item => item.id === id)?.name ?? ''
   rows.value = rows.value.map(row => row.ourVolume === volume ? { ...row, mailTypeId: id, mailTypeLabel: name } : row)
   buildPreview()
-}
-
-function filesOf(group: PctTaskRow[]): SelectedPatentFile[] {
-  return group.map(row => ({
-    fileId: row.ourVolume,
-    fileName: row.ourVolume,
-    fileDescription: row.procLabel,
-    customerName: row.customerName,
-    caseVolume: row.ourVolume,
-    customerVolume: row.customerVolume
-  }))
 }
 
 function shownTo(row: PctTaskRow): string {
@@ -1207,12 +1196,7 @@ function onLimitResult(payload: { items: LimitMonitorRow[]; gates: Record<string
   limitPhase.value = failed ? 'fail' : 'done'
 }
 
-function addresses(group: PctTaskRow[], field: 'to' | 'cc'): string {
-  return [...new Set(group.map(row => {
-    if (field === 'to') return (row.mailTo || sheetRecipientNames(row, specials.value, recipientMode.value).to).trim()
-    return (row.mailCc || sheetRecipientNames(row, specials.value, recipientMode.value).cc).trim()
-  }).filter(Boolean))].join(';')
-}
+const mailService = new MailApplicationService()
 
 function people(group: PctTaskRow[], field: 'to' | 'cc'): string {
   const names = [...new Set(group.map(row => (field === 'to' ? shownTo(row) : shownCc(row))).filter(name => name && name !== '表格里没有'))]
@@ -1221,74 +1205,33 @@ function people(group: PctTaskRow[], field: 'to' | 'cc'): string {
   return `${names.slice(0, 3).join('、')} 等 ${names.length} 人`
 }
 
-function profileFor(name: string): CustomerQueryProfile {
-  const saved = props.customers.find(item => item.enabled !== false && item.name.trim() === name.trim())
-  if (saved) return saved
-  const now = new Date().toISOString()
-  return {
-    id: 'sheet',
-    name: name.trim() || '表格里的客户',
-    baseTemplateId: 'sheet',
-    overrides: {},
-    enabled: true,
-    createdAt: now,
-    updatedAt: now
-  }
-}
-
-function reviewerOf(): { userId: string; name: string } | null {
-  return props.rules?.defaultReviewer ?? null
-}
-
 function buildPreview(): void {
-  const missing: string[] = []
-  if (!rows.value.length) missing.push('先传入表格。')
-  if (unmatched.value.length) missing.push('还有行没有对上发文类型，请在表格里点选。')
-  if (!resolvedSender.value) missing.push('还没有发件人，请选一个。')
-  if (missing.length || !resolvedSender.value) {
+  const previewResult = mailService.previewWorkflowRows({
+    rows: rows.value,
+    customers: props.customers,
+    rules: props.rules,
+    operatorId: props.operatorId,
+    signatureText: props.signatureText,
+    specials: specials.value,
+    recipientMode: recipientMode.value,
+    sender: resolvedSender.value,
+    batchPolicy: 'per_row'
+  })
+  if (!previewResult.ok || !resolvedSender.value) {
     previews.value = []
     cards.value = []
-    status.value = missing.join('')
+    status.value = previewResult.status
     return
   }
   const sender = resolvedSender.value
-  const reviewer = reviewerOf()
-  // 提交是一件一封，预览也按一行一封生成，不再按同客户合并。
-  const groups = rows.value.map(row => [row])
-  const built = groups.map(group => {
-    const row = group[0] ?? group[0]
-    const typeId = row?.mailTypeId ?? ''
-    const typeName = row?.mailTypeLabel ?? ''
-    const current = profileFor(row?.customerName ?? '')
-    const filled = fillFromRules(current, filesOf(group), props.rules, props.operatorId, props.signatureText)
-    const to = addresses(group, 'to')
-    const cc = addresses(group, 'cc')
-    const mail = assembleMail({
-      customer: current,
-      mailTypeId: typeId,
-      mailTypeName: typeName,
-      files: filesOf(group),
-      to: to || filled.to,
-      cc: cc || filled.cc,
-      subject: filled.subject,
-      body: filled.body,
-      reviewer,
-      sender
-    })
-    if ((to || filled.to) && !(to || filled.to).includes('@')) mail.gaps.push('收件人还是表格里的称呼。')
-    return {
-      mail,
-      card: {
-        count: group.length,
-        to: people(group, 'to'),
-        cc: people(group, 'cc'),
-        sender: sender.label,
-        gaps: mail.gaps
-      }
-    }
-  })
-  previews.value = built.map(item => item.mail)
-  cards.value = built.map(item => item.card)
+  previews.value = previewResult.items.map(item => item.mail)
+  cards.value = previewResult.items.map(item => ({
+    count: 1,
+    to: people([item.row], 'to'),
+    cc: people([item.row], 'cc'),
+    sender: sender.label,
+    gaps: item.mail.gaps
+  }))
   status.value = ''
 }
 

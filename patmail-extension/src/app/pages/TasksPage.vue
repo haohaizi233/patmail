@@ -10,12 +10,11 @@ import { fetchMailSenders } from '../../customer/mailset-load'
 import type { MailSender } from '../../customer/mailset'
 import { summarizePctTask } from '../../customer/pct-sheet'
 import type { CustomerQueryProfile } from '../../customer/types'
-import { assembleMail, fillFromRules } from '../../mail'
-import { appendRecipientField } from '../../mail/easy/contracts'
+import { MailApplicationService } from '../../application/mail/mail-service'
+import type { AssembledMail } from '../../mail/assemble'
 import type { MailSignatureItem } from '../../mail/easy/signature-read'
 import { fetchMailboxSignature } from '../../mail/signature-load'
 import { defaultSignatureChoice, signatureChoices } from '../../mail/signature-catalog'
-import type { AssembledMail } from '../../mail/assemble'
 import type { SelectedPatentFile } from '../../mail/types'
 import { describeItemRecord, describeTaskRecord } from '../record-status'
 import { MessageType, type MessageBridge } from '../../shared/message'
@@ -170,18 +169,23 @@ function toggleFile(file: PatentFile): void {
   preview.value = null
 }
 
+const mailService = new MailApplicationService()
+
 function applyRules(): void {
   const current = customer.value
   if (!current) {
     fillNotes.value = ['先选择客户，再带入这个客户的规则。']
     return
   }
-  const filled = fillFromRules(current, picked.value, rules.value, connection.value.operatorId, selectedSignatureText())
-  const sole = current.pctTask?.rows.length === 1 ? current.pctTask.rows[0] : null
-  const keptTo = sole?.mailTo || (current.pctTask?.rows.length === 1 ? current.pctTask.mailTo : '')
-  const keptCc = sole?.mailCc || (current.pctTask?.rows.length === 1 ? current.pctTask.mailCc : '')
-  draftTo.value = keptTo ? appendRecipientField(keptTo, filled.to) : filled.to
-  draftCc.value = keptCc ? appendRecipientField(keptCc, filled.cc) : filled.cc
+  const filled = mailService.applyRulesToDraft({
+    customer: current,
+    files: picked.value,
+    rules: rules.value,
+    operatorId: connection.value.operatorId,
+    signatureText: selectedSignatureText()
+  })
+  draftTo.value = filled.to
+  draftCc.value = filled.cc
   draftSubject.value = filled.subject
   draftBody.value = filled.body
   if (filled.mailTypeId && mailTypes.value.some(item => item.id === filled.mailTypeId)) mailTypeId.value = filled.mailTypeId
@@ -190,7 +194,7 @@ function applyRules(): void {
 }
 
 function buildPreview(): void {
-  preview.value = assembleMail({
+  preview.value = mailService.previewAssembledMail({
     customer: customer.value,
     mailTypeId: mailTypeId.value,
     mailTypeName: mailTypeName.value,
