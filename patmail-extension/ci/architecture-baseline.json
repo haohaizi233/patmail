@@ -1,14 +1,8 @@
 {
   "meta": {
-    "generatedAt": "2026-11-22T07:44:06.125Z",
+    "generatedAt": "2026-11-22T07:51:41.322Z",
     "note": "架构重构棘轮基线：只允许随着迁移减少直至归零，严禁新增任何违规或循环依赖。"
   },
   "cycleCount": 0,
-  "ratchetViolationIds": [
-    "agent-domain-bypass:background/agent.ts->customer/limit-mail-submit.ts",
-    "agent-domain-bypass:background/agent.ts->customer/pct-recipients.ts",
-    "agent-domain-bypass:background/agent.ts->customer/workflow-mail.ts",
-    "agent-domain-bypass:background/agent.ts->mail/assemble.ts",
-    "agent-domain-bypass:background/agent.ts->workflow/reviewer-resolver.ts"
-  ]
+  "ratchetViolationIds": []
 }

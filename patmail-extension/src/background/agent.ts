@@ -6,15 +6,9 @@ import { compactAgentMemory, runAgentTurn } from '../agent/loop'
 import { AGENT_DEADLINE_KEEP, AGENT_FILE_KEEP, createAgentSession, loadMemory, openAgentSession, readAgentSessions, removeAgentSession, renameAgentSession, saveMemory, visibleHistory, type AgentMemoryState, type AgentSessionInfo } from '../agent/memory'
 import { helpText, resolveSlash } from '../agent/slash'
 import { formatDraft, type DeadlineRow, type ToolContext } from '../agent/tools'
-import { limitMailItems, summarizeLimitMailSubmit } from '../customer/limit-mail-submit'
+import { extractTargetVolumes, MailApplicationService } from '../application/mail/mail-service'
 import { isWriteSwitchOpen } from '../settings/write-switch'
-import { fillFromRules } from '../mail/assemble'
-import { groupWorkflowRows } from '../customer/workflow-mail'
-import { sheetRecipientNames } from '../customer/pct-recipients'
-import type { PctTaskRow } from '../customer/types'
 import { workflowPreview } from '../workflow/preview-chart'
-import { resolveReviewer } from '../workflow/reviewer-resolver'
-import type { WorkflowNode } from '../workflow/types'
 import { MAIL_FLOW_TYPE } from '../workflow/contracts'
 import { isQueryGuid } from '../query/query-validator'
 import { isConfirmedOperator } from '../automation/operator'
@@ -326,40 +320,26 @@ async function previewWorkflow(name: string): Promise<string> {
   return `工作流预览「${flow.label}」\n${body || flow.summary}`
 }
 
+const mailService = new MailApplicationService()
+
 async function draftMail(host: WorkspaceHost, bucket: SelectedPatentFile[], customerName: string): Promise<string> {
   if (bucket.length === 0) return '先查案件，这一轮还没有文件可以起草。'
   const session = signedIn(host)
   if ('error' in session) return session.error
   const account = await loadAccount(host.area, session.origin, session.operatorId)
-  const named = customerName.trim()
-  const usable = named ? bucket.filter(file => file.customerName.includes(named)) : bucket
-  const files = usable.length > 0 ? usable : bucket
-  const label = named || files[0]?.customerName || ''
-  const customer = account.customers.find(item => item.name === label || (label && item.name.includes(label)))
-  if (!customer) return `插件里没有对上客户「${label || '未命名'}」。`
-  const filled = fillFromRules(customer, files, account.rules, session.operatorId)
-  const rows: PctTaskRow[] = files.map(file => ({
-    ourVolume: file.caseVolume ?? '',
-    customerVolume: file.customerVolume ?? '',
-    customerName: file.customerName || customer.name,
-    contactName: '',
-    iprName: '',
-    procLabel: '',
-    mailTypeLabel: filled.mailTypeName
-  }))
-  const groups = groupWorkflowRows(customer.limitMailStyle ?? '1', rows)
-  const who = groups.flatMap((group, index) => {
-    const row = group[0]
-    if (!row) return []
-    const names = sheetRecipientNames(row)
-    return [`第 ${index + 1} 封：收件 ${names.to || '未定'}，抄送 ${names.cc || '商务'}`]
-  }).join('\n')
+  const drafted = mailService.draftMail({
+    operatorId: session.operatorId,
+    files: bucket,
+    customerName,
+    account: { customers: account.customers, rules: account.rules }
+  })
+  if (!drafted.ok) return drafted.message
   return formatDraft({
-    letters: groups.length,
-    subject: filled.subject,
-    body: filled.body,
-    notes: filled.notes,
-    who: [`收件：${filled.to || '还没有收件人规则'}`, who].filter(Boolean).join('\n')
+    letters: drafted.letters,
+    subject: drafted.subject,
+    body: drafted.body,
+    notes: drafted.notes,
+    who: drafted.who
   })
 }
 
@@ -386,30 +366,7 @@ async function listHistory(forward: PageForward, surface: string): Promise<strin
 async function listReviewers(host: WorkspaceHost, forward: PageForward): Promise<string> {
   const session = signedIn(host)
   if ('error' in session) return session.error
-  const found = await forward({ type: MessageType.ListFlowReviewers })
-  const error = forwardError(found)
-  if (error) return error
-  if (!isMessage(found) || found.type !== MessageType.ListFlowReviewersResult) return '审核人没有返回。'
-  if (!found.payload.ok) return found.payload.error.message
-  const reviewers = found.payload.data.reviewers
-  const node: WorkflowNode = {
-    listId: 'account',
-    seq: 1,
-    next: '',
-    nodeId: 'account',
-    nodeCode: '',
-    nodeName: '审核',
-    allowSkip: false,
-    userType: '',
-    parallel: false,
-    needAllAudit: false,
-    reviewers,
-    reviewerFormat: reviewers.length > 0 && reviewers.every(item => isQueryGuid(item.id)) ? 'structured' : 'unknown'
-  }
-  const decided = resolveReviewer(session.operatorId, node)
-  const verdict = decided.status === 'matched' ? '当前登录人在名单里。' : decided.reason
-  const names = reviewers.slice(0, 20).map(item => item.name).join('、')
-  return `审核人共 ${reviewers.length} 人。${verdict}这一步没有提交审核。\n${names}`.trim()
+  return mailService.checkReviewers({ operatorId: session.operatorId, forward })
 }
 
 async function listProcesses(forward: PageForward, kind: string, searchKey: string): Promise<string> {
@@ -464,14 +421,8 @@ async function diagnoseMail(forward: PageForward, mailId: string): Promise<strin
   return `邮件核对 ${view.mailId}\n文件：${files || '没有文件'}\n${blockers}\n没有写入。`
 }
 
-function volumeList(raw: string, bucket: SelectedPatentFile[]): string[] {
-  const typed = raw.split(/[\s,，;；]+/).map(item => item.trim()).filter(Boolean)
-  const fromFiles = bucket.map(file => file.customerVolume || file.caseVolume || '').filter(Boolean)
-  return [...new Set(typed.length > 0 ? typed : fromFiles)].slice(0, 20)
-}
-
 async function exportContacts(forward: PageForward, bucket: SelectedPatentFile[], volumes: string): Promise<string> {
-  const list = volumeList(volumes, bucket)
+  const list = extractTargetVolumes(volumes, bucket)
   if (list.length === 0) return '还没有文号可以导出联系人。先查案件，或在原话里给出文号。'
   const found = await forward({ type: MessageType.ExportCaseContacts, payload: { volumes: list } })
   const error = forwardError(found)
@@ -491,55 +442,22 @@ async function submitEasy(
   deadlines: DeadlineRow[],
   caseVolume: string
 ): Promise<string> {
-  if (!isWriteSwitchOpen()) return '写开关已关闭，没有提交到 EASY。'
+  const writeSwitchOpen = isWriteSwitchOpen()
+  if (!writeSwitchOpen) return '写开关已关闭，没有提交到 EASY。'
   const session = signedIn(host)
   if ('error' in session) return session.error
   if (deadlines.length === 0) return '先查期限，这一轮还没有可提交的事项。'
-  const named = volumeList(caseVolume, bucket)
-  const picked = named.length
-    ? deadlines.filter(row => named.some(volume => row.caseVolume.trim().toLowerCase() === volume.trim().toLowerCase()))
-    : deadlines
-  if (picked.length === 0) return '这一轮期限结果里没有这些文号。先按文号查期限。'
   const account = await loadAccount(host.area, session.origin, session.operatorId)
-  const sheets = account.customers.flatMap(profile => profile.pctTask?.rows ?? [])
-  const reviewerId = account.rules?.defaultReviewer?.userId ?? ''
-  if (!isQueryGuid(reviewerId)) return '还没有默认审核人。请到发文映射里设置。'
-  const openIds: string[] = []
-  const held: string[] = []
-  for (const row of picked) {
-    if (!isQueryGuid(row.procId) || !isQueryGuid(row.caseId)) {
-      held.push(row.caseVolume || row.procId)
-      continue
-    }
-    const gate = await forward({ type: MessageType.ReadCaseBusFlow, payload: { caseId: row.caseId, procId: row.procId } })
-    const state = isMessage(gate) && gate.type === MessageType.CaseBusFlowResult && gate.payload.ok ? gate.payload.data.gate : 'pending'
-    if (state === 'open' || state === 'done') openIds.push(row.procId)
-    else held.push(row.caseVolume || row.procId)
-  }
-  if (openIds.length === 0) return `这些事项还在审核里，没有再创建。${held.filter(Boolean).join('、')}`.trim()
-  const lead = picked.every(row => {
-    const sheet = sheets.find(item => item.ourVolume.trim().toLowerCase() === row.caseVolume.trim().toLowerCase())
-    const owner = account.customers.find(profile => profile.pctTask?.rows.some(item => item.ourVolume === sheet?.ourVolume && item.customerName === sheet?.customerName))
-    return owner?.pctTask?.recipientMode === 'lead'
+  const outcome = await mailService.submitLimitMailForReview({
+    operatorId: session.operatorId,
+    writeSwitchOpen,
+    files: bucket,
+    deadlines,
+    caseVolume,
+    account: { customers: account.customers, rules: account.rules },
+    forward
   })
-  const senderId = account.rules?.defaultSender?.mailsetId ?? ''
-  const planned = limitMailItems({
-    reviewerId,
-    procIds: openIds,
-    rows: picked.map(row => ({ procId: row.procId, caseVolume: row.caseVolume, ctrlProc: row.ctrlProc })),
-    sheetRows: sheets,
-    mode: lead ? 'lead' : 'ipr',
-    address: 'auto',
-    ...(isQueryGuid(senderId) ? { senderId } : {})
-  })
-  if (!planned.ok) return planned.message
-  const found = await forward({ type: MessageType.SubmitLimitMail, payload: { userId: session.operatorId, items: planned.items } })
-  const error = forwardError(found)
-  if (error) return error
-  if (!isMessage(found) || found.type !== MessageType.SubmitLimitMailResult) return '提交没有返回。'
-  const summary = summarizeLimitMailSubmit(found.payload.results, found.payload.stopped)
-  if (!summary.startsWith('已提交')) return summary
-  return `已提交到 EASY。${summary}`
+  return outcome.message
 }
 
 async function createTaskFromSearch(

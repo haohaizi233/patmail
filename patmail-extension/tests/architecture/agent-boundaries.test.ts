@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { checkArchitecture } from '../../scripts/architecture-check.mjs'
+import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture-check.mjs'
+import { agentToolSchemas } from '../../src/agent/tools'
 
 describe('agent layer boundaries', () => {
-  it('prevents any new direct domain bypasses from Agent layer', () => {
-    const report = checkArchitecture()
-    const newAgentViolations = report.newRatchetViolations.filter(v => v.rule === 'C-agent-through-application')
-    expect(newAgentViolations).toEqual([])
+  it('ensures Agent and background/agent.ts go through MailApplicationService with zero direct domain bypasses', () => {
+    const inventory = scanProjectDependencies()
+    const agentViolations = evaluateArchitecture(inventory).filter(
+      v => v.rule === 'C-agent-through-application',
+    )
+    expect(agentViolations).toEqual([])
+  })
+
+  it('keeps submit_easy schema aligned with default reviewer business policy', () => {
+    const submitSchema = agentToolSchemas().find(item => item.function.name === 'submit_easy')
+    expect(submitSchema).toBeDefined()
+    expect(submitSchema?.function.description).toContain('默认审核人')
+    expect(submitSchema?.function.description).not.toContain('当前登录人')
   })
 })

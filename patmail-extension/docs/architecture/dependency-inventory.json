@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T07:44:06.123Z",
-  "fileCount": 503,
+  "scannedAt": "2026-11-22T07:51:41.320Z",
+  "fileCount": 514,
   "summary": {
-    "totalEdges": 2195,
-    "runtimeInternalEdges": 1548,
-    "typeOnlyEdges": 518,
+    "totalEdges": 2243,
+    "runtimeInternalEdges": 1577,
+    "typeOnlyEdges": 537,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -23,8 +23,8 @@
     "agent": {
       "workflow": 2,
       "customer": 2,
-      "api": 1,
-      "shared": 1
+      "shared": 4,
+      "api": 1
     },
     "api": {
       "hague": 3,
@@ -121,6 +121,13 @@
     "application/billing": {
       "billing": 3
     },
+    "application/mail": {
+      "customer": 3,
+      "mail": 1,
+      "query": 1,
+      "shared": 2,
+      "workflow": 1
+    },
     "automation": {
       "shared": 1,
       "settings": 3,
@@ -131,14 +138,15 @@
     },
     "background": {
       "automation": 24,
-      "customer": 8,
-      "mail": 4,
+      "customer": 5,
+      "mail": 3,
       "storage": 1,
       "query": 2,
       "api": 4,
       "agent": 10,
+      "application/mail": 1,
       "settings": 4,
-      "workflow": 5,
+      "workflow": 4,
       "shared": 16,
       "browser-download": 5,
       "hague": 7,
@@ -343,6 +351,51 @@
     },
     {
       "file": "agent/tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/case-tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/connection-tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/contracts.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/deadline-tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/documentation-tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/mail-tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/memory-tools.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/registry.ts",
+      "layer": "Agent",
+      "module": "agent"
+    },
+    {
+      "file": "agent/tools/workflow-tools.ts",
       "layer": "Agent",
       "module": "agent"
     },
@@ -1070,6 +1123,16 @@
       "file": "application/billing/ports/spreadsheet-port.ts",
       "layer": "Application",
       "module": "application/billing"
+    },
+    {
+      "file": "application/mail/mail-contracts.ts",
+      "layer": "Application",
+      "module": "application/mail"
+    },
+    {
+      "file": "application/mail/mail-service.ts",
+      "layer": "Application",
+      "module": "application/mail"
     },
     {
       "file": "automation/acceptance-context.ts",
@@ -2787,51 +2850,5 @@
       "module": "workflow"
     }
   ],
-  "violations": [
-    {
-      "id": "agent-domain-bypass:background/agent.ts->customer/limit-mail-submit.ts",
-      "rule": "C-agent-through-application",
-      "severity": "ratchet",
-      "from": "background/agent.ts",
-      "to": "customer/limit-mail-submit.ts",
-      "line": 9,
-      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
-    },
-    {
-      "id": "agent-domain-bypass:background/agent.ts->mail/assemble.ts",
-      "rule": "C-agent-through-application",
-      "severity": "ratchet",
-      "from": "background/agent.ts",
-      "to": "mail/assemble.ts",
-      "line": 11,
-      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
-    },
-    {
-      "id": "agent-domain-bypass:background/agent.ts->customer/workflow-mail.ts",
-      "rule": "C-agent-through-application",
-      "severity": "ratchet",
-      "from": "background/agent.ts",
-      "to": "customer/workflow-mail.ts",
-      "line": 12,
-      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
-    },
-    {
-      "id": "agent-domain-bypass:background/agent.ts->customer/pct-recipients.ts",
-      "rule": "C-agent-through-application",
-      "severity": "ratchet",
-      "from": "background/agent.ts",
-      "to": "customer/pct-recipients.ts",
-      "line": 13,
-      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
-    },
-    {
-      "id": "agent-domain-bypass:background/agent.ts->workflow/reviewer-resolver.ts",
-      "rule": "C-agent-through-application",
-      "severity": "ratchet",
-      "from": "background/agent.ts",
-      "to": "workflow/reviewer-resolver.ts",
-      "line": 16,
-      "reason": "Agent 层应通过 MailApplicationService 调用发文/审核人/邮编规则，不得直接耦合领域实现"
-    }
-  ]
+  "violations": []
 }
