@@ -128,6 +128,7 @@ function detectLayer(file) {
     return 'Domain'
   }
   if (
+    file.startsWith('infrastructure/') ||
     file.startsWith('background/') ||
     file.startsWith('content/') ||
     file.startsWith('api/') ||
@@ -154,6 +155,7 @@ function detectLayer(file) {
 function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals) {
   const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const from = relative(srcRoot, file).replaceAll('\\', '/')
+  const literal = ts.isStringLiteralLike
 
   const addEdge = (specifier, kind, isTypeOnly, node) => {
     const to = resolveRelativeTarget(file, specifier, srcRoot)
@@ -170,28 +172,43 @@ function scanScriptAst(file, srcRoot, code, lineOffset, edges, runtimeSignals) {
   }
 
   function visit(node) {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+    if (ts.isImportDeclaration(node) && literal(node.moduleSpecifier)) {
       const clause = node.importClause
       let isTypeOnly = Boolean(clause?.isTypeOnly)
-      if (!isTypeOnly && clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      if (!isTypeOnly && !clause?.name && clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
         const elems = clause.namedBindings.elements
         if (elems.length > 0 && elems.every(el => el.isTypeOnly)) isTypeOnly = true
       }
       addEdge(node.moduleSpecifier.text, 'static-import', isTypeOnly, node)
-    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      addEdge(node.moduleSpecifier.text, 're-export', Boolean(node.isTypeOnly), node)
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && literal(node.moduleSpecifier)) {
+      const clause = node.exportClause
+      const isTypeOnly =
+        node.isTypeOnly ||
+        Boolean(
+          clause && ts.isNamedExports(clause) && clause.elements.length && clause.elements.every(el => el.isTypeOnly),
+        )
+      addEdge(node.moduleSpecifier.text, 're-export', isTypeOnly, node)
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && literal(node.argument.literal)) {
+      addEdge(node.argument.literal.text, 'import-type', true, node)
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression &&
+      literal(node.moduleReference.expression)
+    ) {
+      addEdge(node.moduleReference.expression.text, 'require', node.isTypeOnly, node)
     } else if (ts.isCallExpression(node)) {
       if (
         node.expression.kind === ts.SyntaxKind.ImportKeyword &&
         node.arguments.length > 0 &&
-        ts.isStringLiteral(node.arguments[0])
+        literal(node.arguments[0])
       ) {
         addEdge(node.arguments[0].text, 'dynamic-import', false, node)
       } else if (
         ts.isIdentifier(node.expression) &&
         node.expression.text === 'require' &&
         node.arguments.length > 0 &&
-        ts.isStringLiteral(node.arguments[0])
+        literal(node.arguments[0])
       ) {
         addEdge(node.arguments[0].text, 'require', false, node)
       } else if (ts.isPropertyAccessExpression(node.expression) && node.expression.getText(sf) === 'import.meta.glob') {
@@ -289,25 +306,22 @@ export function scanProjectDependencies(extensionRoot = scriptRoot) {
     const source = readFileSync(file, 'utf8')
     if (file.endsWith('.vue')) {
       const { descriptor } = parseSfc(source)
-      if (descriptor.script) {
-        scanScriptAst(
-          file,
-          srcRoot,
-          descriptor.script.content,
-          descriptor.script.loc.start.line - 1,
-          edges,
-          runtimeSignals,
-        )
-      }
-      if (descriptor.scriptSetup) {
-        scanScriptAst(
-          file,
-          srcRoot,
-          descriptor.scriptSetup.content,
-          descriptor.scriptSetup.loc.start.line - 1,
-          edges,
-          runtimeSignals,
-        )
+      for (const block of [descriptor.script, descriptor.scriptSetup]) {
+        if (!block) continue
+        const lineOffset = block.loc.start.line - 1
+        if (block.src) {
+          edges.push({
+            from: relative(srcRoot, file).replaceAll('\\', '/'),
+            to: resolveRelativeTarget(file, block.src, srcRoot),
+            specifier: block.src,
+            kind: 'sfc-script',
+            isTypeOnly: false,
+            line: lineOffset + 1,
+            external: !block.src.startsWith('.'),
+          })
+          continue
+        }
+        scanScriptAst(file, srcRoot, block.content, lineOffset, edges, runtimeSignals)
       }
     } else {
       scanScriptAst(file, srcRoot, source, 0, edges, runtimeSignals)
@@ -429,7 +443,7 @@ export function evaluateArchitecture(inventory) {
   // Rule D: Presentation -> Direct Billing Execution Infrastructure
   for (const edge of internalRuntime) {
     if (edge.from !== 'app/pages/BillingWorkflowPage.vue') continue
-    if (BILLING_FORBIDDEN_IN_PAGE.has(edge.to)) {
+    if (BILLING_FORBIDDEN_IN_PAGE.has(edge.to) || edge.to.startsWith('infrastructure/')) {
       violations.push({
         id: `billing-page-direct:${edge.from}->${edge.to}`,
         rule: 'D-presentation-no-direct-infra',
@@ -546,7 +560,8 @@ export function checkArchitecture({ writeBaseline = false, writeDocs = false, ex
   const allowedIds = new Set(baseline.ratchetViolationIds ?? [])
   const newRatchetViolations = violations.filter(v => v.severity === 'ratchet' && !allowedIds.has(v.id))
   const staleBaselineIds = [...allowedIds].filter(id => !violations.some(v => v.id === id))
-  const cycleRegression = inventory.cycles.length > (baseline.cycleCount ?? 0)
+  const baselineCycleCount = baseline.cycleCount ?? 0
+  const cycleRegression = inventory.cycles.length > baselineCycleCount
 
   const report = {
     generatedAt: new Date().toISOString(),
@@ -554,6 +569,8 @@ export function checkArchitecture({ writeBaseline = false, writeDocs = false, ex
     runtimeInternalEdges: inventory.summary.runtimeInternalEdges,
     typeOnlyEdges: inventory.summary.typeOnlyEdges,
     cycleCount: inventory.cycles.length,
+    baselineCycleCount,
+    cycleRegression,
     hardErrors,
     newRatchetViolations,
     remainingRatchetViolations: violations.filter(v => v.severity === 'ratchet'),
@@ -579,6 +596,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     )
   }
   if (!report.passed) {
+    if (report.cycleRegression) {
+      console.error(`✗ 运行时循环依赖超出基线：${report.cycleCount}（基线 ${report.baselineCycleCount}）`)
+    }
     for (const v of [...report.hardErrors, ...report.newRatchetViolations]) {
       console.error(`✗ [${v.rule}] ${v.from}:${v.line} -> ${v.to} (${v.reason})`)
     }

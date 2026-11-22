@@ -2,7 +2,7 @@ export interface ArchitectureEdge {
   from: string
   to: string | null
   specifier: string
-  kind: 'static-import' | 're-export' | 'dynamic-import' | 'require'
+  kind: 'static-import' | 're-export' | 'dynamic-import' | 'require' | 'import-type' | 'sfc-script'
   isTypeOnly: boolean
   line: number
   external: boolean
@@ -49,6 +49,8 @@ export interface ArchitectureReport {
   runtimeInternalEdges: number
   typeOnlyEdges: number
   cycleCount: number
+  baselineCycleCount: number
+  cycleRegression: boolean
   hardErrors: ArchitectureViolation[]
   newRatchetViolations: ArchitectureViolation[]
   remainingRatchetViolations: ArchitectureViolation[]
