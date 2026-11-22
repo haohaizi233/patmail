@@ -16,6 +16,7 @@ from collections import defaultdict
 from html import escape
 from pathlib import Path
 from typing import Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 REPORT_WIDTH = 140
 REPORT_ICON_CANDIDATES = (
@@ -89,6 +90,7 @@ EXCLUDE_FILE_NAMES = {
     "composer.lock",
     "sme-customers.json",
     "file-search-form.snapshot.json",
+    "dependency-inventory.json",
     "code_report.json",
     "code_report.html",
     "count_code.py",
@@ -217,16 +219,21 @@ def normalize_repository_url(remote_url: str) -> str:
             return ""
         host = host_part.split("@", 1)[-1]
         normalized = f"https://{host}/{repository_path}"
-    elif normalized.startswith("ssh://git@"):
-        ssh_target = normalized.removeprefix("ssh://git@")
-        host, separator, repository_path = ssh_target.partition("/")
-        if not separator or not repository_path:
-            return ""
-        normalized = f"https://{host}/{repository_path}"
-    elif not normalized.startswith(("https://", "http://")):
+    try:
+        url = urlsplit(normalized)
+        hostname = url.hostname
+    except ValueError:
         return ""
-
-    return normalized.removesuffix(".git").rstrip("/")
+    if not hostname or not url.path.strip("/"):
+        return ""
+    path = url.path.rstrip("/").removesuffix(".git")
+    if url.scheme == "ssh":
+        host = f"[{hostname}]" if ":" in hostname else hostname
+        return urlunsplit(("https", host, path, "", ""))
+    if url.scheme in {"http", "https"}:
+        host = url.netloc.rsplit("@", 1)[-1]
+        return urlunsplit((url.scheme, host, path, "", ""))
+    return ""
 
 
 def detect_repository_url(root: Path) -> str:
@@ -236,7 +243,8 @@ def detect_repository_url(root: Path) -> str:
             ["git", "config", "--get", "remote.origin.url"],
             cwd=root,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             timeout=2,
         )
@@ -336,6 +344,8 @@ COMMENT_PREFIXES = {
 
 MODULE_BUCKETS = (
     "src/app",
+    "src/application",
+    "src/infrastructure",
     "src/query",
     "src/api",
     "src/customer",
@@ -1157,7 +1167,12 @@ def ensure_report_result(result: dict) -> dict:
     return enriched
 
 
-def scan_project(root: Path, *, analyze_complexity: bool = True) -> dict:
+def scan_project(
+    root: Path,
+    *,
+    analyze_complexity: bool = True,
+    excluded_paths: frozenset[Path] = frozenset(),
+) -> dict:
     total_dirs = 0
     total_files = 0
     code_files = 0
@@ -1192,10 +1207,9 @@ def scan_project(root: Path, *, analyze_complexity: bool = True) -> dict:
 
         for filename in files:
             file_path = current_path / filename
-            total_files += 1
-
-            if should_skip_file(file_path):
+            if should_skip_file(file_path) or file_path.absolute() in excluded_paths:
                 continue
+            total_files += 1
 
             if not is_code_file(file_path):
                 continue
@@ -1900,11 +1914,11 @@ def render_insights(result: dict) -> str:
     largest_file = largest_items[0] if largest_items else None
     largest_total = largest_file["total"] if largest_file else 0
     largest_path = str(largest_file["path"]) if largest_file else "无"
-    largest_risk = str((largest_file or {}).get("risk") or file_risk_level(total_lines=largest_total, is_test=False))
-    if largest_risk == "risk" or largest_total >= PROD_FILE_RISK_LINES:
+    largest_risk = largest_file["risk"] if largest_file else "normal"
+    if largest_risk == "risk":
         largest_message = "存在超大文件，建议评估拆分"
         largest_tone = "risk"
-    elif largest_risk == "watch" or largest_total >= PROD_FILE_WATCH_LINES:
+    elif largest_risk == "watch":
         largest_message = "存在较大文件，建议关注复杂度"
         largest_tone = "watch"
     else:
@@ -2427,8 +2441,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--html",
         nargs="?",
-        const="code_report.html",
-        default="code_report.html",
+        default=None,
         metavar="PATH",
         help="导出 HTML 报告；默认生成项目根目录下的 code_report.html",
     )
@@ -2478,7 +2491,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="生成报告后立即使用默认浏览器打开 HTML",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.gate_prod_max_lines is not None and args.gate_prod_max_lines < 0:
+        parser.error("--gate-prod-max-lines 必须大于或等于 0")
+    if args.gate_test_ratio_min is not None and not 0 <= args.gate_test_ratio_min <= 100:
+        parser.error("--gate-test-ratio-min 必须在 0 到 100 之间")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -2489,14 +2507,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"项目目录不存在或不是目录：{project_root}", file=sys.stderr)
         return 2
 
-    result = scan_project(project_root, analyze_complexity=not args.no_complexity)
+    html_path = (Path(args.html).expanduser() if args.html else project_root / "code_report.html").resolve()
+    json_path = Path(args.json).expanduser().resolve() if args.json else None
+    history_path = Path(args.history).expanduser().resolve() if args.history else None
+    if html_path == json_path or html_path == history_path:
+        print("HTML 输出路径必须与 JSON 输出及历史快照路径不同。", file=sys.stderr)
+        return 2
 
-    if args.history:
-        previous = load_history_report(Path(args.history).expanduser())
-        if previous is None:
-            print(f"无法读取历史报告：{args.history}", file=sys.stderr)
-        else:
+    result = scan_project(
+        project_root,
+        analyze_complexity=not args.no_complexity,
+        excluded_paths=frozenset(path for path in (html_path, json_path, history_path) if path is not None),
+    )
+    if history_path is not None:
+        previous = load_history_report(history_path)
+        try:
+            if previous is None or not isinstance(previous.get("totals"), dict):
+                raise ValueError("无效的历史报告")
             result["history_delta"] = compute_history_delta(result, previous)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            print(f"无法读取历史报告：{history_path}", file=sys.stderr)
+            return 2
 
     prod_max_lines = args.gate_prod_max_lines
     test_ratio_min = args.gate_test_ratio_min
@@ -2513,19 +2544,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print_report(result)
 
-    if args.html:
-        html_path = save_report_html(result, args.html)
+    try:
+        html_path = save_report_html(result, html_path)
         print(f"HTML 报告已生成：{html_path}")
-        if args.open and not open_report_html(html_path):
-            print(f"无法自动打开浏览器，请手动打开：{html_path}", file=sys.stderr)
-            return 1
-    elif args.open:
-        print("未生成 HTML，无法打开浏览器。请指定 --html。", file=sys.stderr)
+        if json_path is not None:
+            json_path = save_report_json(result, json_path)
+            print(f"JSON 报告已生成：{json_path}")
+    except OSError as error:
+        print(f"无法写入报告：{error}", file=sys.stderr)
         return 1
-
-    if args.json:
-        json_path = save_report_json(result, args.json)
-        print(f"JSON 报告已生成：{json_path}")
+    if args.open and not open_report_html(html_path):
+        print(f"无法自动打开浏览器，请手动打开：{html_path}", file=sys.stderr)
+        return 1
 
     gates = result.get("gates") or {}
     if gates.get("enabled") and not gates.get("passed"):
