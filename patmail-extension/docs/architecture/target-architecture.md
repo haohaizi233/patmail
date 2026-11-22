@@ -50,15 +50,22 @@ flowchart TB
 - **`uncertain` 不自动重放写操作**：任何无法确认远端状态的提交保持 `uncertain`，交由只读 `recover` 核对；
 - **`planIdentity` SHA-256 指纹不可绕过**：仅尚未执行的未来步骤允许变更并附警告恢复；当前或已执行步骤变更直接拒绝恢复；
 - **单次重试预算上限**：经 `recoveryAttempts` / `recoveryRetries` 持久化计次，同一失败步骤最多重试一次；
-- **AST 诊断纯旁路约束**：`HagueDiagnosticsPort` 仅使用 `import type { AstAnalysis }`，生产流程（`draft-runner.ts`、`http-driver.ts` 等）严禁运行时引入 `hague/diagnostics/ast/*`。
+- **AST 协议内核与诊断严格边界（Phase 2 更新）**：安全只读 Babel AST JSF 动作解析内核收归 `src/hague/protocol/ast-action-parser.mjs`（+ `.d.mts`）与 `src/hague/protocol/jsf-action-extractor.ts`；`src/hague/diagnostics/ast/analyzer.mjs` 退化为薄兼容性 re-export，`HagueDiagnosticsPort` 仅通过 `import type { AstAnalysis }` 引用分析类型，生产驱动严禁导入 `hague/diagnostics/ast/*`、`diagnostics/{reports,replay,fixtures,export}.ts` 与 `hague/research/*`。
 
-## 三、自动化架构门禁（CI Enforced）
+## 三、自动化架构门禁（CI Enforced，Rules A–K）
 
-由 `patmail-extension/scripts/architecture-check.mjs` 与 `patmail-extension/tests/architecture/` 自动强制执行（见 `ci.yml` 与 `ci:check`）：
+由 `patmail-extension/scripts/architecture-check.mjs`（含 Barrel Re-export 传递展开、Vite 资源后缀剥离、`tsconfig.paths` 解析及 `COMPOSITION_ROOTS` 白名单）与 `patmail-extension/tests/architecture/` 自动强制执行（见 `ci.yml` 与 `ci:check`）：
 
-- **Rule A (`A-domain-purity`)**：Domain 模块零 Vue / Presentation / Background / Content / DOM / Chrome API 运行时依赖；
+- **Rule A (`A-domain-purity`)**：Domain 模块（含 `hague/protocol/ast-action-parser.mjs`）零 Vue / Presentation / Background / Content / DOM / Chrome API 运行时依赖；
 - **Rule B (`B-application-no-ui`)**：`application/*` 严禁依赖 `.vue` 或 Presentation 模块；
-- **Rule C (`C-agent-through-application`)**：`agent/*` 与 `background/agent.ts` 严禁绕过 `MailApplicationService` 直接导入发文/审核人/邮编提交模块；
-- **Rule D (`D-presentation-no-direct-infra`)**：`BillingWorkflowPage.vue` 严禁直接导入 Excel 引擎、汇率客户端或恢复基础设施；
-- **Rule E (`E-no-cycles`)**：核心目标模块间严格保持 0 运行时循环依赖；
-- **Rule F (`F-runtime-isolation`)**：MV3 `background/` 与 `content/`/`*.vue` 双向隔离，且海牙生产编排与 AST 诊断分析器运行时隔离。
+- **Rule C (`C-agent-through-application`)**：`agent/*` 与 `background/agent.ts` 严禁绕过 `MailApplicationService` 直接或经 barrel 导入发文/审核人/邮编提交模块；
+- **Rule D (`D-presentation-no-direct-infra`)**：全部页面、组件、浮层、弹窗、Shell 与非 Composition Root 组合式函数严禁直接导入 `infrastructure/*` 或请款引擎模块（请款页额外禁止 `recovery/client.ts`）；
+- **Rule E (`E-no-cycles`)**：目标严格域（含 `hague/protocol/`）保持 0 运行时循环依赖；
+- **Rule F (`F-runtime-isolation`)**：MV3 `background/` 与 `content/`/`*.vue` 双向严禁运行时互导；
+- **Rule G (`G-mail-ui-through-application`)**：受治发文 UI（`TasksPage.vue`、`WorkflowMailEntry.vue`、`MailWorkspace.vue` 及匹配 `*Mail*.vue` 页面/浮层）必须通过 `MailApplicationService` 交互；
+- **Rule H (`H-application-no-transport-leak`)**：`application/*` 严禁依赖 `shared/message.ts`、`shared/guards.ts`、`infrastructure/*`、`background/*`、`content/*` 或 `chrome.*`/`MessageType.*`；
+- **Rule I (`I-hague-protocol-vs-diagnostics`)**：海牙生产流程严禁引入旁路 `diagnostics/ast/*`、回放/报表/研究模块，`hague/protocol/*` 严禁依赖任何 `diagnostics/*`；
+- **Rule J (`J-no-unresolved-internal-imports`)**：存在任何未解析内部相对/别名导入即阻断；
+- **Rule K (`K-composition-root-registry`)**：仅显式登记于 `COMPOSITION_ROOTS`（`useBillingWorkflow.ts`、`background/agent.ts`）的模块允许直接装配 `infrastructure/*` 适配器。
+
+参见 Phase 2 专题文档：[规则说明](./phase2-architecture-rules.md)、[海牙协议边界](./phase2-hague-protocol-boundaries.md)、[验收与安全披露](./phase2-acceptance.md)。
