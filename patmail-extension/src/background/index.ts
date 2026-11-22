@@ -1,10 +1,7 @@
-import { DOCUMENT_EXPORT_CHANNEL } from '../shared/document-export'
 import { handleDocumentExport } from './document-export'
 import { handleHagueSessionMessage, keepHagueSessionAlive } from './hague-session'
 import { handleHagueDraftMessage } from './hague-draft'
-import { HAGUE_DRAFT_CHANNEL } from '../hague/draft-contract'
-import { HAGUE_HTTP_CHANNEL, handleHagueHttp } from './hague-http'
-import { HAGUE_SESSION_CHANNEL } from '../hague/session-contract'
+import { handleHagueHttp } from './hague-http'
 import { indexedTransactionStore, ExecutionLedger } from '../automation/ledger'
 import { IndexedTaskStore } from '../automation/indexed-store'
 import { IndexedEvidenceStore, MemoryEvidenceStore } from '../automation/evidence-store'
@@ -19,18 +16,17 @@ import { downloadFilesRequestIssue, isMessage, MessageType, type AppMessage, typ
 import { prepareApiDocs } from '../agent/rag-store'
 import { hydrateWriteSwitch, watchWriteSwitch } from '../settings/write-switch'
 import { customerMode, hydrateCustomerMode, preferredModeOrigin, originMatchesMode, watchCustomerMode } from '../settings/customer-mode'
-import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL } from '../shared/download-progress'
 import { LocalStreamDownloads } from './stream-download'
 import { trustedOrigin } from '../api/config'
 import { handleRecoveryMessage } from './recovery'
 import { BrowserStreamDownloads } from './browser-download'
 import { createBrowserDownloadStore } from '../browser-download/store'
-import { BROWSER_FILE_CHANNEL, type BrowserFileReply } from '../browser-download/types'
+import { type BrowserFileReply } from '../browser-download/types'
 import { createNativeDownloadTarget, type NativeFetchEvent } from './native-download-target'
 import { NATIVE_NAVIGATION_CHANNEL } from '../browser-download/native-navigation'
-import { EASY_PAGE_WORLD_CHANNEL } from '../shared/easy-page-world'
 import { handleEasyPageWorld } from './easy-page-world'
-import { handleJihuaMessage, JIHUA_CHANNEL } from './jihua-page-world'
+import { handleJihuaMessage } from './jihua-page-world'
+import { CALL_CHANNEL, createBackgroundMessageRegistry, RESULT_CHANNEL } from './message-registry'
 
 const streamDownloads = new LocalStreamDownloads(chrome.downloads)
 let legacyStreamsUsed = false
@@ -59,9 +55,6 @@ watchWriteSwitch()
 void hydrateWriteSwitch()
 void hydrateCustomerMode()
 void prepareApiDocs()
-
-const CALL_CHANNEL = 'patmail-call'
-const RESULT_CHANNEL = 'patmail-result'
 
 const ownerId = globalThis.crypto.randomUUID()
 const transactions = indexedTransactionStore()
@@ -217,131 +210,55 @@ watchCustomerMode(() => {
 })
 chrome.action.onClicked.addListener(() => { void host.openApp() })
 
-function fromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
-  return typeof sender.url === 'string' && sender.url.startsWith(chrome.runtime.getURL(''))
+function formatInvalidMessage(message: unknown): BackgroundResponse {
+  const type = message && typeof message === 'object' && 'type' in message ? String((message as { type?: unknown }).type) : '未知'
+  const inner = message && typeof message === 'object' && 'payload' in message
+    && (message as { payload?: { action?: unknown; message?: { type?: unknown } } }).payload?.action === 'forward'
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
+    ? String((message as { payload?: { message?: { type?: unknown } } }).payload?.message?.type ?? '')
+    : ''
+  const envelope = isRecord(message) && isRecord(message.payload) ? message.payload : undefined
+  const downloadPayload = type === MessageType.DownloadFiles ? envelope
+    : inner === MessageType.DownloadFiles && isRecord(envelope?.message) ? envelope.message.payload : undefined
+  if (type === MessageType.DownloadFiles || inner === MessageType.DownloadFiles) {
+    const issue = downloadFilesRequestIssue(downloadPayload)
+    if (issue) return { type: MessageType.Error, payload: { message: `下载尚未启动：${issue}` } }
+  }
+  return { type: MessageType.Error, payload: { message: `后台没有接住${inner ? `转发 ${inner}` : type}。请在扩展管理页重新加载后再试。` } }
 }
 
-const WRITES = new Set<string>([
-  MessageType.SaveTask, MessageType.ClaimExecution, MessageType.MarkExecutionPrepared,
-  MessageType.MarkExecutionSent, MessageType.MarkExecutionResponse, MessageType.MarkExecutionVerified,
-  MessageType.CompleteExecution, MessageType.ReleaseExecution, MessageType.MarkExecutionUnknown,
-  MessageType.ArchiveTask
-])
-const READS = new Set<string>([
-  MessageType.ListTasks, MessageType.GetTask, MessageType.ListAcceptance,
-  MessageType.ValidateTaskMetadata, MessageType.RecoverExecution
-])
-
-/** 页面和后台用长连接。查询过程中还会调用 EASY 页面，不能占用一次性消息口。 */
-async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime.MessageSender): Promise<BackgroundResponse> {
-  await connectionReady
-  prepareForwardedSearch(message)
-  if (!isMessage(message)) {
-    const type = message && typeof message === 'object' && 'type' in message ? String((message as { type?: unknown }).type) : '未知'
-    const inner = message && typeof message === 'object' && 'payload' in message
-      && (message as { payload?: { action?: unknown; message?: { type?: unknown } } }).payload?.action === 'forward'
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
-      ? String((message as { payload?: { message?: { type?: unknown } } }).payload?.message?.type ?? '')
-      : ''
-    const envelope = isRecord(message) && isRecord(message.payload) ? message.payload : undefined
-    const downloadPayload = type === MessageType.DownloadFiles ? envelope
-      : inner === MessageType.DownloadFiles && isRecord(envelope?.message) ? envelope.message.payload : undefined
-    if (type === MessageType.DownloadFiles || inner === MessageType.DownloadFiles) {
-      const issue = downloadFilesRequestIssue(downloadPayload)
-      if (issue) return { type: MessageType.Error, payload: { message: `下载尚未启动：${issue}` } }
-    }
-    return { type: MessageType.Error, payload: { message: `后台没有接住${inner ? `转发 ${inner}` : type}。请在扩展管理页重新加载后再试。` } }
-  }
-  if (message.type === MessageType.Ping) {
-    if (connection.context.sessionStatus !== 'authenticated') void warmEasySession()
-    return { type: MessageType.Pong, payload: { ok: true } }
-  }
-  if (message.type === MessageType.AgentChat) {
-    const pageUrl = sender.url ?? sender.tab?.url ?? ''
-    if (!pageUrl.startsWith(chrome.runtime.getURL(''))) {
-      return { type: MessageType.Error, payload: { message: '只有工作台页面可以调用 AI 助手。' } }
-    }
-    return { type: MessageType.AgentChatResult, payload: await handleAgentChat(message.payload, host) }
-  }
-  if (message.type === MessageType.RunReadonlyAcceptance) {
-    return { type: MessageType.Error, payload: { message: '后台没有处理这条消息。' } }
-  }
-  if (message.type === MessageType.Workspace) {
-    try {
-      return await handleWorkspaceMessage(message, host)
-    } catch (error: unknown) {
-      return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '后台没有完成转发。' } }
-    }
-  }
-  /** 打包下载的压缩包由浏览器直接落盘：走 chrome.downloads 才会在下载记录里留下条目，文件名也听插件的。 */
-  if (message.type === MessageType.SaveDownload) {
+const messageRegistry = createBackgroundMessageRegistry({
+  extensionId: chrome.runtime.id,
+  extensionOrigin: chrome.runtime.getURL(''),
+  connectionReady,
+  getConnectionContext: () => connection.context,
+  warmEasySession,
+  recheckBoundSession: () => recheckBoundSession(host),
+  agentChat: payload => handleAgentChat(payload, host),
+  workspace: message => handleWorkspaceMessage(message, host),
+  saveDownload: async payload => {
     const downloads = chrome.downloads
     if (!downloads?.download) {
       return { type: MessageType.Error, payload: { message: '扩展缺「下载」权限：到 chrome://extensions 给 PatMail 点一次「重新加载」后再试。' } }
     }
     try {
-      const options: chrome.downloads.DownloadOptions = message.payload.fileName
-        ? { url: message.payload.url, filename: message.payload.fileName, saveAs: false }
-        : { url: message.payload.url, saveAs: false }
+      const options: chrome.downloads.DownloadOptions = payload.fileName
+        ? { url: payload.url, filename: payload.fileName, saveAs: false }
+        : { url: payload.url, saveAs: false }
       const downloadId = await downloads.download(options)
-      return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: message.payload.fileName, downloadId } }
+      return { type: MessageType.SaveDownloadResult, payload: { ok: true, fileName: payload.fileName, downloadId } }
     } catch (error: unknown) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有接住这次下载。' } }
     }
-  }
-  if (message.type === MessageType.StreamDownload || message.type === MessageType.BrowserStreamDownload) {
-    const tabId = sender.tab?.id
-    if (tabId === undefined || !trustedOrigin(sender.url ?? sender.tab?.url ?? '')) {
-      return { type: MessageType.Error, payload: { message: '只有已连接的EASY来源页可以写入下载流。' } }
-    }
-    try {
-      if (message.payload.action === 'start') {
-        await connectionReady
-        await recheckBoundSession(host)
-        if (connection.context.easyTabId !== tabId || connection.context.sessionStatus !== 'authenticated' || !connection.context.operatorId) {
-          return { type: MessageType.Error, payload: { message: '请先重新确认同一EASY账号，再继续下载。' } }
-        }
-      }
-      if (message.type === MessageType.StreamDownload) legacyStreamsUsed = true
-      const downloads = message.type === MessageType.BrowserStreamDownload ? browserDownloads : streamDownloads
-      return { type: MessageType.StreamDownloadResult, payload: await downloads.command(message.payload, tabId,
-        JSON.stringify([connection.context.easyOrigin, connection.context.operatorId])) }
-    } catch (error) {
-      return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '下载流桥接失败。' } }
-    }
-  }
-  if (message.type === MessageType.DiscardDownload) {
-    await connectionReady
-    const contentOwner = sender.tab?.id === connection.context.easyTabId && trustedOrigin(sender.url ?? '') === connection.context.easyOrigin
-    if ((!fromExtensionPage(sender) && !contentOwner) || connection.context.sessionStatus !== 'authenticated' || !connection.context.operatorId) {
-      return { type: MessageType.Error, payload: { message: '请先连接原任务的EASY账号，再丢弃下载。' } }
-    }
-    const downloads = message.payload.backend === 'browser' ? browserDownloads : streamDownloads
-    await downloads.discardTask(message.payload.taskId, JSON.stringify([connection.context.easyOrigin, connection.context.operatorId]))
-    return { type: MessageType.DiscardDownloadResult, payload: { ok: true } }
-  }
-  if (message.type === MessageType.PauseDownload) {
-    await connectionReady
-    const context = connection.context
-    const contentOwner = sender.tab?.id === context.easyTabId && trustedOrigin(sender.url ?? '') === context.easyOrigin
-    const owner = context.operatorId || context.lastOperatorId
-    if ((!fromExtensionPage(sender) && !contentOwner) || !owner) return { type: MessageType.Error, payload: { message: '下载任务账号范围无法确认。' } }
-    const downloads = message.payload.backend === 'browser' ? browserDownloads : streamDownloads
-    const tabs = await downloads.pauseTask(message.payload.taskId, JSON.stringify([context.easyOrigin, owner]))
-    if (context.easyTabId != null) tabs.push(context.easyTabId)
-    await Promise.all([...new Set(tabs)].map(id => chrome.tabs.sendMessage(id, message).catch(() => {})))
-    return { type: MessageType.PauseDownloadResult, payload: { ok: true } }
-  }
-  /** 浏览器下载进度由内容脚本回读：后台只做一次状态查询，下载再多分钟也不占后台定时器。 */
-  if (message.type === MessageType.DownloadState) {
+  },
+  queryDownloadState: async downloadId => {
     const downloads = chrome.downloads
     if (!downloads?.search) {
       return { type: MessageType.Error, payload: { message: '扩展缺「下载」权限，读不到下载状态。' } }
     }
     try {
-      const items = await downloads.search({ id: message.payload.downloadId })
+      const items = await downloads.search({ id: downloadId })
       const item = items[0]
-      // 任务已经不在下载记录里（被清掉或还没建出来）：明确报错，让调用方按读不到处理，不能假装还在传。
       if (!item) return { type: MessageType.Error, payload: { message: '没有在浏览器下载记录里找到这个任务。' } }
       const receivedBytes = Number.isSafeInteger(item.bytesReceived) && item.bytesReceived >= 0 ? item.bytesReceived : 0
       const totalBytes = Number.isSafeInteger(item.totalBytes) && item.totalBytes > 0 ? item.totalBytes : null
@@ -353,31 +270,41 @@ async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime
     } catch (error: unknown) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有回报下载状态。' } }
     }
-  }
-  let scoped: AppMessage = message
-  const accountScoped = WRITES.has(message.type) || READS.has(message.type)
-  if (accountScoped || fromExtensionPage(sender)) {
-    if (accountScoped) {
-      const gate = await recheckBoundSession(host)
-      if (WRITES.has(message.type) && gate !== 'same') {
-        return { type: MessageType.Error, payload: { message: '会话已变化，请重新读取后再保存。' } }
-      }
-    }
-    const next = scopeExtensionPageMessage(message, connection.context)
-    if ('error' in next) return { type: MessageType.Error, payload: { message: next.error } }
-    scoped = next
-  }
-  const response = await handleAuthorityMessage(scoped, {
+  },
+  notifyTabPause: async (tabId: number, message: AppMessage) => { await chrome.tabs.sendMessage(tabId, message) },
+  streamDownloads,
+  browserDownloads,
+  markLegacyStreamsUsed: () => { legacyStreamsUsed = true },
+  scopeExtensionPageMessage,
+  handleAuthority: (scoped, ctx) => handleAuthorityMessage(scoped, {
     ledger,
     tasks,
     evidence,
     account: {
-      easyOrigin: connection.context.easyOrigin,
-      operatorId: connection.context.operatorId,
-      ...(connection.context.easyTabId == null ? {} : { easyTabId: connection.context.easyTabId, connectionVersion: connection.context.connectionVersion })
+      easyOrigin: ctx.easyOrigin,
+      operatorId: ctx.operatorId,
+      ...(ctx.easyTabId == null ? {} : { easyTabId: ctx.easyTabId, connectionVersion: ctx.connectionVersion })
     }
+  }),
+  handleRecovery: handleRecoveryMessage,
+  handleDocumentExport: (message, sender) => handleDocumentExport(message, sender, documentDownloads),
+  handleHagueHttp,
+  handleHagueDraft: handleHagueDraftMessage,
+  handleHagueSession: handleHagueSessionMessage,
+  handleJihua: handleJihuaMessage,
+  handleEasyPageWorld: (message, sender) => handleEasyPageWorld(message, sender, {
+    extensionId: chrome.runtime.id,
+    allowsOrigin: origin => Boolean(trustedOrigin(origin)) && originMatchesMode(origin),
+    executeScript: injection => chrome.scripting.executeScript(injection)
   })
-  return response ?? { type: MessageType.Error, payload: { message: '后台没有处理这条消息。' } }
+})
+
+/** 页面和后台用长连接。查询过程中还会调用 EASY 页面，不能占用一次性消息口。 */
+async function dispatchExtensionMessage(message: unknown, sender: chrome.runtime.MessageSender): Promise<BackgroundResponse> {
+  await connectionReady
+  prepareForwardedSearch(message)
+  if (!isMessage(message)) return formatInvalidMessage(message)
+  return messageRegistry.dispatchAppMessage(message, sender)
 }
 
 function publish(response: BackgroundResponse, requestId: string | null, sendResponse: (value: BackgroundResponse) => void): void {
@@ -440,40 +367,9 @@ chrome.runtime.onConnect.addListener(port => {
 
 /** MV3 Service Worker 是租约、任务和证据的唯一写入方。 */
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  if (isRecord(message) && (message.channel === BROWSER_FILE_CHANNEL || message.channel === NATIVE_NAVIGATION_CHANNEL)) return
-  if (handleRecoveryMessage(message, sender, sendResponse, connection.context)) return true
-  if (sender.id !== chrome.runtime.id) return
-  if (isRecord(message) && message.channel === DOCUMENT_EXPORT_CHANNEL) {
-    void handleDocumentExport(message, sender, documentDownloads).then(sendResponse)
-    return true
-  }
-  if (isRecord(message) && message.channel === HAGUE_HTTP_CHANNEL) {
-    void handleHagueHttp(message,sender).then(sendResponse,()=>sendResponse({ok:false,error:'海牙接口结果待核对。'}))
-    return true
-  }
-  if (isRecord(message) && message.channel === HAGUE_DRAFT_CHANNEL) {
-    void handleHagueDraftMessage(message, sender).then(sendResponse, () => sendResponse({ ok:false, error:'eHague 草稿操作结果不确定，请检查原站。' }))
-    return true
-  }
-  if (isRecord(message) && message.channel === HAGUE_SESSION_CHANNEL) {
-    void handleHagueSessionMessage(message, sender).then(sendResponse, () => sendResponse({ ok: false, error: 'eHague 登录态验证失败，请重新检测。' }))
-    return true
-  }
-  if (isRecord(message) && message.channel === JIHUA_CHANNEL) {
-    void handleJihuaMessage(message, sender).then(sendResponse, (error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message.slice(0, 500) : '季华页面没有完成操作。' }))
-    return true
-  }
-  if (isRecord(message) && message.channel === EASY_PAGE_WORLD_CHANNEL) {
-    void connectionReady.then(() => handleEasyPageWorld(message, sender, {
-      extensionId: chrome.runtime.id,
-      allowsOrigin: origin => Boolean(trustedOrigin(origin)) && originMatchesMode(origin),
-      executeScript: injection => chrome.scripting.executeScript(injection)
-    })).then(sendResponse, () => sendResponse({ ok: false, message: '原网站页面没有完成操作。' }))
-    return true
-  }
-  if (isRecord(message) && message.channel === RESULT_CHANNEL) return
-  if (isRecord(message) && message.channel === DOWNLOAD_PROGRESS_CHANNEL) return
-  if (isRecord(message) && message.channel === DOWNLOAD_RESULT_CHANNEL) return
+  const routed = messageRegistry.dispatchChannel(message, sender, sendResponse)
+  if (routed === 'ignored') return
+  if (routed === 'handled') return true
   const requestId = isRecord(message) && message.channel === CALL_CHANNEL && typeof message.id === 'string' && message.id.length > 0 && message.id.length <= 80
     ? message.id : null
   const payload = requestId && isRecord(message) ? message.message : message

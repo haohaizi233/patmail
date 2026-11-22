@@ -1,10 +1,10 @@
 {
-  "scannedAt": "2026-11-22T07:51:41.320Z",
-  "fileCount": 514,
+  "scannedAt": "2026-11-22T08:00:31.255Z",
+  "fileCount": 515,
   "summary": {
-    "totalEdges": 2243,
-    "runtimeInternalEdges": 1577,
-    "typeOnlyEdges": 537,
+    "totalEdges": 2252,
+    "runtimeInternalEdges": 1584,
+    "typeOnlyEdges": 539,
     "externalImports": [
       "@babel/parser",
       "@zip.js/zip.js",
@@ -142,13 +142,13 @@
       "mail": 3,
       "storage": 1,
       "query": 2,
-      "api": 4,
+      "api": 5,
       "agent": 10,
       "application/mail": 1,
       "settings": 4,
       "workflow": 4,
-      "shared": 16,
-      "browser-download": 5,
+      "shared": 18,
+      "browser-download": 6,
       "hague": 7,
       "utils": 2,
       "recovery": 2
@@ -1396,6 +1396,11 @@
     },
     {
       "file": "background/jihua-page-world.ts",
+      "layer": "Infrastructure",
+      "module": "background"
+    },
+    {
+      "file": "background/message-registry.ts",
       "layer": "Infrastructure",
       "module": "background"
     },
