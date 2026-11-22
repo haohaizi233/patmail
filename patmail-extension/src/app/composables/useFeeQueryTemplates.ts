@@ -43,6 +43,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
   const templateLists = new TemplateLoadCoordinator()
   const templateDetails = new TemplateLoadCoordinator()
   let accountVersion = 0
+  let deletingId = ''
   const templates = ref<HistoryQueryOption[]>([])
   const selectedTemplateId = ref('')
   const saveName = ref('')
@@ -108,6 +109,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
   }
 
   async function applyTemplate(id: string): Promise<void> {
+    if (id && id === deletingId) return
     const ticket = templateDetails.begin()
     applyingTemplate.value = false
     if (!id) {
@@ -269,6 +271,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
       deletingTemplate.value
     )
       return
+    deletingId = current.id
     deletingTemplate.value = true
     templateMessage.value = '正在从原网站删除…'
     try {
@@ -287,7 +290,6 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
         return
       }
       if (selectedTemplateId.value === current.id) {
-        templateDetails.cancel()
         selectedTemplateId.value = ''
         saveName.value = ''
         saveNameDirty.value = false
@@ -298,7 +300,10 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
     } catch {
       if (version === accountVersion) templateMessage.value = '删除费用模板失败。'
     } finally {
-      if (version === accountVersion) deletingTemplate.value = false
+      if (version === accountVersion) {
+        deletingId = ''
+        deletingTemplate.value = false
+      }
     }
   }
 
@@ -396,6 +401,7 @@ export function useFeeQueryTemplates(options: UseFeeQueryTemplatesOptions) {
 
   function resetTemplatesForUser(): void {
     accountVersion += 1
+    deletingId = ''
     templateLists.cancel()
     templateDetails.cancel()
     loadingTemplates.value = false

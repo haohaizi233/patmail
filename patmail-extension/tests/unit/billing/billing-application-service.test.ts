@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { webcrypto } from 'node:crypto'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { FeeSearchRow } from '../../../src/api/fee-search-types'
@@ -23,13 +24,55 @@ import type { ExportOutcome } from '../../../src/application/billing/billing-con
 import {
   createBrowserBlobDownloadAdapter,
   createChromeExtensionDownloadsVerifier,
+  createTrackedBillingDownloadAdapter,
   createVerifiedChromeDownloadAdapter,
   type ChromeDownloadDelta,
+  type BillingDownloadTracking,
 } from '../../../src/infrastructure/billing/billing-adapters'
 import { defaultHeaders, fillBillingTemplate, type BillingTemplateId } from '../../../src/billing/templates'
 import { XlsxBook } from '../../../src/billing/xlsx-engine'
 
 const ASSETS_DIR = path.resolve(__dirname, '../../../src/assets/billing')
+
+it('reconciles a persisted browser ID after a page remount without starting a duplicate', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fixture')
+  const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  try {
+    const ledger = new Map<string, unknown>()
+    const tracking: BillingDownloadTracking = {
+      get: key => Promise.resolve(ledger.get(key)),
+      put: (key, record) => {
+        ledger.set(key, record)
+        return Promise.resolve()
+      },
+      lock: (_key, action) => action(),
+    }
+    const start = vi.fn(() => Promise.resolve(71))
+    let state: 'in_progress' | 'complete' = 'in_progress'
+    const search = vi.fn(() => Promise.resolve([{ state }]))
+    const request = {
+      bytes: new Uint8Array(8 * 1024 * 1024),
+      fileName: 'fixture.xlsx',
+      mimeType: 'application/octet-stream',
+      blockCount: 1,
+      warnings: [],
+      job: { scope: 'account-a', parameters: 'case selection' },
+    }
+    const adapter = () => createTrackedBillingDownloadAdapter({ download: start, search }, tracking)
+    expect(await adapter().download(request)).toMatchObject({ status: 'download_started', downloadId: 71 })
+    expect(await adapter().download(request)).toMatchObject({ status: 'unknown', downloadId: 71 })
+    state = 'complete'
+    expect(await adapter().download(request)).toMatchObject({ status: 'download_completed', downloadId: 71 })
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(search).toHaveBeenCalledWith({ id: 71 })
+    expect(JSON.stringify([...ledger])).not.toContain('case selection')
+  } finally {
+    createUrl.mockRestore()
+    revokeUrl.mockRestore()
+    vi.unstubAllGlobals()
+  }
+})
 
 const TEMPLATE_FILES: Record<BillingTemplateId, string> = {
   'general-foreign': 'qingkuan-general-foreign.xlsx',

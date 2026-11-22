@@ -20,12 +20,28 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseEnv } from 'node:util'
 import { forbiddenDeliveryName } from './delivery-guard.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(root, 'dist')
 const reportDir = join(root, 'test-results', 'ci')
 const publicRelease = process.argv.includes('--public')
+const modelEnvironments = [process.env]
+for (const name of ['.env', '.env.local', '.env.production', '.env.production.local']) {
+  const path = join(root, name)
+  if (existsSync(path)) modelEnvironments.push(parseEnv(readFileSync(path, 'utf8')))
+}
+const retiredModelKeys = modelEnvironments
+  .flatMap(env => ['VITE_AGENT_DEFAULT_KEY', 'VITE_AGENT_FALLBACK_KEY'].map(name => env[name]?.trim()))
+  .filter(Boolean)
+  .flatMap(key => {
+    const quoted = JSON.stringify(key)
+    // Short historical values can occur inside unrelated words or numbers.
+    return key.length >= 12
+      ? [key, quoted.slice(1, -1)]
+      : [quoted, `'${key.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`, `\`${key}\``]
+  })
 
 const REQUIRED_FILES = [
   'manifest.json',
@@ -175,6 +191,12 @@ for (const name of relativeNames) {
 }
 for (const file of files) {
   const name = relative(distDir, file).replaceAll('\\', '/')
+  if (retiredModelKeys.length && /\.(?:[cm]?js|json|html|map|css|txt)$/i.test(name)) {
+    const artifact = readFileSync(file)
+    if (retiredModelKeys.some(key => artifact.includes(key))) {
+      fail(`交付产物含已退役的模型凭据：${name}`)
+    }
+  }
   if (statSync(file).size > 8 * 1024 * 1024) continue
   if (!/\.(js|mjs|cjs|json|html|css|txt)$/i.test(name)) continue
   const text = readFileSync(file, 'utf8')

@@ -1,19 +1,20 @@
 import { apiError, type ApiResult } from '../api/types'
 import type { AgentQuestion } from '../agent/ask'
-import { fallbackAgentConfig, loadAgentConfig, type AgentConfig } from '../agent/config'
-import { LlmError, bindModelFallback, servedModel } from '../agent/llm'
+import { loadAgentConfig, type AgentConfig } from '../agent/config'
+import { LlmError, chatCompletion, servedModel } from '../agent/llm'
 import { compactAgentMemory, runAgentTurn } from '../agent/loop'
 import { AGENT_DEADLINE_KEEP, AGENT_FILE_KEEP, createAgentSession, loadMemory, openAgentSession, readAgentSessions, removeAgentSession, renameAgentSession, saveMemory, visibleHistory, type AgentMemoryState, type AgentSessionInfo } from '../agent/memory'
 import { helpText, resolveSlash } from '../agent/slash'
 import { formatDraft, type DeadlineRow, type ToolContext } from '../agent/tools'
 import { extractTargetVolumes, MailApplicationService } from '../application/mail/mail-service'
-import { createEasyMailGateway } from '../infrastructure/mail/easy-mail-gateway-adapter'
+import { createEasyMailGateway, MailWriteNotDispatched } from '../infrastructure/mail/easy-mail-gateway-adapter'
 import { isWriteSwitchOpen } from '../settings/write-switch'
 import { workflowPreview } from '../workflow/preview-chart'
 import { MAIL_FLOW_TYPE } from '../workflow/contracts'
 import { isQueryGuid } from '../query/query-validator'
 import { isConfirmedOperator } from '../automation/operator'
 import { isRecord } from '../shared/guards'
+import { freezeAccount, sameAccountContext } from '../shared/connection'
 import type { ProcessKind } from '../api/mail-process'
 import { loadAccount, type LocalArea } from './account-data'
 import { handleWorkspaceMessage, type WorkspaceHost } from './workspace'
@@ -127,11 +128,7 @@ async function clearConversation(area: LocalArea, model: string): Promise<ApiRes
   return { ok: true, data: await viewOf(area, '这段对话已清空。其它对话和长期记忆还在。', model, 0) }
 }
 
-/** 没有归类的失败也带上真实原因，免得只剩一句「没有完成」没法排查。 */
-function describeAgentFailure(error: unknown): string {
-  const detail = error instanceof Error ? error.message.trim() : ''
-  return detail ? `AI 助手调用没有完成。${detail}` : 'AI 助手调用没有完成。'
-}
+const AGENT_FAILURE_MESSAGE = 'AI 助手调用没有完成，请检查模型设置和连接。'
 
 async function compactConversation(area: LocalArea, config: AgentConfig): Promise<ApiResult<AgentTurnView>> {
   try {
@@ -141,7 +138,7 @@ async function compactConversation(area: LocalArea, config: AgentConfig): Promis
     return { ok: true, data: await viewOf(area, compacted.reply, config.model, 0) }
   } catch (error) {
     if (error instanceof LlmError) return apiError(error.code, error.message, error.status)
-    return apiError('NETWORK_ERROR', describeAgentFailure(error))
+    return apiError('NETWORK_ERROR', AGENT_FAILURE_MESSAGE)
   }
 }
 
@@ -149,7 +146,10 @@ function toolContext(host: WorkspaceHost, memory: AgentMemoryState, signal: Abor
   const bucket: SelectedPatentFile[] = [...(memory.work?.files ?? [])]
   const deadlines: DeadlineRow[] = (memory.work?.deadlines ?? []).map(row => ({ ...row }))
   const forward = async (message: ContentRequest): Promise<unknown> => {
-      if (signal.aborted) throw new LlmError('REQUEST_TIMEOUT', '已停下。')
+      if (signal.aborted) {
+        if (message.type === MessageType.SubmitLimitMail) throw new MailWriteNotDispatched('已在派发前停止提交。')
+        throw new LlmError('REQUEST_TIMEOUT', '已停下。')
+      }
       const pending = handleWorkspaceMessage({ type: MessageType.Workspace, payload: { action: 'forward', message } }, host)
       const response = await new Promise<Awaited<ReturnType<typeof handleWorkspaceMessage>>>((resolve, reject) => {
         const stop = (): void => {
@@ -451,6 +451,8 @@ async function submitEasy(
   const session = signedIn(host)
   if ('error' in session) return session.error
   if (deadlines.length === 0) return '先查期限，这一轮还没有可提交的事项。'
+  const accountContext = freezeAccount(host.connection.context)
+  if (!accountContext) return 'EASY 账号绑定尚未确认，没有提交。'
   const outcome = await mailService.submitLimitMailForReview({
     operatorId: session.operatorId,
     writeSwitchOpen,
@@ -458,7 +460,12 @@ async function submitEasy(
     deadlines,
     caseVolume,
     account: () => loadAccount(host.area, session.origin, session.operatorId),
-    gateway: createEasyMailGateway(forward)
+    gateway: createEasyMailGateway(message => {
+      if (!sameAccountContext(host.connection.context, accountContext)) {
+        return Promise.reject(new MailWriteNotDispatched('EASY 账号或标签页已变化，没有派发。'))
+      }
+      return forward(message)
+    })
   })
   return outcome.message
 }
@@ -555,16 +562,13 @@ export async function handleAgentChat(payload: { action?: unknown; message?: unk
     stopAgentTurn()
     return { ok: true, data: await viewOf(area, '已停下。', config.model, 0) }
   }
-  const message = typeof payload.message === 'string' ? payload.message.trim() : ''
   if (action === 'probe') {
-    let requested = { ...config, thinking: false }
+    const requested = { ...config, thinking: false }
     try {
-      const outcome = await bindModelFallback({
-        onSwitch: () => { requested = fallbackAgentConfig(requested) }
-      })(requested, {
+      const outcome = await chatCompletion(requested, {
         messages: [
           { role: 'system', content: '你是 PatMail 的 AI 助手。用一两句简体中文介绍自己。' },
-          { role: 'user', content: message }
+          { role: 'user', content: '你好' }
         ],
         temperature: 0.2
       })
@@ -574,9 +578,10 @@ export async function handleAgentChat(payload: { action?: unknown; message?: unk
     } catch (error) {
       const name = requested.model
       if (error instanceof LlmError) return apiError(error.code, `${name}：${error.message}`, error.status)
-      return apiError('NETWORK_ERROR', `${name}：${describeAgentFailure(error)}`)
+      return apiError('NETWORK_ERROR', `${name}：${AGENT_FAILURE_MESSAGE}`)
     }
   }
+  const message = typeof payload.message === 'string' ? payload.message.trim() : ''
   const resolved = resolveSlash(message)
   if (resolved.kind === 'local' && resolved.local === 'clear') return clearConversation(area, config.model)
   if (resolved.kind === 'local' && resolved.local === 'help') {
@@ -595,15 +600,14 @@ export async function handleAgentChat(payload: { action?: unknown; message?: unk
   turnAbort = abort
   try {
     const loaded = await loadMemory(area)
-    const chat = bindModelFallback({ onSwitch: () => publishActivity('主模型暂时没接上，改用备用模型') })
-    const turn = await runAgentTurn(config, loaded, message, toolContext(host, loaded, abort.signal), (next, options) => chat(next, { ...options, signal: abort.signal }), async state => {
+    const turn = await runAgentTurn(config, loaded, message, toolContext(host, loaded, abort.signal), (next, options) => chatCompletion(next, { ...options, signal: abort.signal }), async state => {
       if (abort.signal.aborted) return
       await saveMemory(area, state)
     }, publishActivity, action === 'turn' && payload.skill === 'hague-filing-arbitration' ? 'hague-filing-arbitration' : action === 'turn' && payload.plain === true)
     return { ok: true, data: await viewOf(area, turn.reply, config.model, turn.steps, turn.memory) }
   } catch (error) {
     if (error instanceof LlmError) return apiError(error.code, error.message, error.status)
-    return apiError('NETWORK_ERROR', describeAgentFailure(error))
+    return apiError('NETWORK_ERROR', AGENT_FAILURE_MESSAGE)
   } finally {
     if (turnAbort === abort) turnAbort = null
   }

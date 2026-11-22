@@ -61,7 +61,7 @@ pnpm scan:secrets --write-baseline  # 把当前发现登记进例外表（必须
 - 不使用真实 EASY 账号 / 生产 Cookie，不发真实发文与审核请求，不连生产库；浏览器 Profile 与扩展目录由 `tests/e2e/support/paths.mjs` 用 `mkdtemp` 隔离，不复用日常 Chrome Profile。
 - CI 环境无显示器下用 Persistent Context 加载 MV3 扩展（`tests/e2e/support/browser.mjs`），不假定 `browser.newContext()` 能加载扩展。
 - 季华传文仅新增 `https://oa.jihualab.net/*` 主机权限，不扩展 EASY 的来源/账号判定，也不向该站自动注入 EASY content script。独立通道只接受本扩展 `app.html`，固定顶层文档和用户绑定；MAIN 世界令牌仅用于同源请求，不进入工作台、存储或日志。隔离 E2E 完整拦截该域名，采用生成文件和模拟会话。
-- 备用模型仅新增 `https://api.xiaomimimo.com/*` 主机权限，让后台 service worker 的 `fetch` 免 CORS 直连（请求带 `api-key` 等自定义头，无主机权限时依赖对端 CORS 放行，备用链路不可押注于此）。与主模型 `http://43.138.138.200:8588/*` 同等口径；单测注入 fetcher，不发真实请求。
+- Agent 仅向设置页明确批准的模型端点发请求。默认无地址和凭据，外部端点须使用 HTTPS，禁止自动切换目的地与跟随重定向。MiMo 的既有主机权限仅供显式配置时使用。连接与失效规则见 [模型安全 ADR](../security/agent-model-security.md)。单测注入 fetcher，不发真实请求。
 
 - 请款工作流仅新增 `https://www.pbc.gov.cn/*` 主机权限，用于工作台页面只读抓取「人民币汇率中间价公告」页面（两次 GET：公告列表 + 最新公告），不带 Cookie（`credentials: 'omit'`），不向该站注入脚本。汇率只在页面内存里使用，用户可手工改；单测只解析固定公告文本，不发真实请求。
 

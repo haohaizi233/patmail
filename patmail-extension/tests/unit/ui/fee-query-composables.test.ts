@@ -161,6 +161,49 @@ describe('useFeeSelection & useFeeQueryTemplates composables', () => {
     tpl.disposeTemplates()
   })
 
+  it('keeps the next template selection live when the previous template is deleted', async () => {
+    const previous = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const next = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const deletion = deferred<unknown>()
+    const nextDetail = deferred<unknown>()
+    const entries = [{ id: previous, name: '原模板' }, { id: next, name: '下一份' }]
+    const detail = (number: string) => ({
+      type: MessageType.HistoryQueryResult,
+      payload: { ok: true, data: { queryXml: `<xmlRoot><bill_no>${number}</bill_no></xmlRoot>` } },
+    })
+    const request = vi.fn(({ type, payload }: { type: string; payload?: { queryId?: string } }) => {
+      if (type === MessageType.DeleteHistoryQuery) return deletion.promise
+      if (type === MessageType.GetHistoryQuery) return payload?.queryId === next ? nextDetail.promise : Promise.resolve(detail('OLD'))
+      return Promise.resolve({ type: MessageType.HistoryQueriesResult, payload: { ok: true, data: entries } })
+    })
+    const bridge = { request } as unknown as MessageBridge
+    const values = ref<Record<string, string>>({ bill_no: '' })
+    const tpl = useFeeQueryTemplates({
+      defaultValues: { bill_no: '' }, values, checkedBoxes: ref({}), selectedCustomers: ref([]),
+      selectedRuleOutCustomers: ref([]), canRead: ref(true), activeBridge: () => bridge,
+      collectDisplayValues: () => ({}), maybeExpandAdvanced: vi.fn(), onCustomersLoaded: vi.fn(),
+      onRefreshCtrlProc: vi.fn(),
+    })
+    await tpl.loadTemplates(false)
+    await tpl.applyTemplate(previous)
+    const deleting = tpl.deleteTemplate()
+    closeDialog(true)
+    await Promise.resolve()
+    expect(tpl.deletingTemplate.value).toBe(true)
+    request.mockClear()
+    await tpl.applyTemplate(previous)
+    expect(request).not.toHaveBeenCalled()
+    const selecting = tpl.applyTemplate(next)
+    deletion.resolve({ type: MessageType.HistoryQueryDeleted, payload: { ok: true } })
+    await deleting
+    nextDetail.resolve(detail('NEXT'))
+    await selecting
+    expect(tpl.selectedTemplateId.value).toBe(next)
+    expect(tpl.applyingTemplate.value).toBe(false)
+    expect(values.value.bill_no).toBe('NEXT')
+    tpl.disposeTemplates()
+  })
+
   it('keeps list and detail requests independent and ignores stale details after clearing or changing account', async () => {
     const list = deferred<unknown>()
     const details = [deferred<unknown>(), deferred<unknown>(), deferred<unknown>()]

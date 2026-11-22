@@ -329,7 +329,7 @@ export class MailApplicationService {
     const planned = limitMailItems({
       reviewerId,
       procIds: openIds,
-      rows: picked.map(row => ({ procId: row.procId, caseVolume: row.caseVolume, ctrlProc: row.ctrlProc })),
+      rows: picked.map(row => ({ procId: row.procId, caseId: row.caseId, caseVolume: row.caseVolume, ctrlProc: row.ctrlProc })),
       sheetRows: sheets,
       mode: lead ? 'lead' : 'ipr',
       address: 'auto',
@@ -351,13 +351,24 @@ export class MailApplicationService {
     }
 
     const summary = summarizeLimitMailSubmit(receipt.results, receipt.stopped)
-    const confirmed = receipt.results.some(item => item.state === 'submitted')
-    const unknownCount = receipt.results.filter(item => item.state === 'unknown').length
-    if (unknownCount) {
-      const prefix = confirmed ? `${summary}另有 ` : ''
-      return { ok: false, status: 'unknown', message: `${prefix}${unknownCount} 件提交结果未确认，请先在 EASY 核对。` }
+    const batch = {
+      submitted: receipt.results.filter(item => item.state === 'submitted').length,
+      rejected: receipt.results.filter(item => item.state === 'failed').length,
+      created: receipt.results.filter(item => item.state === 'created').length,
+      unknown: receipt.results.filter(item => item.state === 'unknown').length,
+      items: receipt.results.map(({ procId, mailId, state }) => ({ procId, mailId, state })),
     }
-    if (!confirmed) return { ok: false, status: 'rejected', message: summary }
-    return { ok: true, status: 'submitted', message: `已提交到 EASY。${summary}` }
+    const other = `${batch.rejected ? `${batch.rejected} 件未提交。` : ''}${batch.created ? `${batch.created} 件已建草稿，尚待提交。` : ''}`
+    if (batch.unknown) {
+      const prefix = batch.submitted ? `${summary}另有 ` : ''
+      return {
+        ok: false,
+        status: 'unknown',
+        batch,
+        message: `${prefix}${batch.unknown} 件提交结果未确认，请先在 EASY 核对。${other}`,
+      }
+    }
+    if (!batch.submitted) return { ok: false, status: 'rejected', batch, message: summary }
+    return { ok: true, status: 'submitted', batch, message: `已提交到 EASY。${summary}${other}` }
   }
 }

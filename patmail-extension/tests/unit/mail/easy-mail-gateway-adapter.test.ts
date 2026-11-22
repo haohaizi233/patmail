@@ -1,13 +1,48 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createEasyMailGateway } from '../../../src/infrastructure/mail/easy-mail-gateway-adapter'
+import { createEasyMailGateway, MailWriteNotDispatched } from '../../../src/infrastructure/mail/easy-mail-gateway-adapter'
 import { MessageType, type ContentRequest } from '../../../src/shared/message'
 
 const VALID_PROC_GUID = '33333333-3333-4333-8333-333333333333'
 const VALID_CASE_GUID = '44444444-4444-4444-8444-444444444444'
 const VALID_OPERATOR_GUID = '22222222-2222-4222-8222-222222222222'
 const VALID_MAIL_TYPE_GUID = '55555555-5555-4555-8555-555555555555'
+const request = {
+  operatorId: VALID_OPERATOR_GUID,
+  items: [
+    {
+      procId: VALID_PROC_GUID,
+      mailTypeId: VALID_MAIL_TYPE_GUID,
+      mailStyle: '1' as const,
+      mode: 'ipr' as const,
+      customerName: '客户甲',
+      contactName: '',
+      iprName: '',
+      leadName: '',
+      address: 'auto' as const,
+      reviewerId: VALID_OPERATOR_GUID,
+    },
+  ],
+}
 
 describe('createEasyMailGateway', () => {
+  it('recognizes cancellation with positive proof that dispatch never began', async () => {
+    const forward = vi.fn(() => Promise.reject(new MailWriteNotDispatched('发送前已取消。')))
+    await expect(createEasyMailGateway(forward).submitLimitMail(request)).resolves.toEqual({
+      status: 'failed', message: '发送前已取消。',
+    })
+  })
+
+  it.each(['runtime port closed', 'service worker terminated', 'cancelled during dispatch'])(
+    'treats an unproven write rejection as unknown without forwarding twice (%s)',
+    async reason => {
+      const forward = vi.fn(() => Promise.reject(new Error(reason)))
+      await expect(createEasyMailGateway(forward).submitLimitMail(request)).resolves.toMatchObject({
+        status: 'unknown',
+      })
+      expect(forward).toHaveBeenCalledTimes(1)
+    },
+  )
+
   it('translates ListFlowReviewers and ReadCaseBusFlow responses cleanly without leaking protocol', async () => {
     const forward = vi.fn((msg: ContentRequest) => {
       if (msg.type === MessageType.ListFlowReviewers) {

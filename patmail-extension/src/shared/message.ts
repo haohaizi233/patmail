@@ -229,7 +229,7 @@ export type ContentRequest =
   | Response<'OPEN_EASY_FORM', { target: ProcessOpenTarget }>
   | Request<'LIST_FLOW_REVIEWERS'>
   | Response<'READ_CASE_DEMANDS', { caseId: string }>
-  | Response<'READ_CASE_BUS_FLOW', { caseId: string; procId: string }>
+  | Response<'READ_CASE_BUS_FLOW', { caseId: string; procId: string; requireProc?: true }>
   | Response<'LOOKUP_IC_FLOW', { rows: IcFlowAsk[] }>
   | Response<'READ_HAGUE_CASE', { caseVolume: string; batchId?: string }>
   | Response<'CANCEL_HAGUE_READ', { batchId: string }>
@@ -704,7 +704,7 @@ function isAccountReviewerResult(value: unknown): value is ApiResult<AccountRevi
 function isLimitMailSubmitItem(value: unknown): boolean {
   if (!isRecord(value)) return false
   const keys = Object.keys(value)
-  const allowed = ['procId', 'procIds', 'mailTypeId', 'mailStyle', 'mailId', 'mode', 'inventor', 'customerName', 'contactName', 'iprName', 'leadName', 'contacts', 'ccName', 'arbitrated', 'namedBusiness', 'hold', 'senderId', 'reviewerId']
+  const allowed = ['procId', 'procIds', 'caseIdsByProc', 'mailTypeId', 'mailStyle', 'mailId', 'mode', 'inventor', 'customerName', 'contactName', 'iprName', 'leadName', 'contacts', 'ccName', 'arbitrated', 'namedBusiness', 'hold', 'senderId', 'reviewerId']
   if (!keys.every(key => allowed.includes(key))) return false
   if (!keys.includes('mode') || !keys.includes('customerName') || !keys.includes('contactName') || !keys.includes('iprName') || !keys.includes('leadName')) return false
   if (value.mode !== 'ipr' && value.mode !== 'lead') return false
@@ -724,6 +724,14 @@ function isLimitMailSubmitItem(value: unknown): boolean {
   if (value.senderId !== undefined && !isQueryGuid(String(value.senderId))) return false
   // eslint-disable-next-line @typescript-eslint/no-base-to-string -- 存量豁免：外部数据宽松 String() 兜底，保留既有校验行为
   if (value.reviewerId !== undefined && !isQueryGuid(String(value.reviewerId))) return false
+  if (value.caseIdsByProc !== undefined) {
+    if (!isRecord(value.caseIdsByProc)) return false
+    const procedures = Array.isArray(value.procIds) ? value.procIds : [value.procId]
+    const entries = Object.entries(value.caseIdsByProc)
+    if (entries.length > 500 || !entries.every(([procId, caseId]) => isQueryGuid(procId) &&
+      typeof caseId === 'string' && isQueryGuid(caseId) &&
+      procedures.some(id => typeof id === 'string' && id.toLowerCase() === procId))) return false
+  }
   if (value.procIds === undefined) return true
   return Array.isArray(value.procIds) && value.procIds.length > 0 && value.procIds.length <= 500 &&
     value.procIds.every(id => isQueryGuid(String(id))) &&
@@ -846,7 +854,9 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.ReadCaseDemands:
       return isRecord(value.payload) && isQueryGuid(String(value.payload.caseId)) && Object.keys(value.payload).length === 1
     case MessageType.ReadCaseBusFlow:
-      return isRecord(value.payload) && isQueryGuid(String(value.payload.caseId)) && isQueryGuid(String(value.payload.procId)) && Object.keys(value.payload).length === 2
+      return isRecord(value.payload) && isQueryGuid(String(value.payload.caseId)) && isQueryGuid(String(value.payload.procId)) &&
+        (value.payload.requireProc === undefined || value.payload.requireProc === true) &&
+        Object.keys(value.payload).every(key => ['caseId', 'procId', 'requireProc'].includes(key))
     case MessageType.LookupIcFlow:
       return isRecord(value.payload) && Array.isArray(value.payload.rows) && value.payload.rows.length > 0 && value.payload.rows.length <= 100 &&
         value.payload.rows.every(isIcFlowAsk) && Object.keys(value.payload).length === 1

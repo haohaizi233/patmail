@@ -9,7 +9,7 @@
  * 每步执行结果写 test-results/ci/steps/<name>.json，汇总写 test-results/ci/ci-check.json，
  * 供 scripts/ci-report.mjs 生成最终报告。任何一步失败都会让 ci:check 以非零退出码结束。
  */
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 // eslint-disable-next-line no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -32,7 +32,7 @@ const STEPS = [
   { name: 'unit', command: vitest('unit'), description: '单元测试' },
   { name: 'integration', command: vitest('integration'), description: '集成测试' },
   { name: 'regression', command: vitest('regression'), description: '历史业务契约回归' },
-  { name: 'build', command: 'pnpm build', description: '扩展构建（vue-tsc + vite 双段）' },
+  { name: 'build', command: 'pnpm build:ci', description: '扩展构建（vue-tsc + vite 双段）' },
   { name: 'manifest', command: 'pnpm verify:manifest', description: 'Manifest V3 合规校验' },
   { name: 'dist', command: 'pnpm verify:dist', description: '构建产物完整性与交付安全校验' },
   { name: 'secrets', command: 'pnpm scan:secrets', description: '密钥与敏感信息扫描（工作树）' },
@@ -54,6 +54,47 @@ if (unknown.length > 0) {
   process.exit(2)
 }
 
+function runStep(step) {
+  return new Promise(resolve => {
+    const env = { ...process.env }
+    if (step.name === 'build' && process.platform === 'win32') env.RAYON_NUM_THREADS ??= '2'
+    const child = spawn(step.command, { cwd: root, shell: true, env, stdio: ['inherit', 'pipe', 'pipe'] })
+    let resourceError = false
+    let spawnError
+    for (const [stream, output] of [
+      [child.stdout, process.stdout],
+      [child.stderr, process.stderr],
+    ]) {
+      let tail = ''
+      stream.on('data', chunk => {
+        const text = tail + chunk.toString()
+        resourceError ||=
+          /out of memory|zone allocation failed|cannot allocate memory|memory allocation of \d+ bytes failed|ERR_WORKER_OUT_OF_MEMORY/i.test(
+            text,
+          )
+        tail = text.slice(-256)
+      })
+      stream.pipe(output, { end: false })
+    }
+    child.on('error', error => {
+      spawnError = error.code ?? error.name
+    })
+    child.on('close', (exitCode, signal) => {
+      const failureKind =
+        exitCode === 0
+          ? undefined
+          : resourceError || spawnError === 'ENOMEM'
+            ? 'resource'
+            : spawnError
+              ? 'spawn'
+              : signal
+                ? 'signal'
+                : 'command'
+      resolve({ exitCode, signal, spawnError, failureKind })
+    })
+  })
+}
+
 const results = []
 for (const name of selected) {
   const step = STEPS.find(item => item.name === name)
@@ -61,14 +102,17 @@ for (const name of selected) {
   console.log(`$ ${step.command}`)
   const startedAt = new Date().toISOString()
   const started = Date.now()
-  const run = spawnSync(step.command, { cwd: root, shell: true, stdio: 'inherit' })
+  const run = await runStep(step)
   const durationMs = Date.now() - started
-  const status = run.status === 0 ? 'pass' : 'fail'
+  const status = run.exitCode === 0 ? 'pass' : 'fail'
   const result = {
     name: step.name,
     command: step.command,
     status,
-    exitCode: run.status ?? 1,
+    exitCode: run.exitCode,
+    signal: run.signal,
+    spawnError: run.spawnError,
+    failureKind: run.failureKind,
     durationMs,
     startedAt,
     finishedAt: new Date().toISOString(),

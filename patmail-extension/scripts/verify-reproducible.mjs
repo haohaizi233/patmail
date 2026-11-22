@@ -2,7 +2,7 @@
 /**
  * 构建可复现性验证（Phase 7 构建一致性）。
  *
- * 在同一受控环境连续执行两次 pnpm build，对 dist/ 全部文件逐项算 SHA-256 比较：
+ * 在同一受控环境连续执行两次 pnpm build:ci，对 dist/ 全部文件逐项算 SHA-256 比较：
  *   - 完全一致 → 可复现；
  *   - 有差异 → 列出差异文件与摘要，判定非确定性来源，不删除任何输出来"凑一致"。
  *
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const distDir = join(root, 'dist')
 const reportDir = join(root, 'test-results', 'ci')
-const buildCommand = process.env.PATMAIL_BUILD_COMMAND || 'pnpm build'
+const buildCommand = process.env.PATMAIL_BUILD_COMMAND || 'pnpm build:ci'
 
 function walk(directory) {
   const files = []

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { bg } from '../../shell/assets'
 import { AVATAR_PRESET_IDS, presetAvatarUrl } from '../../settings/avatar'
 import { useAccountAvatar } from '../../settings/use-account-avatar'
 import { useAgentConfig } from '../../settings/use-agent-config'
+import { agentConnectionIssue } from '../../agent/config'
 import { confirmDialog } from '../dialog'
 import { useMailConcurrency } from '../../settings/use-mail-concurrency'
 import { useWriteSwitch } from '../../settings/use-write-switch'
@@ -15,7 +16,15 @@ import { MessageType } from '../../shared/message'
 const { open, ready, setOpen } = useWriteSwitch()
 const { concurrency, ready: concurrencyReady, setConcurrency } = useMailConcurrency()
 const { src, presetId, uploadId, uploads, custom, note, signedIn, choosePreset, chooseUpload, upload, removeUpload, clear, openZoom } = useAccountAvatar()
-const { config: agentConfig, ready: agentReady, setThinking } = useAgentConfig()
+const { config: agentConfig, ready: agentReady, setThinking, save: saveAgent } = useAgentConfig()
+const agentEndpoint = ref('')
+const agentModel = ref('')
+const personalKey = ref('')
+watch(() => agentConfig.value?.baseUrl, (next, previous) => {
+  agentEndpoint.value = next ?? ''
+  if (previous !== undefined) personalKey.value = ''
+}, { immediate: true })
+watch(() => agentConfig.value?.model, next => { agentModel.value = next ?? '' }, { immediate: true })
 const file = ref<HTMLInputElement | null>(null)
 const presets = AVATAR_PRESET_IDS.map(id => ({ id, src: presetAvatarUrl(id) }))
 const concurrencyOptions = [1, 2, 3, 4].map(count => ({ value: count, label: String(count) }))
@@ -36,6 +45,36 @@ interface ProbeMark { ok: boolean; at: string; detail: string }
 const agentNote = ref('')
 const agentBusy = ref(false)
 const probe = ref<ProbeMark | null>(null)
+
+async function onSaveAgent(): Promise<void> {
+  const stored = agentConfig.value
+  if (!stored || agentBusy.value) return
+  const baseUrl = agentEndpoint.value.trim().replace(/\/+$/, '')
+  const model = agentModel.value.trim()
+  const apiKey = personalKey.value.trim() || (baseUrl === stored.baseUrl ? stored.apiKey : '')
+  const next = { ...stored, baseUrl, model, apiKey, approvedEndpoint: baseUrl }
+  const issue = agentConnectionIssue(next)
+  if (issue || !model) {
+    agentNote.value = issue || '请填写模型名称。'
+    return
+  }
+  agentBusy.value = true
+  try {
+    if (!await confirmDialog({
+      title: '确认模型数据接收方',
+      message: `助手会将对话和所选业务工具结果发送至 ${baseUrl}。请确认该地址获准处理这些数据。`,
+      confirmLabel: '确认并保存',
+    })) return
+    await saveAgent(next)
+    personalKey.value = ''
+    probe.value = null
+    agentNote.value = '已保存本机模型配置。'
+  } catch {
+    agentNote.value = '模型配置保存失败。'
+  } finally {
+    agentBusy.value = false
+  }
+}
 
 function readProbe(value: unknown): ProbeMark | null {
   if (typeof value !== 'object' || value === null) return null
@@ -194,12 +233,18 @@ async function run(action: () => Promise<void>): Promise<void> {
   <section class="card agent-settings">
     <div class="agent-settings-head">
       <h2>AI 助手</h2>
-      <p>顶栏助手使用内置模型。主模型连不上时自动改用备用模型。检测只看连不连得上，并写上这次接通的模型，不查案件。</p>
+      <p>助手仅使用你明确批准的模型端点。非本机回环地址需要 HTTPS。连通检测使用固定测试提示，不读取案件。</p>
     </div>
-    <form v-if="agentConfig" @submit.prevent>
+    <form v-if="agentConfig" @submit.prevent="onSaveAgent">
+      <div class="agent-settings-bar">
+        <label>模型地址 <input v-model="agentEndpoint" type="url" maxlength="300" placeholder="https://model.example/v1" /></label>
+        <label>模型名称 <input v-model="agentModel" maxlength="200" /></label>
+        <label>个人 API Key <input v-model="personalKey" type="password" maxlength="200" autocomplete="off" /></label>
+        <button type="submit" :disabled="agentBusy">保存并批准端点</button>
+      </div>
       <div class="agent-settings-bar">
         <label class="agent-think" v-hint="'打开后模型先思考再回答，等待时显示「正在思考」，勾选立即生效。关掉则直接回答，显示「正在回复」。'">
-          <input :checked="agentConfig.thinking" type="checkbox" @change="onThinking" />
+          <input :checked="agentConfig.thinking" :disabled="agentBusy" type="checkbox" @change="onThinking" />
           思考模式
         </label>
         <button type="button" class="probe" :disabled="agentBusy" @click="onAgentTest">{{ agentBusy ? '正在检测…' : '检测连通' }}</button>

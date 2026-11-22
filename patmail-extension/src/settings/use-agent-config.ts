@@ -28,10 +28,7 @@ export function useAgentConfig() {
       ready.value = true
     })
     ensureAgentConfigWatch()
-    const onStored = (next: AgentConfig): void => {
-      // 思考开关单独写入。不要把地址、密钥的未保存修改盖掉。
-      config.value = config.value ? { ...config.value, thinking: next.thinking } : next
-    }
+    const onStored = (next: AgentConfig): void => { config.value = next }
     configSubscribers.add(onStored)
     onScopeDispose(() => configSubscribers.delete(onStored))
   } else {
@@ -40,8 +37,11 @@ export function useAgentConfig() {
   }
 
   async function save(next: AgentConfig): Promise<void> {
-    if (typeof chrome === 'undefined' || !chrome.storage?.local) return
-    await chrome.storage.local.set({ [AGENT_CONFIG_KEY]: normalizeAgentConfig(next) })
+    const normalized = normalizeAgentConfig(next)
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      await chrome.storage.local.set({ [AGENT_CONFIG_KEY]: normalized })
+    }
+    config.value = normalized
   }
 
   /** 思考开关立即写入已保存的配置，不等「保存配置」。 */

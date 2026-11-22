@@ -404,6 +404,7 @@ export function useBillingWorkflow(options: {
       missingRateCodes: missingRateCodes.value,
       usesManualRate: usesManualRate.value,
       manualRateDate: manualRateDate.value,
+      downloadScope: billingScope.value,
       isStale,
     }
 

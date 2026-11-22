@@ -36,6 +36,25 @@ function runtimeEdge(from: string, to: string, kind: 'static-import' | 're-expor
 }
 
 describe('architecture gate negative & bypass resistance tests', () => {
+  it('guards file and deadline entry points, including composables and transitive barrels', () => {
+    const violations = evaluateArchitecture(
+      makeInventory({
+        edges: [
+          runtimeEdge('app/components/FileManageMail.vue', 'customer/file-manage-submit.ts'),
+          runtimeEdge('app/pages/LimitsPage.vue', 'customer/letters.ts'),
+          runtimeEdge('customer/letters.ts', 'customer/limit-mail-submit.ts', 're-export'),
+          runtimeEdge('app/composables/useBypass.ts', 'customer/file-manage-plan.ts'),
+          { ...runtimeEdge('app/composables/useBypass.ts', 'customer/file-manage-submit.ts'), isTypeOnly: true },
+        ],
+      }),
+    )
+    expect(violations.filter(v => v.rule === 'G-mail-ui-through-application').map(v => [v.from, v.to])).toEqual([
+      ['app/components/FileManageMail.vue', 'customer/file-manage-submit.ts'],
+      ['app/pages/LimitsPage.vue', 'customer/limit-mail-submit.ts'],
+      ['app/composables/useBypass.ts', 'customer/file-manage-plan.ts'],
+    ])
+  })
+
   it('resolves inherited JSONC aliases with exact and longest-prefix precedence', () => {
     withFixture(
       {

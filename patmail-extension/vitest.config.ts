@@ -1,6 +1,20 @@
 import { defineConfig } from 'vitest/config'
 import { resolve } from 'node:path'
+import { availableParallelism, totalmem } from 'node:os'
 import vue from '@vitejs/plugin-vue'
+
+const profiles = {
+  low: 1,
+  default: process.platform === 'win32' ? 2 : 4,
+  parallel: 8,
+} as const
+const requestedProfile = process.env.PATMAIL_TEST_PROFILE ?? 'default'
+if (!Object.hasOwn(profiles, requestedProfile)) {
+  throw new Error('PATMAIL_TEST_PROFILE must be low, default or parallel')
+}
+const profile = requestedProfile as keyof typeof profiles
+const memorySlots = Math.max(1, Math.floor(totalmem() / (2 * 1024 ** 3)))
+const maxWorkers = Math.min(profiles[profile], availableParallelism(), memorySlots)
 
 export default defineConfig({
   plugins: [vue()],
@@ -10,6 +24,7 @@ export default defineConfig({
     },
   },
   test: {
+    maxWorkers,
     environment: 'jsdom',
     include: ['tests/**/*.test.ts'],
     setupFiles: ['tests/setup/vitest-setup.ts'],

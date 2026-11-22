@@ -92,6 +92,7 @@ async function sendToTab(tabId: number, message: AppMessage): Promise<unknown> {
   try {
     return await chrome.tabs.sendMessage(tabId, message)
   } catch (error) {
+    if (message.type === MessageType.SubmitLimitMail || message.type === MessageType.SubmitFileManage) throw error
     const text = error instanceof Error ? error.message : String(error)
     if (!/Receiving end does not exist|Could not establish connection/i.test(text) || !chrome.scripting?.executeScript) throw error
     let injection=reinjected.get(tabId)

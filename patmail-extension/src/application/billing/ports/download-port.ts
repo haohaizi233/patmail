@@ -6,6 +6,7 @@ export interface BillingDownloadRequest {
   mimeType: string
   blockCount: number
   warnings: string[]
+  job?: { scope: string; parameters: string; isStale?: () => boolean }
 }
 
 /** 文件导出与下载交接端口。支持终态核验的适配器应返回 download_completed / interrupted。 */

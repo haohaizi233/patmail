@@ -34,6 +34,13 @@ it('requires explicit stub permission and never permits stubs for delivery', () 
     }
     writeFileSync(join(root, 'dist/assets/sme-customers.json'), JSON.stringify({ takenAt: '2026-11-05', customers: [['aaaaaaaa-1111-4111-8111-111111111111', '测试客户']] }))
     expect(check('0', true).status).toBe(0)
+    const marker = 'fixture-retired-model-marker'
+    writeFileSync(join(root, '.env.production.local'), `VITE_AGENT_DEFAULT_KEY=${marker}\n`)
+    writeFileSync(join(root, 'dist/background.js'), JSON.stringify(marker))
+    const rejected = check('0', true)
+    expect(rejected.status).toBe(1)
+    expect(rejected.stderr).toContain('交付产物含已退役的模型凭据：background.js')
+    expect(rejected.stderr).not.toContain(marker)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

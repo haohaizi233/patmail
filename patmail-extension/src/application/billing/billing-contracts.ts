@@ -29,7 +29,7 @@ export type ExportOutcome =
       warnings: string[]
     }
   | { status: 'download_interrupted'; reason: string }
-  | { status: 'unknown'; reason: string; downloadId: number }
+  | { status: 'unknown'; reason: string; downloadId?: number }
   | { status: 'failed'; reason: string }
 
 export interface PctExceptionItem {
@@ -72,6 +72,8 @@ export interface ExportBillingCommand {
   usesManualRate: boolean
   manualRateDate: string
   today?: Date
+  /** Account scope used to associate a browser download with this export. */
+  downloadScope?: string
   /** 生成工作簿期间由调用方检测范围、账号或确认态是否已变化。 */
   isStale?: () => boolean
 }
