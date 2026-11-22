@@ -329,7 +329,7 @@ export class MailApplicationService {
     const planned = limitMailItems({
       reviewerId,
       procIds: openIds,
-      rows: picked.map(row => ({ procId: row.procId, caseVolume: row.caseVolume, ctrlProc: row.ctrlProc })),
+      rows: picked.map(row => ({ procId: row.procId, caseId: row.caseId, caseVolume: row.caseVolume, ctrlProc: row.ctrlProc })),
       sheetRows: sheets,
       mode: lead ? 'lead' : 'ipr',
       address: 'auto',

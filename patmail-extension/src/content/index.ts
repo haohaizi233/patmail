@@ -457,7 +457,7 @@ const bridge: MessageBridge = {
           payload: await easyRuntime.readCaseDemands(message.payload.caseId, signal) }
       case MessageType.ReadCaseBusFlow:
         return { type: MessageType.CaseBusFlowResult,
-          payload: await easyRuntime.readCaseBusFlow(message.payload.caseId, message.payload.procId, signal) }
+          payload: await easyRuntime.readCaseBusFlow(message.payload.caseId, message.payload.procId, signal, message.payload.requireProc) }
       case MessageType.LookupIcFlow:
         return { type: MessageType.LookupIcFlowResult,
           payload: await easyRuntime.lookupIcFlow(message.payload.rows) }

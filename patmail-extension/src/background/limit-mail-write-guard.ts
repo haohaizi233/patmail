@@ -30,10 +30,10 @@ function parseMarks(raw: unknown): Marks {
 
 export function createLimitMailWriteGuard(journal: LimitMailWriteJournal) {
   let queue = Promise.resolve()
-  function update<T>(scope: string, change: (marks: Marks) => T): Promise<T> {
+  function update<T>(scope: string, change: (marks: Marks) => T | Promise<T>): Promise<T> {
     const next = queue.then(async () => {
       const marks = parseMarks(await journal.load(scope))
-      const result = change(marks)
+      const result = await change(marks)
       await journal.save(scope, marks)
       return result
     })
@@ -50,6 +50,7 @@ export function createLimitMailWriteGuard(journal: LimitMailWriteJournal) {
     isSameAccount: () => boolean,
     writeEnabled: () => boolean,
     send: (eligible: LimitMailSubmitItem[]) => Promise<unknown>,
+    allowsNewLetter?: (procId: string, caseId: string) => Promise<boolean>,
   ) {
     const results: LimitMailSubmitResult[] = []
     const previous = new Map<string, Mark | undefined>()
@@ -72,17 +73,24 @@ export function createLimitMailWriteGuard(journal: LimitMailWriteJournal) {
         for (const item of items) finishItem(item, 'failed', '派发前会话或写开关已变化，没有发送。')
         return resultMessage()
       }
-      await update(scope, marks => {
+      await update(scope, async marks => {
         for (const item of items) {
           const ids = limitMailProcIds(item).map(id => id.toLowerCase())
-          const conflict = ids
-            .map(id => marks[id])
-            .find(mark => mark && (mark.state !== 'created' || !mark.mailId || mark.mailId !== item.mailId))
+          let conflict: Mark | undefined = ids.map(id => marks[id]).find(mark => mark?.state === 'unknown')
+          if (!conflict) for (const id of ids) {
+            const mark = marks[id]
+            if (!mark || (mark.state === 'created' && mark.mailId && mark.mailId === item.mailId)) continue
+            const caseId = item.caseIdsByProc?.[id]
+            if (!item.mailId && mark.state === 'submitted' && caseId && allowsNewLetter &&
+                await allowsNewLetter(id, caseId).catch(() => false)) continue
+            conflict = mark
+            break
+          }
           if (conflict) {
             finishItem(
               item,
               conflict.state === 'unknown' ? 'unknown' : 'failed',
-              conflict.state === 'unknown' ? '原写入结果未确认，已拦截再次提交。' : '已有发文记录，已拦截重复创建。',
+              conflict.state === 'unknown' ? '原写入结果未确认，已拦截再次提交。' : '已有发文记录，当前流程没有确认可再发。',
             )
             continue
           }

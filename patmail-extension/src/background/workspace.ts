@@ -26,8 +26,8 @@ import { dispatchRecoveryRequest } from './recovery'
 
 const mailJournal = createRecoveryClient(dispatchRecoveryRequest)
 const guardLimitMail = createLimitMailWriteGuard({
-  load: scope => mailJournal.get('limit-mail', scope),
-  save: (scope, marks) => mailJournal.put('limit-mail', scope, marks),
+  load: scope => mailJournal.get('limit-mail-intent', scope),
+  save: (scope, marks) => mailJournal.put('limit-mail-intent', scope, marks),
 })
 
 export interface WorkspacePayload {
@@ -80,6 +80,7 @@ export interface WorkspaceHost {
   focusTab(tabId: number, windowId?: number): Promise<void>
   openApp(): Promise<{ tabId: number; created: boolean }>
   sendToTab(tabId: number, message: AppMessage): Promise<unknown>
+  limitMailWriteGuard?: typeof guardLimitMail
   persist?(context: EasyConnectionContext): void
 }
 
@@ -536,8 +537,7 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
       }
       if (outbound.type === MessageType.SubmitLimitMail) {
         if (!initialMailAccount || initialMailAccount.easyTabId !== target.tabId ||
-            !sameAccountContext(host.connection.context, initialMailAccount) ||
-            !sameOperatorId(outbound.payload.userId, initialMailAccount.operatorId)) return staleResult(host)
+            !sameAccountContext(host.connection.context, initialMailAccount)) return staleResult(host)
         const account = await readAccount(host, initialMailAccount)
         if (!account) return staleResult(host)
         const reviewerId = account.rules?.defaultReviewer?.userId ?? ''
@@ -559,7 +559,7 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     const version = host.connection.context.connectionVersion
     try {
       const response = outbound.type === MessageType.SubmitLimitMail && initialMailAccount
-        ? await guardLimitMail(
+        ? await (host.limitMailWriteGuard ?? guardLimitMail)(
           JSON.stringify(['phase3-write', initialMailAccount.easyOrigin, initialMailAccount.operatorId.toLowerCase()]),
           outbound.payload.items,
           () => sameAccountContext(host.connection.context, initialMailAccount),
@@ -568,6 +568,14 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
             type: MessageType.SubmitLimitMail,
             payload: { userId: initialMailAccount.operatorId, items },
           }),
+          async (procId, caseId) => {
+            const reply = await host.sendToTab(target.tabId, {
+              type: MessageType.ReadCaseBusFlow,
+              payload: { procId, caseId, requireProc: true },
+            })
+            return isMessage(reply) && reply.type === MessageType.CaseBusFlowResult && reply.payload.ok &&
+              (reply.payload.data.gate === 'open' || reply.payload.data.gate === 'done')
+          },
         )
         : await host.sendToTab(target.tabId, stripSearchContinuation(outbound))
       if (frozen && !sameAccountContext(host.connection.context, frozen)) {

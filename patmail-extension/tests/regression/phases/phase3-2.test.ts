@@ -13,6 +13,10 @@ import { buildTask } from '../../../src/automation/task-builder'
 import { MemoryEvidenceStore } from '../../../src/automation/evidence-store'
 import { handleAuthorityMessage } from '../../../src/background/authority'
 import { handleWorkspaceMessage, type WorkspaceHost } from '../../../src/background/workspace'
+import { createLimitMailWriteGuard } from '../../../src/background/limit-mail-write-guard'
+import { RecoveryAuthority } from '../../../src/background/recovery'
+import { createRecoveryClient } from '../../../src/recovery/client'
+import { memoryRecoveryStore, openRecoveryLedger, useRecoveryWasm } from '../../../src/recovery/wal-ledger'
 import { loadAccount } from '../../../src/background/account-data'
 import { canCommitWorkspaceResponse } from '../../../src/app/composables/useWorkspace'
 import type { CustomerQueryProfile } from '../../../src/customer/types'
@@ -74,6 +78,14 @@ async function bind(runtime: WorkspaceHost) {
 describe('Phase 3.2 写入入口、账号隔离与只读契约', () => {
   it('期限发文使用该账号发文映射的默认审核人，不信任页面传来的审核人，操作账号保持不变', async () => {
     const runtime = host()
+    const wasm = readFileSync(require.resolve('sql.js/dist/sql-wasm.wasm'))
+    useRecoveryWasm(wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength))
+    const recovery = new RecoveryAuthority(() => openRecoveryLedger(memoryRecoveryStore()))
+    const journal = createRecoveryClient(request => recovery.dispatch(request))
+    runtime.limitMailWriteGuard = createLimitMailWriteGuard({
+      load: scope => journal.get('limit-mail-intent', scope),
+      save: (scope, marks) => journal.put('limit-mail-intent', scope, marks)
+    })
     const scope = await bind(runtime)
     const bundle = { ...rules(), defaultReviewer: { userId: userB, name: '审核员乙' } }
     await handleWorkspaceMessage({ type: MessageType.Workspace, payload: { action: 'saveRules', bundle, expectedScope: scope } }, runtime)

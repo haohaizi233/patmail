@@ -90,6 +90,19 @@ describe('limit mail submit', () => {
     expect(calls.filter(item => item.startsWith('mailSubmit'))).toHaveLength(2)
   })
 
+  it('marks the unstarted tail as failed when a structured login rejection stops the batch', async () => {
+    const calls: string[] = []
+    const result = await submitLimitMailBatch(transport({
+      limitMailCustomer: () => ({ ClientInfo: client({ IsLogin: false }) }),
+    }, calls), user, [draft(), draft({ procId: proc2 })])
+    expect(calls).toHaveLength(1)
+    expect(result.stopped).toBe(true)
+    expect(result.results).toMatchObject([
+      { procId: proc, state: 'failed' },
+      { procId: proc2, state: 'failed', message: '因登录或写开关变化，本事项没有派发。' },
+    ])
+  })
+
   it('不用发是明确结论，同一批后面那件照常提交', async () => {
     const calls: string[] = []
     const result = await submitLimitMailBatch(transport({

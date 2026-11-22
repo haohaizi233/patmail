@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyProcSendGate, finishedWithoutFlow, gateForProcLabel, mailedWithoutFinishDate, MAILED_UNFINISHED_REVIEW, reviewNeedsArbitration, suffixVariant } from '../../../src/customer/pct-flow-status'
+import { classifyProcSendGate, finishedWithoutFlow, gateForProcLabel, loadPctSendGate, mailedWithoutFinishDate, MAILED_UNFINISHED_REVIEW, reviewNeedsArbitration, suffixVariant } from '../../../src/customer/pct-flow-status'
 
 const procId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
@@ -11,6 +11,15 @@ describe('PCT 发文审核状态', () => {
   it('还没有发文流程时可以勾选', () => {
     expect(classifyProcSendGate({ Eflow: [], ProcInfo: [] }, procId)).toBe('open')
     expect(classifyProcSendGate({ Eflow: [node({ eflow_name: '递交', order_by: 2, node_code: 'END' })] }, procId)).toBe('open')
+  })
+
+  it('requires a matched procedure and a complete flow list when rechecking a confirmed receipt', async () => {
+    const caseId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const read = (body: unknown) => loadPctSendGate(caseId, procId, () => Promise.resolve({ ok: true, data: body }), undefined, true)
+    await expect(read({ Eflow: [], ProcInfo: [] })).resolves.toMatchObject({ ok: false })
+    await expect(read({ ProcInfo: [{ proc_id: procId }] })).resolves.toMatchObject({ ok: false })
+    await expect(read({ Eflow: [], ProcInfo: [{ proc_id: procId }] })).resolves.toEqual({ ok: true, data: { gate: 'open' } })
+    await expect(read({ Eflow: [node({ order_by: 2, node_code: 'END' })] })).resolves.toEqual({ ok: true, data: { gate: 'done' } })
   })
 
   it('当前节点不是 END 时待审核，空代码也不是结束', () => {

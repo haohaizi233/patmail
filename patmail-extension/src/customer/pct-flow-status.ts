@@ -253,7 +253,8 @@ export async function loadPctSendGate(
   caseId: string,
   procId: string,
   post: (params: URLSearchParams, signal?: AbortSignal) => Promise<ApiResult<unknown>>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  requireProc = false
 ): Promise<ApiResult<{ gate: PctSendGate }>> {
   const result = await post(caseBusFlowParams(caseId), signal)
   if (!result.ok) return result
@@ -262,6 +263,15 @@ export async function loadPctSendGate(
   const record = data as { Eflow?: unknown; ProcInfo?: unknown }
   if (!Array.isArray(record.Eflow) && !Array.isArray(record.ProcInfo)) {
     return apiError('INVALID_RESPONSE', '案件流程没有返回。')
+  }
+  if (requireProc) {
+    const wanted = procId.trim().toLowerCase()
+    const info: unknown[] = Array.isArray(record.ProcInfo) ? record.ProcInfo : []
+    if (!Array.isArray(record.Eflow) || ![...info, ...record.Eflow].some(row =>
+      row && typeof row === 'object' &&
+      text((row as Record<string, unknown>).proc_id).toLowerCase() === wanted)) {
+      return apiError('INVALID_RESPONSE', '案件流程未能匹配所选事项。')
+    }
   }
   return { ok: true, data: { gate: classifyProcSendGate(data, procId) } }
 }

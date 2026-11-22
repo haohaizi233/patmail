@@ -29,6 +29,8 @@ export interface LimitMailSubmitItem {
   procId: string
   /** 同一封信里的全部处理事项。全部来自这一次的勾选，没有勾的不带。 */
   procIds?: string[]
+  /** 旧回执已确认时，用于重新读取所属案件流程。 */
+  caseIdsByProc?: Record<string, string>
   mailTypeId: string
   /** 1：同客户同收件人的多件并成一封。_file_ids 只列勾上的事项，原站不会带进别的。 */
   mailStyle: '1' | '2'
@@ -208,7 +210,7 @@ export function limitMailLetterLabel(item: { procId: string; procIds?: string[] 
 
 export function limitMailItems(input: {
   procIds: string[]
-  rows: Array<{ procId: string; caseVolume: string; ctrlProc?: string }>
+  rows: Array<{ procId: string; caseId?: string; caseVolume: string; ctrlProc?: string }>
   sheetRows: Array<{ ourVolume: string; customerVolume?: string; procLabel?: string; mailTypeId?: string; customerName?: string; contactName?: string; iprName?: string; leadName?: string; mailTo?: string; mailCc?: string; iprArbitrated?: true; namedBusiness?: true }>
   mode: 'ipr' | 'lead'
   specials?: ReadonlySet<string>
@@ -266,6 +268,7 @@ export function limitMailItems(input: {
     const senderId = input.senderId && isQueryGuid(input.senderId) ? input.senderId : ''
     const item: LimitMailSubmitItem = {
       procId,
+      ...(row.caseId && isQueryGuid(row.caseId) ? { caseIdsByProc: { [procId.toLowerCase()]: row.caseId } } : {}),
       mailTypeId: types[0],
       mailStyle: '1',
       mode: input.mode,
@@ -303,7 +306,10 @@ export function limitMailItems(input: {
     }
     const key = [item.mailTypeId, item.customerName, item.mode, item.inventor, item.namedBusiness, canonicalNameList(item.iprName), canonicalNameList(item.leadName), canonicalNameList(item.ccName), item.contacts].join('\u0001')
     const found = grouped.get(key)
-    if (found) found.procIds = [...limitMailProcIds(found), item.procId]
+    if (found) {
+      found.procIds = [...limitMailProcIds(found), item.procId]
+      if (item.caseIdsByProc) found.caseIdsByProc = { ...found.caseIdsByProc, ...item.caseIdsByProc }
+    }
     else grouped.set(key, { ...item, procIds: [item.procId], mailStyle: '1' as const })
   }
   return {
@@ -789,8 +795,10 @@ async function submitOne(transport: EasyTransport, item: LimitMailSubmitItem): P
 }
 
 export async function submitLimitMailBatch(transport: EasyTransport, userId: string, items: LimitMailSubmitItem[]): Promise<{ stopped: boolean; results: LimitMailSubmitResult[] }> {
-  if (!isWriteSwitchOpen()) return { stopped: true, results: [{ procId: '', mailId: '', state: 'failed', message: '写开关已关闭，没有提交到 EASY。' }] }
-  if (!isQueryGuid(userId)) return { stopped: true, results: [{ procId: '', mailId: '', state: 'failed', message: '当前登录人编号还没确认，没有提交。' }] }
+  const skipped = (pending: LimitMailSubmitItem[], message: string) =>
+    pending.flatMap(item => limitMailProcIds(item).map(procId => failed(procId, message)))
+  if (!isWriteSwitchOpen()) return { stopped: true, results: skipped(items, '写开关已关闭，没有提交到 EASY。') }
+  if (!isQueryGuid(userId)) return { stopped: true, results: skipped(items, '当前登录人编号还没确认，没有提交。') }
   const results: LimitMailSubmitResult[] = []
   const finish = async (stopped: boolean): Promise<{ stopped: boolean; results: LimitMailSubmitResult[] }> => {
     for (const result of results) {
@@ -802,12 +810,15 @@ export async function submitLimitMailBatch(transport: EasyTransport, userId: str
     await ledgerQueue
     return { stopped, results }
   }
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     const letter = await submitOne(transport, item)
     results.push(...letter.map(result => result.message.length > 8000 ? { ...result, message: result.message.slice(0, 8000) } : result))
     /** 一件失败只算这一件，后面的件继续。不用发是明确结论；登录失效、写开关是会话级故障，停批。 */
     const trouble = letter.find(result => result.state !== 'submitted')
-    if (trouble && item.hold !== 'skip' && /登录已失效|写开关/.test(trouble.message)) return finish(true)
+    if (trouble && item.hold !== 'skip' && /登录已失效|写开关/.test(trouble.message)) {
+      results.push(...skipped(items.slice(index + 1), '因登录或写开关变化，本事项没有派发。'))
+      return finish(true)
+    }
   }
   return finish(false)
 }
@@ -815,7 +826,7 @@ export async function submitLimitMailBatch(transport: EasyTransport, userId: str
 export function summarizeLimitMailSubmit(results: LimitMailSubmitResult[], stopped: boolean): string {
   const submitted = results.filter(item => item.state === 'submitted')
   const letters = new Set(submitted.map(item => item.mailId).filter(Boolean)).size
-  const last = results[results.length - 1]
+  const last = results.find(item => item.state === 'unknown') ?? results[results.length - 1]
   const head = !submitted.length
     ? '没有提交到审核人。'
     : letters > 0 && submitted.length !== letters

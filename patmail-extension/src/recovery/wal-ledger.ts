@@ -5,7 +5,7 @@ type SqlDatabase = InstanceType<SqlStatic['Database']>
 import wasmAsset from 'sql.js/dist/sql-wasm.wasm?url'
 
 /** 工作面、查询结果、发文账本、流程执行记录、递交导出行档。登录掉了也按这个槽位装回去。 */
-export type RecoverySlot = 'workflow-desk' | 'billing-desk' | 'limit-query' | 'limit-mail' | 'file-mail' | 'file-desk' | 'workflow-exec' | 'mail-exec' | 'filing-export' | 'file-query'
+export type RecoverySlot = 'workflow-desk' | 'billing-desk' | 'limit-query' | 'limit-mail' | 'limit-mail-intent' | 'file-mail' | 'file-desk' | 'workflow-exec' | 'mail-exec' | 'filing-export' | 'file-query'
 
 export interface StoredFrame {
   seq: number
@@ -31,7 +31,7 @@ export interface RecoveryHead {
   revision?: number
 }
 
-const SLOTS = new Set<RecoverySlot>(['workflow-desk', 'billing-desk', 'limit-query', 'limit-mail', 'file-mail', 'file-desk', 'workflow-exec', 'mail-exec', 'filing-export', 'file-query'])
+const SLOTS = new Set<RecoverySlot>(['workflow-desk', 'billing-desk', 'limit-query', 'limit-mail', 'limit-mail-intent', 'file-mail', 'file-desk', 'workflow-exec', 'mail-exec', 'filing-export', 'file-query'])
 
 /** 两个系统各留一份。origin 用站点地址，leaf 是页面里的槽。 */
 export function systemScope(origin: string, leaf: string): string {

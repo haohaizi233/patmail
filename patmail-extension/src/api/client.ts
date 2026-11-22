@@ -569,12 +569,12 @@ export class EasyRuntime {
   }
 
   /** 案件页流程图。用来看这一件处理事项的发文是待审核还是已经结束。 */
-  readCaseBusFlow(caseId: string, procId: string, signal?: AbortSignal): Promise<ApiResult<{ gate: PctSendGate }>> {
+  readCaseBusFlow(caseId: string, procId: string, signal?: AbortSignal, requireProc = false): Promise<ApiResult<{ gate: PctSendGate }>> {
     return (async (): Promise<ApiResult<{ gate: PctSendGate }>> => {
       if (!(await this.confirmAccountRead())) {
         return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
       }
-      const result = await loadPctSendGate(caseId, procId, (params, next) => this.transport.post('caseBusFlow', params, next), signal)
+      const result = await loadPctSendGate(caseId, procId, (params, next) => this.transport.post('caseBusFlow', params, next), signal, requireProc)
       if (!result.ok && result.error.code === 'SESSION_EXPIRED') this.session.expire()
       return result
     })()

@@ -77,4 +77,43 @@ describe('EASY write intent guard', () => {
     expect(send).not.toHaveBeenCalled()
     expect(await storage.load('account')).toEqual({})
   })
+
+  it('keeps three successes, one rejection and two unknowns distinct across reload', async () => {
+    const journal = memoryJournal()
+    const items = Array.from({ length: 6 }, (_, index) => ({
+      ...item, procId: `33333333-3333-4333-8333-33333333333${index}`,
+    }))
+    const states = ['submitted', 'submitted', 'submitted', 'failed', 'unknown'] as const
+    const send = vi.fn(() => Promise.resolve({
+      type: MessageType.SubmitLimitMailResult,
+      payload: { stopped: false, results: states.map((state, index) => ({
+        procId: items[index].procId, state, mailId: state === 'submitted' ? 'mail-1' : '', message: state,
+      })) },
+    }))
+    const first = await createLimitMailWriteGuard(journal)('account', items, allowed, allowed, send)
+    expect(first.payload.results.map(result => result.state)).toEqual([...states, 'unknown'])
+    const nextSend = vi.fn(() => Promise.resolve(undefined))
+    await createLimitMailWriteGuard(journal)('account', items, allowed, allowed, nextSend)
+    expect(nextSend).toHaveBeenCalledExactlyOnceWith([items[3]])
+  })
+
+  it('preserves legacy new-letter behavior only after a fresh read of the confirmed procedure', async () => {
+    const guard = createLimitMailWriteGuard(memoryJournal())
+    const candidate = { ...item, caseIdsByProc: { [item.procId]: 'case-1' } }
+    const receipt = (state: 'submitted' | 'unknown') => ({
+      type: MessageType.SubmitLimitMailResult,
+      payload: { stopped: false, results: [{ procId: item.procId, mailId: 'mail-1', state, message: state }] },
+    })
+    const send = vi.fn().mockResolvedValueOnce(receipt('submitted')).mockResolvedValueOnce(receipt('unknown'))
+    await guard('account', [candidate], allowed, allowed, send)
+    const allowNew = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const blocked = await guard('account', [candidate], allowed, allowed, send, allowNew)
+    expect(blocked.payload.results[0].state).toBe('failed')
+    const lost = await guard('account', [candidate], allowed, allowed, send, allowNew)
+    expect(lost.payload.results[0].state).toBe('unknown')
+    const unknown = await guard('account', [candidate], allowed, allowed, send, allowNew)
+    expect(unknown.payload.results[0].state).toBe('unknown')
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(allowNew.mock.calls).toEqual([[item.procId, 'case-1'], [item.procId, 'case-1']])
+  })
 })
