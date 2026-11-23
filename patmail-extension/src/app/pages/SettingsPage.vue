@@ -6,7 +6,7 @@ import { bg } from '../../shell/assets'
 import { AVATAR_PRESET_IDS, presetAvatarUrl } from '../../settings/avatar'
 import { useAccountAvatar } from '../../settings/use-account-avatar'
 import { useAgentConfig } from '../../settings/use-agent-config'
-import { agentConnectionIssue } from '../../agent/config'
+import { agentConnectionIssue, isBuiltInAgentModel } from '../../agent/config'
 import { confirmDialog } from '../dialog'
 import { useMailConcurrency } from '../../settings/use-mail-concurrency'
 import { useWriteSwitch } from '../../settings/use-write-switch'
@@ -19,6 +19,10 @@ const { src, presetId, uploadId, uploads, custom, note, signedIn, choosePreset, 
 const { config: agentConfig, ready: agentReady, setThinking, save: saveAgent } = useAgentConfig()
 const agentEndpoint = ref('')
 const agentModel = ref('')
+const builtInModel = computed(() => isBuiltInAgentModel({
+  baseUrl: agentEndpoint.value.trim().replace(/\/+$/, ''),
+  model: agentModel.value.trim(),
+}))
 const personalKey = ref('')
 watch(() => agentConfig.value?.baseUrl, (next, previous) => {
   agentEndpoint.value = next ?? ''
@@ -60,7 +64,7 @@ async function onSaveAgent(): Promise<void> {
   }
   agentBusy.value = true
   try {
-    if (!await confirmDialog({
+    if (!isBuiltInAgentModel(next) && !await confirmDialog({
       title: '确认模型数据接收方',
       message: `助手会将对话和所选业务工具结果发送至 ${baseUrl}。请确认该地址获准处理这些数据。`,
       confirmLabel: '确认并保存',
@@ -232,26 +236,42 @@ async function run(action: () => Promise<void>): Promise<void> {
   </section>
   <section class="card agent-settings">
     <div class="agent-settings-head">
-      <h2>AI 助手</h2>
-      <p>助手仅使用你明确批准的模型端点。非本机回环地址需要 HTTPS。连通检测使用固定测试提示，不读取案件。</p>
+      <div class="agent-settings-title">
+        <h2>AI 助手</h2>
+        <span class="agent-badge" :class="{ custom: !builtInModel }">{{ builtInModel ? '内置默认模型' : '自定义端点' }}</span>
+      </div>
+      <p>内置 Qwen 模型已默认批准，通过明文 HTTP 连接。自定义端点需单独确认，非本机回环地址需要 HTTPS。连通检测使用固定测试提示，不读取案件。</p>
     </div>
-    <form v-if="agentConfig" @submit.prevent="onSaveAgent">
-      <div class="agent-settings-bar">
-        <label>模型地址 <input v-model="agentEndpoint" type="url" maxlength="300" placeholder="https://model.example/v1" /></label>
-        <label>模型名称 <input v-model="agentModel" maxlength="200" /></label>
-        <label>个人 API Key <input v-model="personalKey" type="password" maxlength="200" autocomplete="off" /></label>
-        <button type="submit" :disabled="agentBusy">保存并批准端点</button>
-      </div>
-      <div class="agent-settings-bar">
-        <label class="agent-think" v-hint="'打开后模型先思考再回答，等待时显示「正在思考」，勾选立即生效。关掉则直接回答，显示「正在回复」。'">
-          <input :checked="agentConfig.thinking" :disabled="agentBusy" type="checkbox" @change="onThinking" />
-          思考模式
+    <form v-if="agentConfig" class="agent-settings-form" @submit.prevent="onSaveAgent">
+      <div class="agent-fields">
+        <label class="agent-field agent-field-wide">
+          <span>模型地址</span>
+          <input v-model="agentEndpoint" type="url" maxlength="300" placeholder="https://model.example/v1" />
         </label>
-        <button type="button" class="probe" :disabled="agentBusy" @click="onAgentTest">{{ agentBusy ? '正在检测…' : '检测连通' }}</button>
-        <span class="agent-lamp" :class="lampKind" aria-hidden="true"></span>
-        <p class="agent-probe-meta" v-hint.clip="probeText">{{ probeText }}</p>
+        <label class="agent-field">
+          <span>模型名称</span>
+          <input v-model="agentModel" maxlength="200" placeholder="例如 Qwen3.6-35B-A3B" />
+        </label>
+        <label class="agent-field">
+          <span>个人 API Key</span>
+          <input v-model="personalKey" type="password" maxlength="200" autocomplete="off" placeholder="留空则沿用已保存的 Key" />
+        </label>
       </div>
-      <p v-if="agentNote" class="hint">{{ agentNote }}</p>
+      <div class="agent-settings-footer">
+        <div class="agent-settings-actions">
+          <button type="submit" class="agent-save" :disabled="agentBusy">{{ builtInModel ? '保存模型配置' : '保存并批准端点' }}</button>
+          <button type="button" class="probe" :disabled="agentBusy" @click="onAgentTest">{{ agentBusy ? '正在检测…' : '检测连通' }}</button>
+          <label class="agent-think" v-hint="'打开后模型先思考再回答，等待时显示「正在思考」，勾选立即生效。关掉则直接回答，显示「正在回复」。'">
+            <input :checked="agentConfig.thinking" :disabled="agentBusy" type="checkbox" @change="onThinking" />
+            <span>思考模式</span>
+          </label>
+        </div>
+        <div class="agent-probe-status" :class="lampKind">
+          <span class="agent-lamp" :class="lampKind" aria-hidden="true"></span>
+          <p class="agent-probe-meta" v-hint.clip="probeText">{{ probeText }}</p>
+        </div>
+      </div>
+      <p v-if="agentNote" class="hint agent-note">{{ agentNote }}</p>
     </form>
     <p v-else-if="!agentReady" class="hint">正在读取 AI 助手配置。</p>
     <p v-else class="hint">AI 助手配置没有读到。重新打开这一页再试。</p>

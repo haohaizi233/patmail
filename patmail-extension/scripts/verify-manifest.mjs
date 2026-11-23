@@ -117,6 +117,9 @@ for (const origin of new Set(manifest.host_permissions ?? [])) {
   if (LOCAL_ORIGINS.some(prefix => origin.startsWith(prefix))) {
     warnings += 1
     note(`host_permissions 含本地调试/桥接面：${origin}（本机下载桥接 42843 需要；移除前先做迁移方案）`)
+  } else if (origin === 'http://43.138.138.200:8588/*') {
+    warnings += 1
+    note(`host_permissions 含内置 Qwen 明文 HTTP 地址：${origin}（运行时仅允许固定模型和 /v1 端点）`)
   } else if (origin.startsWith('http://')) {
     warnings += 1
     note(`host_permissions 含明文 HTTP 业务 Origin：${origin}（历史 EASY 部署如此；不得无迁移方案强制改 https）`)

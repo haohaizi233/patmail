@@ -11,16 +11,24 @@ export interface AgentConfig {
   maxTokens: number
   /** 思考型模型的思考链开关。关掉可以省 token、直接出正文。 */
   thinking: boolean
-  /** Exact endpoint explicitly approved by the operator for business data. */
+  /** 获批准的数据接收端点。自定义端点由操作者确认。 */
   approvedEndpoint?: string
 }
 
+const BUILT_IN_ENDPOINT = 'http://43.138.138.200:8588/v1'
+const BUILT_IN_MODEL = 'Qwen3.6-35B-A3B-oQ4-fp16-mtp'
+
 export const AGENT_CONFIG_DEFAULT: AgentConfig = {
-  baseUrl: '',
+  baseUrl: BUILT_IN_ENDPOINT,
+  approvedEndpoint: BUILT_IN_ENDPOINT,
   apiKey: '',
-  model: 'Qwen3.6-35B-A3B-oQ4-fp16-mtp',
+  model: BUILT_IN_MODEL,
   maxTokens: 8192,
   thinking: false
+}
+
+export function isBuiltInAgentModel(config: Pick<AgentConfig, 'baseUrl' | 'model'>): boolean {
+  return config.baseUrl === BUILT_IN_ENDPOINT && config.model === BUILT_IN_MODEL
 }
 
 export function parseAgentEndpoint(value: string): URL | null {
@@ -37,11 +45,12 @@ export function parseAgentEndpoint(value: string): URL | null {
 export function agentConnectionIssue(config: AgentConfig): string {
   const url = parseAgentEndpoint(config.baseUrl)
   if (!url) return '请在系统设置填写合法的模型地址。'
-  if (url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+  const builtIn = isBuiltInAgentModel(config)
+  if (!builtIn && url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
     return '非本机回环的模型地址必须使用 HTTPS。请向部署方获取可用的地址。'
   }
   if (!config.apiKey.trim()) return '请在系统设置填写个人模型 API Key。'
-  if (config.approvedEndpoint !== config.baseUrl) return '请在系统设置确认当前模型数据接收端点。'
+  if (!builtIn && config.approvedEndpoint !== config.baseUrl) return '请在系统设置确认当前模型数据接收端点。'
   return ''
 }
 
@@ -73,7 +82,10 @@ export function normalizeAgentConfig(value: unknown): AgentConfig {
     maxTokens: storedMaxTokens(record.maxTokens),
     thinking: typeof record.thinking === 'boolean' ? record.thinking : false
   }
-  if (next.baseUrl && record.approvedEndpoint === next.baseUrl) next.approvedEndpoint = next.baseUrl
+  if (!next.baseUrl && next.model === BUILT_IN_MODEL && !next.apiKey) next.baseUrl = BUILT_IN_ENDPOINT
+  if (isBuiltInAgentModel(next) || (next.baseUrl && record.approvedEndpoint === next.baseUrl)) {
+    next.approvedEndpoint = next.baseUrl
+  }
   return isAgentConfig(next) ? next : AGENT_CONFIG_DEFAULT
 }
 

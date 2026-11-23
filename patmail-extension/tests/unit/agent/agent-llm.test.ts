@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { chatCompletion, LlmError, llmFailureKind, modelDialect, servedModel } from '../../../src/agent/llm'
-import { AGENT_CONFIG_DEFAULT, isAgentConfig, normalizeAgentConfig } from '../../../src/agent/config'
+import { AGENT_CONFIG_DEFAULT, agentConnectionIssue, isAgentConfig, normalizeAgentConfig } from '../../../src/agent/config'
 
 const endpoint = 'https://model.example.test/v1'
+const builtInEndpoint = 'http://43.138.138.200:8588/v1'
 const config = { ...AGENT_CONFIG_DEFAULT, baseUrl: endpoint, approvedEndpoint: endpoint, apiKey: 'fixture-personal-model-key', maxTokens: 100 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -26,7 +27,16 @@ describe('agent config', () => {
     const legacy = normalizeAgentConfig({ ...config, approvedEndpoint: undefined })
     expect(legacy).toMatchObject({ baseUrl: endpoint, apiKey: config.apiKey, model: config.model })
     expect(legacy.approvedEndpoint).toBeUndefined()
-    expect(AGENT_CONFIG_DEFAULT).toMatchObject({ baseUrl: '', apiKey: '' })
+    expect(AGENT_CONFIG_DEFAULT).toMatchObject({ baseUrl: builtInEndpoint, approvedEndpoint: builtInEndpoint, apiKey: '' })
+  })
+
+  it('upgrades the previous default and preserves a saved key for the exact built-in model', () => {
+    const blank = normalizeAgentConfig({ ...AGENT_CONFIG_DEFAULT, baseUrl: '', approvedEndpoint: undefined, thinking: true })
+    expect(blank).toMatchObject({ baseUrl: builtInEndpoint, approvedEndpoint: builtInEndpoint, thinking: true, apiKey: '' })
+    const legacy = normalizeAgentConfig({ ...blank, baseUrl: `${builtInEndpoint}/`, approvedEndpoint: undefined, apiKey: config.apiKey })
+    expect(legacy.apiKey).toBe(config.apiKey)
+    expect(legacy.approvedEndpoint).toBe(builtInEndpoint)
+    expect(agentConnectionIssue(legacy)).toBe('')
   })
 })
 
@@ -51,11 +61,25 @@ describe('chatCompletion', () => {
       { ...config, baseUrl: 'https://another.example.test/v1' },
       { ...config, baseUrl: 'https://model.example.test/v1?' },
       { ...config, baseUrl: 'http://model.example.test/v1', approvedEndpoint: 'http://model.example.test/v1' },
+      { ...config, baseUrl: builtInEndpoint, approvedEndpoint: builtInEndpoint, model: 'different-model' },
+      { ...AGENT_CONFIG_DEFAULT, baseUrl: `${builtInEndpoint}/other`, approvedEndpoint: `${builtInEndpoint}/other`, apiKey: config.apiKey },
+      AGENT_CONFIG_DEFAULT,
       { ...config, apiKey: '' },
     ]) {
       await expect(chatCompletion(candidate, { messages: [], fetcher })).rejects.toBeInstanceOf(LlmError)
     }
     expect(requests).toBe(0)
+  })
+
+  it('sends the built-in model request without a separately saved approval', async () => {
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      expect(url).toBe(`${builtInEndpoint}/chat/completions`)
+      expect(init?.redirect).toBe('error')
+      return jsonResponse({ choices: [{ message: { content: 'available' } }] })
+    }) as typeof fetch
+    await expect(chatCompletion({ ...AGENT_CONFIG_DEFAULT, apiKey: config.apiKey, approvedEndpoint: undefined }, {
+      messages: [], fetcher,
+    })).resolves.toMatchObject({ choices: [{ content: 'available' }] })
   })
 
   it('allows a directly approved loopback and redacts request payload credentials', async () => {
