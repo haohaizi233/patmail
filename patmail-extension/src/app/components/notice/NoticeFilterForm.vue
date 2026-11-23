@@ -407,7 +407,6 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="importQuery.post_date_e"
               :min="importQuery.post_date_s"
-              default-today
               placeholder="结束日期"
               @update:model-value="patch('import', 'post_date_e', $event)"
             />
@@ -427,7 +426,6 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="importQuery.xiazairq_e"
               :min="importQuery.xiazairq_s"
-              default-today
               placeholder="结束日期"
               @update:model-value="patch('import', 'xiazairq_e', $event)"
             />
@@ -451,7 +449,6 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="importQuery.update_time_e"
               :min="importQuery.update_time_s"
-              default-today
               placeholder="结束日期"
               @update:model-value="patch('import', 'update_time_e', $event)"
             />
@@ -566,7 +563,6 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="downloadQuery.endTime"
               :min="downloadQuery.startTime"
-              default-today
               placeholder="结束日期"
               @update:model-value="patch('download', 'endTime', $event)"
             />
@@ -629,7 +625,6 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="certQuery.endTime"
               :min="certQuery.startTime || '2023-02-07'"
-              default-today
               placeholder="结束日期"
               @update:model-value="patch('cert', 'endTime', $event)"
             />
@@ -726,7 +721,6 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="replayQuery.endTime"
               :min="replayQuery.startTime"
-              default-today
               placeholder="结束日期"
               @update:model-value="patch('replay', 'endTime', $event)"
             />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LIMIT_BLOCKS, LIMIT_DATE_CELLS, buildLimitQueryXml, limitColumnLabels, limitDateDefaults, readLimitQueryXml } from '../../../src/api/limit-form'
+import { LIMIT_BLOCKS, buildLimitQueryXml, limitColumnLabels, readLimitQueryXml } from '../../../src/api/limit-form'
 
 describe('期限查询模板', () => {
   it('writes the site control names and reads them back as query fields', () => {
@@ -135,20 +135,6 @@ describe('期限查询模板', () => {
     for (const key of ['sales_help', 'flow_user_id', 'charge_date_from', 'proc_note', 'apply_tags_id', 'pic_dept_id', 'case_volume_customer', 'column1', 'column2', 'column3', 'column4', 'column5']) {
       expect(main).toContain(key)
       expect(more).not.toContain(key)
-    }
-  })
-
-  it('populates today date for every limit date range end field with MM-dd for month_day_to', () => {
-    const defaults = limitDateDefaults(new Date(2026, 10, 23, 10, 0))
-    expect(LIMIT_DATE_CELLS).toHaveLength(29)
-    expect(Object.keys(defaults).sort()).toEqual(LIMIT_DATE_CELLS.map(cell => cell.end).sort())
-    expect(defaults.month_day_to).toBe('11-23')
-    expect(defaults.legal_due_date_e).toBe('2026-11-23')
-    expect(defaults.int_due_date_e).toBe('2026-11-23')
-    expect(defaults.cus_due_date_e).toBe('2026-11-23')
-    expect(defaults.receipt_third_party_end).toBe('2026-11-23')
-    for (const [key, value] of Object.entries(defaults)) {
-      if (key !== 'month_day_to') expect(value).toBe('2026-11-23')
     }
   })
 })

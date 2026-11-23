@@ -1,6 +1,5 @@
 import { FILING_INPUT_FIELDS, type FilingInputField } from './filing-search-params'
 import { FILING_PICKER_FIELDS } from './dictionaries/picker-catalog'
-import { buildEndDateDefaults } from '../shared/date-defaults'
 
 /** 递交管理查询条件的排版。来源：`Forms/NewFiling/Finished.aspx` 的查询条件区，一排两个条件。控件形态对齐 FilingList.js。 */
 
@@ -121,7 +120,9 @@ export const FILING_DATE_CELLS: FilingDateCell[] = FILING_BLOCKS.filter((cell): 
  * 值按 `yyyy-MM-dd` 写，和 WdatePicker、原站提交的日期格式一致；开始日留空，想收窄再自己填。
  */
 export function filingDateDefaults(now: Date = new Date()): Record<string, string> {
-  return buildEndDateDefaults(FILING_DATE_CELLS, now)
+  const pad = (part: number): string => String(part).padStart(2, '0')
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return Object.fromEntries(FILING_DATE_CELLS.map(cell => [cell.end, today]))
 }
 
 export function filingFieldLabel(name: string): string {

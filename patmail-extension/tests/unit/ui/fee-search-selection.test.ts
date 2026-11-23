@@ -59,6 +59,8 @@ type MaybeRef<T> = T | { value: T }
 interface FeeSearchExpose {
   doSearch: (pageIndex?: number) => Promise<void> | void
   setValues: (patch: Record<string, string>) => void
+  billingSnapshot: () => Record<string, unknown>
+  restoreBillingSnapshot: (state: Record<string, unknown>) => void
   selectingAll: MaybeRef<boolean>
   selectedCount: MaybeRef<number>
   getSelectedRows: () => FeeSearchRow[]
@@ -153,10 +155,11 @@ function mockFeeRow(index: number): FeeSearchRow {
 }
 
 describe('FeeSearchQuery selection tests', () => {
-  it('多页默认勾选、失败页重试及手动全选使用正确的勾选范围', async () => {
-    const total = 25
-    const pageSize = 10
+  it('多页默认勾选、失败页重试及手动全选按每页 100 条翻页并使用正确的勾选范围', async () => {
+    const total = 250
+    const pageSize = 100
     const requestedPages: number[] = []
+    const requestedPageSizes: number[] = []
     const requestedVolumes: Array<string | undefined> = []
     let thirdPageAttempts = 0
 
@@ -165,6 +168,7 @@ describe('FeeSearchQuery selection tests', () => {
         if (message.type === MessageType.SearchFee) {
           const pageIndex = message.payload.query.pageIndex
           requestedPages.push(pageIndex)
+          requestedPageSizes.push(message.payload.query.pageSize)
           requestedVolumes.push(message.payload.query.case_volume)
           if (pageIndex === 3 && ++thirdPageAttempts <= 3) {
             return { type: MessageType.Error, payload: { message: 'fixture unavailable' } }
@@ -174,7 +178,7 @@ describe('FeeSearchQuery selection tests', () => {
           const rows: FeeSearchRow[] = []
           for (let i = start + 1; i <= end; i++) {
             const row = mockFeeRow(i)
-            if (i === 25) row.requestStatus = '审核中'
+            if (i === total) row.requestStatus = '审核中'
             rows.push(row)
           }
           return {
@@ -232,15 +236,16 @@ describe('FeeSearchQuery selection tests', () => {
     await settle()
     await vi.waitFor(() => expect(unwrapBool(vm().selectingAll)).toBe(false), 3000)
 
-    // 验证：3 页（1, 2, 3）都被请求
+    // 验证：3 页（1, 2, 3）都被请求，且每页 100 条
     expect(requestedPages).toContain(1)
     expect(requestedPages).toContain(2)
     expect(requestedPages).toContain(3)
+    expect(requestedPageSizes.every(size => size === 100)).toBe(true)
 
     const currentSelectedCount = () => unwrapCount(vm().selectedCount)
-    expect(currentSelectedCount()).toBe(20)
+    expect(currentSelectedCount()).toBe(200)
     button('重试没读到的页').click()
-    await vi.waitFor(() => expect(currentSelectedCount()).toBe(24))
+    await vi.waitFor(() => expect(currentSelectedCount()).toBe(249))
     expect(vm().getSelectedRows().some(row => row.requestStatus === '审核中')).toBe(false)
 
     // 验证：「取消全选所有」按钮可清空所有选择
@@ -252,35 +257,40 @@ describe('FeeSearchQuery selection tests', () => {
     expect(currentSelectedCount()).toBe(0)
     expect(vm().getSelectedRows().length).toBe(0)
 
-    // 验证：「全选所有」按钮可重新选回所有 25 条
+    // 验证：「全选所有」按钮可重新选回所有 250 条
     const selectAllBtn = button('全选所有')
     expect(selectAllBtn.disabled).toBe(false)
     selectAllBtn.click()
     await settle()
 
-    expect(currentSelectedCount()).toBe(25)
-    expect(vm().getSelectedRows().length).toBe(25)
+    expect(currentSelectedCount()).toBe(250)
+    expect(vm().getSelectedRows().length).toBe(250)
 
-    // 验证：「取消本页」仅取消当前第 1 页的 10 条（剩余 15 条依然被选中）
+    // 验证：「取消本页」仅取消当前第 1 页的 100 条（剩余 150 条依然被选中）
     const deselectCurrentPageBtn = button('取消本页')
     deselectCurrentPageBtn.click()
     await settle()
 
-    expect(currentSelectedCount()).toBe(15)
+    expect(currentSelectedCount()).toBe(150)
 
-    // 验证：「全选本页」重新勾上当前页的 10 条
+    // 验证：「全选本页」重新勾上当前页的 100 条
     const selectCurrentPageBtn = button('全选本页')
     selectCurrentPageBtn.click()
     await settle()
 
-    expect(currentSelectedCount()).toBe(25)
+    expect(currentSelectedCount()).toBe(250)
 
     vm().setValues({ case_volume: 'NEW-SCOPE' })
-    button('下一页').click()
+    const requestCountBeforeNext = requestedPages.length
+    const topNextBtn = document.querySelector<HTMLButtonElement>('nav[aria-label="费用查询顶部分页"] button:last-of-type')
+    expect(topNextBtn).not.toBeNull()
+    topNextBtn!.click()
     await settle()
-    expect(requestedPages.at(-1)).toBe(2)
-    expect(requestedVolumes.at(-1)).toBeUndefined()
-    expect(currentSelectedCount()).toBe(25)
+    expect(requestedPages.length).toBe(requestCountBeforeNext)
+    expect(document.querySelector('nav[aria-label="费用查询顶部分页"] span')?.textContent).toBe('第 2 / 3 页')
+    expect(document.querySelector('nav[aria-label="费用查询分页"] span')?.textContent).toBe('第 2 / 3 页')
+    expect(document.querySelector('.fee-data-table tbody tr .seq-col')?.textContent?.trim()).toBe('101')
+    expect(currentSelectedCount()).toBe(250)
 
     // 验证：「清空选择」清空全部
     const clearBtn = button('清空选择')
@@ -425,5 +435,80 @@ describe('FeeSearchQuery selection tests', () => {
 
     // 强制全选后为 10 项
     expect(currentSelectedCount()).toBe(10)
+  })
+
+  it('恢复旧版 pageSize=10 请款快照后，重新查询自动按每页 100 条翻页', async () => {
+    const requestedPageSizes: number[] = []
+    const total = 150
+
+    const bridge: MessageBridge = {
+      request: vi.fn(async (message: ContentRequest): Promise<ContentResponse> => {
+        if (message.type === MessageType.SearchFee) {
+          const { pageIndex, pageSize } = message.payload.query
+          requestedPageSizes.push(pageSize)
+          const start = (pageIndex - 1) * pageSize
+          const end = Math.min(start + pageSize, total)
+          const rows: FeeSearchRow[] = []
+          for (let i = start + 1; i <= end; i++) rows.push(mockFeeRow(i))
+          return {
+            type: MessageType.SearchFeeResult,
+            payload: {
+              ok: true,
+              data: {
+                total,
+                rows,
+                summary: { pageAgentFee: 0, pageOfficialFee: 0, pageThirdPartyFee: 0 }
+              }
+            }
+          }
+        }
+        if (message.type === MessageType.SearchFeeAmount) {
+          return { type: MessageType.SearchFeeAmountResult, payload: { ok: true, data: { FeeList: [] } } }
+        }
+        return { type: MessageType.Error, payload: { message: `Unhandled ${message.type}` } }
+      })
+    }
+
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+
+    app = createApp({
+      setup() {
+        return () =>
+          h(FeeSearchQuery, {
+            ref: (el: unknown) => {
+              compExpose = el as FeeSearchExpose | null
+            },
+            bridge,
+            userId: 'user-1',
+            canSearch: true
+          })
+      }
+    })
+    app.directive('hint', () => {})
+    app.provide('bridge', bridge)
+    app.mount(root)
+    await settle()
+
+    // 模拟从本地存储恢复旧版请款快照（pageSize: 10，无结果或带旧结果）
+    const snapshot = vm().billingSnapshot()
+    vm().restoreBillingSnapshot({ ...snapshot, pageSize: 10, result: null, query: null })
+    await settle()
+    expect(vm().billingSnapshot().pageSize).toBe(100)
+
+    vm().restoreBillingSnapshot({
+      ...snapshot,
+      pageSize: 10,
+      query: { pageIndex: 1, pageSize: 10 },
+      result: { total: 10, rows: [mockFeeRow(1)], summary: { pageAgentFee: 0, pageOfficialFee: 0, pageThirdPartyFee: 0 } }
+    })
+    await settle()
+
+    await vm().doSearch(1)
+    await settle()
+    await vi.waitFor(() => expect(unwrapBool(vm().selectingAll)).toBe(false), 3000)
+
+    expect(requestedPageSizes).toEqual([100, 100])
+    expect(unwrapCount(vm().selectedCount)).toBe(150)
   })
 })

@@ -6,7 +6,7 @@ import type { NormalizedDictionary } from '../api/dictionaries'
 import type { HistoryQueryOption } from '../api/query-history'
 import type { CustomerQueryProfile } from '../customer/types'
 import { fieldGroup, fieldLabel, parseQueryXml, resolveQueryTemplate } from '../query'
-import { PAGE_OPTIONS, cellKeys, fileDateDefaults, queryBlocks, type QueryCell, type QuerySection } from '../query/form-layout'
+import { PAGE_OPTIONS, cellKeys, queryBlocks, type QueryCell, type QuerySection } from '../query/form-layout'
 import { cellsFromLiveFields } from '../query/live-fields'
 import { buildQueryXml } from '../query/query-xml'
 import { fallbackFields, formCheckDiff, formFieldKey, hiddenFormFields, mergeFormFields, overlayFieldOptions, pageSelectOptions } from '../query/form-page'
@@ -203,6 +203,23 @@ function extraFilled(block: QuerySection, fields: Record<string, string>): boole
     return Boolean(fields[cell.key])
   })
 }
+function extraFilledCount(block: QuerySection): number {
+  const fields = resolved.value.fields
+  let count = 0
+  for (const cell of block.extra) {
+    if (cell.kind === 'download-name') continue
+    if (cell.kind === 'dates') {
+      if ([cell.start, cell.end, cell.empty].some(key => key && fields[key]?.trim())) count += 1
+      continue
+    }
+    if (cell.kind === 'checks') {
+      count += cell.items.filter(item => Boolean(fields[item.key]?.trim())).length
+      continue
+    }
+    if (fields[cell.key]?.trim()) count += 1
+  }
+  return count
+}
 const fieldGroupOrder = ['客户', '案件', '文件', '处理事项', '人员', '日期', '其它', '自定义']
 const fieldOptions = [...businessFields].sort((left, right) => {
   const groupDelta = fieldGroupOrder.indexOf(fieldGroup(left)) - fieldGroupOrder.indexOf(fieldGroup(right))
@@ -220,7 +237,7 @@ const accountTemplates = computed(() => [
 ])
 const canSubmit = computed(() => props.canSearch && !baseMissing.value &&
   (props.mode !== 'customer' || Boolean(selectedCustomer.value?.enabled)) &&
-  hasExplicitFileSearchFilter(explicitResolved.value.fields) && unavailableFields.value.length === 0)
+  hasExplicitFileSearchFilter(resolved.value.fields) && unavailableFields.value.length === 0)
 
 /** 查询按钮点不动时，把缺什么直接说清楚，不再只靠按钮变色。 */
 const submitHint = computed(() => {
@@ -248,13 +265,8 @@ const temporaryFields = computed(() => {
   }
   return fields
 })
-const explicitResolved = computed(() => resolveQueryTemplate(
-  baseMissing.value ? {} : baseFields.value,
-  props.mode === 'customer' ? selectedCustomer.value?.overrides : {},
-  temporaryFields.value
-))
 const resolved = computed(() => resolveQueryTemplate(
-  { ...fileDateDefaults(), ...(baseMissing.value ? {} : baseFields.value) },
+  baseMissing.value ? {} : baseFields.value,
   props.mode === 'customer' ? selectedCustomer.value?.overrides : {},
   temporaryFields.value
 ))
@@ -479,6 +491,11 @@ function restoreRecoveryState(state: unknown): void {
     ;(field as { value: unknown }).value = JSON.parse(JSON.stringify(value))
   }
   restoringForm = false
+  const nextOpen = { ...openExtra.value }
+  for (const block of formSections.value) {
+    if (extraFilled(block, resolved.value.fields)) nextOpen[block.title] = true
+  }
+  openExtra.value = nextOpen
 }
 watch(() => Object.values(recoveryRefs).map(field => field.value), () => emit('recovery-change'), { deep: true })
 defineExpose({ currentDownloadSelection, currentSearchTemplateName: () => baseMissing.value ? '' : baseName.value, recoveryState, restoreRecoveryState })
@@ -595,6 +612,49 @@ const cellLabels = computed(() => {
 })
 function optionLabelOf(key: string): string {
   return cellLabels.value[key] ?? fieldLabel(key)
+}
+function formatActiveFilterValue(key: string, raw: string): string {
+  const text = raw.trim()
+  if (!text) return ''
+  if (key === 'is_close') return text === '1' || text === '否' ? '否（不含结案）' : '是'
+  if (text === 'on' || text === 'true') return '已勾选'
+  if (key === 'filetype' && fileTypeNodes.value.length) {
+    const names = text.split(',').map(id => {
+      const part = id.trim()
+      return fileTypeNodes.value.find(node => node.id.toLowerCase() === part.toLowerCase())?.name ?? part
+    }).filter(Boolean)
+    return names.length <= 2 ? names.join('、') : `${names.slice(0, 2).join('、')} 等 ${names.length} 项`
+  }
+  const opts = optionsFor(key)
+  if (opts.length > 1) {
+    const parts = text.split(',').map(item => item.trim()).filter(Boolean)
+    const names = parts.map(part => opts.find(opt => opt.value === part)?.label ?? part)
+    return names.length <= 2 ? names.join('、') : `${names.slice(0, 2).join('、')} 等 ${names.length} 项`
+  }
+  return text
+}
+const activeFilterChips = computed(() => {
+  const entries: Array<{ key: string; label: string; valueText: string; fullText: string }> = []
+  for (const [key, raw] of Object.entries(resolved.value.fields)) {
+    if (!isFileSearchBusinessField(key)) continue
+    const text = raw.trim()
+    if (!text) continue
+    const label = optionLabelOf(key)
+    const valueText = formatActiveFilterValue(key, text)
+    entries.push({ key, label, valueText, fullText: `${label}：${valueText}` })
+  }
+  return entries
+})
+function clearAllFilters(): void {
+  const nextActive = { ...temporaryActive.value }
+  const next = { ...temporary.value }
+  for (const chip of activeFilterChips.value) {
+    nextActive[chip.key] = true
+    next[chip.key] = ''
+  }
+  temporaryActive.value = nextActive
+  temporary.value = next
+  typedKeys.value = {}
 }
 const unavailableFields = computed(() => Object.keys({ ...FILE_BASIC_OPTION_FIELDS, ...FILE_FLOW_OPTION_FIELDS, ...FILE_PICKER_FIELDS }).filter(key => {
   const ids = formValue(key).split(',').map(id => id.trim()).filter(Boolean)
@@ -969,7 +1029,7 @@ async function importCurrent(): Promise<void> {
 /** 导出 JSON：导出表单当前的查询条件，不含模板名。和保存模板同一套字段口径。 */
 function exportTemplateJson(): void {
   const fields: Record<string, string> = {}
-  for (const [key, value] of Object.entries(explicitResolved.value.fields)) {
+  for (const [key, value] of Object.entries(resolved.value.fields)) {
     if (value.trim()) fields[key] = value
   }
   if (!Object.keys(fields).length) {
@@ -1296,7 +1356,7 @@ async function saveBoth(): Promise<void> {
     return
   }
   const fields: Record<string, string> = {}
-  for (const [key, value] of Object.entries(explicitResolved.value.fields)) {
+  for (const [key, value] of Object.entries(resolved.value.fields)) {
     if (value.trim()) fields[key] = value
   }
   if (!hasExplicitFileSearchFilter(fields)) {
@@ -1658,7 +1718,9 @@ watch(selectedCustomerId, () => {
       <section v-for="block in formSections" :key="block.title" class="query-block">
         <div class="section-heading">
           <strong>{{ block.title }}</strong>
-          <button v-if="block.extra.length" type="button" class="text-button" @click="toggleExtra(block.title)">{{ openExtra[block.title] ? '收起' : '展开' }}</button>
+          <button v-if="block.extra.length" type="button" class="text-button" @click="toggleExtra(block.title)">
+            {{ openExtra[block.title] ? '收起' : (extraFilledCount(block) ? `展开（已填 ${extraFilledCount(block)} 项）` : '展开') }}
+          </button>
         </div>
         <div class="query-grid">
           <template v-for="(cell, index) in shownCells(block)" :key="block.title + index">
@@ -1681,7 +1743,7 @@ watch(selectedCustomerId, () => {
               <span class="date-pair">
                 <WDatePicker :id="cell.start" :model-value="formValue(cell.start)" :max="formValue(cell.end)" placeholder="起" @update:model-value="setOverride(cell.start, String($event))" />
                 <em>到</em>
-                <WDatePicker :id="cell.end" :model-value="formValue(cell.end)" :min="formValue(cell.start)" default-today placeholder="止" @update:model-value="setOverride(cell.end, String($event))" />
+                <WDatePicker :id="cell.end" :model-value="formValue(cell.end)" :min="formValue(cell.start)" placeholder="止" @update:model-value="setOverride(cell.end, String($event))" />
                 <label v-if="cell.empty" class="empty-check"><input :checked="checked(cell.empty)" type="checkbox" @change="onCheck(cell.empty, $event)" />为空</label>
               </span>
             </div>
@@ -1724,6 +1786,14 @@ watch(selectedCustomerId, () => {
       <p v-if="fileDropNote" class="hint">{{ fileDropNote }}</p>
       <p v-if="checkMessage" class="hint">{{ checkMessage }}</p>
       <p v-if="resolved.warnings.length" class="hint">{{ resolved.warnings[0] }}</p>
+    </div>
+    <div v-if="canSearch && activeFilterChips.length" class="active-filters-bar" aria-label="当前生效查询条件">
+      <span class="active-filters-title">当前生效条件（{{ activeFilterChips.length }}）：</span>
+      <span v-for="chip in activeFilterChips" :key="chip.key" class="filter-chip">
+        <span class="filter-chip-text clip" v-hint.clip="chip.fullText">{{ chip.label }}：{{ chip.valueText }}</span>
+        <button type="button" class="filter-chip-del" :aria-label="`清除${chip.label}`" v-hint="`清除「${chip.label}」`" @click="setOverride(chip.key, '')">×</button>
+      </span>
+      <button type="button" class="text-button active-filters-clear" @click="clearAllFilters">清空条件</button>
     </div>
     <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" v-hint="submitHint" @click="search">查询文件</button>
     <p v-if="canSearch && !canSubmit" class="hint" role="status">{{ submitHint }}</p>

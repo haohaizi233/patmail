@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { formatWDate, type WDateFormat } from '../../shared/date-defaults'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { menuBoxStyle, placeMenu } from './theme-select'
 
 /** 复刻原站 My97 `WdatePicker` 的日期框：文本输入加日历弹层，起止用 min / max 互限，值是 `yyyy-MM-dd`。 */
@@ -11,13 +10,11 @@ const props = withDefaults(defineProps<{
   // eslint-disable-next-line vue/require-default-prop -- 存量豁免：optional prop 由父组件保证传入
   max?: string
   /** 原站的 `dateFmt`。申请日(月日) 一格是 `MM-dd`，其余日期都是 `yyyy-MM-dd`。 */
-  format?: WDateFormat
-  /** 为 true 且初始值为空时，在组件封装层自动回填当天日期；用户显式清空后不再回填。 */
-  defaultToday?: boolean
+  format?: 'yyyy-MM-dd' | 'MM-dd'
   disabled?: boolean
   id?: string
   placeholder?: string
-}>(), { modelValue: '', defaultToday: false, disabled: false, id: undefined, placeholder: '', format: 'yyyy-MM-dd' })
+}>(), { modelValue: '', disabled: false, id: undefined, placeholder: '', format: 'yyyy-MM-dd' })
 
 const emit = defineEmits<{ 'update:modelValue': [value: string]; change: [value: string] }>()
 
@@ -26,11 +23,11 @@ const MONTH_DAY = /^\d{2}-\d{2}$/
 const WEEK_TITLES = ['日', '一', '二', '三', '四', '五', '六']
 const MONTH_TITLES = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月']
 
+function pad(part: number): string {
+  return String(part).padStart(2, '0')
+}
+
 const today = new Date()
-const userCleared = ref(false)
-watch(() => props.modelValue, value => {
-  if (value?.trim()) userCleared.value = false
-})
 
 /** `MM-dd` 没有年份，补一个参照年再进日历；起止比较也落在同一年里。 */
 function parseDate(text: string): Date | null {
@@ -51,7 +48,8 @@ function parseDate(text: string): Date | null {
 }
 
 function formatDate(date: Date): string {
-  return formatWDate(date, props.format)
+  if (props.format === 'MM-dd') return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
 function dayStart(date: Date): number {
@@ -152,7 +150,6 @@ function confirm(): void {
 }
 
 function clear(): void {
-  userCleared.value = true
   picked.value = null
   emit('update:modelValue', '')
   emit('change', '')
@@ -187,7 +184,6 @@ function onInput(event: Event): void {
 function onBlur(): void {
   const text = (props.modelValue ?? '').trim()
   if (!text) {
-    userCleared.value = true
     if (props.modelValue !== '') emit('update:modelValue', '')
     return
   }
@@ -227,12 +223,6 @@ watch(opened, value => {
   document.removeEventListener('pointerdown', onPointer, true)
   window.removeEventListener('resize', updatePosition)
   window.removeEventListener('scroll', updatePosition, true)
-})
-
-onMounted(() => {
-  if (props.defaultToday && !props.disabled && !props.modelValue?.trim() && !userCleared.value && !outOfRange(today)) {
-    emit('update:modelValue', formatDate(today))
-  }
 })
 
 onBeforeUnmount(() => {

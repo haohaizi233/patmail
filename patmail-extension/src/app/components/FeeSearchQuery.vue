@@ -17,7 +17,6 @@ import {
   FEE_OPTION_KEYS,
   FEE_ADVANCED_KEYS,
   feeCellKey,
-  feeDateDefaults,
   type FeeCell
 } from '../../api/fee-form'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
@@ -79,9 +78,8 @@ watch(queryTimeoutMs, value => {
   void writeFilingTimeout(value)
 }, { flush: 'sync' })
 
-// Form Values (日期结束日默认当天，其余条件默认空)
+// Form Values (all default empty matching live FeeSearch.aspx)
 const values = ref<Record<string, string>>({
-  ...feeDateDefaults(),
   case_type: '',
   pay_status: '',
   is_close: '',
@@ -524,8 +522,10 @@ function onApplicantGuardClick(): void {
 const searchState = ref<'idle' | 'loading' | 'error' | 'empty' | 'success'>('idle')
 const searchMessage = ref('')
 const result = ref<FeeSearchResult | null>(null)
+const DEFAULT_FEE_PAGE_SIZE = 100
 const pageIndex = ref(1)
-const pageSize = ref(10)
+const pageSize = ref(DEFAULT_FEE_PAGE_SIZE)
+const userPickedPageSize = ref(false)
 const pageSizeOptions = [
   { value: 10, label: '10 条/页' },
   { value: 15, label: '15 条/页' },
@@ -606,6 +606,7 @@ function applyInitialValues(): void {
 applyInitialValues()
 watch(() => props.initialToken, () => {
   invalidateSearch()
+  if (!userPickedPageSize.value) pageSize.value = DEFAULT_FEE_PAGE_SIZE
   applyInitialValues()
 })
 
@@ -692,7 +693,11 @@ async function readSelectionPages(pages: number[]): Promise<void> {
         return { ok: false, session: false }
       }
     }, {
-      concurrency: 6,
+      // EASY Report.ashx 持有 ASP.NET Session 排他锁，服务端按单会话串行执行；
+      // 顺序单路翻页可避免队列堆积超过 60s 触发无谓超时重试，整体更快更稳。
+      concurrency: 1,
+      attempts: 3,
+      gapMs: 800,
       signal,
       onPage: (page, rows) => {
         if (gen !== currentSearchGeneration.value) return
@@ -756,6 +761,32 @@ function invalidateSearch(): void {
   totalAmountInfo.value = { originalAgentFee: 0, discountAgentFee: 0, officialFee: 0, thirdPartyFee: 0 }
 }
 
+function summarizeFeePage(rows: FeeSearchRow[]): FeeSearchResult['summary'] {
+  let pageAgentFee = 0
+  let pageOfficialFee = 0
+  let pageThirdPartyFee = 0
+  for (const row of rows) {
+    const fc = row.feeClass.toUpperCase()
+    if (fc === 'A') pageAgentFee += row.amount
+    else if (fc === 'O') pageOfficialFee += row.amount
+    else if (fc === 'T') pageThirdPartyFee += row.amount
+  }
+  return { pageAgentFee, pageOfficialFee, pageThirdPartyFee }
+}
+
+function readCachedFeePage(page: number): FeeSearchResult | null {
+  const res = result.value
+  const ids = cachedPages.get(page)
+  if (!res || !ids || !ids.size || failedPages.value.includes(page)) return null
+  const rows: FeeSearchRow[] = []
+  for (const id of ids) {
+    const row = allKnownRows.value.get(id)
+    if (!row) return null
+    rows.push(row)
+  }
+  return { total: res.total, rows, summary: summarizeFeePage(rows) }
+}
+
 // Perform Search
 async function doSearch(page = 1, newSearch = true): Promise<void> {
   const b = activeBridge()
@@ -765,10 +796,24 @@ async function doSearch(page = 1, newSearch = true): Promise<void> {
     return
   }
 
-  if (newSearch) invalidateSearch()
+  if (newSearch) {
+    invalidateSearch()
+    if (!userPickedPageSize.value) pageSize.value = DEFAULT_FEE_PAGE_SIZE
+  }
   if (!newSearch && selectionPending.value) return
   const q = newSearch ? buildCurrentQuery(page, pageSize.value) : lastQuery.value && { ...lastQuery.value, pageIndex: page }
   if (!q) return
+  if (!newSearch) {
+    const cached = readCachedFeePage(page)
+    if (cached) {
+      pageIndex.value = page
+      result.value = cached
+      searchState.value = cached.total > 0 && cached.rows.length > 0 ? 'success' : 'empty'
+      searchMessage.value = ''
+      emit('searched', q)
+      return
+    }
+  }
   const gen = currentSearchGeneration.value
   const signal = searchController.signal
   searchState.value = 'loading'
@@ -891,6 +936,8 @@ function resetForm(): void {
   void applyTemplate('')
   exportNotice.value = ''
   showTypeMode.value = 'all'
+  userPickedPageSize.value = false
+  pageSize.value = DEFAULT_FEE_PAGE_SIZE
   invalidateSearch()
 }
 
@@ -902,6 +949,7 @@ function changePage(delta: number): void {
 }
 
 function onPageSizeChange(): void {
+  userPickedPageSize.value = true
   void doSearch(1)
 }
 
@@ -928,6 +976,40 @@ const columns = [
   { key: 'customerName', label: '客户名称' },
   { key: 'applicant', label: '申请人' }
 ]
+
+function feeCellText(row: FeeSearchRow, key: string): string {
+  const val = (row as unknown as Record<string, unknown>)[key]
+  if (val === null || val === undefined || val === '') return '-'
+  return String(val)
+}
+
+function feeCellHint(row: FeeSearchRow, key: string): string {
+  const text = feeCellText(row, key)
+  return text === '-' ? '' : text
+}
+
+function feeRowDetail(row: FeeSearchRow): string {
+  const lines: string[] = []
+  const add = (label: string, value: unknown) => {
+    const text = value === null || value === undefined ? '' : String(value).trim()
+    if (text) lines.push(`${label}：${text}`)
+  }
+  add('我方文号', row.caseVolume)
+  add('客户文号', row.caseVolumeCustomer)
+  add('案件名称', row.caseName)
+  add('申请号', row.appNo)
+  add('费用名称', row.feeType)
+  add('金额', `${row.amount} ${row.currency}${row.rate && row.rate !== 1 ? `（汇率 ${row.rate}，折合 ${row.targetAmount} ${row.targetCurrency}）` : ''}`)
+  add('状态', [row.requestStatus, row.receiveStatus, row.payStatus, row.noticeStatus].filter(Boolean).join(' / '))
+  add('请款单号', row.requestNo)
+  add('缴费单号', row.billNo || row.paymentNo)
+  add('处理事项', row.ctrlProc)
+  add('客户名称', row.customerName)
+  add('申请人', row.applicant)
+  add('缴费期限', row.payDueDate)
+  add('完成日期', row.finishDate)
+  return lines.join('\n')
+}
 
 // 原站高级导出弹窗（1:1 对齐 IhgAdvExport.aspx：导出清单 / 导出勾选费用 / 导出汇总数据）
 const exportModalOpen = ref(false)
@@ -959,7 +1041,6 @@ function onFeeExported(message: string): void {
 }
 
 const DEFAULT_FEE_VALUES: Record<string, string> = {
-  ...feeDateDefaults(),
   case_type: '',
   pay_status: '',
   is_close: '',
@@ -1101,11 +1182,12 @@ function billingSnapshot() {
 
 function restoreBillingSnapshot(state: ReturnType<typeof billingSnapshot>): void {
   invalidateSearch()
+  userPickedPageSize.value = false
   values.value = state.values
   checkedBoxes.value = state.checks
   selectedCustomers.value = state.customers
   selectedRuleOutCustomers.value = state.excludedCustomers
-  pageSize.value = state.pageSize
+  pageSize.value = state.result && state.query ? state.query.pageSize : DEFAULT_FEE_PAGE_SIZE
   pageIndex.value = state.pageIndex
   lastQuery.value = state.query
   result.value = state.result
@@ -1365,7 +1447,6 @@ defineExpose({
                   :model-value="valueOf(cell.end)"
                   :min="valueOf(cell.start)"
                   :disabled="Boolean(cell.empty && isChecked(cell.empty))"
-                  default-today
                   placeholder="止"
                   @update:model-value="setValue(cell.end, String($event))"
                 />
@@ -1574,7 +1655,6 @@ defineExpose({
                     :model-value="valueOf(cell.end)"
                     :min="valueOf(cell.start)"
                     :disabled="Boolean(cell.empty && isChecked(cell.empty))"
-                    default-today
                     placeholder="止"
                     @update:model-value="setValue(cell.end, String($event))"
                   />
@@ -1715,6 +1795,11 @@ defineExpose({
           <button v-if="failedPages.length > 0 && !selectingAll" type="button" class="ghost tiny warn-btn" @click="retryFailedPages">重试没读到的页</button>
           <span v-if="selectedCount > 0" class="hint">已勾选 {{ selectedCount }} 项</span>
         </div>
+        <nav v-if="result && totalPages > 1" class="pagination toolbar-pagination" aria-label="费用查询顶部分页">
+          <button type="button" class="ghost tiny" :disabled="pageIndex <= 1 || selectionPending" @click="changePage(-1)">上一页</button>
+          <span>第 {{ pageIndex }} / {{ totalPages }} 页</span>
+          <button type="button" class="ghost tiny" :disabled="pageIndex >= totalPages || selectionPending" @click="changePage(1)">下一页</button>
+        </nav>
         <div class="page-size-selector">
           每页条数
           <ThemeSelect v-model="pageSize" aria-label="每页条数" :options="pageSizeOptions" @update:model-value="onPageSizeChange" />
@@ -1743,7 +1828,7 @@ defineExpose({
               </th>
               <th class="seq-col">序号</th>
               <th class="op-col">操作</th>
-              <th v-for="col in columns" :key="col.key">{{ col.label }}</th>
+              <th v-for="col in columns" :key="col.key"><span class="clip" v-hint.clip="col.label">{{ col.label }}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -1756,13 +1841,15 @@ defineExpose({
                   @change="toggleRow(row, ($event.target as HTMLInputElement).checked)"
                 />
               </td>
-              <td class="seq-col">{{ row.sn }}</td>
+              <td class="seq-col">
+                <span class="row-detail-trigger" v-hint="feeRowDetail(row)">{{ row.sn }}</span>
+              </td>
               <td class="op-col">
-                <span class="op-icons" v-hint="'查看 / 编辑'">📄 ✏️</span>
+                <span class="op-icons row-detail-trigger" v-hint="feeRowDetail(row)">📄 ✏️</span>
               </td>
               <td v-for="col in columns" :key="col.key">
-                <span class="cell-text" v-hint.clip="String((row as unknown as Record<string, unknown>)[col.key] || '')">
-                  {{ (row as unknown as Record<string, unknown>)[col.key] ?? '-' }}
+                <span class="cell-text clip" v-hint.clip="feeCellHint(row, col.key)">
+                  {{ feeCellText(row, col.key) }}
                 </span>
               </td>
             </tr>
@@ -2109,7 +2196,8 @@ defineExpose({
 
 .fee-results-section > .section-heading, .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .fee-results-toolbar .table-actions { flex: 1 1 360px; min-width: 0; }
-.page-size-selector { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; white-space: nowrap; font-size: 12px; color: #8a7290; }
+.toolbar-pagination { margin: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; font-size: 12px; color: #8a7290; }
+.page-size-selector { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; color: #8a7290; }
 .page-size-selector :deep(.theme-select) { flex: 0 0 92px; }
 .page-size-selector :deep(.theme-select-trigger) { min-width: 0; }
 .page-size-selector :deep(.theme-select), .query-timeout :deep(.theme-select) { width: 92px; }
@@ -2123,7 +2211,9 @@ defineExpose({
 .fee-data-table .seq-col { width: 44px; text-align: center; }
 .fee-data-table .op-col { width: 60px; text-align: center; }
 .op-icons { font-size: 13px; letter-spacing: 4px; }
-.cell-text { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-detail-trigger { cursor: help; }
+.fee-data-table .clip,
+.cell-text { display: block; width: 100%; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 1100px) {
   .fee-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

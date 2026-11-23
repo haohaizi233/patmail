@@ -73,7 +73,7 @@ export function normalizeFeeSearch(raw: unknown, query: FeeSearchQuery): ApiResu
       feeId,
       caseId: cleanString(record.case_id),
       procId: cleanString(record.proc_id),
-      sn: parseNumber(record.sn, index + 1 + ((query.pageIndex || 1) - 1) * (query.pageSize || 10)),
+      sn: parseNumber(record.sn, index + 1 + ((query.pageIndex || 1) - 1) * (query.pageSize || 100)),
       caseVolume: cleanString(record.case_volume),
       caseVolumeCustomer: cleanString(record.case_volume_customer),
       caseStatus: cleanString(record.case_status),

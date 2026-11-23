@@ -368,7 +368,7 @@ export function buildFeeSearchParams(
   const params = new URLSearchParams()
   params.set('Call', 'FeeSearch')
   params.set('pageIndex', String(query.pageIndex || 1))
-  params.set('pageSize', String(query.pageSize || 10))
+  params.set('pageSize', String(query.pageSize || 100))
   params.set('colsel', buildFeeColsel(columns))
 
   for (const field of FEE_SEARCH_EMPTY_DEFAULT_FIELDS) {
