@@ -16,7 +16,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 - [WIPO eHague：HTTP、JSF、上传与扩展 RPC 契约](external-platforms/hague.md)
 - [海牙技术算法：材料解析、并发隔离、检查点与有界容灾](../patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md)
 
-按「入口 + Call」去重后，本索引共 **455** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
+按「入口 + Call」去重后，本索引共 **456** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
 
 表里的「骨架」链到 14–43 的响应字段，「01」到「13」链到页面怎么读这些字段。两边都有的 Call，字段骨架看抓包文档，页面含义看专题文档。
 
@@ -73,7 +73,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [46-运行期补充接口契约.md](46-运行期补充接口契约.md) | 运行期已接入的会话探测、费用辅助树、提案流程、递交版本探测、代理所检索与 FileHandler 取件契约 |
 | [47-来文管理.md](47-来文管理.md) | 来文管理 NoticeInfo.aspx 全量 8 个页签查询、字典热加载、CPC 扫码鉴权与轮询、业务写操作、四大导出与压缩包上传 |
 
-14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。44–47 补齐费用查询、高级导出、运行期补充接口与来文管理全量接口。下面的入口表才是去重后的 455。
+14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。44–47 补齐费用查询、高级导出、运行期补充接口与来文管理全量接口。下面的入口表才是去重后的 456。
 
 ## 抓包里需要单独看的几条
 
@@ -129,9 +129,9 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [UploadFile.aspx](#uploadfileaspx) | 1 |
 | [AgencyAction.ashx](#agencyactionashx) | 1 |
 | [FileHandler.ashx](#filehandlerashx) | 1 |
-| [UploadFile.ashx](#uploadfileashx) | 3 |
+| [UploadFile.ashx](#uploadfileashx) | 4 |
 | [Forms/MultiUPload/UploadMethod.ashx](#formsmultiuploaduploadmethodashx) | 1 |
-| 合计 | 455 |
+| 合计 | 456 |
 
 ## 全部接口
 
@@ -513,7 +513,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetMenuPermit` | [骨架](43-首页与待办.md#baseinfoashx-getmenupermit) |
 | `GetProjectMenu` | [骨架](31-基础信息补充.md#baseinfoashx-getprojectmenu) |
 | `GetProjectTypeDic` | [骨架](22-基础信息.md#baseinfoashx-getprojecttypedic) |
-| `GetPublishConfig` | [骨架](22-基础信息.md#baseinfoashx-getpublishconfig)。参数是成对的 type 和 key |
+| `GetPublishConfig` | [骨架](22-基础信息.md#baseinfoashx-getpublishconfig) · [47](47-来文管理.md#1-初始化字典热加载与角标计数)。参数是成对的 type 和 key |
 | `GetSet` | [骨架](43-首页与待办.md#baseinfoashx-getset) |
 | `GetStageByProjectTypeID` | [骨架](22-基础信息.md#baseinfoashx-getstagebyprojecttypeid) |
 | `GetUserDetail` | [骨架](31-基础信息补充.md#baseinfoashx-getuserdetail) |
@@ -878,10 +878,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### UploadFile.ashx
 
-3 个。
+4 个。
 
 | Call | 文档 |
 |---|---|
+| `GetUploadProcessDetailList` | [47](47-来文管理.md#6-cpc--国防官文压缩包上传与进度追踪)。按 `record_id` 与处理状态查询单批次官文上传明细 |
 | `GetUploadProcessList` | [47](47-来文管理.md#6-cpc--国防官文压缩包上传与进度追踪)。查询官文压缩包上传解析进度列表 |
 | `UploadCPCFileNew` | [47](47-来文管理.md#6-cpc--国防官文压缩包上传与进度追踪)。提交普通 CPC 官文压缩包解压分析 |
 | `UploadCPCFileNewGF` | [47](47-来文管理.md#6-cpc--国防官文压缩包上传与进度追踪)。提交国防专利官文压缩包解压分析 |
