@@ -46,12 +46,16 @@ const props = defineProps<{
   signatureName: string
   signatureText: string
   catalog: WorkflowCatalog
+  lockedWorkflowId?: string
 }>()
 
 const bridge = inject<MessageBridge>('bridge')
 const { connection, call } = useWorkspace()
 const saving = ref(false)
-const workflowId = ref('pct-reminder')
+const workflowId = ref(props.lockedWorkflowId || 'pct-reminder')
+watch(() => props.lockedWorkflowId, next => {
+  if (next) workflowId.value = next
+})
 const sheetName = ref('')
 const sheetNotice = ref('')
 const rows = ref<PctTaskRow[]>([])
@@ -517,7 +521,7 @@ function applyDesk(payload: unknown): void {
   if (isQueryGuid(live) && owner && live.toLowerCase() !== owner) return
   const next = desk.rows.filter((row): row is PctTaskRow => Boolean(row) && typeof row === 'object' && typeof (row as PctTaskRow).ourVolume === 'string')
   if (!next.length && !Array.isArray(desk.progress)) return
-  if (typeof desk.workflowId === 'string') workflowId.value = desk.workflowId
+  if (!props.lockedWorkflowId && typeof desk.workflowId === 'string') workflowId.value = desk.workflowId
   if (typeof desk.sheetName === 'string') sheetName.value = desk.sheetName
   if (typeof desk.senderId === 'string') senderId.value = desk.senderId
   if (typeof desk.status === 'string') status.value = desk.status
@@ -1602,18 +1606,18 @@ async function askGaps(retried = false): Promise<void> {
 }
 
 function definitionHint(item: WorkflowDefinition | null): string {
-  if (!item || isRunnableWorkflow(item) || item.id === FILE_MANAGE_ID) return ''
+  if (!item || isRunnableWorkflow(item) || item.id === FILE_MANAGE_ID || item.id === FILING_EXPORT_ID) return ''
   return '这条还缺读取表格、对收件人和提交审核要用的步骤，现在还不能按它生成预览。'
 }
 </script>
 
 <template>
   <section class="card">
-    <div class="card-head"><h2>按工作流发文</h2></div>
+    <div class="card-head"><h2>{{ props.lockedWorkflowId ? (definition?.label || '按工作流发文') : '按工作流发文' }}</h2></div>
     <p v-if="workflowId === FILE_MANAGE_ID" class="hint">选择已经绑好文件管理的客户。按这位客户保存的查询条件和发文方式查出文件。文件描述按发文映射对上发文类型。收件人是案件联系人，抄送是默认发件人和商务，审核人是默认审核人，标题用标题模板，正文用发文页邮件签名下拉里的格式。所属部门包含研发本部时，在文件描述右侧写入全部发明人，顿号分隔。</p>
     <p v-else-if="workflowId === FILING_EXPORT_ID" class="hint">这条工作流不发文：在下面的查询表单里现场查出递交记录并勾选（逐行、全选本页、全选所有都行），点「导出 Excel」，下表逐件出导出预览，取完数自动下载九列 Excel（我方文号、申请日、案件流向、处理事项、流程专员（退回者）、代理师（接受者）、代理师所属部门、退回的原因、案件状态，首行冻结；表格下方顺延一张前10大退回横向柱状图）。每件只打两个接口：流程历史加人员部门。</p>
     <p v-else class="hint">按工作表名称识别「提醒申请PCT」「PCT进国家阶段官方绝限」「提醒申请涉外外观」，并写入处理事项。进国家有客户文号就用贵方案号，没有客户文号就用我方案号。外观同样按客户文号选择「提醒涉外外观申请（贵方案号）」或「提醒外观申请（我方案号）」，发文类型按完整名称精确匹配。同一客户里空着的联系人默认只在连成整块时顺延补上，中间隔了别的客户就断开；「同客户隔行也顺延补上」打开后不受截断影响。完全空着的，核对时会带上客户要求和著录项目里的发明人、客户联系人。交给助手时只使用这份暂存，不再查客户名单或案件。助手按文号把收件人写回这一行。核对完成后可以导出，在原表上加一列审核状态。邮箱那一列不读。</p>
-    <div class="form-grid">
+    <div v-if="!props.lockedWorkflowId" class="form-grid">
       <div v-if="workflowOptions.length === 0" class="span-all">
         <EmptyGuide text="还没有工作流。去工作流里看 PCT提醒。" action="去工作流" hash="/workflow" />
       </div>

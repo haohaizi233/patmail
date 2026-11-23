@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Bunny from '../../shell/components/Bunny.vue'
 import MailTypeTreeSelect from '../../shell/components/MailTypeTreeSelect.vue'
 import PageHead from '../../shell/components/PageHead.vue'
@@ -9,16 +9,25 @@ import JihuaUploadPage from './JihuaUploadPage.vue'
 import HaguePage from './HaguePage.vue'
 import BillingWorkflowPage from './BillingWorkflowPage.vue'
 import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
+import DocsMarkdown from '../components/DocsMarkdown.vue'
+import WorkflowMailEntry from '../components/WorkflowMailEntry.vue'
 import hagueGuide from '../../../docs/workflows/海牙新申请.md?raw'
 import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
 import billingGuide from '../../../docs/workflows/请款.md?raw'
+import pctGuide from '../../../docs/workflows/PCT提醒.md?raw'
+import pengchengGuide from '../../../docs/workflows/PCT鹏城专案.md?raw'
+import fileManageGuide from '../../../docs/workflows/文件管理.md?raw'
+import filingExportGuide from '../../../docs/workflows/递交管理-已完成导出.md?raw'
 import {
   cloneCatalog,
   cloneWorkflow,
   defaultWorkflowCatalog,
   duplicateWorkflow,
+  FILE_MANAGE_ID,
+  FILING_EXPORT_ID,
   isBuiltinStep,
   isExtraParam,
+  isRunnableWorkflow,
   isSystemWorkflow,
   nextExtraId,
   paramWarning,
@@ -42,22 +51,38 @@ import {
   type ChoiceOption
 } from '../../workflow/choices'
 import { matchPctMailTypes } from '../../customer/mail-flow'
+import { fetchMailSenders } from '../../customer/mailset-load'
+import type { MailSender } from '../../customer/mailset'
+import type { MailSignatureItem } from '../../mail/easy/signature-read'
+import { fetchMailboxSignature } from '../../mail/signature-load'
+import { defaultSignatureChoice, signatureChoices } from '../../mail/signature-catalog'
+import type { MessageBridge } from '../../shared/message'
 import type { TreeOption } from '../../query/option-tree'
 import { workflowPreview } from '../../workflow/preview-chart'
 import { SKILLS, skillTint, stepCaption } from '../../workflow/skills'
+import { useWorkspace } from '../composables/useWorkspace'
 import { useWorkflowChoices } from '../composables/useWorkflowChoices'
 import { useQuerySurfaces } from '../composables/useQuerySurfaces'
 import { confirmDialog } from '../dialog'
 import { createRecoveryClient } from '../../recovery/client'
 import { systemScope } from '../../recovery/wal-ledger'
-import { sanitizeWorkflowDeskState } from './workflow-desk-state'
+import { sanitizeWorkflowDeskState, type WorkflowFlowView } from './workflow-desk-state'
 
 type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague' | 'billing'
+
+const FLOW_GUIDES: Record<string, string> = {
+  'pct-reminder': pctGuide,
+  'pct-pengcheng': pengchengGuide,
+  [FILE_MANAGE_ID]: fileManageGuide,
+  [FILING_EXPORT_ID]: filingExportGuide,
+}
 
 const screen = ref<Screen>('sea')
 const hagueView = ref<'guide' | 'use'>('use')
 const jihuaView = ref<'guide' | 'use'>('use')
 const billingView = ref<'guide' | 'use'>('use')
+const flowView = ref<WorkflowFlowView>('steps')
+const flowGuideSeen = ref(false)
 const billingMounted = ref(false)
 watch(screen, next => { if (next === 'billing') billingMounted.value = true }, { immediate: true })
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
@@ -70,8 +95,52 @@ const oceanNotice = ref('')
 const newName = ref('')
 const picked = ref<string[]>([])
 const creating = ref(false)
+const bridge = inject<MessageBridge | undefined>('bridge', undefined)
+const workspace = useWorkspace()
+const workspaceCustomers = computed(() => workspace.customers?.value ?? [])
+const workspaceOperatorId = computed(() => workspace.connection.value.operatorId ?? '')
+const workspaceReady = computed(() => workspace.connection.value.sessionStatus === 'authenticated')
 const { rules, mailTypes, senders, procs, notice: choiceNotice, load: loadChoices } = useWorkflowChoices()
 const { surfaces: querySurfaces } = useQuerySurfaces()
+const entrySenders = ref<MailSender[]>([])
+const mailSenders = computed<MailSender[]>(() => entrySenders.value.length > 0
+  ? entrySenders.value
+  : senders.value.map(item => ({ id: item.id, name: item.label, email: '', label: item.label, isDefault: false, isPublic: false, signature: '' }))
+)
+const siteSignatures = ref<MailSignatureItem[]>([])
+const siteReservedId = ref('')
+let useAssetsLoaded = false
+const signatureList = computed(() => signatureChoices(siteSignatures.value, rules.value?.signatures ?? [], workspaceOperatorId.value))
+const signatureDefaultKey = computed(() => defaultSignatureChoice(signatureList.value, rules.value?.defaultSignatureId ?? null, siteReservedId.value || null)?.key ?? '')
+const signatureName = computed(() => signatureList.value.find(item => item.key === signatureDefaultKey.value)?.name ?? '')
+const signatureText = computed(() => signatureList.value.find(item => item.key === signatureDefaultKey.value)?.content.trim() ?? '')
+
+async function loadUseAssets(): Promise<void> {
+  if (!bridge || !workspaceReady.value || useAssetsLoaded) return
+  useAssetsLoaded = true
+  try {
+    const [loadedSenders, loadedSignatures] = await Promise.all([
+      fetchMailSenders(bridge, false),
+      fetchMailboxSignature(bridge, false)
+    ])
+    entrySenders.value = loadedSenders.items
+    siteSignatures.value = loadedSignatures.data?.items ?? []
+    siteReservedId.value = loadedSignatures.data?.reserved?.id ?? ''
+  } catch {
+    useAssetsLoaded = false
+  }
+}
+
+function flowGuideFor(flow: { id?: string } | null | undefined): string {
+  return flow?.id ? (FLOW_GUIDES[flow.id] ?? '') : ''
+}
+
+function canUseFlow(flow: WorkflowDefinition | null | undefined): boolean {
+  return Boolean(flow && (isRunnableWorkflow(flow) || flow.id === FILE_MANAGE_ID || flow.id === FILING_EXPORT_ID))
+}
+
+const flowGuideSource = computed(() => flowGuideFor(draft.value).replace(/^# [^\r\n]+\r?\n/, ''))
+
 const WORD_PARAMS = new Set(['type_keyword', 'customer_keyword', 'our_keyword', 'city_keyword', 'other_city_keyword'])
 const LISTED_CHOICES = new Set(['sender_mailset', 'surface_label'])
 let silence = false
@@ -86,7 +155,7 @@ function validDraft(value: unknown): value is WorkflowDefinition {
 }
 
 function deskState() {
-  return { screen: screen.value, hagueView: hagueView.value, jihuaView: jihuaView.value, billingView: billingView.value, draft: draft.value, selectedId: selectedId.value, dirty: dirty.value, picked: picked.value, newName: newName.value }
+  return { screen: screen.value, hagueView: hagueView.value, jihuaView: jihuaView.value, billingView: billingView.value, flowView: flowView.value, draft: draft.value, selectedId: selectedId.value, dirty: dirty.value, picked: picked.value, newName: newName.value }
 }
 
 function flushDeskState(): void {
@@ -104,7 +173,7 @@ onBeforeUnmount(() => {
   flushDeskState()
 })
 
-watch([screen, hagueView, jihuaView, billingView, draft, selectedId, dirty, picked, newName], () => {
+watch([screen, hagueView, jihuaView, billingView, flowView, draft, selectedId, dirty, picked, newName], () => {
   if (!hydrated) return
   clearTimeout(persistTimer)
   persistTimer = setTimeout(flushDeskState, 120)
@@ -132,6 +201,9 @@ onMounted(async () => {
     jihuaView.value = restored.jihuaView
     billingView.value = restored.billingView
     replaceDraft(restored.draft, restored.dirty)
+    const desiredView = restored.flowView ?? 'steps'
+    flowView.value = (desiredView === 'guide' && !flowGuideFor(restored.draft)) || (desiredView === 'use' && !canUseFlow(restored.draft)) ? 'steps' : desiredView
+    if (screen.value === 'flow' && flowView.value === 'guide') flowGuideSeen.value = true
     selectedId.value = restored.selectedId
     picked.value = restored.picked
     newName.value = restored.newName
@@ -139,9 +211,19 @@ onMounted(async () => {
   hydrated = true
 })
 
-watch(screen, (value) => {
-  if (value === 'flow') void loadChoices(false)
-})
+watch([screen, flowView, workspaceReady], ([nextScreen, nextView, ready]) => {
+  if (nextScreen === 'flow') {
+    if (nextView === 'guide') flowGuideSeen.value = true
+    void loadChoices(false)
+    if (nextView === 'use' && ready) void loadUseAssets()
+  }
+  if (!ready) {
+    useAssetsLoaded = false
+    entrySenders.value = []
+    siteSignatures.value = []
+    siteReservedId.value = ''
+  }
+}, { immediate: true })
 
 const locked = computed(() => isSystemWorkflow(draft.value))
 const previewOpen = ref(true)
@@ -200,12 +282,15 @@ function spellStyleNames(flow: WorkflowDefinition): boolean {
   return changed
 }
 
-function openFlow(flow: WorkflowDefinition): void {
+function openFlow(flow: WorkflowDefinition, view: WorkflowFlowView = 'steps'): void {
   const next = cloneWorkflow(flow)
   const changed = isSystemWorkflow(next) ? false : spellStyleNames(next)
   replaceDraft(next, changed)
   selectedId.value = next.steps[0]?.id ?? ''
   notice.value = ''
+  const target = (view === 'guide' && !flowGuideFor(next)) || (view === 'use' && !canUseFlow(next)) ? 'steps' : view
+  flowView.value = target
+  if (target === 'guide') flowGuideSeen.value = true
   screen.value = 'flow'
 }
 
@@ -213,8 +298,8 @@ async function backToSea(): Promise<void> {
   if (dirty.value) {
     const ok = await confirmDialog({
       title: '先不保存？',
-      message: '这一条还有没保存的修改。回到海边后，这些修改就丢掉了。',
-      confirmLabel: '回到海边'
+      message: '这一条还有没保存的修改。回到工作流后，这些修改就丢掉了。',
+      confirmLabel: '回到工作流'
     })
     if (!ok) return
   }
@@ -493,7 +578,7 @@ function chooseProc(param: WorkflowParam, id: string): void {
     <header v-if="screen === 'flow' && draft" class="page-head flow-head">
       <Bunny />
       <div class="flow-head-fields">
-        <button type="button" class="flow-text" @click="backToSea">回到海边</button>
+        <button type="button" class="workflow-back-btn" @click="backToSea">回到工作流</button>
         <label>名字
           <input v-model="draft.label" type="text" maxlength="40" :disabled="locked" />
         </label>
@@ -519,14 +604,20 @@ function chooseProc(param: WorkflowParam, id: string): void {
           <em>{{ flow.steps.length }} 步</em>
         </button>
         <div class="sea-actions">
+          <button v-if="flowGuideFor(flow)" type="button" class="sea-remove" @click="openFlow(flow, 'guide')">流程说明</button>
+          <button v-if="canUseFlow(flow)" type="button" class="sea-remove" @click="openFlow(flow, 'use')">开始使用</button>
           <button type="button" class="sea-remove" @click="copyFlow(flow)">复制副本</button>
           <button v-if="!isSystemWorkflow(flow)" type="button" class="sea-remove" @click="removeFlow(flow)">拿掉</button>
         </div>
       </article>
       <article class="sea-card">
-        <button type="button" class="sea-open" @click="screen = 'hague'">
+        <button type="button" class="sea-open" @click="hagueView = 'use'; screen = 'hague'">
           <b>海牙新申请</b><small>批量核对材料与信息，默认 6 路填写草稿并导出 Summary。</small><span class="sea-badge">批量草稿</span><em>材料核对 · 6 路并发 · Summary 导出</em>
         </button>
+        <div class="sea-actions">
+          <button type="button" class="sea-remove" @click="hagueView = 'guide'; screen = 'hague'">流程说明</button>
+          <button type="button" class="sea-remove" @click="hagueView = 'use'; screen = 'hague'">开始使用</button>
+        </div>
       </article>
       <article class="sea-card jihua-upload-card">
         <button type="button" class="sea-open" @click="jihuaView = 'guide'; screen = 'jihua'">
@@ -559,7 +650,7 @@ function chooseProc(param: WorkflowParam, id: string): void {
     </section>
 
     <section v-else-if="screen === 'ocean'" class="card ocean">
-      <button type="button" class="flow-text" @click="screen = 'sea'">回到海边</button>
+      <button type="button" class="workflow-back-btn" @click="screen = 'sea'">回到工作流</button>
       <p class="hint">现在会自己跑起来的，是 PCT提醒、PCT鹏城专案和文件管理。新加的会按你排的步骤保存下来。</p>
       <div class="skill-sea">
         <button
@@ -585,6 +676,12 @@ function chooseProc(param: WorkflowParam, id: string): void {
     </section>
 
     <template v-else-if="screen === 'flow' && draft">
+    <div v-if="flowGuideSource || canUseFlow(draft)" class="tabs workflow-view-tabs flow-view-tabs" role="tablist" :aria-label="`${draft.label}视图`">
+      <button type="button" role="tab" :class="{ on: flowView === 'steps' }" :aria-selected="flowView === 'steps'" @click="flowView = 'steps'">步骤流程</button>
+      <button v-if="flowGuideSource" type="button" role="tab" :class="{ on: flowView === 'guide' }" :aria-selected="flowView === 'guide'" @click="flowView = 'guide'">流程说明</button>
+      <button v-if="canUseFlow(draft)" type="button" role="tab" :class="{ on: flowView === 'use' }" :aria-selected="flowView === 'use'" @click="flowView = 'use'">开始使用</button>
+    </div>
+    <div v-show="flowView === 'steps'">
     <section class="card flow-preview">
       <div class="section-heading">
         <strong>全局预览</strong>
@@ -709,6 +806,23 @@ function chooseProc(param: WorkflowParam, id: string): void {
         <p v-if="notice" class="hint">{{ notice }}</p>
       </section>
     </div>
+    </div>
+    <section v-if="flowGuideSource" v-show="flowView === 'guide'" class="card workflow-guide flow-guide" role="tabpanel">
+      <DocsMarkdown v-if="flowGuideSeen" :source="flowGuideSource" />
+    </section>
+    <section v-if="canUseFlow(draft) && flowView === 'use'" class="workflow-use" role="tabpanel">
+      <WorkflowMailEntry
+        :locked-workflow-id="draft.id"
+        :customers="workspaceCustomers"
+        :rules="rules"
+        :operator-id="workspaceOperatorId"
+        :mail-types="mailTypes"
+        :senders="mailSenders"
+        :signature-name="signatureName"
+        :signature-text="signatureText"
+        :catalog="catalog"
+      />
+    </section>
     </template>
   </div>
   <div v-if="screen === 'hague'" class="workflow-hague">

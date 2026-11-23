@@ -27,7 +27,7 @@ function navigateTabs(event: KeyboardEvent): void {
 
 <template>
   <PageHead :title="title" :desc="description" :art="art">
-    <button type="button" class="ghost" @click="emit('back')">回到工作流</button>
+    <button type="button" class="workflow-back-btn" @click="emit('back')">回到工作流</button>
     <div :id="headExtraId" class="workflow-head-extra" />
   </PageHead>
   <div class="tabs workflow-view-tabs" role="tablist" :aria-label="`${title}视图`">

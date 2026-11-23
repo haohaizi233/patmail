@@ -12,5 +12,11 @@ describe('workflow desk recovery state', () => {
     expect(sanitizeWorkflowDeskState({ screen: 'flow', draft: { steps: 'bad' } }, valid)).toMatchObject({ screen: 'sea', draft: null })
     expect(sanitizeWorkflowDeskState({ screen: 'ocean', picked: [1, 'ok'], newName: 'x'.repeat(50) }, valid)).toMatchObject({ screen: 'ocean', picked: ['ok'], newName: 'x'.repeat(40), dirty: false })
   })
+  it('restores valid flowView and drops unknown flowView values', () => {
+    const draft = { id: 'pct-reminder', steps: [] }
+    expect(sanitizeWorkflowDeskState({ screen: 'flow', flowView: 'guide', draft }, valid)?.flowView).toBe('guide')
+    expect(sanitizeWorkflowDeskState({ screen: 'flow', flowView: 'use', draft }, valid)?.flowView).toBe('use')
+    expect(sanitizeWorkflowDeskState({ screen: 'flow', flowView: 'bogus', draft }, valid)).not.toHaveProperty('flowView')
+  })
 })
 
