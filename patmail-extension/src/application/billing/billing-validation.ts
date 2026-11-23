@@ -191,16 +191,27 @@ export function isValidBillingTemplateId(id: string): id is BillingTemplateId {
   return BILLING_TEMPLATES.some(item => item.id === id)
 }
 
+export function billingExportSelectionIssue(
+  command: Pick<ExportBillingCommand, 'fileSelectionIssue' | 'feeSelectionIssue' | 'reconciliationRequestedCount' | 'confirmExistingFees' | 'pctExportExceptionsCount' | 'confirmPctExceptions'>,
+): string {
+  const issue = command.fileSelectionIssue || command.feeSelectionIssue
+  if (issue) return issue
+  if (command.reconciliationRequestedCount && !command.confirmExistingFees) {
+    return '请确认已立单或状态待核对的费用后再导出。'
+  }
+  if (command.pctExportExceptionsCount && !command.confirmPctExceptions) {
+    return '请先核对本客户待处理的 PCT 费用。'
+  }
+  return ''
+}
+
 export function validateBillingExportPreconditions(
   command: ExportBillingCommand,
 ): { ok: true } | { ok: false; needsRateRefresh?: boolean; reason: string } {
-  const issue = command.fileSelectionIssue || command.feeSelectionIssue
+  const issue = billingExportSelectionIssue(command)
   if (issue) return { ok: false, reason: issue }
-  if (command.reconciliationRequestedCount && !command.confirmExistingFees) {
-    return { ok: false, reason: '请确认已立单或状态待核对的费用后再导出。' }
-  }
-  if (command.pctExportExceptionsCount && !command.confirmPctExceptions) {
-    return { ok: false, reason: '请先核对本客户待处理的 PCT 费用。' }
+  if (command.ratesLoading) {
+    return { ok: false, reason: '' }
   }
   const todayText = formatLocalDate(command.today)
   if (command.needsForeignRates && command.ratesCheckedOn !== todayText) {
@@ -209,9 +220,6 @@ export function validateBillingExportPreconditions(
       needsRateRefresh: true,
       reason: '已开始刷新汇率，请等待完成后再导出。',
     }
-  }
-  if (command.ratesLoading) {
-    return { ok: false, reason: '' }
   }
   if (command.missingRateCodes.length) {
     return {

@@ -50,7 +50,7 @@ it('reconciles a persisted browser ID after a page remount without starting a du
     }
     const start = vi.fn(() => Promise.resolve(71))
     let state: 'in_progress' | 'complete' = 'in_progress'
-    const search = vi.fn(() => Promise.resolve([{ state }]))
+    const search = vi.fn((): Promise<Array<{ state: 'in_progress' | 'complete'; filename?: string }>> => Promise.resolve([{ state }]))
     const request = {
       bytes: new Uint8Array(8 * 1024 * 1024),
       fileName: 'fixture.xlsx',
@@ -67,6 +67,12 @@ it('reconciles a persisted browser ID after a page remount without starting a du
     expect(start).toHaveBeenCalledTimes(1)
     expect(search).toHaveBeenCalledWith({ id: 71 })
     expect(JSON.stringify([...ledger])).not.toContain('case selection')
+
+    search.mockResolvedValueOnce([{ state: 'complete', filename: '00000000-0000-4000-8000-000000000071.xlsx' }])
+    start.mockResolvedValueOnce(72)
+    expect(await adapter().download(request)).toMatchObject({ status: 'download_completed', downloadId: 72 })
+    expect(await adapter().download(request)).toMatchObject({ status: 'download_completed', downloadId: 72 })
+    expect(start).toHaveBeenCalledTimes(2)
   } finally {
     createUrl.mockRestore()
     revokeUrl.mockRestore()
@@ -334,7 +340,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
 
     const completeAdapter = createVerifiedChromeDownloadAdapter({
       download: () => Promise.resolve(42),
-      search: () => Promise.resolve([{ state: 'complete' }]),
+      search: () => Promise.resolve([{ state: 'complete', filename: 'C:/Downloads/格尔涉外请款单 (1).xlsx' }]),
     })
     const completedOutcome = await completeAdapter.download({
       bytes: new Uint8Array([1, 2]),
@@ -344,7 +350,8 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       warnings: [],
     })
     expect(completedOutcome.status).toBe('download_completed')
-    expect(formatExportOutcomeNotice(completedOutcome)).toContain('已导出并确认下载完成：ok.xlsx')
+    expect(formatExportOutcomeNotice(completedOutcome)).toContain('已导出并确认下载完成：格尔涉外请款单 (1).xlsx')
+    expect(formatExportOutcomeNotice(completedOutcome)).not.toContain('C:/Downloads')
 
     const interruptedAdapter = createVerifiedChromeDownloadAdapter({
       download: () => Promise.resolve(43),
@@ -550,15 +557,16 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       },
       { settleTimeoutMs: 100 },
     )
-    expect(
-      await earlyAdapter.download({
+    const earlyOutcome = await earlyAdapter.download({
         bytes: new Uint8Array([9]),
         fileName: 'early.xlsx',
         mimeType: 'application/octet-stream',
         blockCount: 1,
         warnings: [],
-      }),
-    ).toMatchObject({ status: 'download_completed', downloadId: 106 })
+      })
+    expect(earlyOutcome).toMatchObject({ status: 'download_completed', downloadId: 106 })
+    expect(formatExportOutcomeNotice(earlyOutcome)).toContain('实际文件名请查看浏览器下载记录')
+    expect(formatExportOutcomeNotice(earlyOutcome)).not.toContain('early.xlsx')
     expect(listeners.size).toBe(0)
 
     createObjectURL.mockRestore()

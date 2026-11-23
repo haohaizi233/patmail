@@ -26,6 +26,13 @@ const mock = await installEasyMock(context, { fixtureHtml: fixture, profile: 'ex
 const goerCaseId = '7C842A11-A2E8-467D-9079-D3C766928198'
 const goerFeeId = 'goer-translation'
 let wordCountRequests = 0
+let recoveredBillQueries = 0
+await context.route('http://183.36.43.66:88/**', async route => {
+  const params = new URLSearchParams(route.request().postData() ?? '')
+  if (params.get('Call') !== 'GetSearchFiles') return route.fallback()
+  recoveredBillQueries++
+  await route.fulfill({ json: { ClientInfo: { IsLogin: true, Status: true, Result: true }, TableRowsCount: '0', TableRows: [] } })
+})
 await context.route('**/AjaxServers/CaseInfo.ashx*', async route => {
   const params = new URLSearchParams(route.request().postData() ?? '')
   if (params.get('Call') !== 'GetFeeListByCase') return route.fallback()
@@ -99,12 +106,15 @@ try {
   // Exercise Chrome's native filename and terminal receipt in a fixture-only directory.
   const cdp = await context.newCDPSession(app)
   await cdp.send('Browser.setDownloadBehavior', { behavior: 'default', eventsEnabled: true })
-  const completedDownload = async stem => {
-    await app.getByRole('status').filter({ hasText: '已导出并确认下载完成' }).waitFor({ timeout: 10_000 })
+  const completedDownload = async (stem, collision = false) => {
+    const notice = app.getByRole('status').filter({ hasText: '已导出并确认下载完成' })
+    await notice.waitFor({ timeout: 10_000 })
     const items = await app.evaluate(() => chrome.downloads.search({ state: 'complete' }))
     const found = items.filter(item => item.filename.includes(stem))
     assert.equal(found.length, 1)
-    assert.match(found[0].filename.split(/[\\/]/).at(-1), new RegExp(`^${stem}-\\d{8}\\.xlsx$`))
+    const savedName = found[0].filename.split(/[\\/]/).at(-1)
+    assert.match(savedName, new RegExp(`^${stem}-\\d{8}${collision ? ' \\(1\\)' : ''}\\.xlsx$`))
+    assert.ok((await notice.innerText()).includes(savedName), 'UI must report the filename Chrome actually saved')
     return found[0]
   }
   await app.getByText('测试员', { exact: true }).waitFor({ timeout: 15_000 })
@@ -233,8 +243,13 @@ try {
   await navigation.getByRole('button', { name: /进入请款单导出.*已选 2 笔/ }).waitFor()
   assert.equal(wordCountRequests, 1)
   await feeResultNext.click()
+  const todayStamp = await app.evaluate(() => {
+    const date = new Date()
+    return [date.getFullYear(), date.getMonth() + 1, date.getDate()].map(value => String(value).padStart(2, '0')).join('')
+  })
+  await writeFile(join(downloadPath, `格尔涉外请款单-${todayStamp}.xlsx`), '', { flag: 'wx' })
   await topExport.click()
-  const goer = await completedDownload('格尔涉外请款单')
+  const goer = await completedDownload('格尔涉外请款单', true)
   assert.notEqual(goer.id, download.id)
   const zip = new ZipReader(new Uint8ArrayReader(await readFile(goer.filename)))
   try {
@@ -294,6 +309,28 @@ try {
   await app.locator('.step-3-section').waitFor({ state: 'visible' })
   assert.equal(wordCountRequests, 1, 'restoring the draft does not repeat the fee query')
   report.pass('billing keeps step three and restores draft after tab switch, navigation and reload')
+
+  const saved = await app.evaluate(async origin => {
+    const owner = [origin, '11111111-1111-1111-1111-111111111111', 'billing-files']
+    const scope = JSON.stringify(owner)
+    const send = request => chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request })
+    const previous = await send({ op: 'get', slot: 'file-query', scope })
+    return send({ op: 'put', slot: 'file-query', scope, expectedRevision: previous.value.revision, payload: {
+      version: 1, owner, query: { caseVolume: 'BILL-RECOVERY', pageIndex: 1, pageSize: 100 }, result: null,
+      selected: {}, form: null, downloadSelection: null, stripAppNoDot: true, pageSize: 100,
+      templateName: '', readPages: [], activeTask: null,
+    } })
+  }, new URL(easyUrl).origin)
+  assert.equal(saved.ok, true)
+  await app.reload()
+  await app.locator('.flow-steps-bar .step-item').first().click()
+  const recoveredRefresh = app.getByRole('button', { name: '刷新验证账单', exact: true })
+  await recoveredRefresh.waitFor()
+  assert.equal(recoveredBillQueries, 0, 'restoring the saved query must not dispatch automatically')
+  await recoveredRefresh.click()
+  await recoveredRefresh.waitFor({ state: 'hidden' })
+  assert.equal(recoveredBillQueries, 1)
+  report.pass('WAL-restored bill query can be verified from the top of step one')
 
   // 使用说明：请款.md 的 mermaid 图完整渲染且无错误
   await app.getByRole('tab', { name: '流程说明', exact: true }).click()

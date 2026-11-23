@@ -25,6 +25,7 @@ export type ExportOutcome =
       status: 'download_completed'
       downloadId: number
       fileName: string
+      savedFileName?: string
       blockCount: number
       warnings: string[]
     }

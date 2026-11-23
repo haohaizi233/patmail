@@ -115,7 +115,9 @@ export class BillingApplicationService {
 export function formatExportOutcomeNotice(outcome: ExportOutcome): string {
   switch (outcome.status) {
     case 'download_completed':
-      return `请款单已导出并确认下载完成：${outcome.fileName}（共填入 ${outcome.blockCount} 个事项块/案卷）。`
+      return outcome.savedFileName
+        ? `请款单已导出并确认下载完成：${outcome.savedFileName}（共填入 ${outcome.blockCount} 个事项块/案卷）。`
+        : `请款单已导出并确认下载完成（共填入 ${outcome.blockCount} 个事项块/案卷），实际文件名请查看浏览器下载记录。`
     case 'download_started':
       return `请款单已生成并触发浏览器下载（尚未确认落盘完成）：${outcome.fileName}（共填入 ${outcome.blockCount} 个事项块/案卷）。`
     case 'generated':

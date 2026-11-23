@@ -9,6 +9,7 @@ import { fetchPbcRates } from '../../billing/pbc-rates'
 import { loadBillingTemplate } from '../../billing/template-assets'
 import { fillBillingTemplate } from '../../billing/templates'
 import { createRecoveryClient } from '../../recovery/client'
+import { browserDownloadName } from '../../shared/download-file-name'
 
 export function createBillingTemplateAdapter(): BillingTemplatePort {
   return {
@@ -28,6 +29,18 @@ export function createPbcExchangeRateAdapter(): ExchangeRatePort {
   }
 }
 
+function clickNamedDownload(url: string, fileName: string): void {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  try {
+    document.body.appendChild(link)
+    link.click()
+  } finally {
+    link.remove()
+  }
+}
+
 /**
  * 浏览器 DOM `<a download>` 触发器：只能确认已把 Blob 交给浏览器接管，
  * 无法核验磁盘写入终态，因此明确返回 `download_started` 而非 `download_completed`。
@@ -37,14 +50,9 @@ export function createBrowserBlobDownloadAdapter(): DownloadPort {
     download(request: BillingDownloadRequest): Promise<ExportOutcome> {
       const blob = new Blob([request.bytes as BlobPart], { type: request.mimeType })
       const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = request.fileName
       try {
-        document.body.appendChild(link)
-        link.click()
+        clickNamedDownload(url, request.fileName)
       } finally {
-        link.remove()
         setTimeout(() => URL.revokeObjectURL(url), 10_000)
       }
       return Promise.resolve({
@@ -65,7 +73,11 @@ export interface ChromeDownloadDelta {
 
 export interface ChromeDownloadsVerifier {
   download(options: { url: string; filename: string; saveAs?: boolean }): Promise<number>
-  search(query: { id: number }): Promise<Array<{ state: 'in_progress' | 'interrupted' | 'complete'; error?: string }>>
+  search(query: { id: number }): Promise<Array<{
+    state: 'in_progress' | 'interrupted' | 'complete'
+    error?: string
+    filename?: string
+  }>>
   onChanged?: {
     addListener(callback: (delta: ChromeDownloadDelta) => void): void
     removeListener(callback: (delta: ChromeDownloadDelta) => void): void
@@ -78,17 +90,33 @@ export interface VerifiedDownloadOptions {
 
 const DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS = 15_000
 
+async function readDownloadItem(verifier: ChromeDownloadsVerifier, id: number) {
+  let timer: number | undefined
+  try {
+    return await Promise.race([
+      verifier.search({ id }).then(items => items[0]),
+      new Promise<undefined>(resolve => { timer = window.setTimeout(resolve, 750) }),
+    ])
+  } catch {
+    return undefined
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
 function terminalOutcomeFromState(
   state: string,
   request: BillingDownloadRequest,
   downloadId: number,
   errorText?: string,
+  savedFileName?: string,
 ): ExportOutcome | null {
   if (state === 'complete') {
     return {
       status: 'download_completed',
       downloadId,
       fileName: request.fileName,
+      ...(savedFileName ? { savedFileName } : {}),
       blockCount: request.blockCount,
       warnings: request.warnings,
     }
@@ -108,17 +136,43 @@ function terminalOutcomeFromState(
 export function createChromeExtensionDownloadsVerifier(): ChromeDownloadsVerifier | null {
   if (
     typeof chrome === 'undefined' ||
-    typeof chrome.downloads?.download !== 'function' ||
-    typeof chrome.downloads?.search !== 'function'
+    typeof chrome.downloads?.search !== 'function' ||
+    !chrome.downloads.onCreated ||
+    typeof document === 'undefined'
   ) {
     return null
   }
   return {
-    download: options => chrome.downloads.download(options),
+    download: ({ url, filename }) => new Promise((resolve, reject) => {
+      // A named DOM download preserves the suggested name for an extension-page Blob.
+      // The fresh object URL identifies this one download independently of its filename.
+      const created = chrome.downloads.onCreated
+      const cleanup = () => {
+        clearTimeout(timer)
+        created.removeListener(onCreated)
+      }
+      const onCreated = (item: chrome.downloads.DownloadItem) => {
+        if (item.url !== url) return
+        cleanup()
+        resolve(item.id)
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        reject(new Error('浏览器未返回下载编号。'))
+      }, DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS)
+      try {
+        created.addListener(onCreated)
+        clickNamedDownload(url, filename)
+      } catch (error) {
+        cleanup()
+        reject(error instanceof Error ? error : new Error('浏览器未能发起下载。'))
+      }
+    }),
     search: async query => {
       const items = await chrome.downloads.search(query)
       return items.map(item => ({
         state: item.state,
+        filename: item.filename,
         ...(item.error ? { error: String(item.error) } : {}),
       }))
     },
@@ -189,7 +243,7 @@ export function createVerifiedChromeDownloadAdapter(
             return { status: 'unknown', downloadId: activeId, reason: '未在浏览器下载记录中查询到刚发起的导出任务。' }
           }
           return (
-            terminalOutcomeFromState(item.state, request, activeId, item.error) ?? {
+            terminalOutcomeFromState(item.state, request, activeId, item.error, browserDownloadName(item.filename)) ?? {
               status: 'download_started',
               downloadId: activeId,
               fileName: request.fileName,
@@ -199,7 +253,7 @@ export function createVerifiedChromeDownloadAdapter(
           )
         }
 
-        return await new Promise<ExportOutcome>(resolve => {
+        const outcome = await new Promise<ExportOutcome>(resolve => {
           let settled = false
           const finish = (outcome: ExportOutcome) => {
             if (settled) return
@@ -236,12 +290,17 @@ export function createVerifiedChromeDownloadAdapter(
             .then(
               ([item]) => {
                 if (settled || !item) return
-                const terminal = terminalOutcomeFromState(item.state, request, activeId, item.error)
+                const terminal = terminalOutcomeFromState(item.state, request, activeId, item.error, browserDownloadName(item.filename))
                 if (terminal) finish(terminal)
               },
               () => undefined,
             )
         })
+        if (outcome.status === 'download_completed' && !outcome.savedFileName) {
+          const savedFileName = browserDownloadName((await readDownloadItem(verifier, activeId))?.filename)
+          if (savedFileName) return { ...outcome, savedFileName }
+        }
+        return outcome
       } catch (err) {
         if (downloadId !== undefined) {
           return { status: 'unknown', downloadId, reason: '浏览器已接收导出任务，暂时无法核对下载结果。' }
@@ -337,14 +396,19 @@ export function createTrackedBillingDownloadAdapter(
         }
         if (job.isStale?.()) return { status: 'failed', reason: '请款范围或账号已变化，未发起下载。' }
         if (prior?.state === 'completed' && prior.id !== undefined && Date.now() - prior.at < 86_400_000) {
-          return terminalOutcomeFromState('complete', request, prior.id) ?? unknown(prior.id)
+          const item = await readDownloadItem(verifier, prior.id)
+          const savedName = browserDownloadName(item?.filename)
+          // An explicit export click can replace a completed legacy receipt whose Blob UUID became the filename.
+          if (!savedName || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?: \(\d+\))?\.xlsx$/i.test(savedName)) {
+            return terminalOutcomeFromState('complete', request, prior.id, undefined, savedName) ?? unknown(prior.id)
+          }
         }
         if (prior?.state === 'requested' || prior?.state === 'started') {
           if (prior.id === undefined) return unknown()
           const id = prior.id
           try {
             const [item] = await verifier.search({ id })
-            const terminal = item && terminalOutcomeFromState(item.state, request, id, item.error)
+            const terminal = item && terminalOutcomeFromState(item.state, request, id, item.error, browserDownloadName(item.filename))
             if (!terminal) return unknown(id)
             await storage.put(key, {
               state: item.state === 'complete' ? 'completed' : 'interrupted',

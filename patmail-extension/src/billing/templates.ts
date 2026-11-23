@@ -240,6 +240,10 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
     const foreignAgent = group.agent.filter(fee => normalizeCurrency(fee.currency) !== 'CNY')
     group.agent.filter(fee => normalizeCurrency(fee.currency) === 'CNY' && fee.amount !== 0)
       .forEach(fee => pending(fee, 'EASY 以人民币登记，待核对当地币种'))
+    if (input.bills[group.caseVolume]?.length && group.internalAgent.length &&
+        !group.official.length && !group.agent.length && !group.translation.length) {
+      warnings.push(`${group.caseVolume}「${group.ctrlProc}」已有账单文件，本次仅勾选了我方代理费。请在费用查询核对该事项的官费及外所代理费。`)
+    }
     cells.P = foreignAgent.length ? sumAmount(foreignAgent) : null
     cells.R = totals.size || foreignAgent.length ? rateOf(group.currency, input.rates) : null
     if (cells.R !== null) {

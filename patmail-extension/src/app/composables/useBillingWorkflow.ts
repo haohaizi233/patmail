@@ -6,6 +6,7 @@ import {
   formatExportOutcomeNotice,
 } from '../../application/billing/billing-service'
 import {
+  billingExportSelectionIssue,
   buildBillingSyncKey,
   buildMideaPctDefaultExclusion,
   collectInvolvedCurrencies,
@@ -38,6 +39,9 @@ import { useWorkspace } from './useWorkspace'
 export interface FileSearchPanelHandle {
   selectAllPages: (billsOnly?: boolean) => Promise<void> | undefined
   getBillingSelectionIssue: () => string
+  hasRecoveredQuery: boolean
+  canRefresh: boolean
+  refresh: (scrollOnSuccess?: boolean) => void
 }
 
 export interface FeeSearchQueryHandle {
@@ -229,25 +233,21 @@ export function useBillingWorkflow(options: {
   const involvedCurrencies = computed(() => collectInvolvedCurrencies(selectedFeeRows.value))
   const needsForeignRates = computed(() => hasForeignCurrencyRows(selectedFeeRows.value))
 
-  function formatRate(val: number): string {
-    return val < 0.1 ? val.toFixed(6) : val.toFixed(4)
-  }
 
   async function loadPbcRates(): Promise<void> {
     if (ratesLoading.value) return
     ratesLoading.value = true
-    ratesCheckedOn = formatLocalDate()
+    const checkedOn = formatLocalDate()
     ratesError.value = ''
-    ratesDate.value = ''
-    ratesSourceUrl.value = ''
-    pbcPerCny.value = {}
     try {
       const data = await service.fetchRates()
+      ratesCheckedOn = checkedOn
       ratesDate.value = data.date
       ratesSourceUrl.value = data.sourceUrl
       pbcPerCny.value = { ...data.perCny }
     } catch (err) {
-      ratesError.value = `${err instanceof Error ? err.message : '中国人民银行汇率获取失败'}（不会使用离线估算值，请点击重试或在下方手工填写准确汇率）`
+      if (!ratesDate.value) ratesCheckedOn = checkedOn
+      ratesError.value = `${err instanceof Error ? err.message : '中国人民银行汇率获取失败'}（可重试或手工填写准确汇率）`
     } finally {
       ratesLoading.value = false
     }
@@ -275,10 +275,11 @@ export function useBillingWorkflow(options: {
     delete clearedRates.value[code]
   }
 
-  function initStep3(): void {
-    if (needsForeignRates.value && ratesCheckedOn !== formatLocalDate()) {
-      void loadPbcRates()
-    }
+  const shouldWatchRates = computed(() => currentStep.value === 3 && needsForeignRates.value && (options.isActive?.() ?? true))
+  function checkRatesWhileVisible(): void {
+    if (!shouldWatchRates.value || document.visibilityState === 'hidden') return
+    const today = formatLocalDate()
+    if (ratesCheckedOn !== today || ratesDate.value < today || ratesError.value) void loadPbcRates()
   }
 
   function setStep(target: BillingWorkflowStep, fromResults = false): void {
@@ -295,8 +296,6 @@ export function useBillingWorkflow(options: {
     currentStep.value = target
     if (target === 2) {
       syncFeeQueryIfNeeded(false)
-    } else if (target === 3) {
-      initStep3()
     }
   }
 
@@ -372,63 +371,58 @@ export function useBillingWorkflow(options: {
     const templateId = selectedTemplateId.value
     const rows = selectedFeeRows.value
     const bills = billMap.value
-    const parameters = exportParameters.value
     const account = connection.value.operatorId
     const origin = connection.value.easyOrigin
-
-    const isStale = () =>
-      selectedTemplateId.value !== templateId ||
-      selectedFeeRows.value !== rows ||
-      connection.value.operatorId !== account ||
-      connection.value.easyOrigin !== origin ||
-      billMap.value !== bills ||
-      parameters !== exportParameters.value ||
-      Boolean(fileSelectionIssue.value || feeSelectionIssue.value) ||
-      (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
-      (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value)
-
-    const exportCommand = {
-      templateId,
-      rows,
-      bills,
-      parameters,
+    const scope = billingScope.value
+    const selection = () => ({
       fileSelectionIssue: fileSelectionIssue.value,
       feeSelectionIssue: feeSelectionIssue.value,
       reconciliationRequestedCount: reconciliationInfo.value.requestedCount,
       confirmExistingFees: confirmExistingFees.value,
       pctExportExceptionsCount: pctExportExceptions.value.length,
       confirmPctExceptions: confirmPctExceptions.value,
-      needsForeignRates: needsForeignRates.value,
-      ratesCheckedOn,
-      ratesLoading: ratesLoading.value,
-      missingRateCodes: missingRateCodes.value,
-      usesManualRate: usesManualRate.value,
-      manualRateDate: manualRateDate.value,
-      downloadScope: billingScope.value,
-      isStale,
-    }
-
-    const precheck = validateBillingExportPreconditions(exportCommand)
-    if (!precheck.ok) {
-      if (precheck.needsRateRefresh) {
-        void loadPbcRates()
-      }
-      if (precheck.reason) {
-        exportResultNotice.value = precheck.reason
-      }
+    })
+    const selectionIssue = billingExportSelectionIssue(selection())
+    if (selectionIssue) {
+      exportResultNotice.value = selectionIssue
       return
     }
+    if (ratesLoading.value) return
+    const selectionChanged = () =>
+      selectedTemplateId.value !== templateId ||
+      selectedFeeRows.value !== rows ||
+      connection.value.operatorId !== account ||
+      connection.value.easyOrigin !== origin ||
+      billingScope.value !== scope ||
+      billMap.value !== bills ||
+      Boolean(billingExportSelectionIssue(selection()))
 
     exporting.value = true
-    exportResultNotice.value = '正在生成 Excel 请款表…'
-    exportWarnings.value = []
-
     try {
-      const { outcome, needsRateRefresh } = await service.exportBilling(exportCommand)
-
-      if (needsRateRefresh) {
-        void loadPbcRates()
+      if (needsForeignRates.value) await loadPbcRates()
+      if (selectionChanged()) {
+        exportResultNotice.value = '请款范围已变化，请核对后重新导出。'
+        return
       }
+      const parameters = exportParameters.value
+      const exportCommand = {
+        templateId, rows, bills, parameters, ...selection(),
+        needsForeignRates: needsForeignRates.value,
+        ratesCheckedOn, ratesLoading: ratesLoading.value,
+        missingRateCodes: missingRateCodes.value,
+        usesManualRate: usesManualRate.value,
+        manualRateDate: manualRateDate.value,
+        downloadScope: scope,
+        isStale: () => selectionChanged() || parameters !== exportParameters.value,
+      }
+      const precheck = validateBillingExportPreconditions(exportCommand)
+      if (!precheck.ok) {
+        exportResultNotice.value = precheck.needsRateRefresh && ratesError.value ? ratesError.value : precheck.reason
+        return
+      }
+      exportResultNotice.value = '正在生成 Excel 请款表…'
+      exportWarnings.value = []
+      const { outcome } = await service.exportBilling(exportCommand)
       if (outcome.status === 'download_started' || outcome.status === 'download_completed' || outcome.status === 'generated') {
         exportWarnings.value = outcome.warnings
       }
@@ -440,11 +434,7 @@ export function useBillingWorkflow(options: {
     }
   }
 
-  if (options.isActive) {
-    watch(options.isActive, active => {
-      if (active && currentStep.value === 3) initStep3()
-    })
-  }
+  watch(shouldWatchRates, active => { if (active) checkRatesWhileVisible() })
 
   let persistTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshot = ''
@@ -550,7 +540,6 @@ export function useBillingWorkflow(options: {
           feeQueryRef.value?.restoreBillingSnapshot(state.fees)
         }
         currentStep.value = state.step === 2 || state.step === 3 ? state.step : 1
-        if (currentStep.value === 3) initStep3()
         await nextTick()
       }
       if (!stillCurrent()) return
@@ -561,6 +550,7 @@ export function useBillingWorkflow(options: {
 
   function onBillingVisibility(): void {
     if (document.visibilityState === 'hidden') flushBilling()
+    else checkRatesWhileVisible()
   }
   document.addEventListener('visibilitychange', onBillingVisibility)
   window.addEventListener('pagehide', flushBilling)
@@ -630,7 +620,6 @@ export function useBillingWorkflow(options: {
     usesManualRate,
     effectiveRates,
     involvedCurrencies,
-    formatRate,
     loadPbcRates,
     updateRate,
     resetRate,

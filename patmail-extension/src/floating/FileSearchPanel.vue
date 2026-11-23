@@ -45,7 +45,10 @@ const queryRef = ref<InstanceType<typeof FileSearchQuery> | null>(null)
 
 defineExpose({
   selectAllPages: (billsOnly = false) => queryRef.value?.selectAllPages(billsOnly),
-  getBillingSelectionIssue: () => queryRef.value?.getBillingSelectionIssue() ?? ''
+  getBillingSelectionIssue: () => queryRef.value?.getBillingSelectionIssue() ?? '',
+  hasRecoveredQuery: computed(() => queryRef.value?.hasRecoveredQuery ?? false),
+  canRefresh: computed(() => queryRef.value?.canRefresh ?? false),
+  refresh: (scrollOnSuccess = true) => queryRef.value?.refresh(scrollOnSuccess),
 })
 const showSelected = ref(false)
 const showMail = ref(false)

@@ -124,6 +124,19 @@ describe('billing templates filler', () => {
     expect(sheet.valueOf('X5')).toBe('指定国生效')
     expect(result.warnings.join(' ')).toContain('1000 CNY（EASY 以人民币登记，待核对当地币种')
   })
+  it('shows a linked invoice with only an internal fee without inventing foreign fees', async () => {
+    const caseVolume = 'PA2631851CN-PH'
+    const result = await fillBillingTemplate('general-foreign', readAsset('qingkuan-general-foreign.xlsx'), {
+      rows: [mockFeeRow({ caseVolume, feeClass: 'A', feeType: '合同金额', currency: 'CNY', amount: 1000, ctrlProc: '新申请' })],
+      bills: { [caseVolume]: [{ caseVolume, fileName: 'invoice.pdf', billNo: 'fixture', matter: '菲律宾外观新申请账单', date: '2026-11-06', versionSuffix: '' }] },
+      rates: {}, rateDate: '2026-11-23', headers: defaultHeaders('general-foreign'), options: { reviewFee: 0, bankFee: 0 },
+    })
+    const book = await XlsxBook.open(result.bytes)
+    const sheet = book.sheet(book.sheets[0].name)
+    expect(['I5', 'P5', 'V5'].map(cell => sheet.valueOf(cell))).toEqual(['/', null, 1000])
+    expect(result.warnings).toContainEqual(expect.stringContaining(`${caseVolume}「新申请」已有账单文件，本次仅勾选了我方代理费`))
+  })
+
   it('fills general-foreign template, expands blocks and preserves Excel formulas', async () => {
     const rawTemplate = readAsset('qingkuan-general-foreign.xlsx')
     const rows: FeeSearchRow[] = [

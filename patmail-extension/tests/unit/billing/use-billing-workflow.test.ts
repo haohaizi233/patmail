@@ -74,6 +74,51 @@ function feeRow(overrides: Partial<FeeSearchRow> = {}): FeeSearchRow {
 }
 
 describe('useBillingWorkflow doExportExcel preconditions', () => {
+  it('does not poll while idle and uses a fresh announcement in the same export click', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 10, 23, 9, 14))
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const rates = (date: string, USD: number) => ({ date, sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD } })
+    const filledRates: Array<{ date: string; usd: number }> = []
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: (_id, _bytes, input) => {
+          filledRates.push({ date: input.rateDate, usd: input.rates.USD })
+          return Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] })
+        },
+      },
+      exchangeRates: {
+        fetchRates: vi.fn().mockResolvedValueOnce(rates('2026-11-20', 7.1)).mockResolvedValue(rates('2026-11-23', 7.2)),
+      },
+      downloads: { download: () => Promise.resolve({ status: 'failed', reason: 'fixture' }) },
+      recovery: { load: () => Promise.resolve(null), save: () => Promise.resolve() },
+    })
+    const fetchRates = vi.spyOn(service, 'fetchRates')
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const app = createApp({ setup() { api = useBillingWorkflow({ service }); return () => h('div') } })
+    app.mount(document.createElement('div'))
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      api.onFeeSelectionChange([feeRow()])
+      api.setStep(3)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(api.ratesDate.value).toBe('2026-11-20')
+      await vi.advanceTimersByTimeAsync(180_000)
+      expect(api.ratesDate.value).toBe('2026-11-20')
+      expect(fetchRates).toHaveBeenCalledTimes(1)
+      await api.doExportExcel()
+      expect(api.ratesDate.value).toBe('2026-11-23')
+      expect(filledRates).toEqual([{ date: '2026-11-23', usd: 7.2 }])
+      await api.doExportExcel()
+      expect(fetchRates).toHaveBeenCalledTimes(3)
+    } finally {
+      app.unmount()
+      visibility.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('checks export preconditions before overwriting notice/warnings or flipping exporting', async () => {
     let resolveRates: ((value: { date: string; sourceUrl: string; perCny: Record<string, number> }) => void) | undefined
     const service = new BillingApplicationService({

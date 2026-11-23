@@ -4,7 +4,7 @@ export const PBC_INDEX_URL = 'https://www.pbc.gov.cn/zhengcehuobisi/125207/12521
 export interface PbcRates {
   /** 公告日期 yyyy-mm-dd */
   date: string
-  /** 1 单位外币折合多少人民币（直接标价外币 + 间接标价外币取倒数，保留 4 位）。 */
+  /** 1 单位外币折合多少人民币。直接标价保留公告精度，间接标价折算至 6 位。 */
   perCny: Record<string, number>
   sourceUrl: string
 }
@@ -67,7 +67,7 @@ export function parsePbcAnnouncement(source: string, sourceUrl = PBC_INDEX_URL):
   const perCny: Record<string, number> = {}
   for (const [name, code, unit] of DIRECT) {
     const match = new RegExp(`${unit}${name}对人民币\\s*([0-9.]+)\\s*元`).exec(text)
-    if (match) perCny[code] = Number(match[1]) / unit
+    if (match) perCny[code] = Number(unit === 100 ? `${match[1]}e-2` : match[1])
   }
   for (const [name, code] of INDIRECT) {
     const match = new RegExp(`人民币1元对\\s*([0-9.]+)\\s*${name}`).exec(text)

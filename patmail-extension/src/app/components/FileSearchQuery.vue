@@ -293,7 +293,9 @@ watch(() => props.canSearch, allowed => {
   if (taskCheckProgress.label === '下载文件' || taskCheckProgress.label === '翻页') resetTaskCheckProgress()
   scheduleSurface()
 })
-defineExpose({ protectSurface, selectAllPages, getBillingSelectionIssue })
+const hasRecoveredQuery = computed(() => needsRevalidation.value && Boolean(lastQuery.value))
+const canRefresh = computed(() => props.canSearch && Boolean(lastQuery.value) && searchState.value !== 'loading' && !selectingAll.value)
+defineExpose({ protectSurface, selectAllPages, getBillingSelectionIssue, hasRecoveredQuery, canRefresh, refresh })
 
 function getBillingSelectionIssue(): string {
   if (searchState.value === 'loading' || selectingAll.value) return '账单还在读取，请等待完成。'
@@ -354,7 +356,7 @@ function queryNeedsRevalidation(data: FileSearchResult): boolean {
   return ['QUERY_SESSION_INVALID', 'QUERY_LAYOUT_CHANGED', 'QUERY_SESSION_REVALIDATION_REQUIRED'].includes(data.sourceCode ?? '')
 }
 
-async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs, templateName?: string): Promise<void> {
+async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' = 'start', timeoutMs?: FileSearchTimeoutMs, templateName?: string, scrollOnSuccess = true): Promise<void> {
   if (timeoutMs !== undefined) searchTimeoutMs.value = fileSearchTimeoutMs(timeoutMs)
   if (!bridge || !props.canSearch) return
   searchGeneration += 1
@@ -426,7 +428,7 @@ async function executeSearch(query: FileSearchQuery, run: 'start' | 'continue' =
     await protectSurface().catch(() => {})
     if (current !== generation) return
     searchState.value = result.value.total === 0 ? 'empty' : 'success'
-    void showResults()
+    if (scrollOnSuccess || revalidate) void showResults()
     if (props.autoSelectBills && run === 'start' && result.value.total > 0 && !revalidate) {
       void selectAllPages(true)
     }
@@ -453,10 +455,10 @@ function togglePage(event: Event): void {
   const on = (event.target as HTMLInputElement).checked
   candidateSelection.value = selectPage(candidateSelection.value, items.map(file => toSelectedFile(file, candidateSelection.value[file.fileId]?.customerProfileId, querySessionId.value)), on)
 }
-function refresh(): void {
-  if (!lastQuery.value) return
+function refresh(scrollOnSuccess = true): void {
+  if (!canRefresh.value || !lastQuery.value) return
   pageCache.clear()
-  void executeSearch({ ...lastQuery.value }, 'continue')
+  void executeSearch({ ...lastQuery.value }, 'continue', undefined, undefined, scrollOnSuccess)
 }
 function changePageSize(): void {
   if (!lastQuery.value || !props.canSearch || ![20, 50, 100].includes(pageSize.value)) return
@@ -1033,7 +1035,7 @@ onBeforeUnmount(() => {
         <label class="page-size">每页数量
           <ThemeSelect v-model="pageSize" :disabled="!canSearch || searchState === 'loading' || selectingAll" :options="pageSizeOptions" @change="changePageSize" />
         </label>
-        <button type="button" class="text-button" :disabled="!canSearch || !lastQuery || searchState === 'loading' || selectingAll" @click="refresh">刷新</button>
+        <button type="button" class="text-button" :disabled="!canRefresh" @click="refresh()">刷新</button>
       </div>
       <div v-if="result" class="result-toolbar">
         <span>共 {{ result.total }} 个文件</span>

@@ -75,7 +75,6 @@ const {
   usesManualRate,
   effectiveRates,
   involvedCurrencies,
-  formatRate,
   loadPbcRates,
   updateRate,
   resetRate,
@@ -218,7 +217,12 @@ const {
       </div>
     </nav>
 
-    <p v-if="stepNotice && !noticeInResults" class="step-notice-alert" role="alert">{{ stepNotice }}</p>
+    <div v-if="currentStep === 1 && filePanelRef?.hasRecoveredQuery" class="step-notice-alert recovered-bill-notice">
+      <span role="status">已恢复账单查询，刷新验证后可继续。</span>
+      <button type="button" class="solid" :disabled="!confirmedScope || !filePanelRef.canRefresh"
+        @click="stepNotice = ''; filePanelRef?.refresh(false)">刷新验证账单</button>
+    </div>
+    <p v-else-if="stepNotice && !noticeInResults" class="step-notice-alert" role="alert">{{ stepNotice }}</p>
     <p v-if="recoveryNotice" class="step-notice-alert" role="status">{{ recoveryNotice }}</p>
     <p v-else-if="billingScope && !confirmedScope" class="step-notice-alert" role="status">请款进度已保留，恢复同一 EASY 账号连接后可继续。</p>
 
@@ -402,7 +406,7 @@ const {
           <strong>中国人民银行官网 · 汇率中间价</strong>
           <div class="actions">
             <span v-if="ratesLoading" class="hint">正在连接央行读取…</span>
-            <span v-else-if="ratesDate" class="date-badge">公布日期：{{ ratesDate }}</span>
+            <span v-if="ratesDate" class="date-badge">公布日期：{{ ratesDate }}</span>
             <button
               type="button"
               class="refresh-rates-btn"
@@ -414,6 +418,9 @@ const {
           </div>
         </div>
         <p v-if="ratesError" class="error-line">{{ ratesError }}</p>
+        <p v-if="ratesDate && ratesDate < formatLocalDate()" class="rates-source-hint">
+          当前使用上一期公告，导出前会重新检查。
+        </p>
         <p class="rates-source-hint">
           来源：<a :href="ratesSourceUrl || PBC_INDEX_URL" target="_blank" rel="noopener noreferrer">中国人民银行外汇市场公布表</a>。
           可直接在下方表格修改汇率数值进行微调，将按最终数值自动计算折算人民币金额。
@@ -436,11 +443,11 @@ const {
             <tbody>
               <tr v-for="cur in involvedCurrencies" :key="cur">
                 <td class="cur-code"><b>{{ cur }}</b></td>
-                <td>{{ pbcPerCny[cur] ? `¥ ${formatRate(pbcPerCny[cur])}` : '未获取 / 需手动填写' }}</td>
+                <td>{{ pbcPerCny[cur] ? `¥ ${pbcPerCny[cur]}` : '未获取 / 需手动填写' }}</td>
                 <td>
                   <input
                     type="number"
-                    step="0.0001"
+                    step="any"
                     class="rate-input"
                     :value="effectiveRates[cur] ?? ''"
                     placeholder="请输入汇率"
@@ -497,7 +504,7 @@ const {
       <div class="export-execute-card card">
         <div class="summary-line">
           <span>待填入费用：<b>{{ selectedFeeRows.length }}</b> 笔（未请款 <b>{{ reconciliationInfo.unrequestedCount }}</b>，已立单或状态待核对 <b>{{ reconciliationInfo.requestedCount }}</b>）</span>
-          <span>涉及案卷：<b>{{ reconciliationInfo.totalCases }}</b> 个（匹配账单 <b>{{ reconciliationInfo.matchedCasesCount }}</b>，未匹配 <b>{{ reconciliationInfo.unmatchedCases.length }}</b>）</span>
+          <span>涉及案卷：<b>{{ reconciliationInfo.totalCases }}</b> 个（{{ selectedTemplateId === 'midea-foreign' ? '确认账单日' : '有账单文件' }} <b>{{ reconciliationInfo.matchedCasesCount }}</b>，{{ selectedTemplateId === 'midea-foreign' ? '账单日待核对' : '无账单文件' }} <b>{{ reconciliationInfo.unmatchedCases.length }}</b>）</span>
           <span>目标模板：<b>{{ currentTemplate.label }}</b></span>
           <span v-if="pctSelectedCustomer">EASY 客户：<b>{{ pctSelectedCustomer }}</b></span>
         </div>
@@ -682,6 +689,13 @@ const {
   border-radius: 6px;
   font-size: 13px;
   margin: 0;
+}
+
+.recovered-bill-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
 
 .workflow-guide-banner {
