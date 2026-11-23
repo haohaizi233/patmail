@@ -18,11 +18,13 @@ const props = withDefaults(defineProps<{
   pageIndex: number
   pageSize: number
   selectedKeys: string[]
+  flaggedKeys?: string[]
   loading: boolean
   needCpcLogin?: boolean
   loginMessage?: string
 }>(), {
   importStatus: '0',
+  flaggedKeys: () => [],
   needCpcLogin: false,
   loginMessage: ''
 })
@@ -51,7 +53,20 @@ const columns = computed(() =>
 const hasClickableAppNo = computed(() => columns.value.some(c => Boolean(c.clickableAppNo)))
 const totalPages = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1, props.pageSize))))
 const selectedSet = computed(() => new Set(props.selectedKeys))
+const flaggedSet = computed(() => new Set(props.flaggedKeys))
 const pageKeys = computed(() => props.rows.map(row => noticeRowKey(props.tab, row)).filter(Boolean))
+
+function isRowFlagged(row: NoticeRow): boolean {
+  const key = noticeRowKey(props.tab, row)
+  if (!key) return false
+  if (flaggedSet.value.has(key)) return true
+  return (
+    props.tab === 'import' &&
+    props.importStatus === '0' &&
+    selectedSet.value.has(key) &&
+    !String(row.case_volume ?? '').trim()
+  )
+}
 const allChecked = computed(() => pageKeys.value.length > 0 && pageKeys.value.every(k => selectedSet.value.has(k)))
 
 function toggleAll(checked: boolean): void {
@@ -175,7 +190,7 @@ function canInspectRow(row: NoticeRow): boolean {
             :key="noticeRowKey(tab, row) || idx"
             :class="{ 'notice-row-multi': Boolean(row.is_multi_case) }"
           >
-            <td class="check">
+            <td class="check" :class="{ 'notice-check-flagged': isRowFlagged(row) }">
               <input
                 type="checkbox"
                 aria-label="选择当前行"

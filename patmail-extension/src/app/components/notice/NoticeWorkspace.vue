@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import ThemeSelect from '../../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../../shell/components/TreeOptionSelect.vue'
 import WDatePicker from '../../../shell/components/WDatePicker.vue'
 import {
@@ -28,7 +29,6 @@ import type {
   NoticeActionResult,
   NoticeCertQuery,
   NoticeDownloadQuery,
-  NoticeExportTab,
   NoticeFileTypeNode,
   NoticeHandExcelQuery,
   NoticeHandHisQuery,
@@ -41,12 +41,14 @@ import type {
   NoticeRow,
   NoticeSearchRequest,
   NoticeTabId,
+  NoticeUploadProcessDetailRow,
   NoticeUploadProcessRow
 } from '../../../api/notice-types'
 import { MessageType, type MessageBridge } from '../../../shared/message'
 import type { TreeOption } from '../../../query/option-tree'
 import { confirmDialog, infoDialog } from '../../dialog'
 import NoticeActionBar from './NoticeActionBar.vue'
+import NoticeExportModal from './NoticeExportModal.vue'
 import NoticeFilterForm from './NoticeFilterForm.vue'
 import NoticeResultTable from './NoticeResultTable.vue'
 
@@ -196,14 +198,54 @@ const detailFileTypeTreeOptions = computed<TreeOption[]>(() =>
   }))
 )
 
+// Export modal (IhgAdvExport)
+const exportModalOpen = ref(false)
+const flaggedRowKeys = ref<string[]>([])
+const activeExportAccountLabel = computed(() => {
+  if (activeTab.value === 'cert') return applyAccountLabel(queries.cert.account)
+  if (activeTab.value === 'replay') return applyAccountLabel(queries.replay.account)
+  return ''
+})
+
 // MailCustomer style modal
 const mailStyleModalOpen = ref(false)
 const pickedMailStyle = ref<'1' | '2' | '3'>('1')
 const pendingMailOaIds = ref<string[]>([])
 
-// UploadProcess modal
+// MultUpload modal (上传 CPC / 国防官文多文件队列弹窗)
+const MAX_UPLOAD_ZIP_BYTES = 50 * 1024 * 1024
+const uploadModalOpen = ref(false)
+const uploadKind = ref<'cpc' | 'gf'>('cpc')
+const uploadQueue = ref<File[]>([])
+const uploadDragging = ref(false)
+const uploadPickerInput = ref<HTMLInputElement | null>(null)
+
+// UploadProcess + UploadProcessDetail two-level modals
 const processModalOpen = ref(false)
 const processRows = ref<NoticeUploadProcessRow[]>([])
+const processTotal = ref(0)
+const processPageIndex = ref(1)
+const processPageSize = 10
+const processLoading = ref(false)
+const processTotalPages = computed(() => Math.max(1, Math.ceil(processTotal.value / processPageSize)))
+
+const UPLOAD_PROCESS_DETAIL_STATUS_OPTIONS = [
+  { value: '-1', label: '---' },
+  { value: '1', label: '上传成功' },
+  { value: '2', label: '文件合并' },
+  { value: '3', label: '上传失败' }
+] as const
+
+const processDetailModalOpen = ref(false)
+const processDetailRecordId = ref('')
+const processDetailZipName = ref('')
+const processDetailStatus = ref<'-1' | '1' | '2' | '3'>('-1')
+const processDetailRows = ref<NoticeUploadProcessDetailRow[]>([])
+const processDetailTotal = ref(0)
+const processDetailPageIndex = ref(1)
+const processDetailPageSize = 10
+const processDetailLoading = ref(false)
+const processDetailTotalPages = computed(() => Math.max(1, Math.ceil(processDetailTotal.value / processDetailPageSize)))
 
 function tabBadge(id: NoticeTabId): string {
   if (!initData.value) return ''
@@ -416,6 +458,7 @@ async function runSearch(tab: NoticeTabId = activeTab.value, resetPage = false):
     state.needCpcLogin = resp.payload.data.needCpcLogin
     state.loginMessage = resp.payload.data.loginMessage
     state.selectedKeys = []
+    if (tab === 'import') flaggedRowKeys.value = []
   } finally {
     state.loading = false
   }
@@ -513,76 +556,120 @@ function applyAccountLabel(accountId: string): string {
 }
 
 async function handleImportFlow(mailSales: 'N' | 'Y'): Promise<void> {
+  flaggedRowKeys.value = []
   const rows = selectedRowsForTab('import')
   const oaIds = rows.map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
   if (!oaIds.length) {
-    await infoDialog({ title: '提示', message: '请先勾选要导入的来文！' })
+    await infoDialog({ title: '提示', message: '请选择要导入的来文' })
     return
   }
 
-  const missingVolume = rows.some(r => !String(r.case_volume ?? '').trim())
-  if (missingVolume) {
-    await infoDialog({ title: '无法导入', message: '勾选记录中存在“我方文号”为空的数据，请先补全匹配后再导入。' })
-    return
-  }
+  const closeRule = initData.value?.closeCaseRule ?? '1'
+  const closeImport = initData.value?.closeCaseImportNotice ?? '0'
+  const finishedRows = rows.filter(r => Number(r.is_finish) === 1)
+  const finishedIds = finishedRows.map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
+  const finishedKeys = finishedRows.map(r => noticeRowKey('import', r)).filter(Boolean)
+  const handleClosed =
+    finishedIds.length > 0 && ((closeRule === '1' && closeImport === '1') || closeRule !== '1')
 
-  const finishedIds = rows.filter(r => Number(r.is_finish) === 1).map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
-  const openIds = rows.filter(r => Number(r.is_finish) !== 1).map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
-
-  if (finishedIds.length > 0) {
-    const yesClosed = await confirmDialog({
-      title: '结案案件导入确认',
-      warn: true,
-      confirmLabel: '仅导入文件',
-      cancelLabel: '取消',
-      message: `所选记录中有 ${finishedIds.length} 件处于结案状态，导入时仅导入文件到案件不再产生新任务，是否继续？`
-    })
-    if (!yesClosed) return
+  if (handleClosed) {
+    flaggedRowKeys.value = finishedKeys
+    tableStates.import.selectedKeys = finishedKeys
+    if (closeRule !== '1') {
+      const yesClosed = await confirmDialog({
+        title: '提示',
+        warn: true,
+        confirmLabel: '确定',
+        cancelLabel: '取消',
+        message: '您导入的通知书包含结案的案件请确认。\n注:结案的案件，导入通知书时不再产生新的任务，只会导入文件！'
+      })
+      if (!yesClosed) return
+    }
     busyAction.value = mailSales === 'Y' ? 'importEmail' : 'importNotice'
     try {
       const closedRes = await sendAction({ action: 'importCloseCase', oaIds: finishedIds })
-      if (closedRes) statusMessage.value = closedRes.message
+      if (closedRes) {
+        if (closedRes.ok) {
+          statusMessage.value = closedRes.message
+        } else {
+          statusError.value = closedRes.message
+          await infoDialog({ title: '提示', message: closedRes.message })
+        }
+      }
+      await runSearch('import', false)
     } finally {
       busyAction.value = ''
     }
-    if (!openIds.length) {
-      await runSearch('import', false)
-      return
-    }
+    return
+  }
+
+  const invalidRows = rows.filter(r => !String(r.case_volume ?? '').trim())
+  if (invalidRows.length > 0) {
+    const invalidKeys = new Set(invalidRows.map(r => noticeRowKey('import', r)).filter(Boolean))
+    flaggedRowKeys.value = [...invalidKeys]
+    tableStates.import.selectedKeys = tableStates.import.selectedKeys.filter(k => !invalidKeys.has(k))
+    await infoDialog({ title: '提示', message: '红框处我方文号不正确' })
+    return
   }
 
   const actionKey = mailSales === 'Y' ? 'importEmail' : 'importNotice'
   busyAction.value = actionKey
   try {
-    const check = await sendAction({ action: 'importCheck', oaIds: openIds })
+    const check = await sendAction({ action: 'importCheck', oaIds })
     if (!check) return
     if (check.checkWarnings && check.checkWarnings.length > 0) {
       const cont = await confirmDialog({
-        title: '导入系统确认',
+        title: '提示',
         warn: true,
-        confirmLabel: '仍继续导入',
+        confirmLabel: '继续导入',
         cancelLabel: '取消',
-        message: `${check.checkWarnings.join('\n')}\n\n是否仍继续导入系统？`
-      })
-      if (!cont) return
-    } else {
-      const cont = await confirmDialog({
-        title: mailSales === 'Y' ? '导入并邮寄确认' : '导入系统确认',
-        confirmLabel: '确定导入',
-        cancelLabel: '取消',
-        message: `确认导入已勾选的 ${openIds.length} 条来文记录吗？`
+        message: `${check.checkWarnings.join('\n')}\n\n是否还继续导入系统？`
       })
       if (!cont) return
     }
 
-    const res = await sendAction({ action: 'importNotice', oaIds: openIds, mailSales, checkName: false })
+    const res = await sendAction({ action: 'importNotice', oaIds, mailSales, checkName: false })
+    if (!res) return
+    if (res.isErrorFee) {
+      const goLimit = await confirmDialog({
+        title: '提示',
+        message: '存在不一致的费用，是否查看？',
+        confirmLabel: '查看',
+        cancelLabel: '关闭'
+      })
+      if (goLimit && typeof location !== 'undefined') {
+        location.hash = '/limits'
+      }
+    }
+    if (res.ok) statusMessage.value = res.message
+    else statusError.value = res.message
+    await infoDialog({ title: '提示', message: res.message })
+    await runSearch('import', false)
+  } finally {
+    busyAction.value = ''
+  }
+}
+
+async function runSelectedOaAction(
+  busyKey: string,
+  emptyMsg: string,
+  buildReq: (ids: string[]) => NoticeActionRequest,
+  tab: NoticeTabId = activeTab.value
+): Promise<void> {
+  const rows = selectedRowsForTab(tab)
+  const ids = rows.map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
+  if (!ids.length) {
+    await infoDialog({ title: '提示', message: emptyMsg })
+    return
+  }
+  busyAction.value = busyKey
+  statusError.value = ''
+  try {
+    const res = await sendAction(buildReq(ids))
     if (!res) return
     if (res.ok) statusMessage.value = res.message
     else statusError.value = res.message
-    if (res.isErrorFee) {
-      await infoDialog({ title: '费用差异提示', message: '原站提示存在不一致的费用，可前往「期限监控」核对退费监控项。' })
-    }
-    await runSearch('import', false)
+    await runSearch(tab, false)
   } finally {
     busyAction.value = ''
   }
@@ -591,6 +678,7 @@ async function handleImportFlow(mailSales: 'N' | 'Y'): Promise<void> {
 async function confirmAndRunOaAction(
   busyKey: string,
   title: string,
+  emptyMsg: string,
   confirmMsg: string,
   buildReq: (ids: string[]) => NoticeActionRequest,
   tab: NoticeTabId = activeTab.value,
@@ -599,7 +687,7 @@ async function confirmAndRunOaAction(
   const rows = selectedRowsForTab(tab)
   const ids = rows.map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
   if (!ids.length) {
-    await infoDialog({ title: '提示', message: '请先勾选要操作的数据！' })
+    await infoDialog({ title: '提示', message: emptyMsg })
     return
   }
   const ok = await confirmDialog({ title, message: confirmMsg.replace('{count}', String(ids.length)), confirmLabel: '确定', cancelLabel: '取消', warn })
@@ -619,6 +707,10 @@ async function confirmAndRunOaAction(
 
 async function triggerAction(action: string): Promise<void> {
   statusError.value = ''
+  if (action === 'search') {
+    await runSearch(activeTab.value, true)
+    return
+  }
   if (action === 'refresh') {
     await runSearch(activeTab.value, false)
     return
@@ -639,30 +731,7 @@ async function triggerAction(action: string): Promise<void> {
   if (action === 'export') {
     const tab = activeTab.value
     if (tab !== 'import' && tab !== 'download' && tab !== 'cert' && tab !== 'replay') return
-    if (!props.bridge) return
-    busyAction.value = 'export'
-    try {
-      const exportPayload =
-        tab === 'import'
-          ? { tab: 'import' as NoticeExportTab, query: { ...queries.import } }
-          : tab === 'download'
-            ? { tab: 'download' as NoticeExportTab, query: { ...queries.download } }
-            : tab === 'cert'
-              ? { tab: 'cert' as NoticeExportTab, query: { ...queries.cert } }
-              : { tab: 'replay' as NoticeExportTab, query: { ...queries.replay } }
-      const resp = await props.bridge.request({
-        type: MessageType.ExportNotice,
-        payload: exportPayload as never
-      })
-      if (resp.type === MessageType.Error) {
-        statusError.value = resp.payload.message
-      } else if (resp.type === MessageType.ExportNoticeResult) {
-        if (resp.payload.ok) statusMessage.value = resp.payload.data.message
-        else statusError.value = resp.payload.error.message
-      }
-    } finally {
-      busyAction.value = ''
-    }
+    exportModalOpen.value = true
     return
   }
 
@@ -674,7 +743,7 @@ async function triggerAction(action: string): Promise<void> {
       await handleImportFlow('Y')
       return
     case 'reMatch':
-      await confirmAndRunOaAction('reMatch', '重新匹配案件', '确认重新匹配勾选的 {count} 条未处理来文？', ids => ({
+      await runSelectedOaAction('reMatch', '请选择要更新的数据', ids => ({
         action: 'reMatchNotice',
         oaIds: ids
       }))
@@ -682,40 +751,47 @@ async function triggerAction(action: string): Promise<void> {
     case 'updateDone':
       await confirmAndRunOaAction(
         'updateDone',
-        '更新状态为已完成',
-        '确定要更新勾选的 {count} 条来文状态吗？更新后通知书将不会导入系统中！',
+        '提示',
+        '请选择要更新的数据',
+        '确定要更新状态？更新后通知书将不会导入系统中哦！',
         ids => ({ action: 'updateProcessStatus', oaIds: ids }),
         activeTab.value,
         true
       )
       return
     case 'markNolaiuto':
-      await confirmAndRunOaAction('markNolaiuto', '添加到无需导入来文', '确认将勾选的 {count} 条来文标记为“无需导入来文”？', ids => ({
+      await runSelectedOaAction('markNolaiuto', '请选择要修改的数据', ids => ({
         action: 'changeNolaiuto',
         oaIds: ids,
         value: '1'
       }))
       return
     case 'restoreNolaiuto':
-      await confirmAndRunOaAction(
+      await runSelectedOaAction(
         'restoreNolaiuto',
-        '恢复到导入来文',
-        '确认将勾选的 {count} 条记录恢复到“导入来文”队列？',
+        '请选择要修改的数据',
         ids => ({ action: 'changeNolaiuto', oaIds: ids, value: '0' }),
         'nolaiuto'
       )
       return
     case 'updateCaseName':
-      await confirmAndRunOaAction('updateCaseName', '更新案件名称', '确认更新勾选的 {count} 条来文的案件名称？', ids => ({
-        action: 'updateCaseName',
-        oaIds: ids
-      }))
+      await confirmAndRunOaAction(
+        'updateCaseName',
+        '提示',
+        '请选择要更新的案件名称',
+        '确认更新案件名称？',
+        ids => ({
+          action: 'updateCaseName',
+          oaIds: ids
+        })
+      )
       return
     case 'recover':
       await confirmAndRunOaAction(
         'recover',
-        '恢复未处理',
-        '确定将勾选的 {count} 条记录恢复为未处理状态？',
+        '提示',
+        '请选择要更新的数据',
+        '确定要更新状态',
         ids => ({ action: 'recoveryProcessStatus', oaIds: ids }),
         activeTab.value
       )
@@ -723,8 +799,9 @@ async function triggerAction(action: string): Promise<void> {
     case 'recoverAnalyse':
       await confirmAndRunOaAction(
         'recoverAnalyse',
-        '恢复并重新分析',
-        '确认更新勾选的 {count} 条来文状态为未处理，并返还递交助手重新分析？',
+        '提示',
+        '请选择要更新的数据',
+        '更新来文状态为未处理状态，并将来文返回递交助手重新分析',
         ids => ({ action: 'recoveryStatusAnalyse', oaIds: ids }),
         'handHis',
         true
@@ -734,26 +811,22 @@ async function triggerAction(action: string): Promise<void> {
       const rows = selectedRowsForTab('import')
       const ids = rows.map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
       if (!ids.length) {
-        await infoDialog({ title: '提示', message: '请先勾选要发文给客户的来文！' })
+        await infoDialog({ title: '提示', message: '请选择要发文客户的来文' })
         return
       }
       pendingMailOaIds.value = ids
       mailStyleModalOpen.value = true
       return
     }
-    case 'viewUploadProcess': {
-      busyAction.value = 'viewUploadProcess'
-      try {
-        const res = await sendAction({ action: 'getUploadProcessList', pageIndex: 1, pageSize: 20 })
-        if (res?.uploadProcessRows) {
-          processRows.value = res.uploadProcessRows
-          processModalOpen.value = true
-        }
-      } finally {
-        busyAction.value = ''
-      }
+    case 'openUploadCpc':
+      openUploadModal('cpc')
       return
-    }
+    case 'openUploadGf':
+      openUploadModal('gf')
+      return
+    case 'viewUploadProcess':
+      await loadUploadProcessList(1)
+      return
     case 'updateHandExcel': {
       const rows = selectedRowsForTab('handExcel')
       const docNos = rows.map(r => String(r.doc_no ?? '').trim()).filter(Boolean)
@@ -1011,10 +1084,168 @@ async function confirmMailCustomer(): Promise<void> {
     if (res) {
       if (res.ok) statusMessage.value = res.message
       else statusError.value = res.message
+      await infoDialog({ title: '提示', message: res.message })
       await runSearch('import', false)
     }
   } finally {
     busyAction.value = ''
+  }
+}
+
+function openUploadModal(kind: 'cpc' | 'gf'): void {
+  uploadKind.value = kind
+  uploadQueue.value = []
+  uploadDragging.value = false
+  uploadModalOpen.value = true
+}
+
+function triggerUploadFilePicker(): void {
+  if (uploadPickerInput.value) {
+    uploadPickerInput.value.value = ''
+    uploadPickerInput.value.click()
+  }
+}
+
+async function addUploadFiles(fileList: FileList | null): Promise<void> {
+  if (!fileList?.length) return
+  const next = [...uploadQueue.value]
+  for (const file of Array.from(fileList)) {
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      await infoDialog({ title: '提示', message: '只支持上传下列文件格式: zip' })
+      continue
+    }
+    if (file.size > MAX_UPLOAD_ZIP_BYTES) {
+      await infoDialog({ title: '提示', message: `文件「${file.name}」超过 50MB 限制，不能添加。` })
+      continue
+    }
+    const exists = next.some(item => item.name === file.name && item.size === file.size)
+    if (!exists) next.push(file)
+  }
+  uploadQueue.value = next
+}
+
+function onUploadFilesPicked(e: Event): void {
+  const input = e.target as HTMLInputElement
+  void addUploadFiles(input.files)
+  input.value = ''
+}
+
+function onUploadDrop(e: DragEvent): void {
+  e.preventDefault()
+  uploadDragging.value = false
+  void addUploadFiles(e.dataTransfer?.files ?? null)
+}
+
+function removeQueuedUploadFile(index: number): void {
+  uploadQueue.value = uploadQueue.value.filter((_, idx) => idx !== index)
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+async function submitUploadQueue(): Promise<void> {
+  if (!uploadQueue.value.length) {
+    await infoDialog({ title: '提示', message: '请先添加至少一个 `.zip` 官文压缩包。' })
+    return
+  }
+  busyAction.value = 'uploadCpc'
+  statusError.value = ''
+  try {
+    const encodedFiles = await Promise.all(
+      uploadQueue.value.map(async file => ({
+        fileName: file.name,
+        mimeType: file.type || 'application/zip',
+        base64: await fileToBase64(file)
+      }))
+    )
+    const first = encodedFiles[0]
+    const res = await sendAction({
+      action: 'uploadCpcZip',
+      kind: uploadKind.value,
+      fileName: first.fileName,
+      mimeType: first.mimeType,
+      base64: first.base64,
+      files: encodedFiles
+    })
+    if (res) {
+      if (res.ok) {
+        uploadModalOpen.value = false
+        uploadQueue.value = []
+        statusMessage.value = res.message
+        if (res.uploadTips) {
+          await infoDialog({ title: '提示', message: res.uploadTips })
+        }
+        await runSearch('import', false)
+      } else {
+        statusError.value = res.message
+        await infoDialog({ title: '提示', message: res.message })
+      }
+    }
+  } finally {
+    busyAction.value = ''
+  }
+}
+
+async function loadUploadProcessList(page = processPageIndex.value): Promise<void> {
+  processLoading.value = true
+  processModalOpen.value = true
+  busyAction.value = 'viewUploadProcess'
+  try {
+    const res = await sendAction({
+      action: 'getUploadProcessList',
+      pageIndex: page,
+      pageSize: processPageSize
+    })
+    if (res?.uploadProcessRows) {
+      processRows.value = res.uploadProcessRows
+      processTotal.value = res.uploadProcessTotal ?? res.uploadProcessRows.length
+      processPageIndex.value = page
+    }
+  } finally {
+    processLoading.value = false
+    busyAction.value = ''
+  }
+}
+
+async function loadUploadProcessDetailList(page = processDetailPageIndex.value): Promise<void> {
+  if (!processDetailRecordId.value) return
+  processDetailLoading.value = true
+  try {
+    const res = await sendAction({
+      action: 'getUploadProcessDetailList',
+      recordId: processDetailRecordId.value,
+      status: processDetailStatus.value,
+      pageIndex: page,
+      pageSize: processDetailPageSize
+    })
+    if (res?.uploadProcessDetailRows) {
+      processDetailRows.value = res.uploadProcessDetailRows
+      processDetailTotal.value = res.uploadProcessDetailTotal ?? res.uploadProcessDetailRows.length
+      processDetailPageIndex.value = page
+    }
+  } finally {
+    processDetailLoading.value = false
+  }
+}
+
+async function openProcessDetail(row: NoticeUploadProcessRow): Promise<void> {
+  processDetailRecordId.value = row.id
+  processDetailZipName.value = row.zipFileName
+  processDetailStatus.value = '-1'
+  processDetailPageIndex.value = 1
+  processDetailRows.value = []
+  processDetailTotal.value = 0
+  processDetailModalOpen.value = true
+  await loadUploadProcessDetailList(1)
+}
+
+function onProcessDetailStatusChange(next: string): void {
+  if (next === '-1' || next === '1' || next === '2' || next === '3') {
+    processDetailStatus.value = next
+    void loadUploadProcessDetailList(1)
   }
 }
 
@@ -1054,35 +1285,6 @@ async function handleExcelUpload(file: File): Promise<void> {
       } else {
         statusError.value = resp.payload.ok ? resp.payload.data.message : resp.payload.error.message
       }
-    }
-  } finally {
-    busyAction.value = ''
-  }
-}
-
-async function handleCpcZipUpload(kind: 'cpc' | 'gf', file: File): Promise<void> {
-  const yes = await confirmDialog({
-    title: kind === 'gf' ? '上传国防官文确认' : '上传 CPC 官文确认',
-    message: `确认上传文件「${file.name}」到原站进行解析导入吗？`,
-    confirmLabel: '开始上传',
-    cancelLabel: '取消'
-  })
-  if (!yes) return
-  busyAction.value = 'uploadCpc'
-  statusError.value = ''
-  try {
-    const base64 = await fileToBase64(file)
-    const res = await sendAction({
-      action: 'uploadCpcZip',
-      kind,
-      fileName: file.name,
-      mimeType: file.type || 'application/zip',
-      base64
-    })
-    if (res) {
-      if (res.ok) statusMessage.value = res.message
-      else statusError.value = res.message
-      await runSearch('import', false)
     }
   } finally {
     busyAction.value = ''
@@ -1251,6 +1453,7 @@ async function handleAppFileAction(): Promise<void> {
 
 function onImportStatusChange(): void {
   tableStates.import.selectedKeys = []
+  flaggedRowKeys.value = []
   void runSearch('import', true)
 }
 
@@ -1323,8 +1526,8 @@ onMounted(() => {
       :import-status="queries.import.status"
       :selected-count="currentState.selectedKeys.length"
       :busy-action="busyAction"
+      :notice-gf-enabled="Boolean(initData?.noticeGfEnabled)"
       @trigger="triggerAction"
-      @upload-cpc="handleCpcZipUpload"
     />
 
     <div v-if="activeTab === 'import'" class="card notice-import-tips">
@@ -1340,6 +1543,7 @@ onMounted(() => {
       :page-index="currentQuery.pageIndex"
       :page-size="currentQuery.pageSize"
       :selected-keys="currentState.selectedKeys"
+      :flagged-keys="flaggedRowKeys"
       :loading="currentState.loading"
       :need-cpc-login="currentState.needCpcLogin"
       :login-message="currentState.loginMessage"
@@ -1649,43 +1853,254 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="processModalOpen" class="mask app-dialog" @click.self="processModalOpen = false">
-      <div class="dialog with-table">
+    <div v-if="uploadModalOpen" class="mask app-dialog" @click.self="busyAction !== 'uploadCpc' && (uploadModalOpen = false)">
+      <div class="dialog with-table notice-upload-dialog">
         <header>
-          <h3>CPC / 国防官文上传进度</h3>
-          <button type="button" aria-label="关闭" @click="processModalOpen = false">×</button>
+          <h3>{{ uploadKind === 'gf' ? '上传国防官文' : '上传CPC官文' }}</h3>
+          <button
+            type="button"
+            v-hint="'关闭上传窗口'"
+            aria-label="关闭"
+            :disabled="busyAction === 'uploadCpc'"
+            @click="uploadModalOpen = false"
+          >
+            ×
+          </button>
         </header>
-        <div class="dialog-table">
+
+        <input
+          ref="uploadPickerInput"
+          class="sr-only"
+          type="file"
+          accept=".zip"
+          multiple
+          @change="onUploadFilesPicked"
+        />
+
+        <div
+          class="notice-upload-dropzone"
+          :class="{ 'is-dragging': uploadDragging }"
+          @dragover.prevent="uploadDragging = true"
+          @dragleave.prevent="uploadDragging = false"
+          @drop="onUploadDrop"
+        >
+          <p class="notice-upload-title">将 `.zip` 官文压缩包拖放到此处，或点击选择文件（支持一次添加多个压缩包同批次上传）</p>
+          <div class="notice-upload-toolbar">
+            <button type="button" class="solid tiny" :disabled="busyAction === 'uploadCpc'" @click="triggerUploadFilePicker">
+              添加文件
+            </button>
+            <button
+              type="button"
+              class="ghost tiny"
+              :disabled="!uploadQueue.length || busyAction === 'uploadCpc'"
+              @click="uploadQueue = []"
+            >
+              清空队列
+            </button>
+            <span class="notice-upload-tip">温馨提示：单个文件不能超过 50MB，仅支持 .zip 格式</span>
+          </div>
+        </div>
+
+        <div class="dialog-table notice-detail-scroll">
           <table>
             <thead>
               <tr>
-                <th>序号</th>
-                <th>压缩包名称</th>
-                <th>状态</th>
-                <th>进度</th>
-                <th>成功</th>
-                <th>失败</th>
+                <th style="width: 56px">序号</th>
+                <th>压缩包文件名</th>
+                <th style="width: 110px">文件大小</th>
+                <th style="width: 84px">操作</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-if="processRows.length === 0">
-                <td colspan="6">暂无上传进度记录</td>
+              <tr v-if="uploadQueue.length === 0">
+                <td colspan="4">队列暂无文件，请点击「添加文件」或拖拽 `.zip` 至上方区域</td>
               </tr>
-              <tr v-for="item in processRows" :key="item.id">
-                <td>{{ item.sn }}</td>
-                <td>{{ item.zipFileName }}</td>
-                <td>{{ item.status }}</td>
-                <td>{{ item.process }}</td>
-                <td>{{ item.successNum }}</td>
-                <td>{{ item.failNum }}</td>
+              <tr v-for="(file, idx) in uploadQueue" :key="`${file.name}-${file.size}-${idx}`">
+                <td>{{ idx + 1 }}</td>
+                <td><span class="clip" v-hint.clip="file.name">{{ file.name }}</span></td>
+                <td>{{ formatFileSize(file.size) }}</td>
+                <td>
+                  <button
+                    type="button"
+                    class="go"
+                    :disabled="busyAction === 'uploadCpc'"
+                    @click="removeQueuedUploadFile(idx)"
+                  >
+                    移除
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+
         <footer>
+          <button
+            type="button"
+            class="ghost"
+            :disabled="busyAction === 'uploadCpc'"
+            @click="loadUploadProcessList(1)"
+          >
+            查看上传进度
+          </button>
+          <button type="button" class="ghost" :disabled="busyAction === 'uploadCpc'" @click="uploadModalOpen = false">
+            取消
+          </button>
+          <button
+            type="button"
+            class="solid"
+            :disabled="uploadQueue.length === 0 || busyAction === 'uploadCpc'"
+            @click="submitUploadQueue"
+          >
+            {{ busyAction === 'uploadCpc' ? '正在上传解析…' : `开始上传 (${uploadQueue.length})` }}
+          </button>
+        </footer>
+      </div>
+    </div>
+
+    <div v-if="processModalOpen" class="mask app-dialog" @click.self="processModalOpen = false">
+      <div class="dialog with-table notice-process-dialog">
+        <header>
+          <h3>上传进度</h3>
+          <button type="button" v-hint="'关闭上传进度'" aria-label="关闭" @click="processModalOpen = false">×</button>
+        </header>
+        <p v-if="processLoading" class="hint">正在读取原站上传解析进度…</p>
+        <div class="dialog-table notice-detail-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 56px">序号</th>
+                <th>压缩包名称</th>
+                <th style="width: 96px">状态</th>
+                <th style="width: 90px">上传进度</th>
+                <th style="width: 76px">成功数量</th>
+                <th style="width: 76px">失败数量</th>
+                <th style="width: 76px">合并数量</th>
+                <th style="width: 68px">总数</th>
+                <th style="width: 140px">上传时间</th>
+                <th style="width: 84px">上传人</th>
+                <th style="width: 100px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!processLoading && processRows.length === 0">
+                <td colspan="11">暂无上传进度记录</td>
+              </tr>
+              <tr v-for="item in processRows" :key="item.id">
+                <td>{{ item.sn }}</td>
+                <td><span class="clip" v-hint.clip="item.zipFileName">{{ item.zipFileName }}</span></td>
+                <td>{{ item.status }}</td>
+                <td>{{ item.process }}</td>
+                <td>{{ item.successNum }}</td>
+                <td>{{ item.failNum }}</td>
+                <td>{{ item.mergeNum }}</td>
+                <td>{{ item.totalNum }}</td>
+                <td>{{ item.createTime }}</td>
+                <td>{{ item.uploader }}</td>
+                <td>
+                  <button
+                    type="button"
+                    class="go"
+                    v-hint="'查看上传详细'"
+                    @click="openProcessDetail(item)"
+                  >
+                    查看上传详细
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pager notice-modal-pager">
+          <span>共 {{ processTotal }} 条</span>
+          <div class="notice-pager-controls">
+            <button type="button" :disabled="processPageIndex <= 1 || processLoading" @click="loadUploadProcessList(processPageIndex - 1)">上一页</button>
+            <span>第 {{ processPageIndex }} / {{ processTotalPages }} 页</span>
+            <button type="button" :disabled="processPageIndex >= processTotalPages || processLoading" @click="loadUploadProcessList(processPageIndex + 1)">下一页</button>
+          </div>
+        </div>
+        <footer>
+          <button type="button" class="ghost" :disabled="processLoading" @click="loadUploadProcessList(processPageIndex)">刷新</button>
           <button type="button" class="solid" @click="processModalOpen = false">关闭</button>
         </footer>
       </div>
     </div>
+
+    <div v-if="processDetailModalOpen" class="mask app-dialog" @click.self="processDetailModalOpen = false">
+      <div class="dialog with-table notice-process-dialog">
+        <header>
+          <h3>上传进度详情{{ processDetailZipName ? ` — ${processDetailZipName}` : '' }}</h3>
+          <button type="button" v-hint="'关闭上传进度详情'" aria-label="关闭" @click="processDetailModalOpen = false">×</button>
+        </header>
+        <div class="notice-process-detail-filter">
+          <span class="notice-field-label">处理状态：</span>
+          <div class="notice-detail-status-select">
+            <ThemeSelect
+              :model-value="processDetailStatus"
+              :options="[...UPLOAD_PROCESS_DETAIL_STATUS_OPTIONS]"
+              :disabled="processDetailLoading"
+              @update:model-value="onProcessDetailStatusChange(String($event))"
+            />
+          </div>
+        </div>
+        <p v-if="processDetailLoading" class="hint">正在读取压缩包内文件处理明细…</p>
+        <div class="dialog-table notice-detail-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 56px">序号</th>
+                <th>通知书文件</th>
+                <th style="width: 92px">状态</th>
+                <th>提示信息</th>
+                <th style="width: 144px">更新时间</th>
+                <th style="width: 84px">上传人</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!processDetailLoading && processDetailRows.length === 0">
+                <td colspan="6">暂无明细记录</td>
+              </tr>
+              <tr
+                v-for="item in processDetailRows"
+                :key="item.id"
+                :class="{ 'is-upload-failed': item.status === '上传失败' }"
+              >
+                <td>{{ item.sn }}</td>
+                <td><span class="clip" v-hint.clip="item.fileName">{{ item.fileName }}</span></td>
+                <td>{{ item.status }}</td>
+                <td><span class="clip" v-hint.clip="item.message">{{ item.message }}</span></td>
+                <td>{{ item.updateTime }}</td>
+                <td>{{ item.uploader }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pager notice-modal-pager">
+          <span>共 {{ processDetailTotal }} 条</span>
+          <div class="notice-pager-controls">
+            <button type="button" :disabled="processDetailPageIndex <= 1 || processDetailLoading" @click="loadUploadProcessDetailList(processDetailPageIndex - 1)">上一页</button>
+            <span>第 {{ processDetailPageIndex }} / {{ processDetailTotalPages }} 页</span>
+            <button type="button" :disabled="processDetailPageIndex >= processDetailTotalPages || processDetailLoading" @click="loadUploadProcessDetailList(processDetailPageIndex + 1)">下一页</button>
+          </div>
+        </div>
+        <footer>
+          <button type="button" class="ghost" :disabled="processDetailLoading" @click="loadUploadProcessDetailList(processDetailPageIndex)">刷新</button>
+          <button type="button" class="solid" @click="processDetailModalOpen = false">关闭</button>
+        </footer>
+      </div>
+    </div>
+
+    <NoticeExportModal
+      :open="exportModalOpen"
+      :tab="activeTab === 'download' || activeTab === 'cert' || activeTab === 'replay' ? activeTab : 'import'"
+      :bridge="bridge"
+      :import-query="queries.import"
+      :download-query="queries.download"
+      :cert-query="queries.cert"
+      :replay-query="queries.replay"
+      :account-label="activeExportAccountLabel"
+      @close="exportModalOpen = false"
+      @exported="statusMessage = $event"
+    />
   </div>
 </template>

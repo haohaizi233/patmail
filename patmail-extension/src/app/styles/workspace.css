@@ -939,6 +939,63 @@
 .notice-radio-row:hover { border-color: #f4accb; background: #fff9fc; }
 .notice-radio-row input { width: auto; height: auto; margin: 0; }
 
+.grid td.check.notice-check-flagged {
+  background: #ff4f6d;
+  box-shadow: inset 0 0 0 2px #d4143a;
+}
+
+.notice-upload-dialog { width: min(760px, calc(100vw - 40px)); }
+.notice-process-dialog { width: min(1080px, calc(100vw - 36px)); }
+.notice-upload-dropzone {
+  margin-bottom: 12px;
+  padding: 16px;
+  border: 1.5px dashed #f0a7c7;
+  border-radius: 12px;
+  background: #fff8fc;
+  display: grid;
+  gap: 10px;
+  transition: border-color .15s ease, background .15s ease;
+}
+.notice-upload-dropzone.is-dragging {
+  border-color: #ff4f93;
+  background: #ffedf5;
+}
+.notice-upload-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #5b3b55;
+}
+.notice-upload-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.notice-upload-tip {
+  font-size: 12px;
+  color: #d62851;
+  font-weight: 600;
+}
+
+.notice-process-detail-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.notice-detail-status-select { width: 140px; }
+.notice-modal-pager {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+tr.is-upload-failed,
+tr.is-upload-failed > td {
+  background: #fff0e5 !important;
+  color: #b83206;
+  font-weight: 600;
+}
+
 @media (max-width: 960px) {
   .notice-form-2col { grid-template-columns: minmax(0, 1fr); }
 }
