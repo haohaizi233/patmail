@@ -16,7 +16,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 - [WIPO eHague：HTTP、JSF、上传与扩展 RPC 契约](external-platforms/hague.md)
 - [海牙技术算法：材料解析、并发隔离、检查点与有界容灾](../patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md)
 
-按「入口 + Call」去重后，本索引共 **448** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
+按「入口 + Call」去重后，本索引共 **455** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
 
 表里的「骨架」链到 14–43 的响应字段，「01」到「13」链到页面怎么读这些字段。两边都有的 Call，字段骨架看抓包文档，页面含义看专题文档。
 
@@ -73,7 +73,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [46-运行期补充接口契约.md](46-运行期补充接口契约.md) | 运行期已接入的会话探测、费用辅助树、提案流程、递交版本探测、代理所检索与 FileHandler 取件契约 |
 | [47-来文管理.md](47-来文管理.md) | 来文管理 NoticeInfo.aspx 全量 8 个页签查询、字典热加载、CPC 扫码鉴权与轮询、业务写操作、四大导出与压缩包上传 |
 
-14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。44–47 补齐费用查询、高级导出、运行期补充接口与来文管理全量接口。下面的入口表才是去重后的 448。
+14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。44–47 补齐费用查询、高级导出、运行期补充接口与来文管理全量接口。下面的入口表才是去重后的 455。
 
 ## 抓包里需要单独看的几条
 
@@ -98,14 +98,14 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | 入口 | 接口数 |
 |---|---:|
 | [CaseInfo.ashx](#caseinfoashx) | 88 |
-| [Common.ashx](#commonashx) | 62 |
+| [Common.ashx](#commonashx) | 63 |
 | [Customer.ashx](#customerashx) | 42 |
 | [Mail.ashx](#mailashx) | 27 |
 | [Bill.ashx](#billashx) | 23 |
 | [PatentAction.ashx](#patentactionashx) | 22 |
 | [Report.ashx](#reportashx) | 27 |
 | [BaseInfo.ashx](#baseinfoashx) | 21 |
-| [Notice.ashx](#noticeashx) | 29 |
+| [Notice.ashx](#noticeashx) | 34 |
 | [Login.ashx](#loginashx) | 10 |
 | [Eflow.ashx](#eflowashx) | 6 |
 | [FilingAction.ashx](#filingactionashx) | 23 |
@@ -113,7 +113,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [CRMAction.ashx](#crmactionashx) | 6 |
 | [WadeButtAction.ashx](#wadebuttactionashx) | 5 |
 | [UDAction.ashx](#udactionashx) | 4 |
-| [FilingApiAction.ashx](#filingapiactionashx) | 24 |
+| [FilingApiAction.ashx](#filingapiactionashx) | 25 |
 | [FilingTradeAction.ashx](#filingtradeactionashx) | 3 |
 | [MailAction.ashx](#mailactionashx) | 3 |
 | [AgencyEpEflow.aspx](#agencyepeflowaspx) | 2 |
@@ -131,7 +131,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [FileHandler.ashx](#filehandlerashx) | 1 |
 | [UploadFile.ashx](#uploadfileashx) | 3 |
 | [Forms/MultiUPload/UploadMethod.ashx](#formsmultiuploaduploadmethodashx) | 1 |
-| 合计 | 448 |
+| 合计 | 455 |
 
 ## 全部接口
 
@@ -236,7 +236,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Common.ashx
 
-62 个。
+63 个。
 
 | Call | 文档 |
 |---|---|
@@ -291,6 +291,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `LoadMailType` | [09](09-期限监控.md#3-从列表创建发文) |
 | `LoadOAProblem` | [骨架](18-公共-字典与列表列.md#commonashx-loadoaproblem) |
 | `LoadProcStatusNew` | [骨架](18-公共-字典与列表列.md#commonashx-loadprocstatusnew) |
+| `LoadSearchCase` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情改绑案件时按我方文号关键词联想搜索 |
 | `LoadSentenceResult` | [骨架](18-公共-字典与列表列.md#commonashx-loadsentenceresult) |
 | `LoadTradeLaw` | [骨架](18-公共-字典与列表列.md#commonashx-loadtradelaw) |
 | `LoadTreeIndustryCls` | [骨架](18-公共-字典与列表列.md#commonashx-loadtreeindustrycls) |
@@ -523,7 +524,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### Notice.ashx
 
-29 个。
+34 个。
 
 | Call | 文档 |
 |---|---|
@@ -531,6 +532,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `CheckImportNotice` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。导入前检查重复通知书或费减异常 |
 | `GetAgency` | [骨架](25-官文.md#noticeashx-getagency) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
 | `GetApplyType` | [骨架](25-官文.md#noticeashx-getapplytype) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
+| `GetCasechargedept` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情选定案件后联动读取承办部门（`DeptInfo.dept_name`） |
 | `GetDirectionType` | [骨架](25-官文.md#noticeashx-getdirectiontype) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
 | `GethandExcelList` | [骨架](25-官文.md#noticeashx-gethandexcellist) · [47](47-来文管理.md#21-页签与接口路由总表) |
 | `GetHandHisList` | [47](47-来文管理.md#21-页签与接口路由总表)。异常处理记录页签检索 |
@@ -539,7 +541,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetMailNoticeList` | [骨架](37-登录邮箱与官文通知.md#noticeashx-getmailnoticelist) |
 | `GetNolaiuto` | [47](47-来文管理.md#21-页签与接口路由总表)。无需导入来文页签检索 |
 | `GetNolaiutoCount` | [骨架](25-官文.md#noticeashx-getnolaiutocount) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
+| `GetNoticeCaseType` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情选定案件后联动读取案件类型（`CaseTypeInfo.case_type_id`） |
 | `GetNoticeDetail` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。读取来文详情 `NoticeInfo` |
+| `GetNoticeduibi` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情「对比文件」子表（`TableRows[]`） |
+| `GetNoticefee` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情「官费信息」子表（`TableRows[]`） |
+| `GetNoticehebo` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情「核驳信息」子表（`TableRows[]`） |
 | `ImportCloseCase` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。结案案件只导文件不建新任务 |
 | `ImportNotice` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。导入来文到系统 |
 | `LimitMailCustomer` | [09](09-期限监控.md#3-从列表创建发文)。Result=false 仍可成功。NeedConfirmFillAgency 要停 |
@@ -683,7 +689,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### FilingApiAction.ashx
 
-24 个。
+25 个。
 
 | Call | 文档 |
 |---|---|
@@ -703,6 +709,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetCpcNoticeAccount` | [骨架](23-递交.md#filingapiactionashx-getcpcnoticeaccount) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
 | `GetCPCTzsDate` | [47](47-来文管理.md#1-初始化字典热加载与角标计数)。读取来文下载默认起始时间 |
 | `GetCpcTzsUser` | [47](47-来文管理.md#41-cpc-账号登录态校验)。批量检查 CPC 账号在线时长与扫码过期状态 |
+| `GetFileListByAppNo` | [47](47-来文管理.md#43-案件已有官文列表)。按申请号读取该案已入库官文列表（对应原站 `NoHandFileList.aspx`） |
 | `GetReaplyTzsStatus` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。二次下载后按 `fids` 回查单行状态（原站拼写 `Reaply`） |
 | `GetReplayTzsList` | [47](47-来文管理.md#23-其余页签检索参数与静态枚举)。查询来文二次下载云端列表 |
 | `GetSubmitList` | [骨架](23-递交.md#filingapiactionashx-getsubmitlist) |
