@@ -3,35 +3,48 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg, icon } from '../../shell/assets'
 import { greetingForHour } from '../greeting'
-import { barWidth, homeReport } from '../home-report'
+import { barWidth } from '../home-report'
 import { pickHomeLine } from '../home-lines'
-import { loadLimitMailLedger, readLimitMailLedger, watchLimitMailLedger } from '../../application/mail/mail-ledger-query'
-import type { LimitMailMark } from '../../customer/limit-mail-submit'
+import { useHomeCards } from '../home-cards/use-home-cards'
 import { useWorkspace } from '../composables/useWorkspace'
 import EmptyGuide from '../components/EmptyGuide.vue'
 import wechatQr from '../assets/wechat-qr.png'
 
-const { connection, customers, tasks } = useWorkspace()
+const { connection, tasks } = useWorkspace()
 const ready = computed(() => connection.value.sessionStatus === 'authenticated')
-const ledger = ref<LimitMailMark[]>(readLimitMailLedger())
-const report = computed(() => homeReport({
-  customers: customers.value,
-  tasks: tasks.value,
-  ledger: ledger.value
-}))
+const {
+  allCards,
+  metricCards,
+  boardCards,
+  isEnabled,
+  toggleCard,
+  resetVisibility,
+  refreshing,
+  lastUpdatedText,
+  refresh,
+} = useHomeCards()
+
+const pickerOpen = ref(false)
+const metricCardDefs = computed(() => allCards.value.filter(card => card.kind === 'metric'))
+const boardCardDefs = computed(() => allCards.value.filter(card => card.kind === 'board'))
+
+function openRoute(route?: string): void {
+  if (route) location.hash = route
+}
+
+function onRefresh(): void {
+  void refresh()
+}
+
 const now = ref(new Date())
 let clock = 0
-let stopLedger = (): void => {}
 onMounted(() => {
-  void loadLimitMailLedger().then(marks => { ledger.value = marks })
-  stopLedger = watchLimitMailLedger(() => { void loadLimitMailLedger().then(marks => { ledger.value = marks }) })
   clock = window.setInterval(() => {
     now.value = new Date()
   }, 60_000)
 })
 onUnmounted(() => {
   window.clearInterval(clock)
-  stopLedger()
 })
 const title = computed(() => {
   const name = connection.value.displayName
@@ -73,46 +86,117 @@ watch(qrOpen, (open) => {
   <div v-if="!ready" class="card"><p class="empty">尚未连接 EASY。确认登录用户之前，这里不显示客户、任务或发送统计。</p></div>
   <template v-else>
     <section class="home-report" aria-label="发文报表">
-      <div class="metric-row">
-        <article class="metric tone-green"><img :src="icon(11)" alt="" /><div><b>本页已交审核</b><strong>{{ report.submitted }}</strong><small>这个标签页里的事项</small></div></article>
-        <article class="metric tone-pink"><img :src="icon(18)" alt="" /><div><b>待发任务</b><strong>{{ report.pendingTasks }}</strong><small>计划 {{ report.letters }} 封 · {{ report.files }} 个文件</small></div></article>
-        <article class="metric tone-orange"><img :src="icon(17)" alt="" /><div><b>结果未知</b><strong>{{ report.unknownTasks }}</strong><small>不能自动再提交</small></div></article>
-        <article class="metric tone-blue"><img src="/assets/icons/img_customer.png" alt="" /><div><b>在册客户</b><strong>{{ report.customers }}</strong><small>PCT {{ report.workflows[0]?.count ?? 0 }} · 鹏城 {{ report.workflows[1]?.count ?? 0 }}</small></div></article>
+      <div class="home-report-bar">
+        <div class="home-report-meta">
+          <h3>运行概览</h3>
+          <span class="home-live-tag" :class="{ busy: refreshing }">
+            <i aria-hidden="true"></i>
+            {{ lastUpdatedText }}
+          </span>
+        </div>
+        <div class="home-report-tools">
+          <button type="button" class="home-tool-btn" :disabled="refreshing" @click="onRefresh">
+            {{ refreshing ? '正在同步…' : '刷新' }}
+          </button>
+          <button type="button" class="home-tool-btn" :class="{ on: pickerOpen }" :aria-expanded="pickerOpen" @click="pickerOpen = !pickerOpen">
+            管理卡片
+          </button>
+        </div>
       </div>
-      <div class="report-board">
-        <article>
-          <h2>发文任务</h2>
+
+      <div v-if="pickerOpen" class="home-card-picker" role="region" aria-label="管理首页卡片">
+        <div class="home-picker-head">
+          <span>勾选要展示在首页的卡片，修改立即生效并自动保存。</span>
+          <button type="button" class="home-picker-reset" @click="resetVisibility">恢复默认</button>
+        </div>
+        <div class="home-picker-groups">
+          <div class="home-picker-group">
+            <b>指标卡片</b>
+            <div class="home-picker-list">
+              <label v-for="card in metricCardDefs" :key="card.id" class="home-picker-item" v-hint="card.description ?? ''">
+                <input type="checkbox" :checked="isEnabled(card)" @change="toggleCard(card)" />
+                <span>{{ card.title }}</span>
+              </label>
+            </div>
+          </div>
+          <div class="home-picker-group">
+            <b>分布看板</b>
+            <div class="home-picker-list">
+              <label v-for="card in boardCardDefs" :key="card.id" class="home-picker-item" v-hint="card.description ?? ''">
+                <input type="checkbox" :checked="isEnabled(card)" @change="toggleCard(card)" />
+                <span>{{ card.title }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="metricCards.length > 0" class="metric-row">
+        <template v-for="item in metricCards" :key="item.def.id">
+          <button
+            v-if="item.def.route"
+            type="button"
+            class="metric metric-action"
+            :class="[`tone-${item.def.tone}`, { 'is-zero': item.value === 0 }]"
+            @click="openRoute(item.def.route)"
+          >
+            <span class="metric-icon"><img :src="item.def.icon" alt="" /></span>
+            <div class="metric-body">
+              <b>{{ item.def.title }}<span class="metric-arrow" aria-hidden="true">→</span></b>
+              <strong>{{ item.value }}</strong>
+              <small v-hint.clip="item.subtitle">{{ item.subtitle }}</small>
+            </div>
+          </button>
+          <article
+            v-else
+            class="metric"
+            :class="[`tone-${item.def.tone}`, { 'is-zero': item.value === 0 }]"
+          >
+            <span class="metric-icon"><img :src="item.def.icon" alt="" /></span>
+            <div class="metric-body">
+              <b>{{ item.def.title }}</b>
+              <strong>{{ item.value }}</strong>
+              <small v-hint.clip="item.subtitle">{{ item.subtitle }}</small>
+            </div>
+          </article>
+        </template>
+      </div>
+
+      <div v-if="boardCards.length > 0" class="report-board">
+        <article
+          v-for="item in boardCards"
+          :key="item.def.id"
+          :class="{ clickable: Boolean(item.def.route) }"
+          @click="openRoute(item.def.route)"
+        >
+          <div class="report-board-head">
+            <h2>{{ item.def.title }}</h2>
+            <button
+              v-if="item.def.route"
+              type="button"
+              class="report-board-go"
+              @click.stop="openRoute(item.def.route)"
+            >
+              共 {{ item.total }} 项 →
+            </button>
+            <span v-else class="report-board-count">共 {{ item.total }} 项</span>
+          </div>
           <ul>
-            <li v-for="item in report.tasks" :key="item.label">
-              <span>{{ item.label }}</span>
-              <i><b :class="item.tone" :style="{ width: barWidth(item.count, report.tasks) + '%' }"></b></i>
-              <strong>{{ item.count }}</strong>
+            <li v-for="slice in item.slices" :key="slice.label">
+              <span v-hint.clip="slice.label">{{ slice.label }}</span>
+              <i><b :class="slice.tone" :style="{ width: barWidth(slice.count, item.slices) + '%' }"></b></i>
+              <strong>{{ slice.count }}</strong>
             </li>
           </ul>
+          <p v-if="item.note">{{ item.note }}</p>
         </article>
-        <article>
-          <h2>客户工作流</h2>
-          <ul>
-            <li v-for="item in report.workflows" :key="item.label">
-              <span>{{ item.label }}</span>
-              <i><b :class="item.tone" :style="{ width: barWidth(item.count, report.workflows) + '%' }"></b></i>
-              <strong>{{ item.count }}</strong>
-            </li>
-          </ul>
-        </article>
-        <article>
-          <h2>本页发文</h2>
-          <ul>
-            <li v-for="item in report.ledger" :key="item.label">
-              <span>{{ item.label }}</span>
-              <i><b :class="item.tone" :style="{ width: barWidth(item.count, report.ledger) + '%' }"></b></i>
-              <strong>{{ item.count }}</strong>
-            </li>
-          </ul>
-          <p>账本只留在这个标签页，关掉就清空。</p>
-        </article>
+      </div>
+
+      <div v-if="metricCards.length === 0 && boardCards.length === 0" class="card home-cards-empty">
+        <p class="empty">当前未开启任何首页卡片，可点击右上角「管理卡片」重新开启或恢复默认。</p>
       </div>
     </section>
+
     <section class="card">
       <div class="card-head"><h2><img :src="icon(11)" alt="" />最近任务</h2></div>
       <EmptyGuide v-if="tasks.length === 0" text="还没有发文任务。去发文任务里自己拼一封，或按工作流生成。" action="去发文任务" hash="/tasks" />

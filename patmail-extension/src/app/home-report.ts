@@ -13,6 +13,11 @@ export interface HomeReportMark {
   state: 'created' | 'submitted' | 'unknown'
 }
 
+export interface HomeReportWorkflow {
+  id: string
+  label: string
+}
+
 export interface ReportSlice {
   label: string
   count: number
@@ -33,16 +38,22 @@ export interface HomeReport {
 
 const BLOCKED = new Set(['BLOCKED', 'STALE', 'FAILED', 'CANCELLED', 'PARTIAL_FAILURE', 'BINDING_BLOCKED'])
 
-function workflowOf(customer: HomeReportCustomer): 'pct-reminder' | 'pct-pengcheng' | '' {
-  const id = customer.workflowId || customer.pctTask?.workflowId || ''
-  if (id === 'pct-reminder' || id === 'pct-pengcheng') return id
-  return ''
+const DEFAULT_WORKFLOWS: readonly HomeReportWorkflow[] = [
+  { id: 'pct-reminder', label: 'PCT提醒' },
+  { id: 'pct-pengcheng', label: '鹏城专案' },
+]
+
+const WORKFLOW_TONES: ReadonlyArray<ReportSlice['tone']> = ['pink', 'blue', 'green', 'orange']
+
+function rawWorkflowId(customer: HomeReportCustomer): string {
+  return (customer.workflowId || customer.pctTask?.workflowId || '').trim()
 }
 
 export function homeReport(input: {
-  customers: HomeReportCustomer[]
-  tasks: HomeReportTask[]
-  ledger: HomeReportMark[]
+  customers: readonly HomeReportCustomer[]
+  tasks: readonly HomeReportTask[]
+  ledger: readonly HomeReportMark[]
+  workflows?: readonly HomeReportWorkflow[]
 }): HomeReport {
   let pendingTasks = 0
   let unknownTasks = 0
@@ -58,15 +69,42 @@ export function homeReport(input: {
     else if (BLOCKED.has(task.status)) blocked += 1
     else pendingTasks += 1
   }
-  let pct = 0
-  let pengcheng = 0
+
+  const catalogMode = input.workflows !== undefined
+  const defs: HomeReportWorkflow[] = []
+  const seenIds = new Set<string>()
+  for (const item of input.workflows ?? DEFAULT_WORKFLOWS) {
+    const id = item.id.trim()
+    if (!id || seenIds.has(id)) continue
+    seenIds.add(id)
+    defs.push({ id, label: item.label.trim() || id })
+  }
+
+  const workflowCounts = new Map<string, number>(defs.map(item => [item.id, 0]))
   let unbound = 0
   for (const customer of input.customers) {
-    const workflow = workflowOf(customer)
-    if (workflow === 'pct-reminder') pct += 1
-    else if (workflow === 'pct-pengcheng') pengcheng += 1
-    else unbound += 1
+    const id = rawWorkflowId(customer)
+    if (!id) {
+      unbound += 1
+      continue
+    }
+    if (workflowCounts.has(id)) {
+      workflowCounts.set(id, (workflowCounts.get(id) ?? 0) + 1)
+    } else if (catalogMode) {
+      defs.push({ id, label: id })
+      workflowCounts.set(id, 1)
+    } else {
+      unbound += 1
+    }
   }
+
+  const workflowSlices: ReportSlice[] = defs.map((item, index) => ({
+    label: item.label,
+    count: workflowCounts.get(item.id) ?? 0,
+    tone: WORKFLOW_TONES[index % WORKFLOW_TONES.length],
+  }))
+  workflowSlices.push({ label: '未绑工作流', count: unbound, tone: 'muted' })
+
   let submitted = 0
   let created = 0
   let unknownMarks = 0
@@ -75,6 +113,7 @@ export function homeReport(input: {
     else if (mark.state === 'created') created += 1
     else unknownMarks += 1
   }
+
   return {
     submitted,
     pendingTasks,
@@ -86,18 +125,14 @@ export function homeReport(input: {
       { label: '待发', count: pendingTasks, tone: 'pink' },
       { label: '还不能发', count: blocked, tone: 'orange' },
       { label: '结果未知', count: unknownTasks, tone: 'blue' },
-      { label: '已完成', count: done, tone: 'green' }
+      { label: '已完成', count: done, tone: 'green' },
     ],
-    workflows: [
-      { label: 'PCT提醒', count: pct, tone: 'pink' },
-      { label: '鹏城专案', count: pengcheng, tone: 'blue' },
-      { label: '未绑工作流', count: unbound, tone: 'muted' }
-    ],
+    workflows: workflowSlices,
     ledger: [
       { label: '已交审核', count: submitted, tone: 'green' },
       { label: '已创建未交', count: created, tone: 'pink' },
-      { label: '结果未知', count: unknownMarks, tone: 'orange' }
-    ]
+      { label: '结果未知', count: unknownMarks, tone: 'orange' },
+    ],
   }
 }
 

@@ -39,4 +39,31 @@ describe('首页发文报表', () => {
     expect(barWidth(0, report.tasks)).toBe(0)
     expect(report.workflows.map(item => item.count)).toEqual([0, 0, 0])
   })
+
+  it('按传入工作流目录动态计数并兼容目录外自定义绑定', () => {
+    const report = homeReport({
+      workflows: [
+        { id: 'pct-reminder', label: 'PCT提醒' },
+        { id: 'file-manage', label: '文件管理' },
+        { id: 'custom-vip', label: 'VIP 专案' },
+      ],
+      customers: [
+        { workflowId: 'pct-reminder' },
+        { workflowId: 'file-manage' },
+        { workflowId: 'custom-vip' },
+        { workflowId: 'legacy-flow' },
+        {},
+      ],
+      tasks: [],
+      ledger: [],
+    })
+    expect(report.customers).toBe(5)
+    expect(report.workflows).toEqual([
+      { label: 'PCT提醒', count: 1, tone: 'pink' },
+      { label: '文件管理', count: 1, tone: 'blue' },
+      { label: 'VIP 专案', count: 1, tone: 'green' },
+      { label: 'legacy-flow', count: 1, tone: 'orange' },
+      { label: '未绑工作流', count: 1, tone: 'muted' },
+    ])
+  })
 })
