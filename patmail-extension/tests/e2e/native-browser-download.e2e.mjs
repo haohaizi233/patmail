@@ -275,6 +275,7 @@ try {
     .screenshot({ path: resultPath('file-export-six-complete.png') })
   assert.equal(downloads.length, 1)
   assert.equal(await downloads[0].failure(), null)
+  assert.match(downloads[0].suggestedFilename(), /[\p{Script=Han}].*\.zip$/u)
   const output = resultPath('native-browser-recovered.zip')
   await downloads[0].saveAs(output)
   const saved = await app.evaluate(() => ({ legacyCalls: window.__legacyCalls }))

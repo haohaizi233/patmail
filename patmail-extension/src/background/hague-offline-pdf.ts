@@ -1,4 +1,5 @@
 import { PermitPool } from '../utils/permit-pool'
+import { matchesBrowserDownloadPath } from '../shared/download-file-name'
 const printer=new PermitPool(1)
 export async function printOfflineHague(html:string,caseVolume:string,reference:string,delivery:'download'|'artifact'='download'):Promise<number|{base64:string;fileName:string}>{
  if(!/^P[A-Z0-9-]*HAGUE$/i.test(caseVolume)||!/^\d+$/.test(reference)||html.length>20000000||/<(?:script|iframe|object|embed|base)\b|\son\w+\s*=|(?:src|href)\s*=\s*["']https?:|url\(\s*["']?https?:|@import/i.test(html))throw new Error('离线 Summary 内容或标识无效。')
@@ -17,9 +18,10 @@ export async function printOfflineHague(html:string,caseVolume:string,reference:
    const pdf=await chrome.debugger.sendCommand(target,'Page.printToPDF',{printBackground:true,preferCSSPageSize:true,displayHeaderFooter:false,transferMode:'ReturnAsBase64'}) as {data?:string}
    if(!pdf.data||!atob(pdf.data.slice(0,12)).startsWith('%PDF-'))throw new Error('未返回有效 Summary PDF。')
    if(delivery==='artifact')return{base64:pdf.data,fileName:`${caseVolume}-Summary-WIPO${reference}.pdf`}
-   const id=await chrome.downloads.download({url:`data:application/pdf;base64,${pdf.data}`,filename:`PatMail/Hague/${caseVolume}/Summary-WIPO${reference}.pdf`,saveAs:false,conflictAction:'uniquify'})
+   const filename=`PatMail/Hague/${caseVolume}/Summary-WIPO${reference}.pdf`
+   const id=await chrome.downloads.download({url:`data:application/pdf;base64,${pdf.data}`,filename,saveAs:false,conflictAction:'uniquify'})
    const deadline=Date.now()+60000
-   while(Date.now()<deadline){const item=(await chrome.downloads.search({id}))[0];if(item?.state==='complete')return id;if(item?.state==='interrupted')throw new Error('Summary PDF 下载中断。');await new Promise(r=>setTimeout(r,250))}
+   while(Date.now()<deadline){const item=(await chrome.downloads.search({id}))[0];if(item?.state==='complete'){if(!matchesBrowserDownloadPath(item.filename,filename))throw new Error('Summary 已下载，但保存路径或文件名与本案不一致，请核对浏览器下载列表。');return id}if(item?.state==='interrupted')throw new Error('Summary PDF 下载中断。');await new Promise(r=>setTimeout(r,250))}
    throw new Error('Summary PDF 下载尚未确认完成。')
   }finally{if(attached)await chrome.debugger.detach(target).catch(()=>{});await chrome.tabs.remove(tab.id).catch(()=>{})}
  })

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { downloadNamedBlob } from '../../utils/download-blob'
 import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { restoreDiagnosticEvents, clearDiagnosticEvents, getDiagnosticEvents, getResearchStatus, getCollectorStats, isDiagnosticModeEnabled, setDiagnosticMode, subscribeDiagnostics } from '../../hague/diagnostics/store'
 import { buildDiagnosticReport, exportDiagnostics } from '../../hague/diagnostics/reports'
@@ -48,9 +49,12 @@ onBeforeUnmount(stop)
 function toggle(event: Event) { enabled.value = (event.target as HTMLInputElement).checked; setDiagnosticMode(enabled.value) }
 function download(format: 'json' | 'jsonl' | 'markdown') {
   const content = exportDiagnostics(report.value.events, format, replay.value ? 'offline-replay' : 'observed')
-  const url = URL.createObjectURL(new Blob([content], { type: format === 'markdown' ? 'text/markdown' : 'application/json' }))
-  const link = document.createElement('a'); link.href = url; link.download = `hague-${replay.value ? 'offline-replay' : 'diagnostics'}.${format === 'markdown' ? 'md' : format}`; link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  const { extension, mime } = {
+    json: { extension: 'json', mime: 'application/json' },
+    jsonl: { extension: 'jsonl', mime: 'application/x-ndjson' },
+    markdown: { extension: 'md', mime: 'text/markdown' },
+  }[format]
+  downloadNamedBlob(new Blob([content], { type: mime }), `hague-${replay.value ? 'offline-replay' : 'diagnostics'}.${extension}`)
 }
 async function importReplay(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]

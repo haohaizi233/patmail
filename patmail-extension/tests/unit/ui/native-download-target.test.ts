@@ -27,6 +27,7 @@ describe('native stream download target', () => {
     const f = fixture(); const reader = await f.attach()
     expect(f.response!.headers.get('content-length')).toBeNull()
     expect(f.response!.headers.get('content-disposition')).toContain("filename*=UTF-8''")
+    expect(decodeURIComponent(new URL(f.url).pathname.split('/').at(-1)!)).toBe('报告.zip')
     await reader.cancel()
   })
   it('holds write acknowledgement until a consumer pulls, and preserves byte order', async () => {

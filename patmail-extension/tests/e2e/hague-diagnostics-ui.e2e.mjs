@@ -30,7 +30,7 @@ try {
   await panel.waitFor()
   assert.equal(await panel.evaluate(node => node.open), false)
   await panel.locator(':scope > summary').click()
-  assert.match(await panel.innerText(), /CDP 数据缺失/)
+  await panel.getByRole('status').filter({ hasText: 'CDP 数据缺失' }).waitFor()
   assert.match(await panel.innerText(), /不会开启 CDP 深度脚本读取/)
   await panel.getByRole('checkbox').check()
   await page.evaluate(async()=>{
@@ -55,10 +55,11 @@ try {
   await panel.locator('tbody tr').nth(1).getByRole('button').click()
   assert.match(await panel.locator('pre').first().innerText(), /"httpStatus": 200/)
   await panel.screenshot({ path: path.join(output, 'panel-desktop.png') })
-  for (const format of ['jsonl', 'json', 'markdown']) {
+  for (const [format, extension] of [['jsonl', 'jsonl'], ['json', 'json'], ['markdown', 'md']]) {
     const downloadPromise = page.waitForEvent('download')
     await panel.getByRole('button', { name: `导出 ${format}`, exact: true }).click()
     const download = await downloadPromise
+    assert.equal(download.suggestedFilename(), `hague-diagnostics.${extension}`)
     const target = path.join(output, download.suggestedFilename())
     await download.saveAs(target)
     const text = await readFile(target, 'utf8')
@@ -74,8 +75,8 @@ try {
   assert.ok(box.width <= 860 && box.x >= 0, 'diagnostics panel must fit the narrow viewport')
   assert.ok(await panel.locator('.diagnostic-scroll').evaluate(node => node.scrollWidth > node.clientWidth), 'narrow timeline keeps legible columns in its own scroll container')
   await panel.getByRole('button', { name: '清空应用记录' }).click()
-  assert.equal(await panel.locator('tbody tr').count(), 0)
-  assert.equal(external.length, 0, 'fixture must not attempt external network calls')
+  await panel.locator('tbody tr').first().waitFor({ state: 'detached' })
+  assert.deepEqual(external, [], 'fixture must not attempt external network calls')
   await writeFile(path.join(output, 'result.json'), JSON.stringify({ passed: true, externalRequests: external.length, viewportWidths: [1440, 860], syntheticOnly: true }, null, 2))
   console.log('Hague diagnostics isolated UI: passed (desktop/narrow, details, export, replay, clear, privacy).')
 } finally {

@@ -1,3 +1,5 @@
+import { downloadNamedBlob } from '../utils/download-blob'
+
 function decodeXml(text: string): string {
   return text
     .replace(/&lt;/g, '<')
@@ -434,12 +436,7 @@ export function xlsxBytes(rows: string[][], sheetName = 'Sheet1'): ArrayBuffer {
 
 export function downloadXlsxSheets(sheets: XlsxSheetSpec[], filename: string): void {
   const blob = new Blob([xlsxBookBytes(sheets)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(url)
+  downloadNamedBlob(blob, filename)
 }
 
 export function downloadXlsxRows(rows: string[][], filename: string, sheetName = 'Sheet1'): void {

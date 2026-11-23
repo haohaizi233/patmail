@@ -1,4 +1,5 @@
 import { filingSearchValueLimit, isFilingSearchInputField } from '../api/filing-search-params'
+import { downloadNamedBlob } from '../utils/download-blob'
 import { fileSearchValueLimit, isFileSearchBusinessField } from '../api/file-search-params'
 import { isFeeSearchInputField } from '../api/fee-form'
 import { isLimitMonitorInputField } from '../api/limit-monitor-params'
@@ -109,12 +110,7 @@ export function templateJsonFileName(surface: TemplateJsonSurface, sourceName = 
 /** 下载 JSON 文件。和 Excel 导出一样走一次性 `<a download>`，不碰原站的下载通道。 */
 export function downloadTemplateJson(text: string, filename: string): void {
   const blob = new Blob([text], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(url)
+  downloadNamedBlob(blob, filename)
 }
 
 function readRecord(raw: unknown): Record<string, unknown> | null {

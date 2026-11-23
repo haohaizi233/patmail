@@ -11,7 +11,7 @@ import type { MailRuleBundle } from '../mail/types'
 import { isQueryGuid, isQueryTemplate } from '../query/query-validator'
 import type { QueryTemplate } from '../query/query-types'
 import { isEasyConnection, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope } from './connection'
-import { isCaseContactResult, isDictionaryResult, isFeeSearchApiResult, isFeeSearchQuery, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isFileTempNamesResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isSessionResult, isVolumeList } from '../api/message-guards'
+import { isCaseContactResult, isDictionaryResult, isFeeSearchApiResult, isFeeSearchQuery, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isFileTempNamesResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isNoticeActionRequest, isNoticeExcelUploadRequest, isNoticeExportRequest, isNoticeSearchApiResult, isNoticeSearchRequest, isSessionResult, isVolumeList, isWriteNoticeAction } from '../api/message-guards'
 import type { FileTempNameList } from '../api/file-temp-name'
 import type { LimitMonitorQuery } from '../api/limit-monitor-params'
 import type { FilingSearchQuery } from '../api/filing-search-params'
@@ -26,6 +26,17 @@ import type { LimitMonitorResult } from '../api/limit-monitor-types'
 import type { FilingSearchResult } from '../api/filing-search-types'
 import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeSearchResult } from '../api/fee-search-types'
 import type { FeeExportConfigRequest, FeeExportConfigResponse, FeeExportRequest, FeeExportResponse } from '../api/fee-export'
+import type {
+  NoticeActionRequest,
+  NoticeActionResult,
+  NoticeExcelUploadRequest,
+  NoticeExcelUploadResult,
+  NoticeExportRequest,
+  NoticeExportResult,
+  NoticeInitData,
+  NoticeSearchRequest,
+  NoticeSearchResult
+} from '../api/notice-types'
 import type { FilingFlowRow, FilingUser } from '../api/filing-export'
 import type { DictionaryLoadRequest, DictionarySnapshot } from '../api/dictionaries'
 import type { FileSearchQuery } from '../api/file-search-params'
@@ -83,6 +94,16 @@ export const MessageType = {
   FeeExportConfigResult: 'FEE_EXPORT_CONFIG_RESULT',
   ExportFee: 'EXPORT_FEE',
   ExportFeeResult: 'EXPORT_FEE_RESULT',
+  LoadNoticeInit: 'LOAD_NOTICE_INIT',
+  LoadNoticeInitResult: 'LOAD_NOTICE_INIT_RESULT',
+  SearchNotice: 'SEARCH_NOTICE',
+  SearchNoticeResult: 'SEARCH_NOTICE_RESULT',
+  NoticeAction: 'NOTICE_ACTION',
+  NoticeActionResult: 'NOTICE_ACTION_RESULT',
+  ExportNotice: 'EXPORT_NOTICE',
+  ExportNoticeResult: 'EXPORT_NOTICE_RESULT',
+  UploadNoticeExcel: 'UPLOAD_NOTICE_EXCEL',
+  UploadNoticeExcelResult: 'UPLOAD_NOTICE_EXCEL_RESULT',
   SubmitLimitMail: 'SUBMIT_LIMIT_MAIL',
   SubmitLimitMailResult: 'SUBMIT_LIMIT_MAIL_RESULT',
   SubmitFileManage: 'SUBMIT_FILE_MANAGE',
@@ -220,6 +241,11 @@ export type ContentRequest =
   | Response<'LOAD_FEE_APPLICANTS', { customerIds: string }>
   | Response<'FEE_EXPORT_CONFIG', FeeExportConfigRequest>
   | Response<'EXPORT_FEE', FeeExportRequest>
+  | Request<'LOAD_NOTICE_INIT'>
+  | Response<'SEARCH_NOTICE', NoticeSearchRequest>
+  | Response<'NOTICE_ACTION', NoticeActionRequest>
+  | Response<'EXPORT_NOTICE', NoticeExportRequest>
+  | Response<'UPLOAD_NOTICE_EXCEL', NoticeExcelUploadRequest>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; namedBusiness?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string; addresses?: Pick<FileMailConfig, 'to' | 'cc'> }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
@@ -326,7 +352,7 @@ export type BackgroundResponse =
   | Response<'EVIDENCE_RESULT', { records: Record<string, unknown>[] }>
   | Response<'WORKSPACE_RESULT', WorkspaceResultPayload>
   | Response<'SAVE_DOWNLOAD_RESULT', { ok: true; fileName: string; downloadId?: number }>
-  | Response<'DOWNLOAD_STATE_RESULT', { ok: true; state: 'inProgress' | 'complete' | 'interrupted'; receivedBytes: number; totalBytes: number | null; error?: string }>
+  | Response<'DOWNLOAD_STATE_RESULT', { ok: true; state: 'inProgress' | 'complete' | 'interrupted'; receivedBytes: number; totalBytes: number | null; error?: string; fileName?: string }>
   | Response<'STREAM_DOWNLOAD_RESULT', { ok: true; token?: string; downloadId?: number; taskId?: string; info?: Record<string, unknown>; data?: string }>
   | Response<'AGENT_CHAT_RESULT', ApiResult<{ reply: string; model: string; steps: number; history: Array<{ role: 'user' | 'assistant'; content: string }>; sessions: Array<{ id: string; title: string; updatedAt: string; active: boolean }>; activeId: string }>>
   | ErrorMessage
@@ -445,6 +471,11 @@ export type ContentResponse =
   | Response<'LOAD_FEE_APPLICANTS_RESULT', ApiResult<FeeApplicantItem[]>>
   | Response<'FEE_EXPORT_CONFIG_RESULT', ApiResult<FeeExportConfigResponse>>
   | Response<'EXPORT_FEE_RESULT', ApiResult<FeeExportResponse>>
+  | Response<'LOAD_NOTICE_INIT_RESULT', ApiResult<NoticeInitData>>
+  | Response<'SEARCH_NOTICE_RESULT', ApiResult<NoticeSearchResult>>
+  | Response<'NOTICE_ACTION_RESULT', ApiResult<NoticeActionResult>>
+  | Response<'EXPORT_NOTICE_RESULT', ApiResult<NoticeExportResult>>
+  | Response<'UPLOAD_NOTICE_EXCEL_RESULT', ApiResult<NoticeExcelUploadResult>>
   | Response<'SUBMIT_LIMIT_MAIL_RESULT', { stopped: boolean; results: Array<{ procId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string; to?: string; cc?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE_RESULT', { stopped: boolean; results: Array<{ fileId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES_RESULT', ApiResult<{ names: string[] }>>
@@ -971,7 +1002,16 @@ export function isMessage(value: unknown): value is AppMessage {
       return keys.every(key => key === 'query' || key === 'timeoutMs')
     }
     case MessageType.LoadFeeInit:
+    case MessageType.LoadNoticeInit:
       return value.payload === undefined
+    case MessageType.SearchNotice:
+      return isNoticeSearchRequest(value.payload)
+    case MessageType.NoticeAction:
+      return isNoticeActionRequest(value.payload)
+    case MessageType.ExportNotice:
+      return isNoticeExportRequest(value.payload)
+    case MessageType.UploadNoticeExcel:
+      return isNoticeExcelUploadRequest(value.payload)
     case MessageType.SearchFeeCustomers:
       return isRecord(value.payload) && typeof value.payload.searchKey === 'string' && Object.keys(value.payload).length === 1
     case MessageType.LoadFeeApplicants:
@@ -1093,10 +1133,11 @@ export function isMessage(value: unknown): value is AppMessage {
       const payload = value.payload
       if (!isRecord(payload) || payload.ok !== true) return false
       const keys = Object.keys(payload)
-      if (!keys.every(key => ['ok', 'state', 'receivedBytes', 'totalBytes', 'error'].includes(key))) return false
+      if (!keys.every(key => ['ok', 'state', 'receivedBytes', 'totalBytes', 'error', 'fileName'].includes(key))) return false
       if (payload.state !== 'inProgress' && payload.state !== 'complete' && payload.state !== 'interrupted') return false
       if (typeof payload.receivedBytes !== 'number' || !Number.isSafeInteger(payload.receivedBytes) || payload.receivedBytes < 0) return false
       if (payload.totalBytes !== null && (typeof payload.totalBytes !== 'number' || !Number.isSafeInteger(payload.totalBytes) || payload.totalBytes < 0)) return false
+      if (payload.fileName !== undefined && (typeof payload.fileName !== 'string' || !payload.fileName || /[\\/]/.test(payload.fileName))) return false
       return payload.error === undefined || (typeof payload.error === 'string' && payload.error.length <= 200)
     }
     case MessageType.ExportCaseContacts:
@@ -1133,7 +1174,13 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.LoadFeeApplicantsResult:
     case MessageType.FeeExportConfigResult:
     case MessageType.ExportFeeResult:
+    case MessageType.LoadNoticeInitResult:
+    case MessageType.NoticeActionResult:
+    case MessageType.ExportNoticeResult:
+    case MessageType.UploadNoticeExcelResult:
       return isRecord(value.payload)
+    case MessageType.SearchNoticeResult:
+      return isNoticeSearchApiResult(value.payload)
     case MessageType.ExportCaseContactsResult:
       return isCaseContactResult(value.payload)
     case MessageType.ListMailProcessesResult:
@@ -1270,7 +1317,8 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.CheckSession || value.type === MessageType.CancelSessionCheck ||
     value.type === MessageType.SearchFiles || value.type === MessageType.CancelFileSearch ||
     value.type === MessageType.CancelLimitMonitor ||
-    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.SearchFee || value.type === MessageType.SearchFeeAmount || value.type === MessageType.LoadFeeInit || value.type === MessageType.SearchFeeCustomers || value.type === MessageType.LoadFeeApplicants || value.type === MessageType.FeeExportConfig || value.type === MessageType.ExportFee || value.type === MessageType.ListMailProcesses ||
+    value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.SearchFee || value.type === MessageType.SearchFeeAmount || value.type === MessageType.LoadFeeInit || value.type === MessageType.SearchFeeCustomers || value.type === MessageType.LoadFeeApplicants || value.type === MessageType.FeeExportConfig || value.type === MessageType.ExportFee ||
+    value.type === MessageType.LoadNoticeInit || value.type === MessageType.SearchNotice || value.type === MessageType.NoticeAction || value.type === MessageType.ExportNotice || value.type === MessageType.UploadNoticeExcel || value.type === MessageType.ListMailProcesses ||
     value.type === MessageType.SubmitLimitMail ||
     value.type === MessageType.SubmitFileManage ||
     value.type === MessageType.ResolveDownloadNames ||
@@ -1306,13 +1354,16 @@ export function isContentRequest(value: unknown): value is ContentRequest {
   )
 }
 
-const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'SEARCH_FEE', 'SEARCH_FEE_AMOUNT', 'LOAD_FEE_INIT', 'SEARCH_FEE_CUSTOMERS', 'LOAD_FEE_APPLICANTS', 'FEE_EXPORT_CONFIG', 'EXPORT_FEE', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'CANCEL_HAGUE_READ', 'READ_HAGUE_CASE', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES'])
-const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SAVE_FILE_TEMP_NAME', 'DELETE_FILE_TEMP_NAME', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE'])
+const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'SEARCH_FEE', 'SEARCH_FEE_AMOUNT', 'LOAD_FEE_INIT', 'SEARCH_FEE_CUSTOMERS', 'LOAD_FEE_APPLICANTS', 'FEE_EXPORT_CONFIG', 'EXPORT_FEE', 'LOAD_NOTICE_INIT', 'SEARCH_NOTICE', 'EXPORT_NOTICE', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'CANCEL_HAGUE_READ', 'READ_HAGUE_CASE', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES'])
+const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SAVE_FILE_TEMP_NAME', 'DELETE_FILE_TEMP_NAME', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE', 'UPLOAD_NOTICE_EXCEL'])
 
 /** 不允许转发时给出原因。写开关关掉时，创建、保存和查询模板写回都停在这里。 */
 export function workspaceForwardBlock(value: unknown): string {
   if (!isContentRequest(value)) return '完整页面不能转发这个请求。'
   if (PAGE_FORWARD.has(value.type)) return ''
+  if (value.type === MessageType.NoticeAction) {
+    return isWriteNoticeAction(value.payload) && !isWriteSwitchOpen() ? '写开关已关闭。' : ''
+  }
   if (WRITE_FORWARD.has(value.type)) return isWriteSwitchOpen() ? '' : '写开关已关闭。'
   return '完整页面不能转发这个请求。'
 }

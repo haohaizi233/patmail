@@ -328,6 +328,8 @@ describe('CDP observer target and event filtering', () => {
 
   it('keeps network metadata to origin, path, and Call without reading request bodies', () => {
     const safeNetworkUrl = required<(url: string, postData?: string) => Record<string, unknown>>('safeNetworkUrl')
+    expect(safeNetworkUrl('chrome-extension://patmail/_patmail_native_download/private-token/%E8%B4%A6%E5%8D%95.zip'))
+      .toEqual({ origin: 'chrome-extension://patmail', path: '/_patmail_native_download/' })
     expect(safeNetworkUrl('https://user:pass@183.36.43.66:88/Ajax/Report.ashx?Call=GetRows&token=secret&x=1'))
       .toEqual({ origin: 'https://183.36.43.66:88', path: '/Ajax/Report.ashx', call: 'GetRows' })
     expect(safeNetworkUrl('http://183.36.43.66:88/AjaxServers/Report.ashx', 'Call=DownLoad&password=private&token=secret'))

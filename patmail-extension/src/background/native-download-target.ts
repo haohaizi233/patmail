@@ -104,9 +104,10 @@ export function createNativeDownloadTarget(options: NativeDownloadTargetOptions)
       if (previous.request.taskId !== request.taskId || previous.request.owner !== request.owner) throw new Error('下载目标不属于当前任务或账号。')
       if (!previous.done) { fail(previous, new Error('下载目标已重新打开。')); await cancelNative(previous) }
     }
-    const fileName = options.resolveFileName ? await options.resolveFileName(request) : request.fileName ?? 'PatMail.zip'
-    const suffix = /\.pdf$/i.test(fileName) ? 'pdf' : 'zip'
-    const url = prefix + crypto.randomUUID() + '/' + crypto.randomUUID() + '.' + suffix
+    const requestedName = options.resolveFileName ? await options.resolveFileName(request) : request.fileName ?? 'PatMail.zip'
+    const sanitized = requestedName.replace(/[\\/]/g, '_').replaceAll('\r', '_').replaceAll('\n', '_').replaceAll('\0', '_')
+    const fileName = new TextDecoder().decode(new TextEncoder().encode(sanitized))
+    const url = prefix + crypto.randomUUID() + '/' + encodeURIComponent(fileName)
     const s = { request: { ...request }, url, fileName, cursor: 0, attached: deferred<void>(), completed: deferred<void>(),
       closing: false, done: false, claimed: false, listener: (_change: NativeDownloadChange) => {} } as Session
     s.stream = new ReadableStream<Uint8Array>({
@@ -181,8 +182,7 @@ export function createNativeDownloadTarget(options: NativeDownloadTargetOptions)
         event.respondWith(new Response('Download not found', { status: 404 })); return true
       }
       s.claimed = true; capabilities.delete(s.url); clearTimeout(s.attachTimer)
-      // eslint-disable-next-line no-control-regex -- 存量豁免：有意匹配控制字符（文件名与输入清洗）
-      const name = s.fileName.replace(/[\r\n\\/\u0000]/g, '_')
+      const name = s.fileName
       const encoded = encodeURIComponent(name).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase())
       event.respondWith(new Response(s.stream, { headers: { 'Content-Type': /\.pdf$/i.test(name) ? 'application/pdf' : 'application/zip', 'Content-Disposition': `attachment; filename="PatMail.${/\.pdf$/i.test(name) ? 'pdf' : 'zip'}"; filename*=UTF-8''${encoded}`, 'Cache-Control': 'no-store' } }))
       watch(s); s.attached.resolve(); return true

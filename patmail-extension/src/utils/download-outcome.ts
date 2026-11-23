@@ -6,6 +6,7 @@ export interface BrowserDownloadSnapshot {
   receivedBytes?: number
   totalBytes?: number | null
   error?: string
+  fileName?: string
 }
 
 /** 浏览器下载的终态。complete 才算保存完成；interrupted 说明压缩包没保存完整。 */
@@ -14,6 +15,7 @@ export interface BrowserDownloadOutcome {
   receivedBytes: number
   totalBytes: number | null
   error: string
+  fileName?: string
 }
 
 export interface WatchBrowserDownloadOptions {
@@ -74,7 +76,7 @@ export async function watchBrowserDownload(options: WatchBrowserDownloadOptions)
         phase: 'downloading', done: 0, total: 1, state: snapshot.state,
         elapsedMs: Date.now() - startedAt, receivedBytes: savedBytes, ...(totalBytes === null ? {} : { totalBytes })
       })
-      return { state: snapshot.state, receivedBytes: savedBytes, totalBytes, error }
+      return { state: snapshot.state, receivedBytes: savedBytes, totalBytes, error, ...(snapshot.fileName ? { fileName: snapshot.fileName } : {}) }
     }
     // 只有字节数或总长度变化才算新进度；不变的在途状态不重复报。
     if (!sent || sent.receivedBytes !== receivedBytes || sent.totalBytes !== totalBytes) {

@@ -11,6 +11,7 @@ import { scopeExtensionPageMessage } from './scope'
 import { EasyConnectionController, sameConnectionSnapshot, tabOrigin, type ConnectionSnapshot } from '../shared/connection'
 import { handleWorkspaceMessage, openWorkspaceTab, recheckBoundSession, resumeEasySession, type WorkspaceHost } from './workspace'
 import { isRecord } from '../shared/guards'
+import { browserDownloadName } from '../shared/download-file-name'
 import { prepareForwardedSearch } from '../api/message-guards'
 import { downloadFilesRequestIssue, isMessage, MessageType, type AppMessage, type BackgroundResponse } from '../shared/message'
 import { prepareApiDocs } from '../agent/rag-store'
@@ -264,9 +265,10 @@ const messageRegistry = createBackgroundMessageRegistry({
       const receivedBytes = Number.isSafeInteger(item.bytesReceived) && item.bytesReceived >= 0 ? item.bytesReceived : 0
       const totalBytes = Number.isSafeInteger(item.totalBytes) && item.totalBytes > 0 ? item.totalBytes : null
       const state = item.state === 'complete' ? 'complete' : item.state === 'interrupted' ? 'interrupted' : 'inProgress'
+      const fileName = state === 'complete' ? browserDownloadName(item.filename) : undefined
       return {
         type: MessageType.DownloadStateResult,
-        payload: { ok: true, state, receivedBytes, totalBytes, ...(item.error ? { error: String(item.error).slice(0, 200) } : {}) }
+        payload: { ok: true, state, receivedBytes, totalBytes, ...(fileName ? { fileName } : {}), ...(item.error ? { error: String(item.error).slice(0, 200) } : {}) }
       }
     } catch (error: unknown) {
       return { type: MessageType.Error, payload: { message: error instanceof Error ? error.message : '浏览器没有回报下载状态。' } }

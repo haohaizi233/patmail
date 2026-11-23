@@ -1,4 +1,5 @@
 import type { CaseContactRow } from './query'
+import { downloadNamedBlob } from '../utils/download-blob'
 
 const HEADER = ['客户案号', '技术负责人', '邮箱']
 
@@ -115,10 +116,5 @@ export function contactWorkbook(rows: CaseContactRow[]): ArrayBuffer {
 
 export function downloadContactWorkbook(rows: CaseContactRow[], filename = '客户案号-技术负责人-邮箱.xlsx'): void {
   const blob = new Blob([contactWorkbook(rows)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(url)
+  downloadNamedBlob(blob, filename)
 }

@@ -58,13 +58,13 @@ try {
     const bytes = new TextEncoder().encode('%PDF-1.7\nNative export regression\n%%EOF')
     // eslint-disable-next-line require-await -- 存量豁免：保留 async 接口契约（Promise 返回）
     const source = name => ({ name, open: async () => bytes })
-    const pdf = await downloadDocuments('pdf', [source('Summary.pdf')], 'Summary.pdf')
-    const zip = await downloadDocuments('zip', [source('First.pdf'), source('Second.pdf')], 'Summaries.zip')
+    const pdf = await downloadDocuments('pdf', [source('案件摘要.pdf')], '案件摘要.pdf')
+    const zip = await downloadDocuments('zip', [source('First.pdf'), source('Second.pdf')], '案件摘要归档.zip')
     return { pdf, zip }
   })
   assert.equal(downloads.length, 2)
-  assert.equal(downloads[0].suggestedFilename(), 'Summary.pdf')
-  assert.equal(downloads[1].suggestedFilename(), 'Summaries.zip')
+  assert.equal(downloads[0].suggestedFilename(), '案件摘要.pdf')
+  assert.equal(downloads[1].suggestedFilename(), '案件摘要归档.zip')
   const original = Buffer.from('%PDF-1.7\nNative export regression\n%%EOF')
   assert.deepEqual(await readFile(await downloads[0].path()), original)
   const zip = new ZipReader(new Uint8ArrayReader(new Uint8Array(await readFile(await downloads[1].path()))))

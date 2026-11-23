@@ -537,6 +537,9 @@ export function safeNetworkUrl(value, postData = '', source = '') {
   } catch {
     return { origin: '', path: '/' }
   }
+  if (url.protocol === 'chrome-extension:' && url.pathname.startsWith('/_patmail_native_download/')) {
+    return { origin: `${url.protocol}//${url.host}`, path: '/_patmail_native_download/' }
+  }
   if (url.hostname === 'oa.jihualab.net' || source === 'jihua') {
     if (url.protocol !== 'https:' || url.hostname !== 'oa.jihualab.net' || url.port !== '' || url.username || url.password) {
       return { origin: '', path: '/' }

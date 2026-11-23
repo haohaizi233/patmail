@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { downloadNamedBlob } from '../../utils/download-blob'
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
@@ -1099,12 +1100,7 @@ function exportCsv(): void {
     return [sourceName, row.relativePath, isSelected(row) ? '是' : '否', row.applicationNo, row.caseName, row.description,
       selectedMaterial?.label ?? '', target, statusLabel(row), rowDetail(row), receiptIds]
   })].map(line => line.map(protect).join(',')).join('\r\n')
-  const url = URL.createObjectURL(new Blob([`\uFEFF${lines}`], { type: 'text/csv;charset=utf-8' }))
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = '季华实验室-文件导入结果.csv'
-  anchor.click()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  downloadNamedBlob(new Blob([`\uFEFF${lines}`], { type: 'text/csv;charset=utf-8' }), '季华实验室-文件导入结果.csv')
 }
 
 function setFilePage(next: number): void {
@@ -1153,7 +1149,7 @@ onUnmounted(() => {
     desc="只读取文件名来分组；确认案件、材料和登录会话后，再逐项上传。"
     :art="bg('让重复工作变简单.png')"
   >
-    <button type="button" class="ghost jh-back" @click="emit('back')">回到工作流</button>
+    <button type="button" class="workflow-back-btn jh-back" @click="emit('back')">回到工作流</button>
   </PageHead>
 
   <p v-if="bootError" class="jh-alert card tone-pink" role="alert">{{ bootError }}</p>

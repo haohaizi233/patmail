@@ -495,6 +495,7 @@ try {
   const downloadEvent = app.waitForEvent('download')
   await app.getByRole('button', { name: '导出 CSV', exact: true }).click()
   const download = await downloadEvent
+  assert.equal(download.suggestedFilename(), '季华实验室-文件导入结果.csv')
   const exportPath = join(resultDir, 'results.csv')
   await download.saveAs(exportPath)
   const csv = await readFile(exportPath, 'utf8')
