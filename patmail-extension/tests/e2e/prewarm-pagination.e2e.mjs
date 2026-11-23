@@ -292,10 +292,11 @@ try {
   await app.getByRole('option', { name: '预热验收模板', exact: true }).click()
 
   markStage('query first 100 of 120 synthetic files')
+  const pagination = app.getByRole('navigation', { name: '文件分页', exact: true })
   await app.getByLabel('我方文号', { exact: true }).first().fill('PREWARM-CASE')
   await app.getByRole('button', { name: '查询文件', exact: true }).click()
   await app.getByText('预热文件-1.pdf', { exact: true }).waitFor()
-  await app.getByText('第 1 / 2 页', { exact: true }).waitFor()
+  await pagination.getByText('第 1 / 2 页', { exact: true }).waitFor()
   assert.deepEqual(
     searchCalls.map(call => [call.pageIndex, call.pageSize]),
     [[1, 100]],
@@ -374,11 +375,10 @@ try {
   report.progressSamples.push({ phase: 'all-names-resolved-at-download-entry', ...afterNames })
 
   markStage('verify cached pagination while download is held at DownLoad')
-  const pagination = app.getByRole('navigation', { name: '文件分页', exact: true })
   const next = pagination.getByRole('button', { name: '下一页', exact: true })
   assert.equal(await next.isEnabled(), true, '下载正在等待源站打包时仍允许翻页查看已缓存结果')
   await next.click()
-  await app.getByText('第 2 / 2 页', { exact: true }).waitFor()
+  await pagination.getByText('第 2 / 2 页', { exact: true }).waitFor()
   await app.getByText('预热文件-101.pdf', { exact: true }).waitFor()
   assert.equal(await app.locator('.grid tbody tr').count(), 20, '第2页应显示最后20个结果')
   assert.equal(await app.getByText('预热文件-1.pdf', { exact: true }).count(), 0, '翻到第2页后不能残留第1页内容')
@@ -391,7 +391,7 @@ try {
   report.progressSamples.push({ phase: 'page-2-during-download', ...page2Progress })
 
   await pagination.getByRole('button', { name: '上一页', exact: true }).click()
-  await app.getByText('第 1 / 2 页', { exact: true }).waitFor()
+  await pagination.getByText('第 1 / 2 页', { exact: true }).waitFor()
   await app.getByText('预热文件-1.pdf', { exact: true }).waitFor()
   assert.equal(await app.locator('.grid tbody tr').count(), 100, '返回第1页应恢复原100行')
   assert.equal(await app.getByText('预热文件-101.pdf', { exact: true }).count(), 0, '返回第1页后不能残留第2页内容')
