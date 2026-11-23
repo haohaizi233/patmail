@@ -220,7 +220,7 @@ defineExpose({ clearPickedExcel })
         <label class="notice-field">
           <span class="notice-field-label">
             第一申请人行政区划
-            <i class="notice-field-help" title="对应第一申请人信息中的行政区划" aria-label="说明：对应第一申请人信息中的行政区划">?</i>
+            <i class="notice-field-help" tabindex="0" v-hint="'对应第一申请人信息中的行政区划'" aria-label="说明：对应第一申请人信息中的行政区划">?</i>
           </span>
           <input
             :value="importQuery.app_area_name"
@@ -407,6 +407,7 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="importQuery.post_date_e"
               :min="importQuery.post_date_s"
+              default-today
               placeholder="结束日期"
               @update:model-value="patch('import', 'post_date_e', $event)"
             />
@@ -426,6 +427,7 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="importQuery.xiazairq_e"
               :min="importQuery.xiazairq_s"
+              default-today
               placeholder="结束日期"
               @update:model-value="patch('import', 'xiazairq_e', $event)"
             />
@@ -436,7 +438,7 @@ defineExpose({ clearPickedExcel })
         <label class="notice-field">
           <span class="notice-field-label">
             来文分析日期
-            <i class="notice-field-help" title="cpc客户端的分析来文日期" aria-label="说明：cpc客户端的分析来文日期">?</i>
+            <i class="notice-field-help" tabindex="0" v-hint="'cpc客户端的分析来文日期'" aria-label="说明：cpc客户端的分析来文日期">?</i>
           </span>
           <div class="date-pair">
             <WDatePicker
@@ -449,6 +451,7 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="importQuery.update_time_e"
               :min="importQuery.update_time_s"
+              default-today
               placeholder="结束日期"
               @update:model-value="patch('import', 'update_time_e', $event)"
             />
@@ -563,6 +566,7 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="downloadQuery.endTime"
               :min="downloadQuery.startTime"
+              default-today
               placeholder="结束日期"
               @update:model-value="patch('download', 'endTime', $event)"
             />
@@ -625,6 +629,7 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="certQuery.endTime"
               :min="certQuery.startTime || '2023-02-07'"
+              default-today
               placeholder="结束日期"
               @update:model-value="patch('cert', 'endTime', $event)"
             />
@@ -721,6 +726,7 @@ defineExpose({ clearPickedExcel })
             <WDatePicker
               :model-value="replayQuery.endTime"
               :min="replayQuery.startTime"
+              default-today
               placeholder="结束日期"
               @update:model-value="patch('replay', 'endTime', $event)"
             />

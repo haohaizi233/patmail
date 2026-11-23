@@ -280,7 +280,8 @@ const {
             <button
               type="button"
               class="tag-del"
-              title="从本次请款文号清单中移除"
+              v-hint="'从本次请款文号清单中移除'"
+              aria-label="从本次请款文号清单中移除"
               @click="removeVolume(vol)"
             >×</button>
           </span>

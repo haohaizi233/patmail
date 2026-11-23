@@ -195,7 +195,7 @@ function canInspectRow(row: NoticeRow): boolean {
                 v-if="col.clickable && canInspectRow(row)"
                 type="button"
                 class="go clip"
-                v-hint="formatCell(row, col.key)"
+                v-hint.clip="formatCell(row, col.key)"
                 @click="emit('inspect', row)"
               >
                 {{ formatCell(row, col.key) || '查看' }}
@@ -213,7 +213,7 @@ function canInspectRow(row: NoticeRow): boolean {
                 v-else
                 class="clip"
                 :class="statusClass(row, col.key)"
-                v-hint="formatCell(row, col.key)"
+                v-hint.clip="formatCell(row, col.key)"
               >
                 {{ formatCell(row, col.key) }}
               </span>

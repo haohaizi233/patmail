@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest'
-import { isTextClipped, visibleHint } from '../../../src/shell/components/hint'
+import { afterEach, describe, expect, it } from 'vitest'
+import { absorbNativeTitle, installHintHost, isTextClipped, visibleHint } from '../../../src/shell/components/hint'
+
+afterEach(() => {
+  document.body.innerHTML = ''
+})
 
 describe('悬停气泡', () => {
   it('写明的说明一直显示', () => {
@@ -35,5 +39,52 @@ describe('悬停气泡', () => {
     Object.defineProperty(child, 'clientWidth', { value: 80, configurable: true })
     expect(isTextClipped(child)).toBe(true)
     expect(isTextClipped(parent)).toBe(true)
+  })
+
+  it('封装层自动剥离原生 title 并用卡哇伊气泡替代展示', async () => {
+    const icon = document.createElement('i')
+    icon.textContent = '?'
+    icon.setAttribute('title', '对应第一申请人信息中的行政区划')
+    document.body.appendChild(icon)
+
+    installHintHost(document)
+    expect(icon.getAttribute('title')).toBeNull()
+    expect(icon.dataset.patmailHint).toBe('对应第一申请人信息中的行政区划')
+
+    icon.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    const bubble = document.body.querySelector<HTMLElement>(':scope > .patmail-hint')
+    expect(bubble?.hidden).toBe(false)
+    expect(bubble?.textContent).toBe('对应第一申请人信息中的行政区划')
+
+    icon.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
+    expect(bubble?.hidden).toBe(true)
+
+    // 后续动态添加带原生 title 的节点也会被 MutationObserver 自动吸收
+    const dynamicBtn = document.createElement('button')
+    dynamicBtn.setAttribute('title', '动态按钮说明')
+    document.body.appendChild(dynamicBtn)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(dynamicBtn.getAttribute('title')).toBeNull()
+    expect(dynamicBtn.dataset.patmailHint).toBe('动态按钮说明')
+
+    const frame = document.createElement('iframe')
+    frame.title = '安全保留的 iframe 标题'
+    absorbNativeTitle(frame)
+    expect(frame.getAttribute('title')).toBe('安全保留的 iframe 标题')
+  })
+
+  it('未显式写 v-hint 的溢出 .clip 元素也能由封装层委托弹出卡哇伊气泡', () => {
+    installHintHost(document)
+    const span = document.createElement('span')
+    span.className = 'clip'
+    span.textContent = '深圳市世纪恒程知识产权代理事务所（超长截断全称）'
+    Object.defineProperty(span, 'scrollWidth', { value: 320, configurable: true })
+    Object.defineProperty(span, 'clientWidth', { value: 120, configurable: true })
+    document.body.appendChild(span)
+
+    span.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    const bubble = document.body.querySelector<HTMLElement>(':scope > .patmail-hint')
+    expect(bubble?.hidden).toBe(false)
+    expect(bubble?.textContent).toBe('深圳市世纪恒程知识产权代理事务所（超长截断全称）')
   })
 })

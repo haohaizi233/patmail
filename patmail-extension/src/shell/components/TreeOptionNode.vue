@@ -29,7 +29,7 @@ const open = computed(() => Boolean(props.expanded[props.nodeId]))
       <label class="theme-tree-check">
         <input v-if="multiple" type="checkbox" :disabled="node.selectable === false && node.childIds.length === 0" :checked="checkState.checked" :indeterminate="checkState.indeterminate" :aria-checked="checkState.indeterminate ? 'mixed' : checkState.checked" @change="emit('toggle', nodeId)" />
         <input v-else type="radio" :disabled="node.selectable === false || (leavesOnly && node.childIds.length > 0)" :name="inputName" :checked="selected.includes(nodeId)" @change="emit('toggle', nodeId)" />
-        <span>{{ node.label }}</span>
+        <span v-hint.clip="node.label">{{ node.label }}</span>
       </label>
     </div>
     <div v-if="open && children.length" class="theme-tree-children" role="group">

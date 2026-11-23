@@ -173,9 +173,9 @@ onBeforeUnmount(() => {
 
 <template>
   <span ref="root" class="theme-select" @keydown="onKey">
-    <span v-if="!available" class="theme-select-status" role="status">{{ statusText }} <button v-if="state === 'invalid'" type="button" @click="emit('retry')">重试</button></span>
+    <span v-if="!available" class="theme-select-status" role="status" v-hint.clip="statusText">{{ statusText }} <button v-if="state === 'invalid'" type="button" @click="emit('retry')">重试</button></span>
     <button v-else ref="trigger" type="button" class="theme-select-trigger" :class="{ 'is-open': opened }" :disabled="disabled" aria-haspopup="tree" :aria-expanded="opened" @click="opened ? close() : show()">
-      <span class="theme-select-value" :class="{ 'is-placeholder': summary === '不限' }">{{ summary }}</span>
+      <span class="theme-select-value" :class="{ 'is-placeholder': summary === '不限' }" v-hint.clip="summary">{{ summary }}</span>
       <svg class="theme-select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.2 6 8l4-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
     <span v-if="unresolved.length" class="theme-select-unresolved" role="alert">原选项当前不可用：{{ unresolved.join('、') }} <button type="button" @click="emit('update:modelValue', selected.filter(id => !unresolved.includes(id)).join(','))">清除原选项</button></span>

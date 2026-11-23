@@ -1,5 +1,5 @@
 import { createApp } from 'vue'
-import { hintDirective } from '../shell/components/hint'
+import { hintDirective, installHintHost } from '../shell/components/hint'
 import { bindFileManageRecovery } from '../customer/file-manage-submit'
 import { bindLimitMailRecovery } from '../customer/limit-mail-submit'
 import { recallRecovery, rememberRecovery } from '../recovery/wal-ledger'
@@ -19,4 +19,5 @@ bindFileManageRecovery({
 
 const app = createApp(App)
 app.directive('hint', hintDirective)
+installHintHost(document)
 app.mount('#app')

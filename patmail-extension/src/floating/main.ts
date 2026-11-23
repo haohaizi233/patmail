@@ -1,5 +1,5 @@
 import { createApp, type App as VueApp } from 'vue'
-import { hintDirective } from '../shell/components/hint'
+import { hintDirective, installHintHost } from '../shell/components/hint'
 import App from './App.vue'
 import type { MessageBridge } from '../shared/message'
 
@@ -7,6 +7,7 @@ import type { MessageBridge } from '../shared/message'
 export function mountFloating(container: HTMLElement, bridge: MessageBridge, close: () => void): VueApp {
   const app = createApp(App)
   app.directive('hint', hintDirective)
+  installHintHost(container)
   app.provide('bridge', bridge)
   app.provide('closePanel', close)
   app.mount(container)

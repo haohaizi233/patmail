@@ -267,7 +267,7 @@ onBeforeUnmount(() => {
             @click="choose(option)"
           >
             <span v-if="option.badge" class="theme-select-badge" :class="toneClass(option.tone)">{{ option.badge }}</span>
-            <span class="theme-select-label">{{ option.label }}</span>
+            <span class="theme-select-label" v-hint.clip="option.label">{{ option.label }}</span>
           </li>
         </template>
         <li v-if="hiddenCount > 0" class="theme-select-empty" role="presentation">已显示前 {{ listed.length }} 条，还有 {{ hiddenCount }} 条没显示。输入关键词缩小范围。</li>
