@@ -19,6 +19,19 @@ export type EasyOperation =
   | 'feeSearchInit' | 'feeCustomerTree' | 'feeApplicantTree' | 'feeAgencyList' | 'feeContactInit' | 'feeProducts' | 'feeTechnical'
   | 'feeExportConfig' | 'feeExportConfigSave' | 'feeExportConfigUpdate'
   | 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
+  | 'noticeApplyType' | 'noticeAgency' | 'noticeDirectionType' | 'noticeCountry'
+  | 'noticeCpcAccount' | 'noticeCpcTzsDate' | 'noticeNolaiutoCount'
+  | 'noticeCheckUserStatus' | 'noticeCpcTzsUser' | 'noticeReplayTzsStatus'
+  | 'noticeDetail' | 'noticeCheckImport' | 'noticeUploadProcess'
+  | 'noticeSearch' | 'noticeImportList' | 'noticeUnProcessTzsList' | 'noticeCertList' | 'noticeReplayTzsList'
+  | 'noticeHandList' | 'noticeHandHisList' | 'noticeNolaiutoList' | 'noticeHandExcelList'
+  | 'noticeGetTzsListStatus' | 'noticeProcessTzsListStatus' | 'noticeGetCertListStatus' | 'noticeGetAnalyseCertStatus'
+  | 'noticeExportReport' | 'noticeExportTzs' | 'noticeExportCert' | 'noticeExportReplay'
+  | 'noticeImport' | 'noticeImportCloseCase' | 'noticeRecoveryProcess' | 'noticeReMatch'
+  | 'noticeUpdateProcess' | 'noticeChangeNolaiuto' | 'noticeUpdateCaseName' | 'noticeSaveDetail'
+  | 'noticeRecoveryStatusAnalyse' | 'noticeUpdateHandExcel' | 'noticeDeleteOaByFids'
+  | 'noticeGetTzsList' | 'noticeProcessTzsList' | 'noticeGetCpcCertList' | 'noticeDownloadAnalyseCert'
+  | 'noticeUploadExcel' | 'noticeUploadCpcChunk' | 'noticeUploadCpcNew' | 'noticeUploadCpcNewGf'
 
 export interface TransportOptions {
   fetcher?: typeof fetch
@@ -114,7 +127,56 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   feeExportConfigUpdate: { path: '/AjaxServers/Common.ashx', call: 'UpdateQueryOutConfigNew' },
   feeExportByCond: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListByCond' },
   feeExportByChecked: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListByChecked' },
-  feeExportCountByCond: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListCountByCond' }
+  feeExportCountByCond: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListCountByCond' },
+  noticeApplyType: { path: '/AjaxServers/Notice.ashx', call: 'GetApplyType' },
+  noticeAgency: { path: '/AjaxServers/Notice.ashx', call: 'GetAgency' },
+  noticeDirectionType: { path: '/AjaxServers/Notice.ashx', call: 'GetDirectionType' },
+  noticeCountry: { path: '/AjaxServers/Common.ashx', call: 'LoadCountry' },
+  noticeCpcAccount: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCpcNoticeAccount' },
+  noticeCpcTzsDate: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCPCTzsDate' },
+  noticeNolaiutoCount: { path: '/AjaxServers/Notice.ashx', call: 'GetNolaiutoCount' },
+  noticeCheckUserStatus: { path: '/AjaxServers/FilingApiAction.ashx', call: 'CheckUserStatus' },
+  noticeCpcTzsUser: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCpcTzsUser' },
+  noticeReplayTzsStatus: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetReaplyTzsStatus' },
+  noticeDetail: { path: '/AjaxServers/Notice.ashx', call: 'GetNoticeDetail' },
+  noticeCheckImport: { path: '/AjaxServers/Notice.ashx', call: 'CheckImportNotice' },
+  noticeUploadProcess: { path: '/AjaxServers/UploadFile.ashx', call: 'GetUploadProcessList' },
+  noticeSearch: { path: '/AjaxServers/Notice.ashx', call: 'SearchNotice' },
+  noticeImportList: { path: '/AjaxServers/Notice.ashx', call: 'GetImportNoticeList' },
+  noticeUnProcessTzsList: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetUnProcessTzsList' },
+  noticeCertList: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCertList' },
+  noticeReplayTzsList: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetReplayTzsList' },
+  noticeHandList: { path: '/AjaxServers/Notice.ashx', call: 'GetHandNoticeList' },
+  noticeHandHisList: { path: '/AjaxServers/Notice.ashx', call: 'GetHandHisList' },
+  noticeNolaiutoList: { path: '/AjaxServers/Notice.ashx', call: 'GetNolaiuto' },
+  noticeHandExcelList: { path: '/AjaxServers/Notice.ashx', call: 'GethandExcelList' },
+  noticeGetTzsListStatus: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetTzsListStatus' },
+  noticeProcessTzsListStatus: { path: '/AjaxServers/FilingApiAction.ashx', call: 'ProcessTzsListStatus' },
+  noticeGetCertListStatus: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCertListStatus' },
+  noticeGetAnalyseCertStatus: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetAnalyseCertStatus' },
+  noticeExportReport: { path: '/AjaxServers/Notice.ashx', call: 'ReportNoticeExcel' },
+  noticeExportTzs: { path: '/AjaxServers/FilingApiAction.ashx', call: 'ExportExcelTzsList' },
+  noticeExportCert: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCertListExport' },
+  noticeExportReplay: { path: '/AjaxServers/FilingApiAction.ashx', call: 'ExportExcelTwoTzsList' },
+  noticeImport: { path: '/AjaxServers/Notice.ashx', call: 'ImportNotice' },
+  noticeImportCloseCase: { path: '/AjaxServers/Notice.ashx', call: 'ImportCloseCase' },
+  noticeRecoveryProcess: { path: '/AjaxServers/Notice.ashx', call: 'RecoveryProcessstatus' },
+  noticeReMatch: { path: '/AjaxServers/Notice.ashx', call: 'ReMatchNotice' },
+  noticeUpdateProcess: { path: '/AjaxServers/Notice.ashx', call: 'UpdateProcessstatus' },
+  noticeChangeNolaiuto: { path: '/AjaxServers/Notice.ashx', call: 'ChangeNolaiuto' },
+  noticeUpdateCaseName: { path: '/AjaxServers/Notice.ashx', call: 'UpdateCaseName' },
+  noticeSaveDetail: { path: '/AjaxServers/Notice.ashx', call: 'SaveNoticeDetail' },
+  noticeRecoveryStatusAnalyse: { path: '/AjaxServers/Notice.ashx', call: 'RecoveryStatusAnalyse' },
+  noticeUpdateHandExcel: { path: '/AjaxServers/Notice.ashx', call: 'UpdateHandExcel' },
+  noticeDeleteOaByFids: { path: '/AjaxServers/FilingApiAction.ashx', call: 'DeleteOaInfoByFids' },
+  noticeGetTzsList: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetTzsList' },
+  noticeProcessTzsList: { path: '/AjaxServers/FilingApiAction.ashx', call: 'ProcessTzsList' },
+  noticeGetCpcCertList: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCpcCertList' },
+  noticeDownloadAnalyseCert: { path: '/AjaxServers/FilingApiAction.ashx', call: 'DownloadAndAnalyseCert' },
+  noticeUploadExcel: { path: '/AjaxServers/Notice.ashx', call: 'UploadNoticeExcel' },
+  noticeUploadCpcChunk: { path: '/Forms/MultiUPload/UploadMethod.ashx', call: '' },
+  noticeUploadCpcNew: { path: '/AjaxServers/UploadFile.ashx', call: 'UploadCPCFileNew' },
+  noticeUploadCpcNewGf: { path: '/AjaxServers/UploadFile.ashx', call: 'UploadCPCFileNewGF' }
 }
 
 function loginRedirect(response: Response, origin: string): boolean {
@@ -146,7 +208,31 @@ export function transientEasyFailure(message: string): boolean {
 const SLOW_OPERATIONS = new Set<EasyOperation>([
   'limitMailCustomer', 'mailProcess', 'processAP', 'processEF', 'agencySearchCase', 'icSearch', 'caseBusFlow', 'casePageDemand', 'caseInventor', 'caseRecordContact', 'customerList',
   'getMailInfo', 'getMailCase', 'getMailRule', 'getCustomerContact', 'getRecentContact', 'getCaseContact', 'getSalesContact', 'getPicsContact', 'getCaseAgentContact',
-  'getFlowInfo', 'getFlowSubmit', 'getUrgencyList', 'getFlowLastStatus', 'saveMailInfo', 'mailSubmit', 'fileDownload', 'getFileName'
+  'getFlowInfo', 'getFlowSubmit', 'getUrgencyList', 'getFlowLastStatus', 'saveMailInfo', 'mailSubmit', 'fileDownload', 'getFileName',
+  'noticeSearch', 'noticeImportList', 'noticeUnProcessTzsList', 'noticeCertList', 'noticeReplayTzsList',
+  'noticeHandList', 'noticeHandHisList', 'noticeNolaiutoList', 'noticeHandExcelList',
+  'noticeImport', 'noticeImportCloseCase', 'noticeReMatch', 'noticeUpdateCaseName',
+  'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf'
+])
+
+const NON_RETRYABLE_OPERATIONS = new Set<EasyOperation>([
+  'mailCustomer', 'saveMailInfo', 'saveMailRelatedFiles', 'historySave', 'historyDelete',
+  'fileTempSave', 'fileTempDelete', 'limitMailCustomer', 'mailSubmit', 'fileDownload',
+  'feeExportConfigSave', 'feeExportConfigUpdate', 'feeExportByCond', 'feeExportByChecked', 'feeExportCountByCond',
+  'noticeExportReport', 'noticeExportTzs', 'noticeExportCert', 'noticeExportReplay',
+  'noticeImport', 'noticeImportCloseCase', 'noticeRecoveryProcess', 'noticeReMatch',
+  'noticeUpdateProcess', 'noticeChangeNolaiuto', 'noticeUpdateCaseName', 'noticeSaveDetail',
+  'noticeRecoveryStatusAnalyse', 'noticeUpdateHandExcel', 'noticeDeleteOaByFids',
+  'noticeGetTzsList', 'noticeProcessTzsList', 'noticeGetCpcCertList', 'noticeDownloadAnalyseCert',
+  'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf'
+])
+
+const SEARCH_TIMEOUT_OPERATIONS = new Set<EasyOperation>([
+  'fileSearch', 'limitMonitor', 'filingSearch', 'feeSearch', 'feeSearchAmount',
+  'feeExportByCond', 'feeExportByChecked', 'feeExportCountByCond',
+  'noticeSearch', 'noticeImportList', 'noticeUnProcessTzsList', 'noticeCertList', 'noticeReplayTzsList',
+  'noticeHandList', 'noticeHandHisList', 'noticeNolaiutoList', 'noticeHandExcelList',
+  'noticeExportReport', 'noticeExportTzs', 'noticeExportCert', 'noticeExportReplay'
 ])
 
 /** 发文已经创建、后面的读取失败时，再点提交应沿用这封，而不是再创建一封。 */
@@ -169,7 +255,7 @@ export class EasyTransport {
 
   /** 只读请求遇到网关 502/503 时再试。写请求不重试，避免一次 502 后面又创建出第二封；打包下载也不重试，免得在原站留两份临时包。 */
   async post(operation: EasyOperation, params: URLSearchParams, signal?: AbortSignal, timeoutMs?: number, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
-    const retryable = operation !== 'mailCustomer' && operation !== 'saveMailInfo' && operation !== 'saveMailRelatedFiles' && operation !== 'historySave' && operation !== 'historyDelete' && operation !== 'fileTempSave' && operation !== 'fileTempDelete' && operation !== 'limitMailCustomer' && operation !== 'mailSubmit' && operation !== 'fileDownload' && operation !== 'feeExportConfigSave' && operation !== 'feeExportConfigUpdate' && operation !== 'feeExportByCond' && operation !== 'feeExportByChecked' && operation !== 'feeExportCountByCond'
+    const retryable = !NON_RETRYABLE_OPERATIONS.has(operation)
     let result = await this.postOnce(operation, params, signal, timeoutMs, onBytes, networkPool)
     for (let attempt = 1; retryable && !result.ok && (result.error.status === 502 || result.error.status === 503) && attempt < 3; attempt += 1) {
       if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
@@ -180,11 +266,44 @@ export class EasyTransport {
     return result
   }
 
+  /** 提交 multipart/form-data（仅限白名单上传入口），用于清单 Excel 上传与 CPC 压缩包分片上传。 */
+  async postMultipart(
+    operation: 'noticeUploadExcel' | 'noticeUploadCpcChunk',
+    formData: FormData,
+    query?: Record<string, string>,
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ): Promise<ApiResult<unknown>> {
+    if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
+    const route = ROUTES[operation]
+    if (!route) return apiError('INVALID_QUERY', '业务请求类型无效。')
+    if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
+    const search = new URLSearchParams()
+    if (route.call) search.set('Call', route.call)
+    if (query) {
+      for (const [k, v] of Object.entries(query)) {
+        if (v.trim()) search.set(k, v.trim())
+      }
+    }
+    const qs = search.toString()
+    const fullPath = qs ? `${route.path}?${qs}` : route.path
+    return this.dispatchPost(
+      fullPath,
+      { 'X-Requested-With': 'XMLHttpRequest' },
+      formData,
+      this.waitMs(operation, timeoutMs),
+      signal,
+      undefined,
+      undefined,
+      operation === 'noticeUploadCpcChunk'
+    )
+  }
+
   /** 文件查询、期限监控和递交查询在这套原网站上经常超过 15 秒。测试传入的短超时仍然生效。文件查询可以按页面选择拉长。
  * 发文提交这一串（建单、联系人、规则、保存、提交流程）在原站高峰期实测 20 到 30 秒才回，全部放宽到 60 秒， 15 秒会把还 能成功的请求掐成「结果无法确认」。 */
   private waitMs(operation: EasyOperation, timeoutMs?: number): number {
     if (this.timeoutMs < 15_000) return this.timeoutMs
-    if (operation === 'fileSearch' || operation === 'limitMonitor' || operation === 'filingSearch' || operation === 'feeSearch' || operation === 'feeSearchAmount' || operation === 'feeExportByCond' || operation === 'feeExportByChecked' || operation === 'feeExportCountByCond') return fileSearchTimeoutMs(timeoutMs)
+    if (SEARCH_TIMEOUT_OPERATIONS.has(operation)) return fileSearchTimeoutMs(timeoutMs)
     // 原站先准备完整压缩包再返回GUID；与原站Ajax一样不设总时长，不能在5分钟主动掐断。
     if (operation === 'fileDownload') return 0
     // 命名一批 40 个实测单批可超过一分钟；与原站 jQuery 一样不设总时长，不能在固定时限主动掐断，显式取消仍然生效。
@@ -233,7 +352,32 @@ export class EasyTransport {
   }
 
   /** Handler 和 Call 已由上层收口。Cookie 只随当前页面发出，不读出来。 */
-  private async sendForm(path: string, params: URLSearchParams, timeoutMs: number, signal?: AbortSignal, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
+  private sendForm(path: string, params: URLSearchParams, timeoutMs: number, signal?: AbortSignal, onBytes?: (received: number) => void, networkPool?: PermitPool): Promise<ApiResult<unknown>> {
+    return this.dispatchPost(
+      path,
+      {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      params.toString(),
+      timeoutMs,
+      signal,
+      onBytes,
+      networkPool,
+      false
+    )
+  }
+
+  private async dispatchPost(
+    path: string,
+    headers: Record<string, string>,
+    bodyPayload: BodyInit,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    onBytes?: (received: number) => void,
+    networkPool?: PermitPool,
+    allowEmptyJson = false
+  ): Promise<ApiResult<unknown>> {
     if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
     let release: (() => void) | undefined
     if (networkPool) {
@@ -253,11 +397,8 @@ export class EasyTransport {
         method: 'POST',
         credentials: 'include',
         redirect: 'follow',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: params.toString(),
+        headers,
+        body: bodyPayload,
         signal: controller.signal
       })
       if (response.status === 401 || response.status === 403 || loginRedirect(response, this.origin)) {
@@ -286,6 +427,9 @@ export class EasyTransport {
       // The body has arrived. Release before parsing, validation, and caller cleanup.
       release?.(); release = undefined
       const body = text.trim()
+      if (!body && allowEmptyJson) {
+        return { ok: true, data: {} }
+      }
       if (body.startsWith('<')) {
         return apiError(looksLikeLoggedOutHtml(body) ? 'SESSION_EXPIRED' : 'UNEXPECTED_HTML',
           looksLikeLoggedOutHtml(body) ? 'EASY 登录状态已失效，请在原网站重新登录。' : 'EASY 返回了非业务 HTML。')
