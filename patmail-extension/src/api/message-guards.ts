@@ -12,6 +12,14 @@ import type { FilingSearchResult, FilingSearchRow } from './filing-search-types'
 import type { FilingFlowRow, FilingUser } from './filing-export'
 import type { FeeSearchResult } from './fee-search-types'
 export { isFeeSearchQuery } from './fee-search-params'
+import type {
+  NoticeActionRequest,
+  NoticeExcelUploadRequest,
+  NoticeExportRequest,
+  NoticeSearchRequest,
+  NoticeSearchResult,
+  NoticeTabId
+} from './notice-types'
 import { isProcessKind, isProcessOpenTarget, PROCESS_SPECS, type ProcessListQuery, type ProcessListResult, type ProcessListRow } from './mail-process'
 import type { SessionSummary } from './session'
 import type { CaseContactExport } from '../case-contact/query'
@@ -361,4 +369,85 @@ function isFeeSearchResult(value: unknown): value is FeeSearchResult {
 
 export function isFeeSearchApiResult(value: unknown): value is ApiResult<FeeSearchResult> {
   return isApiResult(value, isFeeSearchResult)
+}
+
+const NOTICE_TABS = new Set<string>(['import', 'download', 'cert', 'replay', 'hand', 'handHis', 'nolaiuto', 'handExcel'])
+const READONLY_NOTICE_ACTIONS = new Set<string>([
+  'refreshCounts',
+  'importCheck',
+  'getNoticeDetail',
+  'checkCpcUserStatus',
+  'getCpcTzsUser',
+  'getUploadProcessList',
+  'openEasyNoticeTab'
+])
+
+export function isNoticeTabId(value: unknown): value is NoticeTabId {
+  return typeof value === 'string' && NOTICE_TABS.has(value)
+}
+
+function isNoticePagination(query: Record<string, unknown>): boolean {
+  return (
+    Number.isSafeInteger(query.pageIndex) &&
+    Number(query.pageIndex) >= 1 &&
+    Number.isSafeInteger(query.pageSize) &&
+    Number(query.pageSize) >= 1 &&
+    Number(query.pageSize) <= 200
+  )
+}
+
+export function isNoticeSearchRequest(value: unknown): value is NoticeSearchRequest {
+  if (!isRecord(value) || !isNoticeTabId(value.tab) || !isRecord(value.query)) return false
+  if (!isNoticePagination(value.query)) return false
+  if (value.timeoutMs !== undefined && fileSearchTimeoutMs(value.timeoutMs) !== value.timeoutMs) return false
+  return Object.keys(value).every(k => k === 'tab' || k === 'query' || k === 'timeoutMs')
+}
+
+export function isNoticeActionRequest(value: unknown): value is NoticeActionRequest {
+  return isRecord(value) && typeof value.action === 'string' && value.action.length > 0 && value.action.length <= 60
+}
+
+export function isWriteNoticeAction(value: unknown): boolean {
+  if (!isNoticeActionRequest(value)) return false
+  return !READONLY_NOTICE_ACTIONS.has(value.action)
+}
+
+export function isNoticeExportRequest(value: unknown): value is NoticeExportRequest {
+  if (!isRecord(value)) return false
+  if (value.tab !== 'import' && value.tab !== 'download' && value.tab !== 'cert' && value.tab !== 'replay') return false
+  if (!isRecord(value.query)) return false
+  if (value.columns !== undefined) {
+    if (
+      !Array.isArray(value.columns) ||
+      value.columns.length > 300 ||
+      !value.columns.every(c => isRecord(c) && typeof c.value === 'string' && typeof c.text === 'string')
+    ) {
+      return false
+    }
+  }
+  if (value.timeoutMs !== undefined && fileSearchTimeoutMs(value.timeoutMs) !== value.timeoutMs) return false
+  return Object.keys(value).every(k => k === 'tab' || k === 'query' || k === 'columns' || k === 'timeoutMs')
+}
+
+export function isNoticeExcelUploadRequest(value: unknown): value is NoticeExcelUploadRequest {
+  return (
+    isRecord(value) &&
+    typeof value.fileName === 'string' &&
+    value.fileName.trim().length > 0 &&
+    value.fileName.length <= 260 &&
+    typeof value.mimeType === 'string' &&
+    value.mimeType.length <= 200 &&
+    typeof value.base64 === 'string' &&
+    value.base64.length > 0 &&
+    value.base64.length <= 25_000_000 &&
+    Object.keys(value).length === 3
+  )
+}
+
+function isNoticeSearchResult(value: unknown): value is NoticeSearchResult {
+  return isRecord(value) && isNoticeTabId(value.tab) && Array.isArray(value.rows) && typeof value.total === 'number'
+}
+
+export function isNoticeSearchApiResult(value: unknown): value is ApiResult<NoticeSearchResult> {
+  return isApiResult(value, isNoticeSearchResult)
 }

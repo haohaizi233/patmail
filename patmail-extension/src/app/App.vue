@@ -25,6 +25,7 @@ import SettingsPage from './pages/SettingsPage.vue'
 import LimitsPage from './pages/LimitsPage.vue'
 import FilingsPage from './pages/FilingsPage.vue'
 import FeesPage from './pages/FeesPage.vue'
+import NoticesPage from './pages/NoticesPage.vue'
 import CaseContactsPage from './pages/CaseContactsPage.vue'
 import SnapshotProbe from './pages/SnapshotProbe.vue'
 import { CASE_CONTACT_CUSTOMER_NAME } from '../customer/skills'
@@ -38,6 +39,7 @@ const nav = [
   { name: '期限监控', path: 'limit', hash: '/limits', icon: 42 },
   { name: '递交管理', path: 'filing', hash: '/filings', icon: 33 },
   { name: '费用查询', path: 'fee', hash: '/fees', icon: 44 },
+  { name: '来文管理', path: 'notice', hash: '/notices', icon: 46 },
   ] },
   { name: '客户管理', path: 'users', hash: '/customers', icon: 40 },
   { name: '发文映射', path: 'rule', hash: '/rules', icon: 32 },
@@ -49,7 +51,7 @@ const nav = [
 ]
 const routeItems = nav.flatMap(item => item.children ?? [item])
 const hiddenRoutes = new Set(['/acceptance', '/settings', '/contacts', '/probe'])
-const pages = { '/': HomePage, '/files': FilesPage, '/limits': LimitsPage, '/filings': FilingsPage, '/fees': FeesPage, '/customers': CustomersPage, '/contacts': CaseContactsPage, '/templates': TemplatesPage, '/rules': RulesPage, '/tasks': TasksPage, '/drafts': DraftsPage, '/workflow': WorkflowPage, '/records': RecordsPage, '/acceptance': AcceptancePage, '/settings': SettingsPage, '/probe': SnapshotProbe }
+const pages = { '/': HomePage, '/files': FilesPage, '/limits': LimitsPage, '/filings': FilingsPage, '/fees': FeesPage, '/notices': NoticesPage, '/customers': CustomersPage, '/contacts': CaseContactsPage, '/templates': TemplatesPage, '/rules': RulesPage, '/tasks': TasksPage, '/drafts': DraftsPage, '/workflow': WorkflowPage, '/records': RecordsPage, '/acceptance': AcceptancePage, '/settings': SettingsPage, '/probe': SnapshotProbe }
 
 function readRoute(): string {
   const path = location.hash.replace(/^#/, '') || '/'
