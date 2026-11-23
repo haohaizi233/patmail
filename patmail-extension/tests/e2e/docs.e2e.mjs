@@ -133,9 +133,12 @@ try {
       { timeout: 60000 },
     )
     await app.waitForFunction(() =>
-      [...document.querySelectorAll('.docs-md .mermaid-viewport')].every(
-        host => Math.abs(host.querySelector('svg').getBoundingClientRect().width - (host.clientWidth - 32)) < 2,
-      ),
+      [...document.querySelectorAll('.docs-md .mermaid-viewport')].every(host => {
+        const svg = host.querySelector('svg')
+        if (!svg) return false
+        const expectedWidth = Math.min(host.clientWidth - 32, svg.viewBox.baseVal.width)
+        return Math.abs(svg.getBoundingClientRect().width - expectedWidth) < 2
+      }),
     )
     assert.equal(await docs.locator('.mermaid-error').count(), 0)
     assert.equal(await docs.locator('.mermaid-figure').count(), expected)
@@ -154,16 +157,17 @@ try {
           width: host.clientWidth,
           height: host.clientHeight,
           drawing: svg.getBoundingClientRect().width,
+          natural: svg.viewBox.baseVal.width,
           ratio: svg.viewBox.baseVal.height / svg.viewBox.baseVal.width,
         }
       }),
     )
     assert.ok(
-      layouts.every(item => Math.abs(item.drawing - (item.width - 32)) < 2),
-      `${file}: inline diagrams must fill the available width`,
+      layouts.every(item => Math.abs(item.drawing - Math.min(item.width - 32, item.natural)) < 2),
+      `${file}: inline diagrams must fit the available width without upscaling`,
     )
     assert.ok(
-      layouts.every(item => Math.abs(item.height - ((item.width - 32) * item.ratio + 32)) < 2),
+      layouts.every(item => Math.abs(item.height - (item.drawing * item.ratio + 32)) < 2),
       `${file}: inline height must follow the diagram aspect ratio`,
     )
     const blankNodes = await docs.locator('.mermaid-content svg g.node').evaluateAll(nodes =>
