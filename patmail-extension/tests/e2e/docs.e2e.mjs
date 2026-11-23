@@ -193,12 +193,14 @@ try {
       await app.waitForFunction(() =>
         [...document.querySelectorAll('.docs-md .mermaid-viewport')].every(host => {
           const svg = host.querySelector('svg')
+          const viewWidth = svg?.viewBox.baseVal.width || 800
+          const viewHeight = svg?.viewBox.baseVal.height || 600
+          const scale = Math.min(1, (host.clientWidth - 32) / viewWidth)
+          const expectedWidth = viewWidth * scale
+          const expectedHeight = viewHeight * scale + 32
           return (
-            Math.abs(svg.getBoundingClientRect().width - (host.clientWidth - 32)) < 2 &&
-            Math.abs(
-              host.clientHeight -
-                (((host.clientWidth - 32) * svg.viewBox.baseVal.height) / svg.viewBox.baseVal.width + 32),
-            ) < 2
+            Math.abs(svg.getBoundingClientRect().width - expectedWidth) < 2 &&
+            Math.abs(host.clientHeight - expectedHeight) < 2
           )
         }),
       )
@@ -264,9 +266,12 @@ try {
   assert.equal(await preset('适应宽度').getAttribute('aria-pressed'), 'true')
   assert.equal(await modal.locator('button[aria-pressed="true"]').count(), 1)
   assert.ok(
-    Math.abs(
-      (await modal.locator('.mermaid-content').evaluate(el => el.getBoundingClientRect().width)) - (box.width - 32),
-    ) < 2,
+    await modal.locator('.mermaid-content').evaluate((el, hostWidth) => {
+      const svg = el.querySelector('svg')
+      const viewWidth = svg?.viewBox.baseVal.width || 800
+      const expectedWidth = Math.min(hostWidth - 32, viewWidth * 1.25)
+      return Math.abs(el.getBoundingClientRect().width - expectedWidth) < 2
+    }, box.width),
   )
   await modal.getByRole('button', { name: '原始大小', exact: true }).click()
   assert.equal(Number(await zoom.inputValue()), 100)

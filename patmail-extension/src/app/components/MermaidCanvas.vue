@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { loadMermaidViewMode, saveMermaidViewMode, type MermaidViewMode } from '../../settings/mermaid-view-mode'
+import {
+  computeFitWidth,
+  computeFitWindow,
+  MAX_INLINE_FIT_SCALE,
+  MAX_INTERACTIVE_FIT_SCALE,
+} from '../docs/mermaid-fit'
 
 const props = defineProps<{ svg: string; interactive?: boolean }>()
 const suffix = useId().replace(/[^a-zA-Z0-9_-]/g, '')
@@ -36,20 +42,33 @@ const viewportStyle = computed(() => props.interactive ? undefined : ({ height: 
 
 function fitWidth(): void {
   const host = viewport.value
-  if (!host || host.clientWidth <= 32) return
-  scale.value = (host.clientWidth - 32) / size.value.width
-  x.value = 16
-  y.value = 16
+  if (!host) return
+  const next = computeFitWidth(
+    host.clientWidth,
+    size.value.width,
+    props.interactive ? MAX_INTERACTIVE_FIT_SCALE : MAX_INLINE_FIT_SCALE,
+  )
+  if (!next) return
+  scale.value = next.scale
+  x.value = next.x
+  y.value = next.y
 }
 
 function fit(): void {
   if (!props.interactive) return fitWidth()
   const host = viewport.value
-  if (!host || !host.clientWidth || !host.clientHeight) return
-  const s = Math.min((host.clientWidth - 32) / size.value.width, (host.clientHeight - 32) / size.value.height)
-  scale.value = Math.max(0.001, s)
-  x.value = (host.clientWidth - size.value.width * scale.value) / 2
-  y.value = (host.clientHeight - size.value.height * scale.value) / 2
+  if (!host) return
+  const next = computeFitWindow(
+    host.clientWidth,
+    host.clientHeight,
+    size.value.width,
+    size.value.height,
+    MAX_INTERACTIVE_FIT_SCALE,
+  )
+  if (!next) return
+  scale.value = next.scale
+  x.value = next.x
+  y.value = next.y
 }
 
 function applyMode(): void {
