@@ -4,7 +4,7 @@ const STYLE = `
 .patmail-hint {
   position: fixed;
   z-index: 2147483646;
-  max-width: 300px;
+  max-width: 380px;
   padding: 8px 13px;
   border: 1px solid #f5bcd4;
   border-radius: 12px;

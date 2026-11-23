@@ -448,6 +448,15 @@ function rowNo(index: number): number {
 function cellText(file: PatentFile, key: typeof resultColumns[number]['key']): string {
   return file[key]?.trim() ?? ''
 }
+function fileRowDetail(file: PatentFile): string {
+  return resultColumns
+    .map(column => {
+      const text = cellText(file, column.key)
+      return text ? `${column.label}：${text}` : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
 function togglePage(event: Event): void {
   if (needsRevalidation.value || !props.canSearch || selectingAll.value) return
   stopBulk()
@@ -1032,6 +1041,11 @@ onBeforeUnmount(() => {
       <div class="section-heading">
         <strong>查询结果</strong>
         <slot name="result-actions" />
+        <nav v-if="result && result.totalPages > 1" class="pagination toolbar-pagination" aria-label="文件顶部分页">
+          <button type="button" class="ghost tiny" :disabled="result.pageIndex <= 1 || searchState === 'loading' || selectingAll" @click="page(-1)">上一页</button>
+          <span>第 {{ result.pageIndex }} / {{ result.totalPages }} 页</span>
+          <button type="button" class="ghost tiny" :disabled="result.pageIndex >= result.totalPages || searchState === 'loading' || selectingAll" @click="page(1)">下一页</button>
+        </nav>
         <label class="page-size">每页数量
           <ThemeSelect v-model="pageSize" :disabled="!canSearch || searchState === 'loading' || selectingAll" :options="pageSizeOptions" @change="changePageSize" />
         </label>
@@ -1090,7 +1104,7 @@ onBeforeUnmount(() => {
                   <input type="checkbox" aria-label="当前页全选" :disabled="needsRevalidation || !canSearch || selectingAll" :checked="pageAllSelected" @change="togglePage" />
                 </th>
                 <th class="seq">序号</th>
-                <th v-for="column in resultColumns" :key="column.key">{{ column.label }}</th>
+                <th v-for="column in resultColumns" :key="column.key"><span class="clip" v-hint.clip="column.label">{{ column.label }}</span></th>
               </tr>
             </thead>
             <tbody>
@@ -1098,7 +1112,7 @@ onBeforeUnmount(() => {
                 <td v-if="selectable" class="check">
                   <input type="checkbox" :aria-label="file.fileName" :disabled="needsRevalidation || !canSearch || selectingAll" :checked="Boolean(selected[file.fileId])" @change="toggleFile(file)" />
                 </td>
-                <td class="seq">{{ rowNo(index) }}</td>
+                <td class="seq"><span class="row-detail-trigger" v-hint="fileRowDetail(file)">{{ rowNo(index) }}</span></td>
                 <td v-for="column in resultColumns" :key="column.key">
                   <span class="clip" v-hint.clip="cellText(file, column.key)">{{ cellText(file, column.key) }}</span>
                 </td>
@@ -1132,5 +1146,7 @@ onBeforeUnmount(() => {
 .file-export-actions button:focus-visible { outline: 2px solid var(--focus, #9b3060); outline-offset: 3px; }
 .file-export-actions button:not(:disabled):hover { filter: brightness(.97); }
 .file-export-notice { margin: 0; color: var(--text, #243056); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.row-detail-trigger { cursor: help; }
+.toolbar-pagination { margin: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; font-size: 12px; color: #8a7290; }
 @media (max-width: 600px) { .file-export-actions .download-opt { width: 100%; } }
 </style>

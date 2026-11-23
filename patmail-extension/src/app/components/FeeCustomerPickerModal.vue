@@ -185,7 +185,9 @@ function confirmSelection(): void {
                   <td class="col-name">
                     <span class="col-name-clip" v-hint.clip="item.name">{{ item.name }}</span>
                   </td>
-                  <td class="col-tel">{{ item.tel || '-' }}</td>
+                  <td class="col-tel">
+                    <span class="col-name-clip" v-hint.clip="item.tel || ''">{{ item.tel || '-' }}</span>
+                  </td>
                 </tr>
               </tbody>
             </table>

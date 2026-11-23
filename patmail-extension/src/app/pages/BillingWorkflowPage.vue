@@ -3,6 +3,7 @@ import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import FileSearchPanel from '../../floating/FileSearchPanel.vue'
 import FeeSearchQuery from '../components/FeeSearchQuery.vue'
+import type { FeeSearchRow } from '../../api/fee-search-types'
 import { useBillingWorkflow } from '../composables/useBillingWorkflow'
 
 const props = withDefaults(
@@ -88,6 +89,28 @@ const {
   doExportExcel,
   recoveryNotice
 } = useBillingWorkflow({ isActive: () => props.isActive })
+
+function volumeDetail(vol: string): string {
+  const matched = Object.values(fileSelection.value).filter(item => item.caseVolume?.trim() === vol)
+  if (!matched.length) return `我方文号：${vol}\n来源：手工添加`
+  const names = matched.slice(0, 5).map(item => item.fileName).filter(Boolean)
+  const extra = matched.length > 5 ? `\n…等共 ${matched.length} 个文件` : ''
+  return `我方文号：${vol}\n已选账单：${matched.length} 个\n${names.join('\n')}${extra}`
+}
+
+function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
+  return [
+    `待核对原因：${reason}`,
+    row.customerName ? `客户名称：${row.customerName}` : '',
+    row.caseVolume ? `我方文号：${row.caseVolume}` : '',
+    row.caseVolumeCustomer ? `客户文号：${row.caseVolumeCustomer}` : '',
+    row.caseName ? `案件名称：${row.caseName}` : '',
+    row.feeType ? `费用名称：${row.feeType}` : '',
+    `金额：${row.amount} ${row.currency}`,
+    row.ctrlProc ? `处理事项：${row.ctrlProc}` : '',
+    row.requestStatus ? `请款状态：${row.requestStatus}` : ''
+  ].filter(Boolean).join('\n')
+}
 </script>
 
 <template>
@@ -222,7 +245,15 @@ const {
       <button type="button" class="solid" :disabled="!confirmedScope || !filePanelRef.canRefresh"
         @click="stepNotice = ''; filePanelRef?.refresh(false)">刷新验证账单</button>
     </div>
-    <p v-else-if="stepNotice && !noticeInResults" class="step-notice-alert" role="alert">{{ stepNotice }}</p>
+    <p v-else-if="stepNotice && !noticeInResults" class="step-notice-alert" role="alert">
+      {{ stepNotice }}
+      <button
+        v-if="currentStep !== 1 && filePanelRef?.hasRecoveredQuery && stepNotice.includes('刷新验证')"
+        type="button"
+        class="text-button"
+        @click="setStep(1)"
+      >去步骤 1 刷新验证</button>
+    </p>
     <p v-if="recoveryNotice" class="step-notice-alert" role="status">{{ recoveryNotice }}</p>
     <p v-else-if="billingScope && !confirmedScope" class="step-notice-alert" role="status">请款进度已保留，恢复同一 EASY 账号连接后可继续。</p>
 
@@ -275,7 +306,7 @@ const {
           </button>
         </div>
         <div class="volume-tags-flow">
-          <span v-for="vol in activeVolumes" :key="vol" class="volume-tag">
+          <span v-for="vol in activeVolumes" :key="vol" class="volume-tag" v-hint="volumeDetail(vol)">
             {{ vol }}
             <button
               type="button"
@@ -360,7 +391,15 @@ const {
         @selection-change="onFeeSelectionChange"
       >
         <template #result-actions>
-          <span v-if="stepNotice && noticeInResults && currentStep === 2" class="step-notice-alert" role="alert">{{ stepNotice }}</span>
+          <span v-if="stepNotice && noticeInResults && currentStep === 2" class="step-notice-alert" role="alert">
+            {{ stepNotice }}
+            <button
+              v-if="filePanelRef?.hasRecoveredQuery && stepNotice.includes('刷新验证')"
+              type="button"
+              class="text-button"
+              @click="setStep(1)"
+            >去步骤 1 刷新验证</button>
+          </span>
           <button type="button" class="solid billing-result-action" :disabled="!canAdvanceFromFees" @click="advanceFromResults(3)">
             进入请款单导出 →
           </button>
@@ -376,7 +415,7 @@ const {
           <details v-if="pctExceptions.length" class="reconcile-warn">
             <summary>PCT 待核对费用（{{ pctExceptions.length }} 笔）</summary>
             <ul>
-              <li v-for="{ row, reason } in pctExceptions" :key="row.feeId">
+              <li v-for="{ row, reason } in pctExceptions" :key="row.feeId" v-hint="pctExceptionDetail(row, reason)">
                 {{ row.customerName || '客户待核对' }} · {{ row.caseVolume }} · {{ row.feeType || row.feeId }} · {{ row.amount }} {{ row.currency }}（{{ reason }}）
               </li>
             </ul>
@@ -390,7 +429,7 @@ const {
       <details v-if="pctExportExceptions.length" class="reconcile-warn" open>
         <summary>有 {{ pctExportExceptions.length }} 笔未请款费用待处理</summary>
         <ul>
-          <li v-for="{ row, reason } in pctExportExceptions" :key="row.feeId">
+          <li v-for="{ row, reason } in pctExportExceptions" :key="row.feeId" v-hint="pctExceptionDetail(row, reason)">
             {{ row.customerName || '客户待核对' }} · {{ row.caseVolume }} · {{ row.feeType || row.feeId }} · {{ row.amount }} {{ row.currency }}（{{ reason }}）
           </li>
         </ul>
