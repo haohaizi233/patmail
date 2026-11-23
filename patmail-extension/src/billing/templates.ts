@@ -88,7 +88,7 @@ export const BILLING_TEMPLATES: BillingTemplateInfo[] = [
     id: 'midea-pct', label: '美的 PCT 费用清单', fileBase: '美的PCT费用清单',
     summary: '一案一行：PCT 国际申请费 / 检索费 / 附加费 / 我方代理费，金额折人民币。',
     queryPreset: {
-      fileFields: { flow_direction: 'IO', filetype: '付款INVOICE' },
+      fileFields: { flow_direction: 'IO' },
       fileStepOptional: true,
       feeFields: { case_type: PATENT_CASE_TYPE_ID, Case_direction: 'IO', fee_class: 'O,A' },
       feeClassLabel: '官费 + 我方代理费',

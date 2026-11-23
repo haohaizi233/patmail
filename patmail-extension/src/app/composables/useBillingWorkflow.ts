@@ -91,7 +91,11 @@ export function useBillingWorkflow(options: {
   const filePanelRef = ref<FileSearchPanelHandle | null>(null)
   const fileSelection = ref<Record<string, SelectedPatentFile>>({})
   const recoveredBills = ref<Record<string, BillInfo[]>>({})
-  const fileSelectionIssue = computed(() => filePanelRef.value?.getBillingSelectionIssue() ?? '')
+  const fileSelectionIssue = computed(() =>
+    currentTemplate.value.queryPreset.fileStepOptional
+      ? ''
+      : (filePanelRef.value?.getBillingSelectionIssue() ?? ''),
+  )
 
   const fileSeed = ref<Record<string, string>>({ ...BILLING_TEMPLATES[0].queryPreset.fileFields })
   const fileSeedToken = ref(1)
