@@ -105,23 +105,49 @@ export interface NoticeTableColumn {
   label: string
   width?: string
   clickable?: boolean
+  clickableAppNo?: boolean
 }
+
+export const NOTICE_IMPORT_COMPLETED_COLUMNS: readonly NoticeTableColumn[] = [
+  { key: 'sn', label: '序号', width: '56px' },
+  { key: 'oa_name', label: '来文名称', clickable: true },
+  { key: 'oa_code', label: '来文编号', width: '96px' },
+  { key: 'FaWenRQ', label: '官方发文日', width: '108px' },
+  { key: 'assayer', label: '分析人', width: '80px' },
+  { key: 'customer_name', label: '客户名称' },
+  { key: 'ShenQingH', label: '申请号', width: '140px' },
+  { key: 'case_volume', label: '我方文号', width: '130px' },
+  { key: 'FaMingMC', label: '案件名称' },
+  { key: 'customer_status', label: '客户状态', width: '96px' }
+] as const
 
 export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColumn[]> = {
   import: [
     { key: 'sn', label: '序号', width: '56px' },
     { key: 'oa_name', label: '来文名称', clickable: true },
-    { key: 'file_desc_code', label: '来文编号', width: '100px' },
-    { key: 'FaWenRQ', label: '官方发文日', width: '110px' },
+    { key: 'file_desc_code', label: '来文编号', width: '96px' },
+    { key: 'FaWenRQ', label: '官方发文日', width: '108px' },
     { key: 'customer_name', label: '客户名称' },
+    { key: 'assayer', label: '分析人', width: '80px' },
     { key: 'ShenQingH', label: '申请号', width: '140px' },
+    { key: 'issue_no', label: '公告号', width: '120px' },
+    { key: 'issue_date', label: '公告日', width: '105px' },
+    { key: 'certificate_no', label: '证书号', width: '120px' },
     { key: 'case_volume', label: '我方文号', width: '130px' },
     { key: 'case_name', label: '案件名称' },
-    { key: 'case_status', label: '案件状态', width: '90px' },
+    { key: 'case_status', label: '案件状态', width: '96px' },
     { key: 'applicant_name', label: '申请人' },
-    { key: 'assayer', label: '分析人', width: '80px' },
+    { key: 'customer_status', label: '客户状态', width: '96px' },
+    { key: 'contract_no', label: '合同编号', width: '110px' },
+    { key: 'pic', label: '处理人', width: '80px' },
     { key: 'sales_help', label: '业务助理', width: '80px' },
+    { key: 'introducer', label: '外部案源人', width: '90px' },
+    { key: 'sales_user', label: '业务人员', width: '80px' },
     { key: 'app_date', label: '申请日', width: '105px' },
+    { key: 'is_speed_checkd', label: '是否优先审查', width: '100px' },
+    { key: 'hearing_the_case', label: '是否预审案件', width: '100px' },
+    { key: 'remark', label: '案件备注' },
+    { key: 'apply_tags', label: '专利标签', width: '100px' },
     { key: 'oa_error_msg', label: '异常/备注' }
   ],
   download: [
@@ -130,16 +156,16 @@ export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColum
     { key: 'oa_code', label: '来文编号', width: '100px' },
     { key: 'FaWenRQ', label: '官方发文日', width: '110px' },
     { key: 'fawenxlh', label: '发文序列号', width: '150px' },
-    { key: 'ShenQingH', label: '申请号', width: '140px' },
+    { key: 'ShenQingH', label: '申请号', width: '140px', clickableAppNo: true },
     { key: 'case_name', label: '案件名称' },
     { key: 'user_name', label: '账号', width: '120px' },
-    { key: 'status', label: '状态', width: '96px' },
+    { key: 'status', label: '下载状态', width: '110px' },
     { key: 'download_time', label: '下载时间', width: '140px' },
     { key: 'remark', label: '备注' }
   ],
   cert: [
     { key: 'sn', label: '序号', width: '56px' },
-    { key: 'zhuanlisqh', label: '申请号', width: '140px' },
+    { key: 'zhuanlisqh', label: '申请号', width: '140px', clickableAppNo: true },
     { key: 'certName', label: '证书名称' },
     { key: 'zhuanlimc', label: '发明名称' },
     { key: 'gonggaoDate', label: '授权公告日', width: '110px' },
@@ -168,9 +194,10 @@ export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColum
     { key: 'oa_code', label: '来文编号', width: '100px' },
     { key: 'FaWenRQ', label: '官方发文日', width: '110px' },
     { key: 'customer_name', label: '客户名称' },
-    { key: 'ShenQingH', label: '申请号', width: '140px' },
+    { key: 'ShenQingH', label: '申请号', width: '140px', clickableAppNo: true },
     { key: 'case_volume', label: '我方文号', width: '130px' },
     { key: 'case_name', label: '案件名称' },
+    { key: 'customer_status', label: '客户状态', width: '96px' },
     { key: 'assayer', label: '分析人', width: '84px' },
     { key: 'oa_error_msg', label: '异常原因' }
   ],
@@ -183,7 +210,8 @@ export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColum
     { key: 'case_volume', label: '我方文号', width: '130px' },
     { key: 'case_name', label: '案件名称' },
     { key: 'cn_name', label: '处理人', width: '84px' },
-    { key: 'update_time', label: '处理时间', width: '140px' }
+    { key: 'update_time', label: '处理时间', width: '140px' },
+    { key: 'customer_status', label: '客户状态', width: '96px' }
   ],
   nolaiuto: [
     { key: 'sn', label: '序号', width: '56px' },
@@ -322,7 +350,7 @@ export function createDefaultNoticeDownloadQuery(defaultStart = ''): NoticeDownl
     appno: '',
     startTime: defaultStart,
     endTime: '',
-    status: '',
+    status: 'unprocess',
     pageIndex: 1,
     pageSize: 50
   }
@@ -335,7 +363,7 @@ export function createDefaultNoticeCertQuery(): NoticeCertQuery {
     appno: '',
     startTime: '',
     endTime: '',
-    status: '',
+    status: '1',
     xlh: '',
     pageIndex: 1,
     pageSize: 50
@@ -594,6 +622,45 @@ export function filterNoticeRowsByKeyword(rows: readonly NoticeRow[], keyword: s
       return (typeof val === 'string' || typeof val === 'number') && String(val).toLowerCase().includes(kw)
     })
   )
+}
+
+export interface NoticeStatusBadge {
+  text: string
+  tone: 'ok' | 'warn' | 'fail' | ''
+}
+
+/** 对齐 notice.js Notice.ProcessStatus(status, remark) */
+export function formatDownloadProcessStatus(status: unknown, remark?: unknown): NoticeStatusBadge {
+  const s = typeof status === 'string' ? status.trim() : ''
+  const r = typeof remark === 'string' ? remark.trim() : ''
+  switch (s) {
+    case 'download fail':
+      return { text: '通知书文件下载失败', tone: 'fail' }
+    case 'processing':
+      return { text: '处理中...', tone: 'warn' }
+    case 'fail':
+      return { text: r || '通知书解析失败', tone: 'fail' }
+    case 'finish':
+      return { text: '解析完成', tone: 'ok' }
+    default:
+      return { text: '待下载', tone: '' }
+  }
+}
+
+/** 对齐 notice.js Notice.ProcessCertStatus(status, remark) */
+export function formatCertProcessStatus(status: unknown, remark?: unknown): NoticeStatusBadge {
+  const s = typeof status === 'string' || typeof status === 'number' ? String(status).trim() : ''
+  const r = typeof remark === 'string' ? remark.trim() : ''
+  switch (s) {
+    case '1':
+      return { text: '待下载', tone: 'warn' }
+    case '2':
+      return { text: '已下载', tone: 'ok' }
+    case 'finish':
+      return { text: '解析完成', tone: 'ok' }
+    default:
+      return { text: r || '状态异常', tone: 'fail' }
+  }
 }
 
 export function noticeRowKey(tab: NoticeTabId, row: NoticeRow): string {

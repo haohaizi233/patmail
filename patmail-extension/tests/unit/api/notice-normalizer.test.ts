@@ -65,7 +65,8 @@ describe('notice-normalizer', () => {
     expect(data.branches).toEqual([{ value: 'd1', label: '恒程创新' }])
     expect(data.countries).toEqual([{ value: 'CN', label: '中国' }])
     expect(data.fileTypes).toHaveLength(2)
-    expect(data.fileTypes[0]?.selectable).toBe(false)
+    // pcheck: true 允许勾选来文大类父节点
+    expect(data.fileTypes[0]?.selectable).toBeUndefined()
     expect(data.fileTypes[1]?.selectable).toBeUndefined()
     expect(data.cpcAccounts).toEqual([{ value: 'acc1', label: '主账号' }])
     expect(data.defaultTzsStartDate).toBe('2026-10-01')
@@ -109,6 +110,40 @@ describe('notice-normalizer', () => {
         createTime: '',
         remark: ''
       }
+    ])
+  })
+
+  it('normalizes GetTreeUser personnel tree, keeps country parents, and allows parent selection on fileTypes', () => {
+    const data = normalizeNoticeInitData({
+      countries: {
+        country: [
+          { id: 'Asia', name: '亚洲', pid: '0' },
+          { id: 'CN', name: '中国', pid: 'Asia' }
+        ]
+      },
+      fileTypes: {
+        FileType: [
+          { id: 'cat-1', name: '审查意见', pid: '0', TreeType: 'Class' },
+          { id: 'ft-1', name: '一通', pid: 'cat-1', TreeType: 'FileType' }
+        ]
+      },
+      users: {
+        TreeUser: [
+          { id: 'dept-1', name: '专利流程部', pid: '0', TreeType: 'Dept' },
+          { id: 'usr-1', name: '陈秋晓', pid: 'dept-1', TreeType: 'User' },
+          { id: 'usr-1', name: '重复跳过', pid: 'dept-1', TreeType: 'User' }
+        ]
+      }
+    })
+
+    expect(data.countries).toEqual([
+      { value: 'Asia', label: '亚洲', parent: '0' },
+      { value: 'CN', label: '中国', parent: 'Asia' }
+    ])
+    expect(data.fileTypes.find(n => n.id === 'cat-1')?.selectable).toBeUndefined()
+    expect(data.users).toEqual([
+      { id: 'dept-1', name: '专利流程部', parentId: '0', selectable: false, treeType: 'Dept' },
+      { id: 'usr-1', name: '陈秋晓', parentId: 'dept-1', treeType: 'User' }
     ])
   })
 })

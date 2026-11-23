@@ -22,7 +22,9 @@ export type EasyOperation =
   | 'noticeApplyType' | 'noticeAgency' | 'noticeDirectionType' | 'noticeCountry'
   | 'noticeCpcAccount' | 'noticeCpcTzsDate' | 'noticeNolaiutoCount'
   | 'noticeCheckUserStatus' | 'noticeCpcTzsUser' | 'noticeReplayTzsStatus'
-  | 'noticeDetail' | 'noticeCheckImport' | 'noticeUploadProcess'
+  | 'noticeDetail' | 'noticeDetailFee' | 'noticeDetailHebo' | 'noticeDetailDuibi'
+  | 'noticeCaseChargeDept' | 'noticeCaseType' | 'noticeSearchCase' | 'noticeAppNoFiles'
+  | 'noticeCheckImport' | 'noticeUploadProcess'
   | 'noticeSearch' | 'noticeImportList' | 'noticeUnProcessTzsList' | 'noticeCertList' | 'noticeReplayTzsList'
   | 'noticeHandList' | 'noticeHandHisList' | 'noticeNolaiutoList' | 'noticeHandExcelList'
   | 'noticeGetTzsListStatus' | 'noticeProcessTzsListStatus' | 'noticeGetCertListStatus' | 'noticeGetAnalyseCertStatus'
@@ -139,6 +141,13 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   noticeCpcTzsUser: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCpcTzsUser' },
   noticeReplayTzsStatus: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetReaplyTzsStatus' },
   noticeDetail: { path: '/AjaxServers/Notice.ashx', call: 'GetNoticeDetail' },
+  noticeDetailFee: { path: '/AjaxServers/Notice.ashx', call: 'GetNoticefee' },
+  noticeDetailHebo: { path: '/AjaxServers/Notice.ashx', call: 'GetNoticehebo' },
+  noticeDetailDuibi: { path: '/AjaxServers/Notice.ashx', call: 'GetNoticeduibi' },
+  noticeCaseChargeDept: { path: '/AjaxServers/Notice.ashx', call: 'GetCasechargedept' },
+  noticeCaseType: { path: '/AjaxServers/Notice.ashx', call: 'GetNoticeCaseType' },
+  noticeSearchCase: { path: '/AjaxServers/Common.ashx', call: 'LoadSearchCase' },
+  noticeAppNoFiles: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetFileListByAppNo' },
   noticeCheckImport: { path: '/AjaxServers/Notice.ashx', call: 'CheckImportNotice' },
   noticeUploadProcess: { path: '/AjaxServers/UploadFile.ashx', call: 'GetUploadProcessList' },
   noticeSearch: { path: '/AjaxServers/Notice.ashx', call: 'SearchNotice' },
@@ -209,6 +218,8 @@ const SLOW_OPERATIONS = new Set<EasyOperation>([
   'limitMailCustomer', 'mailProcess', 'processAP', 'processEF', 'agencySearchCase', 'icSearch', 'caseBusFlow', 'casePageDemand', 'caseInventor', 'caseRecordContact', 'customerList',
   'getMailInfo', 'getMailCase', 'getMailRule', 'getCustomerContact', 'getRecentContact', 'getCaseContact', 'getSalesContact', 'getPicsContact', 'getCaseAgentContact',
   'getFlowInfo', 'getFlowSubmit', 'getUrgencyList', 'getFlowLastStatus', 'saveMailInfo', 'mailSubmit', 'fileDownload', 'getFileName',
+  'treeUser', 'noticeApplyType', 'noticeAgency', 'noticeDirectionType', 'noticeCountry', 'noticeCpcAccount', 'noticeCpcTzsDate', 'noticeNolaiutoCount',
+  'noticeDetailFee', 'noticeDetailHebo', 'noticeDetailDuibi', 'noticeCaseChargeDept', 'noticeCaseType', 'noticeSearchCase', 'noticeAppNoFiles',
   'noticeSearch', 'noticeImportList', 'noticeUnProcessTzsList', 'noticeCertList', 'noticeReplayTzsList',
   'noticeHandList', 'noticeHandHisList', 'noticeNolaiutoList', 'noticeHandExcelList',
   'noticeImport', 'noticeImportCloseCase', 'noticeReMatch', 'noticeUpdateCaseName',

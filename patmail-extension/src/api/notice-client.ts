@@ -120,25 +120,17 @@ export class NoticeClient {
       }
     }
 
-    const [
-      applyTypes,
-      agencies,
-      directions,
-      applyTags,
-      branches,
-      countries,
-      fileTypes,
-      cpcAccounts,
-      cpcTzsDate,
-      handCheck,
-      nolaiutoCount
-    ] = await Promise.all([
+    // 避免 ASP.NET Session 锁队头阻塞：同源单页状态下同一 Handler 不并发多请求，并剥离慢计数由 refreshCounts 异步拉取。
+    const [applyTypes, applyTags, branches, countries, cpcAccounts] = await Promise.all([
       fetchPart('申请类型', 'noticeApplyType', { Call: 'GetApplyType', log_pagename: 'NoticeInfo.aspx' }),
-      fetchPart('代理机构', 'noticeAgency', { Call: 'GetAgency', log_pagename: 'NoticeInfo.aspx' }),
-      fetchPart('案件流向', 'noticeDirectionType', { Call: 'GetDirectionType', log_pagename: 'NoticeInfo.aspx' }),
       fetchPart('专利标签', 'applyTags', { Call: 'GetApplyTags', log_pagename: 'NoticeInfo.aspx' }),
       fetchPart('所属分部', 'deptBranch', { Call: 'GetDeptBranch', log_pagename: 'NoticeInfo.aspx' }),
       fetchPart('客户国家', 'noticeCountry', { Call: 'LoadCountry', log_pagename: 'NoticeInfo.aspx' }),
+      fetchPart('CPC账号', 'noticeCpcAccount', { Call: 'GetCpcNoticeAccount' })
+    ])
+
+    const [agencies, fileTypes, cpcTzsDate] = await Promise.all([
+      fetchPart('代理机构', 'noticeAgency', { Call: 'GetAgency', log_pagename: 'NoticeInfo.aspx' }),
       fetchPart('来文类型', 'fileTypeTree', {
         Call: 'LoadFileTypeByCaseType',
         official: '1',
@@ -146,10 +138,18 @@ export class NoticeClient {
         file_type: '',
         log_pagename: 'NoticeInfo.aspx'
       }),
-      fetchPart('CPC账号', 'noticeCpcAccount', { Call: 'GetCpcNoticeAccount' }),
-      fetchPart('默认发文日', 'noticeCpcTzsDate', { Call: 'GetCPCTzsDate' }),
-      fetchPart('异常来文计数', 'noticeHandList', { Call: 'GetHandNoticeList', is_check: '1', log_pagename: 'NoticeInfo.aspx' }),
-      fetchPart('无需导入计数', 'noticeNolaiutoCount', { Call: 'GetNolaiutoCount', log_pagename: 'NoticeInfo.aspx' })
+      fetchPart('默认发文日', 'noticeCpcTzsDate', { Call: 'GetCPCTzsDate' })
+    ])
+
+    const [directions, users] = await Promise.all([
+      fetchPart('案件流向', 'noticeDirectionType', {
+        Call: 'GetDirectionType',
+        log_pagename: 'NoticeInfo.aspx'
+      }),
+      fetchPart('人员字典', 'treeUser', {
+        Call: 'GetTreeUser',
+        log_pagename: 'NoticeInfo.aspx'
+      })
     ])
 
     return {
@@ -162,10 +162,9 @@ export class NoticeClient {
         branches,
         countries,
         fileTypes,
+        users,
         cpcAccounts,
         cpcTzsDate,
-        handCheck,
-        nolaiutoCount,
         warnings
       })
     }
@@ -194,21 +193,26 @@ export class NoticeClient {
   }
 
   private async fetchCounts(): Promise<{ handCount?: number; nolaiutoCount?: number }> {
-    const [handRes, noRes] = await Promise.all([
-      this.deps.transport.post('noticeHandList', new URLSearchParams({ Call: 'GetHandNoticeList', is_check: '1', log_pagename: 'NoticeInfo.aspx' })),
-      this.deps.transport.post('noticeNolaiutoCount', new URLSearchParams({ Call: 'GetNolaiutoCount', log_pagename: 'NoticeInfo.aspx' }))
-    ])
     const counts: { handCount?: number; nolaiutoCount?: number } = {}
-    if (handRes.ok && isRecord(handRes.data)) {
-      const raw = handRes.data.TableRowsCount
-      if (typeof raw === 'number' || (typeof raw === 'string' && /^\d+$/.test(raw.trim()))) {
-        counts.handCount = Number(raw)
-      }
-    }
+    // 先查轻量的无需导入计数，再查可能耗时二十余秒的异常来文计数，避免互相抢占同 Handler Session 锁。
+    const noRes = await this.deps.transport.post(
+      'noticeNolaiutoCount',
+      new URLSearchParams({ Call: 'GetNolaiutoCount', log_pagename: 'NoticeInfo.aspx' })
+    )
     if (noRes.ok && isRecord(noRes.data)) {
       const raw = noRes.data.count
       if (typeof raw === 'number' || (typeof raw === 'string' && /^\d+$/.test(raw.trim()))) {
         counts.nolaiutoCount = Number(raw)
+      }
+    }
+    const handRes = await this.deps.transport.post(
+      'noticeHandList',
+      new URLSearchParams({ Call: 'GetHandNoticeList', is_check: '1', log_pagename: 'NoticeInfo.aspx' })
+    )
+    if (handRes.ok && isRecord(handRes.data)) {
+      const raw = handRes.data.TableRowsCount
+      if (typeof raw === 'number' || (typeof raw === 'string' && /^\d+$/.test(raw.trim()))) {
+        counts.handCount = Number(raw)
       }
     }
     return counts
@@ -343,7 +347,93 @@ export class NoticeClient {
         return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请在原网站重新登录。')
       }
       const detail = isRecord(body.NoticeInfo) ? body.NoticeInfo : {}
-      return { ok: true, data: { ok: true, message: '已读取来文详情。', detail } }
+      const rowsOf = (payload: unknown): Record<string, unknown>[] =>
+        isRecord(payload) && Array.isArray(payload.TableRows) ? payload.TableRows.filter(isRecord) : []
+
+      const feeRes = await this.deps.transport.post(
+        'noticeDetailFee',
+        new URLSearchParams({ Call: 'GetNoticefee', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
+      )
+      const heboRes = await this.deps.transport.post(
+        'noticeDetailHebo',
+        new URLSearchParams({ Call: 'GetNoticehebo', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
+      )
+      const duibiRes = await this.deps.transport.post(
+        'noticeDetailDuibi',
+        new URLSearchParams({ Call: 'GetNoticeduibi', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
+      )
+
+      return {
+        ok: true,
+        data: {
+          ok: true,
+          message: '已读取来文详情。',
+          detail,
+          detailFees: feeRes.ok ? rowsOf(feeRes.data) : [],
+          detailHebo: heboRes.ok ? rowsOf(heboRes.data) : [],
+          detailDuibi: duibiRes.ok ? rowsOf(duibiRes.data) : []
+        }
+      }
+    }
+
+    if (request.action === 'searchNoticeCases') {
+      const key = request.keyword.trim()
+      if (!key) return { ok: true, data: { ok: true, message: '请输入我方文号关键词。', caseOptions: [] } }
+      const res = await this.deps.transport.post(
+        'noticeSearchCase',
+        new URLSearchParams({ Call: 'LoadSearchCase', Key: key, log_pagename: 'Notice.aspx' })
+      )
+      if (!res.ok) return res
+      const body = isRecord(res.data) ? res.data : {}
+      if (isSessionExpiredPayload(body)) {
+        this.deps.expireSession()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请在原网站重新登录。')
+      }
+      const caseOptions = Array.isArray(body.CaseList)
+        ? body.CaseList.filter(isRecord)
+            .map(row => ({ value: str(row.id), label: str(row.name) }))
+            .filter(item => item.value && item.label)
+        : []
+      return { ok: true, data: { ok: true, message: `找到 ${caseOptions.length} 条匹配案件。`, caseOptions } }
+    }
+
+    if (request.action === 'getCaseMeta') {
+      const caseId = request.caseId.trim()
+      if (!caseId) return { ok: true, data: { ok: true, message: '缺少案件 ID。', chargeDept: '', caseTypeId: '' } }
+      const deptRes = await this.deps.transport.post(
+        'noticeCaseChargeDept',
+        new URLSearchParams({ Call: 'GetCasechargedept', case_id: caseId, log_pagename: 'Notice.aspx' })
+      )
+      const typeRes = await this.deps.transport.post(
+        'noticeCaseType',
+        new URLSearchParams({ Call: 'GetNoticeCaseType', case_id: caseId, log_pagename: 'Notice.aspx' })
+      )
+      const chargeDept =
+        deptRes.ok && isRecord(deptRes.data) && isRecord(deptRes.data.DeptInfo)
+          ? str(deptRes.data.DeptInfo.dept_name)
+          : ''
+      const caseTypeId =
+        typeRes.ok && isRecord(typeRes.data) && isRecord(typeRes.data.CaseTypeInfo)
+          ? str(typeRes.data.CaseTypeInfo.case_type_id)
+          : ''
+      return { ok: true, data: { ok: true, message: '已同步案件部门与类型。', chargeDept, caseTypeId } }
+    }
+
+    if (request.action === 'getAppNoFiles') {
+      const appNo = request.appNo.trim()
+      if (!appNo) return apiError('INVALID_QUERY', '当前记录缺少申请号。')
+      const res = await this.deps.transport.post(
+        'noticeAppNoFiles',
+        new URLSearchParams({ Call: 'GetFileListByAppNo', appNo, log_pagename: 'NoHandFileList.aspx' })
+      )
+      if (!res.ok) return res
+      const body = isRecord(res.data) ? res.data : {}
+      if (isSessionExpiredPayload(body)) {
+        this.deps.expireSession()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请在原网站重新登录。')
+      }
+      const caseFiles = Array.isArray(body.TableRows) ? body.TableRows.filter(isRecord) : []
+      return { ok: true, data: { ok: true, message: `已读取 ${caseFiles.length} 条案件官文记录。`, caseFiles } }
     }
 
     if (request.action === 'importCheck') {

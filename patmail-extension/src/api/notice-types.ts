@@ -33,6 +33,7 @@ export interface NoticeInitData {
   branches: NoticeOptionItem[]
   countries: NoticeOptionItem[]
   fileTypes: NoticeFileTypeNode[]
+  users: NoticeFileTypeNode[]
   cpcAccounts: NoticeOptionItem[]
   defaultTzsStartDate: string
   handCount: number
@@ -196,6 +197,9 @@ export type NoticeActionRequest =
   | { action: 'recoveryStatusAnalyse'; oaIds: string[] }
   | { action: 'mailCustomer'; oaIds: string[]; mailStyle: '1' | '2' | '3' }
   | { action: 'getNoticeDetail'; oaId: string; ctrlProcId?: string }
+  | { action: 'searchNoticeCases'; keyword: string }
+  | { action: 'getCaseMeta'; caseId: string }
+  | { action: 'getAppNoFiles'; appNo: string }
   | {
       action: 'saveNoticeDetail'
       oaId: string
@@ -265,6 +269,10 @@ export interface NoticeActionResult {
   detailFees?: Record<string, unknown>[]
   detailHebo?: Record<string, unknown>[]
   detailDuibi?: Record<string, unknown>[]
+  caseOptions?: NoticeOptionItem[]
+  chargeDept?: string
+  caseTypeId?: string
+  caseFiles?: NoticeRow[]
   checkWarnings?: string[]
   isErrorFee?: boolean
   statusRows?: Record<string, unknown>[]

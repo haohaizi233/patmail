@@ -11,6 +11,9 @@ import {
   createDefaultNoticeNolaiutoQuery,
   createDefaultNoticeReplayQuery,
   filterNoticeRowsByKeyword,
+  formatCertProcessStatus,
+  formatDownloadProcessStatus,
+  NOTICE_IMPORT_COMPLETED_COLUMNS,
   noticeRowKey
 } from '../../../src/api/notice-params'
 
@@ -132,5 +135,24 @@ describe('notice-params', () => {
     expect(noticeRowKey('download', { fid: 'f-1', oa_id: 'oa-1' })).toBe('f-1')
     expect(noticeRowKey('handExcel', { doc_no: 'D-123' })).toBe('D-123')
     expect(noticeRowKey('import', { oa_id: 'oa-9' })).toBe('oa-9')
+  })
+
+  it('uses original site defaults for download/cert tabs and formats process status badges', () => {
+    expect(createDefaultNoticeDownloadQuery().status).toBe('unprocess')
+    expect(createDefaultNoticeCertQuery().status).toBe('1')
+    expect(NOTICE_IMPORT_COMPLETED_COLUMNS.length).toBeGreaterThan(0)
+
+    expect(formatDownloadProcessStatus('download fail')).toEqual({ text: '通知书文件下载失败', tone: 'fail' })
+    expect(formatDownloadProcessStatus('processing')).toEqual({ text: '处理中...', tone: 'warn' })
+    expect(formatDownloadProcessStatus('fail', '自定义错误')).toEqual({ text: '自定义错误', tone: 'fail' })
+    expect(formatDownloadProcessStatus('fail')).toEqual({ text: '通知书解析失败', tone: 'fail' })
+    expect(formatDownloadProcessStatus('finish')).toEqual({ text: '解析完成', tone: 'ok' })
+    expect(formatDownloadProcessStatus('')).toEqual({ text: '待下载', tone: '' })
+
+    expect(formatCertProcessStatus('1')).toEqual({ text: '待下载', tone: 'warn' })
+    expect(formatCertProcessStatus(2)).toEqual({ text: '已下载', tone: 'ok' })
+    expect(formatCertProcessStatus('finish')).toEqual({ text: '解析完成', tone: 'ok' })
+    expect(formatCertProcessStatus('error', '证书损坏')).toEqual({ text: '证书损坏', tone: 'fail' })
+    expect(formatCertProcessStatus('unknown')).toEqual({ text: '状态异常', tone: 'fail' })
   })
 })

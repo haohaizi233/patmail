@@ -71,6 +71,7 @@ export interface NoticeInitRawParts {
   branches?: unknown
   countries?: unknown
   fileTypes?: unknown
+  users?: unknown
   cpcAccounts?: unknown
   cpcTzsDate?: unknown
   handCheck?: unknown
@@ -128,21 +129,43 @@ export function normalizeNoticeInitData(parts: NoticeInitRawParts): NoticeInitDa
   )
 
   const countries = dedupeOptions(
-    arrayOf(parts.countries, 'country').map(row => ({
-      value: str(row.id || row.value),
-      label: str(row.name || row.text_zh_cn)
-    }))
+    arrayOf(parts.countries, 'country').map(row => {
+      const parent = str(row.pid || row.pId)
+      return {
+        value: str(row.id || row.value),
+        label: str(row.name || row.text_zh_cn),
+        ...(parent ? { parent } : {})
+      }
+    })
   )
 
   const rawFileTypeRows = arrayOf(parts.fileTypes, 'FileType')
   const builtTree = buildFileTypeTree(rawFileTypeRows)
+  // 原站 notice.js L32 对 #seltype 传入 pcheck: true，允许直接勾选来文大类父节点。
   const fileTypes: NoticeFileTypeNode[] = builtTree.nodes.map(node => ({
     id: node.id,
     name: node.name,
     parentId: node.parentId,
-    ...(node.selectable === false ? { selectable: false } : {}),
     ...(node.treeType ? { treeType: node.treeType } : {})
   }))
+
+  const usersSeen = new Set<string>()
+  const users: NoticeFileTypeNode[] = []
+  for (const row of arrayOf(parts.users, 'TreeUser')) {
+    const id = str(row.id)
+    const name = str(row.name)
+    if (!id || !name || usersSeen.has(id)) continue
+    usersSeen.add(id)
+    const parentId = str(row.pid || row.pId)
+    const treeType = str(row.TreeType)
+    users.push({
+      id,
+      name,
+      parentId,
+      ...(treeType === 'Dept' ? { selectable: false } : {}),
+      ...(treeType ? { treeType } : {})
+    })
+  }
 
   const cpcAccounts = dedupeOptions(
     arrayOf(parts.cpcAccounts, 'accounts').map(row => ({
@@ -178,6 +201,7 @@ export function normalizeNoticeInitData(parts: NoticeInitRawParts): NoticeInitDa
     branches,
     countries,
     fileTypes,
+    users,
     cpcAccounts,
     defaultTzsStartDate,
     handCount,
