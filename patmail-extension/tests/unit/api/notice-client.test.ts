@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { NoticeClient } from '../../../src/api/notice-client'
+import { createDefaultNoticeCertQuery, createDefaultNoticeReplayQuery } from '../../../src/api/notice-params'
 import type { EasyOperation, EasyTransport } from '../../../src/api/transport'
 
 describe('NoticeClient concurrency and slow count separation', () => {
@@ -194,5 +195,139 @@ describe('NoticeClient concurrency and slow count separation', () => {
       'noticeCaseType',
       'noticeAppNoFiles'
     ])
+  })
+
+  it('loads upload process detail list with status filtering and uploads multi-file batches sharing one GUID', async () => {
+    const chunkGuids: string[] = []
+    const chunkNames: string[] = []
+    let finishGuid = ''
+    let detailCallParams = ''
+
+    const fakeTransport = {
+      async post(op: EasyOperation, params: URLSearchParams) {
+        if (op === 'noticeUploadProcessDetail') {
+          detailCallParams = params.toString()
+          return {
+            ok: true as const,
+            data: {
+              TableRowsCount: '2',
+              TableRows: [
+                {
+                  id: 'd-1',
+                  sn: 1,
+                  file_name: 'notice1.pdf',
+                  status: '上传失败',
+                  message: '案卷不存在',
+                  update_time_mm: '2026-11-23 11:00',
+                  cn_name: '李四'
+                }
+              ]
+            }
+          }
+        }
+        if (op === 'noticeUploadCpcNew') {
+          finishGuid = params.get('GUID') ?? ''
+          return {
+            ok: true as const,
+            data: {
+              ClientInfo: { Result: true, Message: '提交完成' },
+              Tips: '共解析 2 份通知书',
+              oa_ids: 'oa-1;oa-2'
+            }
+          }
+        }
+        return { ok: true as const, data: {} }
+      },
+      async postMultipart(_op: string, formData: FormData, query?: Record<string, string>) {
+        chunkGuids.push(query?.GUID ?? '')
+        const rawName = formData.get('name')
+        chunkNames.push(typeof rawName === 'string' ? rawName : '')
+        return { ok: true as const, data: {} }
+      }
+    } as unknown as EasyTransport
+
+    const client = new NoticeClient({
+      transport: fakeTransport,
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true
+    })
+
+    const detailRes = await client.executeNoticeAction({
+      action: 'getUploadProcessDetailList',
+      recordId: 'batch-1',
+      status: '3',
+      pageIndex: 2,
+      pageSize: 10
+    })
+    expect(detailRes.ok).toBe(true)
+    expect(detailCallParams).toContain('Call=GetUploadProcessDetailList')
+    expect(detailCallParams).toContain('record_id=batch-1')
+    expect(detailCallParams).toContain('status=3')
+    expect(detailCallParams).toContain('log_pagename=UploadProcessDetail.aspx')
+    if (detailRes.ok) {
+      expect(detailRes.data.uploadProcessDetailTotal).toBe(2)
+      expect(detailRes.data.uploadProcessDetailRows?.[0]?.status).toBe('上传失败')
+    }
+
+    const uploadRes = await client.executeNoticeAction({
+      action: 'uploadCpcZip',
+      kind: 'cpc',
+      fileName: 'a.zip',
+      mimeType: 'application/zip',
+      base64: 'UEs=',
+      files: [
+        { fileName: 'a.zip', mimeType: 'application/zip', base64: 'UEs=' },
+        { fileName: 'b.zip', mimeType: 'application/zip', base64: 'UEs=' }
+      ]
+    })
+    expect(uploadRes.ok).toBe(true)
+    expect(chunkNames).toEqual(['a.zip', 'b.zip'])
+    expect(chunkGuids).toHaveLength(2)
+    expect(chunkGuids[0]).toBeTruthy()
+    expect(chunkGuids[0]).toBe(chunkGuids[1])
+    expect(finishGuid).toBe(chunkGuids[0])
+    if (uploadRes.ok) {
+      expect(uploadRes.data.uploadTips).toBe('共解析 2 份通知书')
+      expect(uploadRes.data.uploadedOaIds).toBe('oa-1;oa-2')
+    }
+  })
+
+  it('pre-checks branch CPC login status before exporting cert or replay tabs', async () => {
+    const ops: EasyOperation[] = []
+    const fakeTransport = {
+      async post(op: EasyOperation) {
+        ops.push(op)
+        if (op === 'noticeCheckUserStatus') {
+          return { ok: true as const, data: { ClientInfo: { Result: false, Message: '401' } } }
+        }
+        return { ok: true as const, data: {} }
+      }
+    } as unknown as EasyTransport
+
+    const client = new NoticeClient({
+      transport: fakeTransport,
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true
+    })
+
+    const certBlocked = await client.exportNoticeExcel({
+      tab: 'cert',
+      query: { ...createDefaultNoticeCertQuery(), account: 'acc-branch' },
+      accountLabel: '深圳_分部'
+    })
+    expect(certBlocked.ok).toBe(false)
+    if (!certBlocked.ok) {
+      expect(certBlocked.error.message).toContain('扫码')
+    }
+
+    const replayBlocked = await client.exportNoticeExcel({
+      tab: 'replay',
+      query: { ...createDefaultNoticeReplayQuery('acc-branch') },
+      accountLabel: '北京_分部'
+    })
+    expect(replayBlocked.ok).toBe(false)
+    expect(ops).toEqual(['noticeCheckUserStatus', 'noticeCheckUserStatus'])
   })
 })

@@ -382,6 +382,7 @@ const READONLY_NOTICE_ACTIONS = new Set<string>([
   'checkCpcUserStatus',
   'getCpcTzsUser',
   'getUploadProcessList',
+  'getUploadProcessDetailList',
   'openEasyNoticeTab'
 ])
 
@@ -428,8 +429,11 @@ export function isNoticeExportRequest(value: unknown): value is NoticeExportRequ
       return false
     }
   }
+  if (value.accountLabel !== undefined && (typeof value.accountLabel !== 'string' || value.accountLabel.length > 200)) return false
   if (value.timeoutMs !== undefined && fileSearchTimeoutMs(value.timeoutMs) !== value.timeoutMs) return false
-  return Object.keys(value).every(k => k === 'tab' || k === 'query' || k === 'columns' || k === 'timeoutMs')
+  return Object.keys(value).every(
+    k => k === 'tab' || k === 'query' || k === 'columns' || k === 'accountLabel' || k === 'timeoutMs'
+  )
 }
 
 export function isNoticeExcelUploadRequest(value: unknown): value is NoticeExcelUploadRequest {

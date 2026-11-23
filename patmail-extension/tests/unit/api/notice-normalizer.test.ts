@@ -3,6 +3,7 @@ import {
   isCpcAuthRequired,
   normalizeNoticeInitData,
   normalizeNoticeSearchResponse,
+  normalizeUploadProcessDetailList,
   normalizeUploadProcessList
 } from '../../../src/api/notice-normalizer'
 import { PATENT_CASE_TYPE_ID } from '../../../src/api/notice-params'
@@ -94,9 +95,23 @@ describe('notice-normalizer', () => {
     if (!expired.ok) expect(expired.error.code).toBe('SESSION_EXPIRED')
   })
 
-  it('normalizes UploadFile GetUploadProcessList rows', () => {
+  it('normalizes UploadFile GetUploadProcessList and GetUploadProcessDetailList rows and publish flags', () => {
     const rows = normalizeUploadProcessList({
-      TableRows: [{ id: 'p1', sn: 1, zip_file_name: 'batch.zip', status: '完成', process: '100%', success_num: 12, fail_num: 0 }]
+      TableRows: [
+        {
+          id: 'p1',
+          sn: 1,
+          zip_file_name: 'batch.zip',
+          status: '完成',
+          process: '100%',
+          success_num: 12,
+          fail_num: 0,
+          merge_num: 2,
+          total_num: 14,
+          create_time_mm: '2026-11-23 10:00',
+          cn_name: '张三'
+        }
+      ]
     })
     expect(rows).toEqual([
       {
@@ -107,10 +122,53 @@ describe('notice-normalizer', () => {
         process: '100%',
         successNum: '12',
         failNum: '0',
-        createTime: '',
+        mergeNum: '2',
+        totalNum: '14',
+        createTime: '2026-11-23 10:00',
+        uploader: '张三',
         remark: ''
       }
     ])
+
+    const detail = normalizeUploadProcessDetailList({
+      TableRowsCount: '15',
+      TableRows: [
+        {
+          id: 'd1',
+          sn: 1,
+          file_name: 'GA001.pdf',
+          status: '上传失败',
+          message: '找不到匹配案件',
+          update_time_mm: '2026-11-23 10:01',
+          cn_name: '张三'
+        }
+      ]
+    })
+    expect(detail).toEqual({
+      total: 15,
+      rows: [
+        {
+          id: 'd1',
+          sn: 1,
+          fileName: 'GA001.pdf',
+          status: '上传失败',
+          message: '找不到匹配案件',
+          updateTime: '2026-11-23 10:01',
+          uploader: '张三'
+        }
+      ]
+    })
+
+    const cfgData = normalizeNoticeInitData({
+      noticeGfConfig: { PublishConfig: { cfg_value: '1' } },
+      closeCaseConfig: { PublishConfig: { cfg_value: '0' } },
+      closeCaseImportConfig: { PublishConfig: { cfg_value: '1' } },
+      sgReduceConfig: { PublishConfig: { cfg_value: 'TRUE' } }
+    })
+    expect(cfgData.noticeGfEnabled).toBe(true)
+    expect(cfgData.closeCaseRule).toBe('0')
+    expect(cfgData.closeCaseImportNotice).toBe('1')
+    expect(cfgData.sgReduceEnabled).toBe(true)
   })
 
   it('normalizes GetTreeUser personnel tree, keeps country parents, and allows parent selection on fileTypes', () => {

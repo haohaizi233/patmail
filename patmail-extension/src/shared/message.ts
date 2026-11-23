@@ -1020,7 +1020,7 @@ export function isMessage(value: unknown): value is AppMessage {
       const p = value.payload
       if (!isRecord(p)) return false
       if (p.action !== 'list' && p.action !== 'detail' && p.action !== 'add' && p.action !== 'up' && p.action !== 'del') return false
-      if (p.belongKey !== 'FeeSearch_ExportByCond' && p.belongKey !== 'FeeSearch_ExportCountByCond') return false
+      if (p.belongKey !== 'FeeSearch_ExportByCond' && p.belongKey !== 'FeeSearch_ExportCountByCond' && p.belongKey !== 'NoticeInfo') return false
       if (p.typeId !== undefined && typeof p.typeId !== 'string') return false
       if (p.modelName !== undefined && typeof p.modelName !== 'string') return false
       if (p.columns !== undefined && (!Array.isArray(p.columns) || p.columns.length > 300 || !p.columns.every(c => isRecord(c) && typeof c.value === 'string' && typeof c.text === 'string'))) return false

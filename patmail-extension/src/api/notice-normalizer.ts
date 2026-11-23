@@ -7,6 +7,7 @@ import type {
   NoticeOptionItem,
   NoticeSearchResult,
   NoticeTabId,
+  NoticeUploadProcessDetailRow,
   NoticeUploadProcessRow
 } from './notice-types'
 import { apiError, type ApiResult } from './types'
@@ -63,6 +64,16 @@ export function isCpcAuthRequired(body: unknown): boolean {
   return info.Result === false && str(info.Message) === '401'
 }
 
+function readPublishConfigValue(raw: unknown): string {
+  if (!isRecord(raw) || !isRecord(raw.PublishConfig)) return ''
+  return str(raw.PublishConfig.cfg_value)
+}
+
+function isTruthyPublishFlag(raw: unknown): boolean {
+  const val = readPublishConfigValue(raw)
+  return val.toUpperCase() === 'TRUE' || val === '1' || val.length > 7
+}
+
 export interface NoticeInitRawParts {
   applyTypes?: unknown
   agencies?: unknown
@@ -76,6 +87,10 @@ export interface NoticeInitRawParts {
   cpcTzsDate?: unknown
   handCheck?: unknown
   nolaiutoCount?: unknown
+  noticeGfConfig?: unknown
+  closeCaseConfig?: unknown
+  closeCaseImportConfig?: unknown
+  sgReduceConfig?: unknown
   warnings?: string[]
 }
 
@@ -193,6 +208,11 @@ export function normalizeNoticeInitData(parts: NoticeInitRawParts): NoticeInitDa
     nolaiutoCount = intCount(parts.nolaiutoCount.count ?? parts.nolaiutoCount.TableRowsCount, 0)
   }
 
+  const noticeGfEnabled = isTruthyPublishFlag(parts.noticeGfConfig)
+  const closeCaseRule = readPublishConfigValue(parts.closeCaseConfig) || '1'
+  const closeCaseImportNotice = readPublishConfigValue(parts.closeCaseImportConfig) || '0'
+  const sgReduceEnabled = isTruthyPublishFlag(parts.sgReduceConfig)
+
   return {
     applyTypes,
     agencies,
@@ -206,6 +226,10 @@ export function normalizeNoticeInitData(parts: NoticeInitRawParts): NoticeInitDa
     defaultTzsStartDate,
     handCount,
     nolaiutoCount,
+    noticeGfEnabled,
+    closeCaseRule,
+    closeCaseImportNotice,
+    sgReduceEnabled,
     warnings
   }
 }
@@ -273,7 +297,29 @@ export function normalizeUploadProcessList(raw: unknown): NoticeUploadProcessRow
     process: str(row.process),
     successNum: str(row.success_num),
     failNum: str(row.fail_num),
-    createTime: str(row.create_time || row.update_time),
+    mergeNum: str(row.merge_num),
+    totalNum: str(row.total_num),
+    createTime: str(row.create_time_mm || row.create_time || row.update_time),
+    uploader: str(row.cn_name),
     remark: str(row.remark)
   }))
+}
+
+export function normalizeUploadProcessDetailList(raw: unknown): {
+  rows: NoticeUploadProcessDetailRow[]
+  total: number
+} {
+  const rows = arrayOf(raw, 'TableRows').map((row, idx) => ({
+    id: str(row.id) || String(idx + 1),
+    sn: intCount(row.sn, idx + 1),
+    fileName: str(row.file_name),
+    status: str(row.status),
+    message: str(row.message),
+    updateTime: str(row.update_time_mm || row.update_time),
+    uploader: str(row.cn_name)
+  }))
+  const rec = isRecord(raw) ? raw : {}
+  const firstTotal = arrayOf(raw, 'TableRows')[0]?.TableRowsCount
+  const total = intCount(rec.TableRowsCount ?? rec.total ?? firstTotal, rows.length)
+  return { rows, total }
 }

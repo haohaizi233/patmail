@@ -4,6 +4,7 @@ import {
   isSessionExpiredPayload,
   normalizeNoticeInitData,
   normalizeNoticeSearchResponse,
+  normalizeUploadProcessDetailList,
   normalizeUploadProcessList
 } from './notice-normalizer'
 import { isRecord, readClientInfo } from './response-guards'
@@ -121,10 +122,39 @@ export class NoticeClient {
     }
 
     // 避免 ASP.NET Session 锁队头阻塞：同源单页状态下同一 Handler 不并发多请求，并剥离慢计数由 refreshCounts 异步拉取。
-    const [applyTypes, applyTags, branches, countries, cpcAccounts] = await Promise.all([
+    const baseInfoChain = (async () => {
+      const branchesData = await fetchPart('所属分部', 'deptBranch', { Call: 'GetDeptBranch', log_pagename: 'NoticeInfo.aspx' })
+      const noticeGfConfig = await fetchPart('国防官文配置', 'noticePublishConfig', {
+        Call: 'GetPublishConfig',
+        type: 'NoticeGF',
+        key: 'NoticeGF',
+        log_pagename: 'NoticeInfo.aspx'
+      })
+      const closeCaseConfig = await fetchPart('结案编辑配置', 'noticePublishConfig', {
+        Call: 'GetPublishConfig',
+        type: 'CaseButton',
+        key: 'Close_this_case',
+        log_pagename: 'NoticeInfo.aspx'
+      })
+      const closeCaseImportConfig = await fetchPart('结案来文配置', 'noticePublishConfig', {
+        Call: 'GetPublishConfig',
+        type: 'CaseButton',
+        key: 'Close_case_import_notice',
+        log_pagename: 'NoticeInfo.aspx'
+      })
+      const sgReduceConfig = await fetchPart('费减异常配置', 'noticePublishConfig', {
+        Call: 'GetPublishConfig',
+        type: 'SGReduce',
+        key: 'is_fee_reduce',
+        log_pagename: 'NoticeInfo.aspx'
+      })
+      return { branchesData, noticeGfConfig, closeCaseConfig, closeCaseImportConfig, sgReduceConfig }
+    })()
+
+    const [applyTypes, applyTags, baseInfoParts, countries, cpcAccounts] = await Promise.all([
       fetchPart('申请类型', 'noticeApplyType', { Call: 'GetApplyType', log_pagename: 'NoticeInfo.aspx' }),
       fetchPart('专利标签', 'applyTags', { Call: 'GetApplyTags', log_pagename: 'NoticeInfo.aspx' }),
-      fetchPart('所属分部', 'deptBranch', { Call: 'GetDeptBranch', log_pagename: 'NoticeInfo.aspx' }),
+      baseInfoChain,
       fetchPart('客户国家', 'noticeCountry', { Call: 'LoadCountry', log_pagename: 'NoticeInfo.aspx' }),
       fetchPart('CPC账号', 'noticeCpcAccount', { Call: 'GetCpcNoticeAccount' })
     ])
@@ -159,12 +189,16 @@ export class NoticeClient {
         agencies,
         directions,
         applyTags,
-        branches,
+        branches: baseInfoParts.branchesData,
         countries,
         fileTypes,
         users,
         cpcAccounts,
         cpcTzsDate,
+        noticeGfConfig: baseInfoParts.noticeGfConfig,
+        closeCaseConfig: baseInfoParts.closeCaseConfig,
+        closeCaseImportConfig: baseInfoParts.closeCaseImportConfig,
+        sgReduceConfig: baseInfoParts.sgReduceConfig,
         warnings
       })
     }
@@ -478,18 +512,63 @@ export class NoticeClient {
         new URLSearchParams({
           Call: 'GetUploadProcessList',
           pageIndex: String(request.pageIndex ?? 1),
-          pageSize: String(request.pageSize ?? 20),
+          pageSize: String(request.pageSize ?? 10),
           log_pagename: 'UploadProcess.aspx'
         })
       )
       if (!res.ok) return res
+      const body = isRecord(res.data) ? res.data : {}
+      if (isSessionExpiredPayload(body)) {
+        this.deps.expireSession()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请在原网站重新登录。')
+      }
       const uploadProcessRows = normalizeUploadProcessList(res.data)
+      const rawTotal = body.TableRowsCount
+      const uploadProcessTotal =
+        typeof rawTotal === 'number' && Number.isFinite(rawTotal)
+          ? rawTotal
+          : typeof rawTotal === 'string' && /^\d+$/.test(rawTotal.trim())
+            ? Number(rawTotal.trim())
+            : uploadProcessRows.length
       return {
         ok: true,
         data: {
           ok: true,
           message: `已获取 ${uploadProcessRows.length} 条上传进度记录。`,
-          uploadProcessRows
+          uploadProcessRows,
+          uploadProcessTotal
+        }
+      }
+    }
+
+    if (request.action === 'getUploadProcessDetailList') {
+      const recordId = request.recordId.trim()
+      if (!recordId) return apiError('INVALID_QUERY', '缺少上传批次 recordId。')
+      const res = await this.deps.transport.post(
+        'noticeUploadProcessDetail',
+        new URLSearchParams({
+          Call: 'GetUploadProcessDetailList',
+          record_id: recordId,
+          status: request.status ?? '-1',
+          pageIndex: String(request.pageIndex ?? 1),
+          pageSize: String(request.pageSize ?? 10),
+          log_pagename: 'UploadProcessDetail.aspx'
+        })
+      )
+      if (!res.ok) return res
+      const body = isRecord(res.data) ? res.data : {}
+      if (isSessionExpiredPayload(body)) {
+        this.deps.expireSession()
+        return apiError('SESSION_EXPIRED', 'EASY 登录状态已失效，请在原网站重新登录。')
+      }
+      const { rows, total } = normalizeUploadProcessDetailList(res.data)
+      return {
+        ok: true,
+        data: {
+          ok: true,
+          message: `已获取 ${rows.length} 条上传进度明细。`,
+          uploadProcessDetailRows: rows,
+          uploadProcessDetailTotal: total
         }
       }
     }
@@ -763,20 +842,42 @@ export class NoticeClient {
         return { ok: true, data: polled }
       }
       case 'uploadCpcZip': {
+        const files = request.files?.length
+          ? request.files
+          : [{ fileName: request.fileName, mimeType: request.mimeType, base64: request.base64 }]
+        const validFiles = files.filter(f => f.fileName.trim() && f.base64)
+        if (!validFiles.length) return apiError('INVALID_QUERY', '请先选择要上传的压缩包文件。')
         const guid = newUuid()
-        const bytes = base64ToUint8Array(request.base64)
-        const blob = new Blob([bytes], { type: request.mimeType || 'application/zip' })
-        const form = new FormData()
-        form.append('name', request.fileName)
-        form.append('file', blob, request.fileName)
-        const chunkRes = await this.deps.transport.postMultipart('noticeUploadCpcChunk', form, { GUID: guid })
-        if (!chunkRes.ok) return chunkRes
+        for (const item of validFiles) {
+          const bytes = base64ToUint8Array(item.base64)
+          const blob = new Blob([bytes], { type: item.mimeType || 'application/zip' })
+          const form = new FormData()
+          form.append('name', item.fileName)
+          form.append('file', blob, item.fileName)
+          const chunkRes = await this.deps.transport.postMultipart('noticeUploadCpcChunk', form, { GUID: guid })
+          if (!chunkRes.ok) return chunkRes
+        }
         const op: EasyOperation = request.kind === 'gf' ? 'noticeUploadCpcNewGf' : 'noticeUploadCpcNew'
         const call = request.kind === 'gf' ? 'UploadCPCFileNewGF' : 'UploadCPCFileNew'
         const finishRes = await this.deps.transport.post(op, new URLSearchParams({ Call: call, GUID: guid }))
         if (!finishRes.ok) return finishRes
-        const msgInfo = this.extractClientMessage(finishRes.data, '官文压缩包已上传并提交解析，可在「查看上传进度」跟踪结果。', '官文压缩包解析触发失败。')
-        return { ok: true, data: { ok: msgInfo.ok, message: msgInfo.message } }
+        const body = isRecord(finishRes.data) ? finishRes.data : {}
+        const msgInfo = this.extractClientMessage(
+          finishRes.data,
+          `已上传 ${validFiles.length} 个官文压缩包并提交解析，可在「查看上传进度」跟踪结果。`,
+          '官文压缩包解析触发失败。'
+        )
+        const uploadTips = str(body.Tips)
+        const uploadedOaIds = str(body.oa_ids)
+        return {
+          ok: true,
+          data: {
+            ok: msgInfo.ok,
+            message: msgInfo.message,
+            ...(uploadTips ? { uploadTips } : {}),
+            ...(uploadedOaIds ? { uploadedOaIds } : {})
+          }
+        }
       }
     }
   }
@@ -786,6 +887,12 @@ export class NoticeClient {
   > {
     if (!(await this.ensureSession())) {
       return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    if ((request.tab === 'cert' || request.tab === 'replay') && request.accountLabel?.includes('_')) {
+      const loginBlock = await this.ensureCpcLoginReady(request.query.account, request.accountLabel)
+      if (loginBlock) {
+        return apiError('BUSINESS_ERROR', loginBlock.message)
+      }
     }
     const { operation, params } = buildNoticeExportPayload(request)
     const response = await this.deps.transport.post(operation, params, undefined, request.timeoutMs)

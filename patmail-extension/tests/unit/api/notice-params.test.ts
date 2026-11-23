@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildNoticeExportGroups,
   buildNoticeExportPayload,
   buildNoticeSearchPayload,
   createDefaultNoticeCertQuery,
@@ -180,5 +181,26 @@ describe('notice-params', () => {
     const replay = createDefaultNoticeReplayQuery('acc-1', fixedNow)
     expect(replay.startTime).toBe('')
     expect(replay.endTime).toBe('2026-11-23')
+  })
+
+  it('builds grouped export columns for all 4 tabs and appends dynamic import condition fields', () => {
+    const baseGroups = buildNoticeExportGroups('import', createDefaultNoticeImportQuery())
+    expect(baseGroups.map(g => g.title)).toEqual(['案件信息', '文件信息', '著录项目'])
+    expect(baseGroups[0].columns.some(c => c.value === 'agency_id')).toBe(false)
+
+    const richQuery = {
+      ...createDefaultNoticeImportQuery(),
+      agency_id: 'ag-1',
+      apply_type: 'IV',
+      flow_direction: 'OO'
+    }
+    const richGroups = buildNoticeExportGroups('import', richQuery)
+    expect(richGroups[0].columns.some(c => c.value === 'agency_id' && c.text === '代理机构')).toBe(true)
+    expect(richGroups[0].columns.some(c => c.value === 'apply_type' && c.text === '申请类型')).toBe(true)
+    expect(richGroups[0].columns.some(c => c.value === 'flow_direction' && c.text === '案件流向')).toBe(true)
+
+    expect(buildNoticeExportGroups('download')[0].title).toBe('来文信息')
+    expect(buildNoticeExportGroups('cert')[0].title).toBe('证书信息')
+    expect(buildNoticeExportGroups('replay')[0].title).toBe('来文信息')
   })
 })

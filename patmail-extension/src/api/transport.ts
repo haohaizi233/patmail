@@ -34,6 +34,7 @@ export type EasyOperation =
   | 'noticeRecoveryStatusAnalyse' | 'noticeUpdateHandExcel' | 'noticeDeleteOaByFids'
   | 'noticeGetTzsList' | 'noticeProcessTzsList' | 'noticeGetCpcCertList' | 'noticeDownloadAnalyseCert'
   | 'noticeUploadExcel' | 'noticeUploadCpcChunk' | 'noticeUploadCpcNew' | 'noticeUploadCpcNewGf'
+  | 'noticePublishConfig' | 'noticeUploadProcessDetail'
 
 export interface TransportOptions {
   fetcher?: typeof fetch
@@ -185,7 +186,9 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   noticeUploadExcel: { path: '/AjaxServers/Notice.ashx', call: 'UploadNoticeExcel' },
   noticeUploadCpcChunk: { path: '/Forms/MultiUPload/UploadMethod.ashx', call: '' },
   noticeUploadCpcNew: { path: '/AjaxServers/UploadFile.ashx', call: 'UploadCPCFileNew' },
-  noticeUploadCpcNewGf: { path: '/AjaxServers/UploadFile.ashx', call: 'UploadCPCFileNewGF' }
+  noticeUploadCpcNewGf: { path: '/AjaxServers/UploadFile.ashx', call: 'UploadCPCFileNewGF' },
+  noticePublishConfig: { path: '/AjaxServers/BaseInfo.ashx', call: 'GetPublishConfig' },
+  noticeUploadProcessDetail: { path: '/AjaxServers/UploadFile.ashx', call: 'GetUploadProcessDetailList' }
 }
 
 function loginRedirect(response: Response, origin: string): boolean {
@@ -223,7 +226,8 @@ const SLOW_OPERATIONS = new Set<EasyOperation>([
   'noticeSearch', 'noticeImportList', 'noticeUnProcessTzsList', 'noticeCertList', 'noticeReplayTzsList',
   'noticeHandList', 'noticeHandHisList', 'noticeNolaiutoList', 'noticeHandExcelList',
   'noticeImport', 'noticeImportCloseCase', 'noticeReMatch', 'noticeUpdateCaseName',
-  'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf'
+  'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf',
+  'noticePublishConfig', 'noticeUploadProcessDetail'
 ])
 
 const NON_RETRYABLE_OPERATIONS = new Set<EasyOperation>([

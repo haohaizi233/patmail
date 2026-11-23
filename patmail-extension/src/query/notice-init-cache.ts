@@ -132,6 +132,10 @@ function cloneSnapshot(snapshot: NoticeInitCacheSnapshot): NoticeInitCacheSnapsh
       defaultTzsStartDate: snapshot.initData.defaultTzsStartDate,
       handCount: snapshot.initData.handCount,
       nolaiutoCount: snapshot.initData.nolaiutoCount,
+      ...(typeof snapshot.initData.noticeGfEnabled === 'boolean' ? { noticeGfEnabled: snapshot.initData.noticeGfEnabled } : {}),
+      ...(snapshot.initData.closeCaseRule ? { closeCaseRule: snapshot.initData.closeCaseRule } : {}),
+      ...(snapshot.initData.closeCaseImportNotice ? { closeCaseImportNotice: snapshot.initData.closeCaseImportNotice } : {}),
+      ...(typeof snapshot.initData.sgReduceEnabled === 'boolean' ? { sgReduceEnabled: snapshot.initData.sgReduceEnabled } : {}),
       warnings: []
     },
     userOptions: snapshot.userOptions.map(item => ({ ...item })),
@@ -157,6 +161,12 @@ function sanitizeSnapshot(raw: unknown): NoticeInitCacheSnapshot | null {
       defaultTzsStartDate: date,
       handCount: cleanCount(initRaw.handCount),
       nolaiutoCount: cleanCount(initRaw.nolaiutoCount),
+      ...(typeof initRaw.noticeGfEnabled === 'boolean' ? { noticeGfEnabled: initRaw.noticeGfEnabled } : {}),
+      ...(cleanString(initRaw.closeCaseRule, 40) ? { closeCaseRule: cleanString(initRaw.closeCaseRule, 40) } : {}),
+      ...(cleanString(initRaw.closeCaseImportNotice, 40)
+        ? { closeCaseImportNotice: cleanString(initRaw.closeCaseImportNotice, 40) }
+        : {}),
+      ...(typeof initRaw.sgReduceEnabled === 'boolean' ? { sgReduceEnabled: initRaw.sgReduceEnabled } : {}),
       warnings: []
     },
     userOptions: cleanTreeOptions(raw.userOptions),
@@ -215,6 +225,10 @@ export function mergeNoticeInitData(
     defaultTzsStartDate,
     handCount: options.preserveCounts ? previous.handCount : incoming.handCount,
     nolaiutoCount: options.preserveCounts ? previous.nolaiutoCount : incoming.nolaiutoCount,
+    noticeGfEnabled: incoming.noticeGfEnabled ?? previous.noticeGfEnabled ?? false,
+    closeCaseRule: incoming.closeCaseRule || previous.closeCaseRule || '1',
+    closeCaseImportNotice: incoming.closeCaseImportNotice || previous.closeCaseImportNotice || '0',
+    sgReduceEnabled: incoming.sgReduceEnabled ?? previous.sgReduceEnabled ?? false,
     warnings: []
   }
 

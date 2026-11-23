@@ -38,6 +38,10 @@ export interface NoticeInitData {
   defaultTzsStartDate: string
   handCount: number
   nolaiutoCount: number
+  noticeGfEnabled?: boolean
+  closeCaseRule?: string
+  closeCaseImportNotice?: string
+  sgReduceEnabled?: boolean
   warnings: string[]
 }
 
@@ -180,8 +184,21 @@ export interface NoticeUploadProcessRow {
   process: string
   successNum: string
   failNum: string
+  mergeNum: string
+  totalNum: string
   createTime: string
+  uploader: string
   remark: string
+}
+
+export interface NoticeUploadProcessDetailRow {
+  id: string
+  sn: number
+  fileName: string
+  status: string
+  message: string
+  updateTime: string
+  uploader: string
 }
 
 export type NoticeActionRequest =
@@ -257,7 +274,21 @@ export type NoticeActionRequest =
       xlh?: string[]
     }
   | { action: 'getUploadProcessList'; pageIndex?: number; pageSize?: number }
-  | { action: 'uploadCpcZip'; kind: 'cpc' | 'gf'; fileName: string; mimeType: string; base64: string }
+  | {
+      action: 'getUploadProcessDetailList'
+      recordId: string
+      status?: '-1' | '1' | '2' | '3'
+      pageIndex?: number
+      pageSize?: number
+    }
+  | {
+      action: 'uploadCpcZip'
+      kind: 'cpc' | 'gf'
+      fileName: string
+      mimeType: string
+      base64: string
+      files?: Array<{ fileName: string; mimeType: string; base64: string }>
+    }
   | { action: 'openEasyNoticeTab' }
 
 export interface NoticeActionResult {
@@ -277,6 +308,11 @@ export interface NoticeActionResult {
   isErrorFee?: boolean
   statusRows?: Record<string, unknown>[]
   uploadProcessRows?: NoticeUploadProcessRow[]
+  uploadProcessTotal?: number
+  uploadProcessDetailRows?: NoticeUploadProcessDetailRow[]
+  uploadProcessDetailTotal?: number
+  uploadTips?: string
+  uploadedOaIds?: string
   counts?: {
     handCount?: number
     nolaiutoCount?: number
@@ -288,8 +324,20 @@ export type NoticeExportTab = 'import' | 'download' | 'cert' | 'replay'
 export type NoticeExportRequest =
   | { tab: 'import'; query: NoticeImportQuery; columns?: Array<{ value: string; text: string }>; timeoutMs?: number }
   | { tab: 'download'; query: NoticeDownloadQuery; columns?: Array<{ value: string; text: string }>; timeoutMs?: number }
-  | { tab: 'cert'; query: NoticeCertQuery; columns?: Array<{ value: string; text: string }>; timeoutMs?: number }
-  | { tab: 'replay'; query: NoticeReplayQuery; columns?: Array<{ value: string; text: string }>; timeoutMs?: number }
+  | {
+      tab: 'cert'
+      query: NoticeCertQuery
+      columns?: Array<{ value: string; text: string }>
+      accountLabel?: string
+      timeoutMs?: number
+    }
+  | {
+      tab: 'replay'
+      query: NoticeReplayQuery
+      columns?: Array<{ value: string; text: string }>
+      accountLabel?: string
+      timeoutMs?: number
+    }
 
 export type NoticeExportStatus =
   | 'requested'

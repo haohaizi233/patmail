@@ -2,7 +2,7 @@ import type { FeeSearchQuery } from './fee-search-params'
 
 export type FeeExportMode = 'cond' | 'checked' | 'count'
 
-export type FeeExportBelongKey = 'FeeSearch_ExportByCond' | 'FeeSearch_ExportCountByCond'
+export type FeeExportBelongKey = 'FeeSearch_ExportByCond' | 'FeeSearch_ExportCountByCond' | 'NoticeInfo'
 
 export interface FeeExportColumn {
   value: string

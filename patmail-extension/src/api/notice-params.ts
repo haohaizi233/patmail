@@ -1,4 +1,4 @@
-import { buildExportColumnsXml } from './fee-export'
+import { buildExportColumnsXml, type FeeExportGroup } from './fee-export'
 import { formatWDate } from '../shared/date-defaults'
 import type { EasyOperation } from './transport'
 import type {
@@ -304,6 +304,67 @@ export const NOTICE_DEFAULT_EXPORT_COLUMNS: Record<NoticeExportTab, Array<{ valu
     { value: 'account', text: '账户' },
     { value: 'status', text: '是否导入系统' }
   ]
+}
+
+export type NoticeExportGroup = FeeExportGroup
+
+/** 按原站 notice.js (ExportExcel / GetCPCCertListExport / ExportCPCReplayTzsList / ExportTzsList) 严格构造分组导出栏位 */
+export function buildNoticeExportGroups(tab: NoticeExportTab, importQuery?: NoticeImportQuery): NoticeExportGroup[] {
+  switch (tab) {
+    case 'import': {
+      const caseCols = [
+        { value: 'case_volume', text: '我方文号' },
+        { value: 'case_volume_customer', text: '客户文号' },
+        { value: 'case_name', text: '案件名称' },
+        { value: 'ShenQingH', text: '申请号' },
+        { value: 'app_date', text: '申请日' },
+        { value: 'Examiner', text: '审查员' },
+        { value: 'ExaminerTel', text: '审查员电话' },
+        { value: 'ExaminerDept', text: '审查部门' },
+        { value: 'customer_name', text: '客户名称' },
+        { value: 'customer_code', text: '客户代码' },
+        { value: 'assayer', text: '分析人' },
+        { value: 'customer_status', text: '客户状态' },
+        { value: 'sales', text: '业务员' },
+        { value: 'sales_help', text: '业务助理' },
+        { value: 'introducer', text: '外部案源人' },
+        { value: 'sales_in_depts', text: '业务人员部门' },
+        { value: 'app_area_name', text: '行政区划' },
+        { value: 'upload_time', text: '导入日期' },
+        { value: 'XiaZaiRQ', text: '下载日期' },
+        { value: 'pic', text: '处理人' },
+        { value: 'sales_user', text: '业务人员' },
+        { value: 'is_speed_checkd', text: '是否优先审查' },
+        { value: 'hearing_the_case', text: '是否预审案件' },
+        { value: 'remark', text: '案件备注' },
+        { value: 'apply_tags', text: '专利标签' },
+        ...(importQuery?.agency_id.trim() ? [{ value: 'agency_id', text: '代理机构' }] : []),
+        ...(importQuery?.apply_type.trim() ? [{ value: 'apply_type', text: '申请类型' }] : []),
+        ...(importQuery?.flow_direction.trim() ? [{ value: 'flow_direction', text: '案件流向' }] : []),
+        { value: 'case_status_zh_cn', text: '案件状态' },
+        { value: 'contract_no', text: '合同编号' }
+      ]
+      const fileCols = [
+        { value: 'oa_name', text: '来文名称' },
+        { value: 'oa_code', text: '来文编号' },
+        { value: 'notice_content', text: '来文备注' },
+        { value: 'FaWenRQ', text: '官方发文日' },
+        { value: 'FaWenXLH', text: '发文序列号' }
+      ]
+      const biblioCols = [{ value: 'applicant_name_cn', text: '申请人' }]
+      return [
+        { id: 'case', title: '案件信息', columns: caseCols },
+        { id: 'file', title: '文件信息', columns: fileCols },
+        { id: 'biblio', title: '著录项目', columns: biblioCols }
+      ]
+    }
+    case 'download':
+      return [{ id: 'notice', title: '来文信息', columns: [...NOTICE_DEFAULT_EXPORT_COLUMNS.download] }]
+    case 'cert':
+      return [{ id: 'cert', title: '证书信息', columns: [...NOTICE_DEFAULT_EXPORT_COLUMNS.cert] }]
+    case 'replay':
+      return [{ id: 'replay', title: '来文信息', columns: [...NOTICE_DEFAULT_EXPORT_COLUMNS.replay] }]
+  }
 }
 
 /** 返回本地当天日期（`yyyy-MM-dd`），用于查询表单默认结束日期。 */
