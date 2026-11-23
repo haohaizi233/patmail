@@ -21,5 +21,5 @@ const ready = computed(() => connection.value.sessionStatus === 'authenticated')
     <h2>来文管理</h2>
     <p class="empty">尚未连接 EASY。来文管理会通过已绑定的原网站标签页读取会话并同步下拉与检索数据。</p>
   </section>
-  <NoticeWorkspace v-else :bridge="bridge" />
+  <NoticeWorkspace v-else :bridge="bridge" :user-id="connection.operatorId" />
 </template>

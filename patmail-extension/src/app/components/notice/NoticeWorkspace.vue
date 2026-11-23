@@ -1,7 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import type { NormalizedDictionary } from '../../../api/dictionaries'
-import { choicesFromDictionary } from '../../../api/dictionaries/picker-catalog'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import TreeOptionSelect from '../../../shell/components/TreeOptionSelect.vue'
+import WDatePicker from '../../../shell/components/WDatePicker.vue'
+import {
+  hasCachedNoticeOptions,
+  mergeNoticeInitData,
+  peekNoticeInitCache,
+  readNoticeInitCache,
+  saveNoticeInitCache
+} from '../../../query/notice-init-cache'
 import {
   NOTICE_MAIL_STYLE_OPTIONS,
   NOTICE_TABS,
@@ -22,12 +29,14 @@ import type {
   NoticeCertQuery,
   NoticeDownloadQuery,
   NoticeExportTab,
+  NoticeFileTypeNode,
   NoticeHandExcelQuery,
   NoticeHandHisQuery,
   NoticeHandQuery,
   NoticeImportQuery,
   NoticeInitData,
   NoticeNolaiutoQuery,
+  NoticeOptionItem,
   NoticeReplayQuery,
   NoticeRow,
   NoticeSearchRequest,
@@ -43,14 +52,27 @@ import NoticeResultTable from './NoticeResultTable.vue'
 
 const props = withDefaults(defineProps<{
   bridge?: MessageBridge
+  userId?: string
 }>(), {
-  bridge: undefined
+  bridge: undefined,
+  userId: ''
 })
+
+const cacheUserKey = computed(() => props.userId.trim() || '__default__')
+let initRunSeq = 0
+
+function txt(v: unknown): string {
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  if (typeof v === 'boolean') return v ? '是' : '否'
+  return ''
+}
 
 const activeTab = ref<NoticeTabId>('import')
 const initData = ref<NoticeInitData | null>(null)
 const userOptions = ref<TreeOption[]>([])
 const loadingInit = ref(false)
+const backgroundLoading = ref(false)
 const busyAction = ref('')
 const statusMessage = ref('')
 const statusError = ref('')
@@ -116,11 +138,63 @@ const displayedRows = computed(() => {
   return rows
 })
 
-// Detail modal
+// Detail modal (4 页签可编辑弹窗，对齐 Notice.aspx)
 const detailOpen = ref(false)
+const detailTab = ref<'charge' | 'fee' | 'hebo' | 'duibi'>('charge')
 const detailRow = ref<NoticeRow | null>(null)
-const detailInfo = ref<Record<string, unknown> | null>(null)
+const detailFees = ref<Record<string, unknown>[]>([])
+const detailHebo = ref<Record<string, unknown>[]>([])
+const detailDuibi = ref<Record<string, unknown>[]>([])
 const detailLoading = ref(false)
+const detailSaving = ref(false)
+const detailMessage = ref('')
+const detailEditable = ref(false)
+const detailForm = reactive({
+  oaId: '',
+  importId: '',
+  ctrlProc: '',
+  caseId: '',
+  caseVolume: '',
+  chargeDept: '',
+  picName: '',
+  oaCode: '',
+  oaDate: '',
+  oaTypeId: '',
+  oaTypeName: '',
+  oaDesc: '',
+  intDueDate: '',
+  cusDueDate: '',
+  legalDueDate: '',
+  examiner: '',
+  examinerTel: '',
+  examinerDept: '',
+  issueNo: '',
+  issueDate: '',
+  certificateNo: '',
+  customerName: '',
+  remark: ''
+})
+const caseSearchKeyword = ref('')
+const caseSearchOptions = ref<NoticeOptionItem[]>([])
+const caseSearching = ref(false)
+
+// AppNo file list modal (对齐 NoHandFileList.aspx)
+const appFilesOpen = ref(false)
+const appFilesLoading = ref(false)
+const appFilesBusy = ref(false)
+const appFilesMode = ref<'hand' | 'del'>('hand')
+const appFilesAppNo = ref('')
+const appFilesTargetId = ref('')
+const appFilesRows = ref<NoticeRow[]>([])
+
+const detailFileTypeTreeOptions = computed<TreeOption[]>(() =>
+  (initData.value?.fileTypes ?? []).map(node => ({
+    value: node.id,
+    label: node.name,
+    ...(node.parentId ? { parent: node.parentId } : {}),
+    ...(node.selectable === false ? { selectable: false } : {})
+  }))
+)
 
 // MailCustomer style modal
 const mailStyleModalOpen = ref(false)
@@ -138,48 +212,156 @@ function tabBadge(id: NoticeTabId): string {
   return ''
 }
 
-function readUserTreeFromPicker(dictionaries: Record<string, NormalizedDictionary>): TreeOption[] {
-  const dict = dictionaries.user
-  if (!dict) return []
-  return choicesFromDictionary(dict).map(c => ({
-    value: c.value,
-    label: c.label,
-    ...(c.parent ? { parent: c.parent } : {})
+function mapUsersToTree(nodes: readonly NoticeFileTypeNode[]): TreeOption[] {
+  return nodes.map(node => ({
+    value: node.id,
+    label: node.name,
+    ...(node.parentId ? { parent: node.parentId } : {}),
+    ...(node.selectable === false ? { selectable: false } : {})
   }))
 }
 
-async function loadInit(force = false): Promise<void> {
+function createEmptyInitData(): NoticeInitData {
+  return {
+    applyTypes: [],
+    agencies: [],
+    directions: [],
+    applyTags: [],
+    branches: [],
+    countries: [],
+    fileTypes: [],
+    users: [],
+    cpcAccounts: [],
+    defaultTzsStartDate: '2023-01-01',
+    handCount: 0,
+    nolaiutoCount: 0,
+    warnings: []
+  }
+}
+
+function applyInitDefaults(data: NoticeInitData): void {
+  if (!queries.download.startTime && data.defaultTzsStartDate) {
+    queries.download.startTime = data.defaultTzsStartDate
+  }
+  if (!queries.replay.account && data.cpcAccounts.length > 0) {
+    queries.replay.account = data.cpcAccounts[0].value
+  }
+}
+
+function persistNoticeCache(): void {
+  if (!initData.value) return
+  void saveNoticeInitCache(cacheUserKey.value, {
+    initData: initData.value,
+    userOptions: userOptions.value
+  })
+}
+
+async function refreshCountsSilently(seq = initRunSeq): Promise<void> {
   if (!props.bridge) return
-  loadingInit.value = true
   try {
-    const [initResp, pickerResp] = await Promise.all([
-      props.bridge.request({ type: MessageType.LoadNoticeInit }),
-      props.bridge.request({ type: MessageType.LoadDictionary, payload: { kind: 'picker', force } })
-    ])
+    const resp = await props.bridge.request({
+      type: MessageType.NoticeAction,
+      payload: { action: 'refreshCounts' }
+    })
+    if (seq !== initRunSeq) return
+    if (
+      resp.type === MessageType.NoticeActionResult &&
+      resp.payload.ok &&
+      resp.payload.data.counts
+    ) {
+      const target = initData.value ?? createEmptyInitData()
+      const { handCount, nolaiutoCount } = resp.payload.data.counts
+      initData.value = {
+        ...target,
+        handCount: typeof handCount === 'number' ? handCount : target.handCount,
+        nolaiutoCount: typeof nolaiutoCount === 'number' ? nolaiutoCount : target.nolaiutoCount
+      }
+      persistNoticeCache()
+    }
+  } catch {
+    // 后台静默更新计数失败时不打扰当前操作
+  }
+}
+
+async function loadInit(options: { silent?: boolean } = {}): Promise<void> {
+  if (!props.bridge) return
+  const { silent = false } = options
+  const seq = initRunSeq
+  const userKey = cacheUserKey.value
+  const hadCachedBefore = hasCachedNoticeOptions(initData.value) || userOptions.value.length > 0
+  if (!silent) loadingInit.value = true
+  try {
+    const initResp = await props.bridge.request({ type: MessageType.LoadNoticeInit })
+    if (seq !== initRunSeq || userKey !== cacheUserKey.value) return
+
     if (initResp.type === MessageType.LoadNoticeInitResult && initResp.payload.ok) {
-      initData.value = initResp.payload.data
-      if (!queries.download.startTime && initResp.payload.data.defaultTzsStartDate) {
-        queries.download.startTime = initResp.payload.data.defaultTzsStartDate
+      const merged = mergeNoticeInitData(initData.value, initResp.payload.data, {
+        preserveCounts: true,
+        silent: silent || hadCachedBefore
+      })
+      initData.value = merged
+      if (merged.users.length > 0) {
+        userOptions.value = mapUsersToTree(merged.users)
       }
-      if (!queries.replay.account && initResp.payload.data.cpcAccounts.length > 0) {
-        queries.replay.account = initResp.payload.data.cpcAccounts[0].value
+      applyInitDefaults(merged)
+      persistNoticeCache()
+    } else if (!silent && !hadCachedBefore) {
+      if (initResp.type === MessageType.LoadNoticeInitResult && !initResp.payload.ok) {
+        statusError.value = initResp.payload.error.message
+      } else if (initResp.type === MessageType.Error) {
+        statusError.value = initResp.payload.message
       }
-    } else if (initResp.type === MessageType.LoadNoticeInitResult && !initResp.payload.ok) {
-      statusError.value = initResp.payload.error.message
-    } else if (initResp.type === MessageType.Error) {
-      statusError.value = initResp.payload.message
     }
 
-    if (
-      pickerResp.type === MessageType.DictionaryResult &&
-      pickerResp.payload.ok &&
-      pickerResp.payload.data.kind === 'picker'
-    ) {
-      userOptions.value = readUserTreeFromPicker(pickerResp.payload.data.dictionaries)
+    if (!silent) {
+      await refreshCountsSilently(seq)
     }
   } finally {
-    loadingInit.value = false
+    if (!silent) loadingInit.value = false
   }
+}
+
+async function bootstrapWorkspace(): Promise<void> {
+  const seq = (initRunSeq += 1)
+  const userKey = cacheUserKey.value
+  const memHit = peekNoticeInitCache(userKey)
+  const cached = memHit ?? (await readNoticeInitCache(userKey))
+  if (seq !== initRunSeq) return
+
+  if (cached && hasCachedNoticeOptions(cached.initData)) {
+    initData.value = cached.initData
+    userOptions.value = cached.initData.users.length > 0 ? mapUsersToTree(cached.initData.users) : cached.userOptions
+    applyInitDefaults(cached.initData)
+
+    await runSearch('import', false)
+    if (seq !== initRunSeq) return
+
+    backgroundLoading.value = true
+    void (async () => {
+      try {
+        await loadInit({ silent: true })
+        if (seq !== initRunSeq) return
+        await refreshCountsSilently(seq)
+      } finally {
+        if (seq === initRunSeq) backgroundLoading.value = false
+      }
+    })()
+    return
+  }
+
+  // 首次无缓存冷启动：先完成已错峰的轻量字典加载（约 1 秒）填满下拉并写入缓存，再拉首屏表格与慢计数。
+  initData.value = null
+  userOptions.value = []
+  backgroundLoading.value = true
+  try {
+    await loadInit({ silent: true })
+  } finally {
+    if (seq === initRunSeq) backgroundLoading.value = false
+  }
+  if (seq !== initRunSeq) return
+  await runSearch('import', false)
+  if (seq !== initRunSeq) return
+  void refreshCountsSilently(seq)
 }
 
 function buildSearchRequest(tab: NoticeTabId): NoticeSearchRequest {
@@ -314,9 +496,14 @@ async function sendAction(req: NoticeActionRequest): Promise<NoticeActionResult 
     return null
   }
   const result = resp.payload.data
-  if (result.counts && initData.value) {
-    if (typeof result.counts.handCount === 'number') initData.value.handCount = result.counts.handCount
-    if (typeof result.counts.nolaiutoCount === 'number') initData.value.nolaiutoCount = result.counts.nolaiutoCount
+  if (result.counts) {
+    const target = initData.value ?? createEmptyInitData()
+    initData.value = {
+      ...target,
+      handCount: typeof result.counts.handCount === 'number' ? result.counts.handCount : target.handCount,
+      nolaiutoCount: typeof result.counts.nolaiutoCount === 'number' ? result.counts.nolaiutoCount : target.nolaiutoCount
+    }
+    persistNoticeCache()
   }
   return result
 }
@@ -902,23 +1089,169 @@ async function handleCpcZipUpload(kind: 'cpc' | 'gf', file: File): Promise<void>
   }
 }
 
+function resetDetailForm(row: NoticeRow, detail: Record<string, unknown> | null): void {
+  const src = detail ?? row
+  detailForm.oaId = txt(src.oa_id || row.oa_id)
+  detailForm.importId = txt(src.import_id)
+  detailForm.ctrlProc = txt(src.ctrl_proc_zh_cn || src.ctrl_proc || row.ctrl_proc)
+  detailForm.caseId = txt(src.case_id || row.case_id)
+  detailForm.caseVolume = txt(src.case_volume || row.case_volume)
+  detailForm.chargeDept = txt(src.dept_name)
+  detailForm.picName = txt(src.i_cn_name || src.f_cn_name || src.cn_name || row.pic)
+  detailForm.oaCode = txt(src.oa_code || row.oa_code || row.file_desc_code)
+  detailForm.oaDate = txt(src.FaWenRQ || row.FaWenRQ)
+  detailForm.oaTypeId = txt(src.oa_type_id)
+  detailForm.oaTypeName = txt(src.oa_name || row.oa_name)
+  detailForm.oaDesc = txt(src.notice_Content || row.remark)
+  detailForm.intDueDate = txt(src.i_int_due_date || src.int_due_date)
+  detailForm.cusDueDate = txt(src.i_cus_due_date || src.cus_due_date)
+  detailForm.legalDueDate = txt(src.i_legal_due_date || src.legal_due_date)
+  detailForm.examiner = txt(src.Examiner)
+  detailForm.examinerTel = txt(src.ExaminerTel)
+  detailForm.examinerDept = txt(src.ExaminerDept)
+  detailForm.issueNo = txt(src.issue_no || row.issue_no)
+  detailForm.issueDate = txt(src.issue_date || row.issue_date)
+  detailForm.certificateNo = txt(src.certificate_no || row.certificate_no)
+  detailForm.customerName = txt(src.customer_name || row.customer_name)
+  detailForm.remark = txt(src.remark || row.remark)
+}
+
 async function inspectRow(row: NoticeRow): Promise<void> {
   detailRow.value = row
-  detailInfo.value = null
+  detailTab.value = 'charge'
+  detailFees.value = []
+  detailHebo.value = []
+  detailDuibi.value = []
+  detailMessage.value = ''
+  caseSearchKeyword.value = ''
+  caseSearchOptions.value = []
+  const ps = row.process_status
+  detailEditable.value =
+    (activeTab.value === 'import' && queries.import.status === '0') &&
+    (ps === '0' || ps === 0 || ps === undefined || ps === null || ps === '')
+  resetDetailForm(row, null)
   detailOpen.value = true
-  const oaId = typeof row.oa_id === 'string' ? row.oa_id.trim() : ''
+
+  const oaId = txt(row.oa_id).trim()
   if (!oaId) return
   detailLoading.value = true
   try {
     const res = await sendAction({
       action: 'getNoticeDetail',
       oaId,
-      ctrlProcId: typeof row.ctrl_proc_id === 'string' ? row.ctrl_proc_id : ''
+      ctrlProcId: txt(row.ctrl_proc_id)
     })
-    if (res?.detail) detailInfo.value = res.detail
+    if (res) {
+      if (res.detail) resetDetailForm(row, res.detail)
+      detailFees.value = res.detailFees ?? []
+      detailHebo.value = res.detailHebo ?? []
+      detailDuibi.value = res.detailDuibi ?? []
+    }
   } finally {
     detailLoading.value = false
   }
+}
+
+async function searchDetailCases(): Promise<void> {
+  const kw = caseSearchKeyword.value.trim() || detailForm.caseVolume.trim()
+  if (!kw) return
+  caseSearching.value = true
+  try {
+    const res = await sendAction({ action: 'searchNoticeCases', keyword: kw })
+    caseSearchOptions.value = res?.caseOptions ?? []
+  } finally {
+    caseSearching.value = false
+  }
+}
+
+async function pickDetailCase(opt: NoticeOptionItem): Promise<void> {
+  detailForm.caseId = opt.value
+  detailForm.caseVolume = opt.label
+  caseSearchOptions.value = []
+  const meta = await sendAction({ action: 'getCaseMeta', caseId: opt.value })
+  if (meta?.chargeDept) detailForm.chargeDept = meta.chargeDept
+}
+
+async function saveDetail(): Promise<void> {
+  if (!detailForm.caseId.trim()) {
+    detailMessage.value = '请先检索并关联我方文号对应的案件。'
+    return
+  }
+  detailSaving.value = true
+  detailMessage.value = ''
+  try {
+    const res = await sendAction({
+      action: 'saveNoticeDetail',
+      oaId: detailForm.oaId,
+      importId: detailForm.importId,
+      oaDate: detailForm.oaDate,
+      oaTypeId: detailForm.oaTypeId,
+      caseId: detailForm.caseId,
+      issueNo: detailForm.issueNo,
+      issueDate: detailForm.issueDate,
+      certificateNo: detailForm.certificateNo
+    })
+    if (res?.ok) {
+      detailMessage.value = res.message
+      await runSearch(activeTab.value, false)
+    } else if (res) {
+      detailMessage.value = res.message
+    }
+  } finally {
+    detailSaving.value = false
+  }
+}
+
+async function openAppNoFiles(row: NoticeRow): Promise<void> {
+  const appNo = txt(row.ShenQingH || row.zhuanlisqh).trim()
+  if (!appNo) return
+  appFilesMode.value = activeTab.value === 'download' ? 'del' : 'hand'
+  appFilesAppNo.value = appNo
+  appFilesTargetId.value = activeTab.value === 'download' ? txt(row.fid).trim() : txt(row.oa_id).trim()
+  appFilesRows.value = []
+  appFilesOpen.value = true
+  appFilesLoading.value = true
+  try {
+    const res = await sendAction({ action: 'getAppNoFiles', appNo })
+    appFilesRows.value = res?.caseFiles ?? []
+  } finally {
+    appFilesLoading.value = false
+  }
+}
+
+async function handleAppFileAction(): Promise<void> {
+  if (!appFilesTargetId.value) return
+  const isDel = appFilesMode.value === 'del'
+  const ok = await confirmDialog({
+    title: isDel ? '删除确认' : '更新状态确认',
+    warn: isDel,
+    confirmLabel: isDel ? '确定删除' : '确定标记',
+    cancelLabel: '取消',
+    message: isDel
+      ? '确定删除该通知书文件吗？删除后如需重新下载请前往「来文二次下载」操作。'
+      : '确定标记此异常通知书为已处理吗？'
+  })
+  if (!ok) return
+  appFilesBusy.value = true
+  try {
+    const res = isDel
+      ? await sendAction({ action: 'deleteDownloadOa', fids: [appFilesTargetId.value] })
+      : await sendAction({ action: 'updateProcessStatus', oaIds: [appFilesTargetId.value] })
+    if (res?.ok) {
+      statusMessage.value = res.message
+      appFilesOpen.value = false
+      await runSearch(activeTab.value, false)
+    } else if (res) {
+      statusError.value = res.message
+    }
+  } finally {
+    appFilesBusy.value = false
+  }
+}
+
+function onImportStatusChange(): void {
+  tableStates.import.selectedKeys = []
+  void runSearch('import', true)
 }
 
 function patchQuery(targetTab: NoticeTabId, key: string, value: string | boolean): void {
@@ -928,9 +1261,12 @@ function patchQuery(targetTab: NoticeTabId, key: string, value: string | boolean
   }
 }
 
-onMounted(async () => {
-  await loadInit(false)
-  await runSearch('import', false)
+watch(() => props.userId, (next, prev) => {
+  if (next !== prev) void bootstrapWorkspace()
+})
+
+onMounted(() => {
+  void bootstrapWorkspace()
 })
 </script>
 
@@ -962,6 +1298,7 @@ onMounted(async () => {
       :tab="activeTab"
       :init-data="initData"
       :user-options="userOptions"
+      :background-loading="backgroundLoading"
       :loading-init="loadingInit"
       :loading-search="currentState.loading"
       :uploading-excel="busyAction === 'uploadExcel'"
@@ -975,8 +1312,9 @@ onMounted(async () => {
       :hand-excel-query="queries.handExcel"
       @search="runSearch(activeTab, true)"
       @reset="resetTabQuery"
-      @refresh-init="loadInit(true)"
+      @refresh-init="loadInit({ silent: false })"
       @upload-excel="handleExcelUpload"
+      @status-change="onImportStatusChange"
       @patch-query="patchQuery"
     />
 
@@ -989,8 +1327,14 @@ onMounted(async () => {
       @upload-cpc="handleCpcZipUpload"
     />
 
+    <div v-if="activeTab === 'import'" class="card notice-import-tips">
+      <p>1. 查询栏位中案件名称标记为<span class="notice-tip-red">红色</span>的代表通知书中的发明名称与实际系统中的案件名称不一致。</p>
+      <p>2. 案件名称中<span class="notice-tip-blue">蓝色背景</span>代表该通知书匹配到多个申请号案件，系统匹配到其中一个；导入通知书时请留意；已经结案的案件导入时不再产生新任务，只会导入文件。</p>
+    </div>
+
     <NoticeResultTable
       :tab="activeTab"
+      :import-status="queries.import.status"
       :rows="displayedRows"
       :total="currentState.total"
       :page-index="currentQuery.pageIndex"
@@ -1003,28 +1347,285 @@ onMounted(async () => {
       @page-change="onPageChange"
       @size-change="onSizeChange"
       @inspect="inspectRow"
+      @inspect-app-no="openAppNoFiles"
       @open-easy="triggerAction('openEasyTab')"
     />
 
     <div v-if="detailOpen" class="mask app-dialog" @click.self="detailOpen = false">
-      <div class="dialog with-table">
+      <div class="dialog with-table notice-detail-dialog">
         <header>
-          <h3>来文详情</h3>
+          <h3>来文详细信息{{ detailEditable ? '（可编辑关联案件与来文信息）' : '' }}</h3>
           <button type="button" aria-label="关闭" @click="detailOpen = false">×</button>
         </header>
-        <p v-if="detailLoading" class="hint">正在读取原站来文详情…</p>
-        <div class="dialog-table notice-detail-scroll">
+
+        <div class="tabs notice-detail-tabs" role="tablist">
+          <button type="button" :class="{ on: detailTab === 'charge' }" @click="detailTab = 'charge'">处理信息</button>
+          <button type="button" :class="{ on: detailTab === 'fee' }" @click="detailTab = 'fee'">官费信息 ({{ detailFees.length }})</button>
+          <button type="button" :class="{ on: detailTab === 'hebo' }" @click="detailTab = 'hebo'">核驳信息 ({{ detailHebo.length }})</button>
+          <button type="button" :class="{ on: detailTab === 'duibi' }" @click="detailTab = 'duibi'">对比文件 ({{ detailDuibi.length }})</button>
+        </div>
+
+        <p v-if="detailLoading" class="hint">正在读取原站来文详情与关联信息…</p>
+        <p v-if="detailMessage" class="notice-status-inline-ok">{{ detailMessage }}</p>
+
+        <div v-if="detailTab === 'charge'" class="notice-detail-scroll">
+          <div class="notice-form-2col notice-detail-grid">
+            <label class="notice-field">
+              <span class="notice-field-label">处理事项</span>
+              <input :value="detailForm.ctrlProc" type="text" disabled />
+            </label>
+            <div class="notice-field">
+              <span class="notice-field-label">我方文号</span>
+              <div v-if="detailEditable" class="notice-case-picker">
+                <div class="notice-inline-pair">
+                  <input
+                    v-model="caseSearchKeyword"
+                    type="text"
+                    :placeholder="detailForm.caseVolume || '输入我方文号关键词搜索关联'"
+                    @keydown.enter.prevent="searchDetailCases"
+                  />
+                  <button type="button" class="ghost" :disabled="caseSearching" @click="searchDetailCases">
+                    {{ caseSearching ? '检索中…' : '查找案件' }}
+                  </button>
+                </div>
+                <small v-if="detailForm.caseVolume" class="notice-picked-case">当前关联：{{ detailForm.caseVolume }}</small>
+                <div v-if="caseSearchOptions.length > 0" class="notice-case-dropdown">
+                  <button
+                    v-for="opt in caseSearchOptions"
+                    :key="opt.value"
+                    type="button"
+                    class="notice-case-option"
+                    @click="pickDetailCase(opt)"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+              <input v-else :value="detailForm.caseVolume" type="text" disabled />
+            </div>
+
+            <label class="notice-field">
+              <span class="notice-field-label">承办部门</span>
+              <input :value="detailForm.chargeDept" type="text" disabled />
+            </label>
+            <label class="notice-field">
+              <span class="notice-field-label">处理人</span>
+              <input :value="detailForm.picName" type="text" disabled />
+            </label>
+
+            <label class="notice-field">
+              <span class="notice-field-label">来文编号</span>
+              <input :value="detailForm.oaCode" type="text" disabled />
+            </label>
+            <label class="notice-field">
+              <span class="notice-field-label">官方发文日</span>
+              <WDatePicker v-model="detailForm.oaDate" :disabled="!detailEditable" placeholder="选择发文日" />
+            </label>
+
+            <div class="notice-field">
+              <span class="notice-field-label">来文名称</span>
+              <TreeOptionSelect
+                v-if="detailEditable && detailFileTypeTreeOptions.length > 0"
+                :model-value="detailForm.oaTypeId"
+                :options="detailFileTypeTreeOptions"
+                :multiple="false"
+                empty-text="暂无来文类型"
+                @update:model-value="detailForm.oaTypeId = $event"
+              />
+              <input v-else :value="detailForm.oaTypeName" type="text" disabled />
+            </div>
+            <label class="notice-field">
+              <span class="notice-field-label">来文备注</span>
+              <input :value="detailForm.oaDesc" type="text" disabled />
+            </label>
+
+            <label class="notice-field">
+              <span class="notice-field-label">内部期限</span>
+              <input :value="detailForm.intDueDate" type="text" disabled />
+            </label>
+            <label class="notice-field">
+              <span class="notice-field-label">客户期限</span>
+              <input :value="detailForm.cusDueDate" type="text" disabled />
+            </label>
+
+            <label class="notice-field">
+              <span class="notice-field-label">官方期限</span>
+              <input :value="detailForm.legalDueDate" type="text" disabled />
+            </label>
+            <label class="notice-field">
+              <span class="notice-field-label">审查员</span>
+              <input :value="detailForm.examiner" type="text" disabled />
+            </label>
+
+            <label class="notice-field">
+              <span class="notice-field-label">审查员电话</span>
+              <input :value="detailForm.examinerTel" type="text" disabled />
+            </label>
+            <label class="notice-field">
+              <span class="notice-field-label">审查部门</span>
+              <input :value="detailForm.examinerDept" type="text" disabled />
+            </label>
+
+            <label class="notice-field">
+              <span class="notice-field-label">公告号</span>
+              <input v-model="detailForm.issueNo" type="text" :disabled="!detailEditable" />
+            </label>
+            <label class="notice-field">
+              <span class="notice-field-label">公告日</span>
+              <WDatePicker v-model="detailForm.issueDate" :disabled="!detailEditable" placeholder="选择公告日" />
+            </label>
+
+            <label class="notice-field">
+              <span class="notice-field-label">证书号</span>
+              <input v-model="detailForm.certificateNo" type="text" :disabled="!detailEditable" />
+            </label>
+            <label class="notice-field">
+              <span class="notice-field-label">客户名称</span>
+              <input :value="detailForm.customerName" type="text" disabled />
+            </label>
+          </div>
+        </div>
+
+        <div v-else-if="detailTab === 'fee'" class="dialog-table notice-detail-scroll">
           <table>
+            <thead>
+              <tr>
+                <th>序号</th>
+                <th>费用类型</th>
+                <th>费用子类</th>
+                <th>费用</th>
+                <th>费用期限</th>
+                <th>备注</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr v-for="[k, v] in Object.entries(detailInfo ?? detailRow ?? {})" :key="k">
-                <th style="width: 180px">{{ k }}</th>
-                <td>{{ v == null ? '' : String(v) }}</td>
+              <tr v-if="detailFees.length === 0">
+                <td colspan="6">暂无官费信息</td>
+              </tr>
+              <tr v-for="(item, i) in detailFees" :key="txt(item.oa_fee_id) || i">
+                <td>{{ txt(item.sn) || i + 1 }}</td>
+                <td>{{ txt(item.fee_type) }}</td>
+                <td>{{ txt(item.fee_sub_type) }}</td>
+                <td>{{ txt(item.amount) }}</td>
+                <td>{{ txt(item.legal_due_date) }}</td>
+                <td>{{ txt(item.description) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-else-if="detailTab === 'hebo'" class="notice-detail-scroll">
+          <div class="dialog-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>权利要求项</th>
+                  <th>引用法条</th>
+                  <th>审查结果</th>
+                  <th>审查类型</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="detailHebo.length === 0">
+                  <td colspan="4">暂无核驳明细</td>
+                </tr>
+                <tr v-for="(item, i) in detailHebo" :key="txt(item.reject_id) || i">
+                  <td>{{ txt(item.reject_claims) }}</td>
+                  <td>{{ txt(item.reject_law) }}</td>
+                  <td>{{ txt(item.reject_file) }}</td>
+                  <td>{{ txt(item.review_type) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <label class="notice-field">
+            <span class="notice-field-label">审查结论</span>
+            <textarea :value="detailForm.remark" rows="3" disabled class="notice-textarea" />
+          </label>
+        </div>
+
+        <div v-else class="dialog-table notice-detail-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>国别</th>
+                <th>对比文件号</th>
+                <th>公开日期</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="detailDuibi.length === 0">
+                <td colspan="3">暂无对比文件</td>
+              </tr>
+              <tr v-for="(item, i) in detailDuibi" :key="txt(item.oa_ids_id) || i">
+                <td>{{ txt(item.country) }}</td>
+                <td>{{ txt(item.file_no) }}</td>
+                <td>{{ txt(item.pub_date) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <footer>
+          <button type="button" class="ghost" @click="detailOpen = false">取消</button>
+          <button
+            v-if="detailEditable && detailTab === 'charge'"
+            type="button"
+            class="solid"
+            :disabled="detailSaving"
+            @click="saveDetail"
+          >
+            {{ detailSaving ? '保存中…' : '保存修改' }}
+          </button>
+        </footer>
+      </div>
+    </div>
+
+    <div v-if="appFilesOpen" class="mask app-dialog" @click.self="appFilesOpen = false">
+      <div class="dialog with-table">
+        <header>
+          <h3>案件官文列表（申请号：{{ appFilesAppNo }}）</h3>
+          <button type="button" aria-label="关闭" @click="appFilesOpen = false">×</button>
+        </header>
+        <p v-if="appFilesLoading" class="hint">正在加载该申请号下已有官文记录…</p>
+        <div class="dialog-table">
+          <table>
+            <thead>
+              <tr>
+                <th>附件名称</th>
+                <th>文件类型</th>
+                <th>文件描述</th>
+                <th>官方发文日</th>
+                <th>上传者</th>
+                <th>上传日期</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!appFilesLoading && appFilesRows.length === 0">
+                <td colspan="6">该申请号下暂无已入库官文记录</td>
+              </tr>
+              <tr v-for="(item, i) in appFilesRows" :key="txt(item.file_id) || i">
+                <td>{{ txt(item.file_name) }}</td>
+                <td>{{ txt(item.file_type) }}</td>
+                <td>{{ txt(item.file_desc) }}</td>
+                <td>{{ txt(item.post_date) }}</td>
+                <td>{{ txt(item.cn_name) }}</td>
+                <td>{{ txt(item.upload_time) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
         <footer>
-          <button type="button" class="solid" @click="detailOpen = false">关闭</button>
+          <button type="button" class="ghost" @click="appFilesOpen = false">关闭</button>
+          <button
+            v-if="appFilesTargetId"
+            type="button"
+            class="solid"
+            :disabled="appFilesBusy"
+            @click="handleAppFileAction"
+          >
+            {{ appFilesMode === 'del' ? '删除该通知书' : '标记此通知书为已处理' }}
+          </button>
         </footer>
       </div>
     </div>

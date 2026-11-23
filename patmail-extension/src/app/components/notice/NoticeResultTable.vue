@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import ThemeSelect from '../../../shell/components/ThemeSelect.vue'
-import { NOTICE_TABLE_COLUMNS, noticeRowKey } from '../../../api/notice-params'
+import {
+  NOTICE_IMPORT_COMPLETED_COLUMNS,
+  NOTICE_TABLE_COLUMNS,
+  formatCertProcessStatus,
+  formatDownloadProcessStatus,
+  noticeRowKey
+} from '../../../api/notice-params'
 import type { NoticeRow, NoticeTabId } from '../../../api/notice-types'
 
 const props = withDefaults(defineProps<{
   tab: NoticeTabId
+  importStatus?: '0' | '1'
   rows: NoticeRow[]
   total: number
   pageIndex: number
@@ -15,6 +22,7 @@ const props = withDefaults(defineProps<{
   needCpcLogin?: boolean
   loginMessage?: string
 }>(), {
+  importStatus: '0',
   needCpcLogin: false,
   loginMessage: ''
 })
@@ -24,6 +32,7 @@ const emit = defineEmits<{
   'page-change': [pageIndex: number]
   'size-change': [pageSize: number]
   inspect: [row: NoticeRow]
+  'inspect-app-no': [row: NoticeRow]
   openEasy: []
 }>()
 
@@ -34,7 +43,12 @@ const PAGE_SIZE_OPTIONS = [
   { value: 200, label: '200 条/页' }
 ]
 
-const columns = computed(() => NOTICE_TABLE_COLUMNS[props.tab])
+const columns = computed(() =>
+  props.tab === 'import' && props.importStatus === '1'
+    ? NOTICE_IMPORT_COMPLETED_COLUMNS
+    : NOTICE_TABLE_COLUMNS[props.tab]
+)
+const hasClickableAppNo = computed(() => columns.value.some(c => Boolean(c.clickableAppNo)))
 const totalPages = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1, props.pageSize))))
 const selectedSet = computed(() => new Set(props.selectedKeys))
 const pageKeys = computed(() => props.rows.map(row => noticeRowKey(props.tab, row)).filter(Boolean))
@@ -67,38 +81,47 @@ function formatCell(row: NoticeRow, key: string): string {
     if (raw === false || raw === 0 || raw === '0') return '未处理'
   }
   if (props.tab === 'download' && key === 'status') {
-    const val = String(raw ?? '')
-    if (val === 'processing') return '处理中…'
-    if (val === 'fail') return String(row.remark || '解析失败')
-    if (val === 'finish' || val === 'process') return '解析完成'
-    if (val === 'unprocess' || val === '') return '待下载'
-    return val
+    return formatDownloadProcessStatus(raw, row.remark).text
   }
   if (props.tab === 'cert' && key === 'status') {
-    const val = String(raw ?? '')
-    if (val === '1') return '待下载'
-    if (val === '2') return '已下载'
-    if (val === 'finish') return '解析完成'
-    return val || String(row.remark || '状态异常')
+    return formatCertProcessStatus(raw, row.remark).text
   }
   if (props.tab === 'replay' && key === 'status') {
-    const val = String(raw ?? '')
-    if (val === 'fail') return String(row.remark || '分析失败')
+    const val = typeof raw === 'string' ? raw.trim() : ''
+    if (val === 'fail') return typeof row.remark === 'string' && row.remark ? row.remark : '分析失败'
     if (val === 'finish' || val === 'success') return '分析成功'
     return val || '未处理'
   }
   if (raw === null || raw === undefined) return ''
   if (typeof raw === 'boolean') return raw ? '是' : '否'
-  return String(raw)
+  if (typeof raw === 'string' || typeof raw === 'number') return String(raw)
+  return ''
 }
 
 function isRedCaseName(row: NoticeRow, key: string): boolean {
-  return props.tab === 'import' && key === 'case_name' && row.is_checkname === false
+  if (props.tab !== 'import' || key !== 'case_name') return false
+  return row.is_checkname === false || row.is_checkname === 0 || row.is_checkname === '0'
+}
+
+function isMultiCaseCell(row: NoticeRow, key: string): boolean {
+  return props.tab === 'import' && key === 'case_name' && Boolean(row.is_multi_case)
+}
+
+function isRedErrorCell(row: NoticeRow, key: string): boolean {
+  return key === 'oa_error_msg' && typeof row.oa_error_msg === 'string' && row.oa_error_msg.trim().length > 0
 }
 
 function statusClass(row: NoticeRow, key: string): string {
+  if (props.tab === 'download' && key === 'status') {
+    const tone = formatDownloadProcessStatus(row.status, row.remark).tone
+    return tone === 'ok' ? 'status 已完成' : tone === 'warn' ? 'status 执行中' : tone === 'fail' ? 'status 失败' : ''
+  }
+  if (props.tab === 'cert' && key === 'status') {
+    const tone = formatCertProcessStatus(row.status, row.remark).tone
+    return tone === 'ok' ? 'status 已完成' : tone === 'warn' ? 'status 执行中' : tone === 'fail' ? 'status 失败' : ''
+  }
   if (key !== 'status' && key !== 'oa_error_msg' && key !== 'is_handle') return ''
-  const val = String(row[key] ?? '')
+  const val = typeof row[key] === 'string' || typeof row[key] === 'number' ? String(row[key]) : ''
   if (val === 'fail' || (key === 'oa_error_msg' && val.trim().length > 0)) return 'status 失败'
   if (val === 'finish' || val === 'process' || val === 'success' || val === '2' || row[key] === true) return 'status 已完成'
   if (val === 'processing' || val === '1') return 'status 执行中'
@@ -163,7 +186,10 @@ function canInspectRow(row: NoticeRow): boolean {
             <td
               v-for="col in columns"
               :key="col.key"
-              :class="{ 'volume-corrected': isRedCaseName(row, col.key) }"
+              :class="{
+                'volume-corrected': isRedCaseName(row, col.key) || isRedErrorCell(row, col.key),
+                'is-multi-case': isMultiCaseCell(row, col.key)
+              }"
             >
               <button
                 v-if="col.clickable && canInspectRow(row)"
@@ -173,6 +199,15 @@ function canInspectRow(row: NoticeRow): boolean {
                 @click="emit('inspect', row)"
               >
                 {{ formatCell(row, col.key) || '查看' }}
+              </button>
+              <button
+                v-else-if="col.clickableAppNo && formatCell(row, col.key)"
+                type="button"
+                class="go clip"
+                v-hint="'查看案件已有官文列表'"
+                @click="emit('inspect-app-no', row)"
+              >
+                {{ formatCell(row, col.key) }}
               </button>
               <span
                 v-else
@@ -184,7 +219,23 @@ function canInspectRow(row: NoticeRow): boolean {
               </span>
             </td>
             <td>
-              <button type="button" class="go" @click="emit('inspect', row)">详情</button>
+              <button
+                v-if="canInspectRow(row)"
+                type="button"
+                class="go"
+                @click="emit('inspect', row)"
+              >
+                {{ tab === 'import' && importStatus === '0' ? '编辑' : '详情' }}
+              </button>
+              <button
+                v-else-if="hasClickableAppNo && (row.ShenQingH || row.zhuanlisqh)"
+                type="button"
+                class="go"
+                @click="emit('inspect-app-no', row)"
+              >
+                查看
+              </button>
+              <span v-else class="notice-muted">—</span>
             </td>
           </tr>
         </tbody>

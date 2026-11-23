@@ -21,6 +21,11 @@ const emit = defineEmits(['navigate', 'settings', 'preview', 'mode'])
 const menu = computed(() => props.items || nav)
 const expanded = ref(false)
 const isQueryPage = computed(() => menu.value.some(item => item.children?.some(child => child.name === props.page)))
+const ICON_CROP = {
+  44: { viewBox: '259 282 670 670', size: 1254 },
+  45: { viewBox: '167 148 910 910', size: 1254 },
+  46: { viewBox: '139 138 744 744', size: 1024 }
+}
 </script>
 
 <template>
@@ -46,7 +51,7 @@ const isQueryPage = computed(() => menu.value.some(item => item.children?.some(c
         <nav>
           <div v-for="item in menu" :key="item.name" class="nav-entry">
           <button :class="{ active: page === item.name || (item.children && isQueryPage) }" :aria-expanded="item.children ? expanded : undefined" @click="item.children ? expanded = !expanded : emit('navigate', item.name)">
-            <svg v-if="item.icon === 44 || item.icon === 45" class="nav-icon" :viewBox="item.icon === 44 ? '259 282 670 670' : '167 148 910 910'" aria-hidden="true"><image :href="icon(item.icon)" width="1254" height="1254" /></svg>
+            <svg v-if="ICON_CROP[item.icon]" class="nav-icon" :viewBox="ICON_CROP[item.icon].viewBox" aria-hidden="true"><image :href="icon(item.icon)" :width="ICON_CROP[item.icon].size" :height="ICON_CROP[item.icon].size" /></svg>
             <img v-else-if="item.icon" class="nav-icon" :src="icon(item.icon)" alt="" />
             <svg v-else-if="item.path === 'home'" viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
             <svg v-else-if="item.path === 'task'" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 9h8M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -62,7 +67,7 @@ const isQueryPage = computed(() => menu.value.some(item => item.children?.some(c
           </button>
           <div v-if="item.children && expanded" class="nav-children" :aria-label="item.name">
             <button v-for="child in item.children" :key="child.name" :class="{ active: page === child.name }" :aria-current="page === child.name ? 'page' : undefined" @click="emit('navigate', child.name)">
-              <svg v-if="child.icon === 44 || child.icon === 45" class="nav-icon" :viewBox="child.icon === 44 ? '259 282 670 670' : '167 148 910 910'" aria-hidden="true"><image :href="icon(child.icon)" width="1254" height="1254" /></svg>
+              <svg v-if="ICON_CROP[child.icon]" class="nav-icon" :viewBox="ICON_CROP[child.icon].viewBox" aria-hidden="true"><image :href="icon(child.icon)" :width="ICON_CROP[child.icon].size" :height="ICON_CROP[child.icon].size" /></svg>
               <img v-else class="nav-icon" :src="icon(child.icon)" alt="" />
               <span>{{ child.name }}</span>
             </button>
