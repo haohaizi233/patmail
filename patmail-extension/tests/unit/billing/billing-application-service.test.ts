@@ -670,4 +670,204 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       }),
     ).toEqual({ ok: false, reason: '请确认已立单或状态待核对的费用后再导出。' })
   })
+
+  it('splits multi-customer rows into concurrent per-customer workbooks by default with adaptive file names', async () => {
+    const templateLoads: string[] = []
+    const downloadedFiles: string[] = []
+    const progressLog: Array<{ done: number; total: number; currentCustomer: string }> = []
+
+    const service = new BillingApplicationService({
+      templates: {
+        async loadTemplate(id) {
+          templateLoads.push(id)
+          return readAsset(id)
+        },
+      },
+      spreadsheet: {
+        fill: fillBillingTemplate,
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-23', perCny: { USD: 7.2 }, sourceUrl: '' }),
+      },
+      downloads: {
+        async download(req) {
+          downloadedFiles.push(req.fileName)
+          return {
+            status: 'download_completed',
+            downloadId: downloadedFiles.length,
+            fileName: req.fileName,
+            savedFileName: req.fileName,
+            blockCount: req.blockCount,
+            warnings: req.warnings,
+          }
+        },
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.resolve(),
+      },
+    })
+
+    const rows: FeeSearchRow[] = [
+      mockFeeRow({
+        feeId: 'pct-1',
+        caseId: 'c-1',
+        caseVolume: 'PA2601001PCT',
+        businessType: 'PCT国际阶段',
+        feeClass: 'O',
+        feeType: '申请费',
+        amount: 9000,
+        currency: 'CNY',
+        customerName: '美的工业技术事业部',
+        requestStatus: '未请款',
+      }),
+      mockFeeRow({
+        feeId: 'pct-2',
+        caseId: 'c-2',
+        caseVolume: 'PA2601002PCT',
+        businessType: 'PCT国际阶段',
+        feeClass: 'O',
+        feeType: '检索费',
+        amount: 2100,
+        currency: 'CNY',
+        customerName: '美的家用空调',
+        requestStatus: '未请款',
+      }),
+    ]
+
+    const { outcome } = await service.exportBilling({
+      templateId: 'midea-pct',
+      rows,
+      bills: {},
+      parameters: {
+        headers: defaultHeaders('midea-pct', new Date('2026-11-23')),
+        options: { reviewFee: 0, bankFee: 0 },
+        rates: { CNY: 1 },
+        rateSourceUrl: '',
+        rateDate: '2026-11-23',
+      },
+      fileSelectionIssue: '',
+      feeSelectionIssue: '',
+      reconciliationRequestedCount: 0,
+      confirmExistingFees: false,
+      pctExportExceptionsCount: 0,
+      confirmPctExceptions: false,
+      needsForeignRates: false,
+      ratesCheckedOn: '2026-11-23',
+      ratesLoading: false,
+      missingRateCodes: [],
+      usesManualRate: false,
+      manualRateDate: '',
+      today: new Date('2026-11-23T00:00:00Z'),
+      onProgress: progress => progressLog.push(progress),
+    })
+
+    expect(templateLoads).toEqual(['midea-pct'])
+    expect(outcome.status).toBe('batch_completed')
+    if (outcome.status === 'batch_completed') {
+      expect(outcome.totalCount).toBe(2)
+      expect(outcome.successCount).toBe(2)
+      expect(outcome.failedCount).toBe(0)
+      expect(outcome.items.map(i => i.fileName)).toEqual([
+        '美的PCT费用清单-美的工业技术事业部-20261123.xlsx',
+        '美的PCT费用清单-美的家用空调-20261123.xlsx',
+      ])
+    }
+    expect(downloadedFiles).toHaveLength(2)
+    expect(progressLog).toHaveLength(2)
+  })
+
+  it('merges multiple customers into a single workbook when allowMixedCustomers is true', async () => {
+    const downloadedFiles: string[] = []
+
+    const service = new BillingApplicationService({
+      templates: {
+        loadTemplate: id => Promise.resolve(readAsset(id)),
+      },
+      spreadsheet: {
+        fill: fillBillingTemplate,
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-23', perCny: { USD: 7.2 }, sourceUrl: '' }),
+      },
+      downloads: {
+        async download(req) {
+          downloadedFiles.push(req.fileName)
+          return {
+            status: 'download_completed',
+            downloadId: 1,
+            fileName: req.fileName,
+            savedFileName: req.fileName,
+            blockCount: req.blockCount,
+            warnings: req.warnings,
+          }
+        },
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.resolve(),
+      },
+    })
+
+    const rows: FeeSearchRow[] = [
+      mockFeeRow({
+        feeId: 'pct-1',
+        caseId: 'c-1',
+        caseVolume: 'PA2601001PCT',
+        businessType: 'PCT国际阶段',
+        feeClass: 'O',
+        feeType: '申请费',
+        amount: 9000,
+        currency: 'CNY',
+        customerName: '美的工业技术事业部',
+        requestStatus: '未请款',
+      }),
+      mockFeeRow({
+        feeId: 'pct-2',
+        caseId: 'c-2',
+        caseVolume: 'PA2601002PCT',
+        businessType: 'PCT国际阶段',
+        feeClass: 'O',
+        feeType: '检索费',
+        amount: 2100,
+        currency: 'CNY',
+        customerName: '美的家用空调',
+        requestStatus: '未请款',
+      }),
+    ]
+
+    const { outcome } = await service.exportBilling({
+      templateId: 'midea-pct',
+      rows,
+      bills: {},
+      parameters: {
+        headers: defaultHeaders('midea-pct', new Date('2026-11-23')),
+        options: { reviewFee: 0, bankFee: 0 },
+        allowMixedCustomers: true,
+        rates: { CNY: 1 },
+        rateSourceUrl: '',
+        rateDate: '2026-11-23',
+      },
+      fileSelectionIssue: '',
+      feeSelectionIssue: '',
+      reconciliationRequestedCount: 0,
+      confirmExistingFees: false,
+      pctExportExceptionsCount: 0,
+      confirmPctExceptions: false,
+      needsForeignRates: false,
+      ratesCheckedOn: '2026-11-23',
+      ratesLoading: false,
+      missingRateCodes: [],
+      usesManualRate: false,
+      manualRateDate: '',
+      today: new Date('2026-11-23T00:00:00Z'),
+    })
+
+    expect(outcome.status).toBe('download_completed')
+    if (outcome.status === 'download_completed') {
+      expect(outcome.fileName).toBe('美的PCT费用清单-多客户合并(2个)-20261123.xlsx')
+      expect(outcome.blockCount).toBe(2)
+    }
+    expect(downloadedFiles).toEqual(['美的PCT费用清单-多客户合并(2个)-20261123.xlsx'])
+  })
 })

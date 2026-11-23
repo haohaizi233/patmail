@@ -1,6 +1,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { FeeSearchRow } from '../../api/fee-search-types'
-import type { BillingDeskSnapshot } from '../../application/billing/billing-contracts'
+import type { BatchExportProgress, BillingDeskSnapshot } from '../../application/billing/billing-contracts'
 import {
   BillingApplicationService,
   formatExportOutcomeNotice,
@@ -29,6 +29,7 @@ import {
   BILLING_TEMPLATES,
   defaultHeaders,
   formatLocalDate,
+  groupBillingRowsByCustomer,
   type BillingOptions,
   type BillingTemplateId,
 } from '../../billing/templates'
@@ -164,14 +165,23 @@ export function useBillingWorkflow(options: {
   const pctCandidates = computed(() =>
     isMideaPct.value ? collectPctCandidates(Array.from(feeQueryRef.value?.getKnownRows() ?? [])) : new Map<string, FeeSearchRow[]>(),
   )
-  const pctSelectedCustomer = computed(() =>
-    isMideaPct.value ? (selectedFeeRows.value[0]?.customerName.trim() ?? '') : '',
+  const allowMixedCustomers = ref(false)
+  const selectedCustomerGroups = computed(() => groupBillingRowsByCustomer(selectedFeeRows.value))
+  const pctSelectedCustomers = computed(() =>
+    isMideaPct.value
+      ? [...new Set(selectedFeeRows.value.map(row => row.customerName.trim()).filter(Boolean))]
+      : [],
   )
+  const pctSelectedCustomer = computed(() => {
+    const names = pctSelectedCustomers.value
+    if (!names.length) return ''
+    return names.length === 1 ? names[0] : `${names[0]} 等 ${names.length} 个客户`
+  })
   const pctExceptions = computed(() =>
     isMideaPct.value ? collectPctExceptions(Array.from(feeQueryRef.value?.getKnownRows() ?? [])) : [],
   )
   const pctExportExceptions = computed(() =>
-    filterPctExportExceptions(pctExceptions.value, pctSelectedCustomer.value),
+    filterPctExportExceptions(pctExceptions.value, pctSelectedCustomers.value),
   )
   const confirmPctExceptions = ref(false)
   watch([selectedFeeRows, pctExportExceptions], () => {
@@ -360,9 +370,11 @@ export function useBillingWorkflow(options: {
     exportResultNotice.value = ''
     exportWarnings.value = []
   })
+  const exportProgress = ref<BatchExportProgress | null>(null)
   const exportParameters = computed(() => ({
     headers: { ...headerValues.value },
     options: { ...billingOptions.value },
+    allowMixedCustomers: allowMixedCustomers.value,
     rates: { ...effectiveRates.value },
     rateSourceUrl: ratesSourceUrl.value,
     rateDate: usesManualRate.value
@@ -417,6 +429,10 @@ export function useBillingWorkflow(options: {
         usesManualRate: usesManualRate.value,
         manualRateDate: manualRateDate.value,
         downloadScope: scope,
+        onProgress: (progress: BatchExportProgress) => {
+          exportProgress.value = progress
+          exportResultNotice.value = `正在按客户流水线批量导出 ${progress.done}/${progress.total}（${progress.currentCustomer}）…`
+        },
         isStale: () => selectionChanged() || parameters !== exportParameters.value,
       }
       const precheck = validateBillingExportPreconditions(exportCommand)
@@ -424,16 +440,28 @@ export function useBillingWorkflow(options: {
         exportResultNotice.value = precheck.needsRateRefresh && ratesError.value ? ratesError.value : precheck.reason
         return
       }
-      exportResultNotice.value = '正在生成 Excel 请款表…'
+      exportProgress.value = null
+      const splitCount = !parameters.allowMixedCustomers && selectedCustomerGroups.value.length > 1
+        ? selectedCustomerGroups.value.length
+        : 0
+      exportResultNotice.value = splitCount
+        ? `正在按客户流水线并发导出 ${splitCount} 份 Excel 请款表…`
+        : '正在生成 Excel 请款表…'
       exportWarnings.value = []
       const { outcome } = await service.exportBilling(exportCommand)
-      if (outcome.status === 'download_started' || outcome.status === 'download_completed' || outcome.status === 'generated') {
+      if (
+        outcome.status === 'download_started' ||
+        outcome.status === 'download_completed' ||
+        outcome.status === 'generated' ||
+        outcome.status === 'batch_completed'
+      ) {
         exportWarnings.value = outcome.warnings
       }
       exportResultNotice.value = formatExportOutcomeNotice(outcome)
     } catch (err) {
       exportResultNotice.value = err instanceof Error ? err.message : '请款表生成失败'
     } finally {
+      exportProgress.value = null
       exporting.value = false
     }
   }
@@ -453,6 +481,7 @@ export function useBillingWorkflow(options: {
       step: currentStep.value,
       headers: headerValues.value,
       options: billingOptions.value,
+      allowMixedCustomers: allowMixedCustomers.value,
       extra: extraVolumes.value,
       excluded: excludedVolumes.value,
       volumeInput: customVolumeInput.value,
@@ -507,6 +536,7 @@ export function useBillingWorkflow(options: {
       selectedTemplateId.value = 'general-foreign'
       headerValues.value = defaultHeaders('general-foreign')
       billingOptions.value = { ...BILLING_TEMPLATES[0].queryPreset.defaultOptions }
+      allowMixedCustomers.value = false
       fileSeed.value = { ...BILLING_TEMPLATES[0].queryPreset.fileFields }
       fileSelection.value = {}
       recoveredBills.value = {}
@@ -528,6 +558,7 @@ export function useBillingWorkflow(options: {
         selectedTemplateId.value = state.template
         headerValues.value = state.headers
         billingOptions.value = state.options
+        allowMixedCustomers.value = Boolean(state.allowMixedCustomers)
         fileSeed.value = { ...currentTemplate.value.queryPreset.fileFields }
         fileSeedToken.value += 1
         extraVolumes.value = state.extra
@@ -603,6 +634,8 @@ export function useBillingWorkflow(options: {
     feeInitialToken,
     selectedFeeRows,
     isMideaPct,
+    allowMixedCustomers,
+    selectedCustomerGroups,
     defaultSelectionExclusion,
     pctCandidates,
     pctSelectedCustomer,
@@ -629,6 +662,7 @@ export function useBillingWorkflow(options: {
     resetRate,
     reconciliationInfo,
     exporting,
+    exportProgress,
     exportResultNotice,
     exportWarnings,
     confirmExistingFees,

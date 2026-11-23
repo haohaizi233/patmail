@@ -55,6 +55,8 @@ const {
   feeInitialToken,
   selectedFeeRows,
   isMideaPct,
+  allowMixedCustomers,
+  selectedCustomerGroups,
   defaultSelectionExclusion,
   pctCandidates,
   pctSelectedCustomer,
@@ -81,6 +83,7 @@ const {
   resetRate,
   reconciliationInfo,
   exporting,
+  exportProgress,
   exportResultNotice,
   exportWarnings,
   confirmExistingFees,
@@ -367,7 +370,7 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
           <template v-else>
             （未带入文号，请按客户/日期/文号等条件自行检索）
           </template>。<br />
-          <template v-if="isMideaPct">请优先用「客户名称」和「处理事项完成日」限定范围。默认只勾选美的客户可归类的未请款费用，每份清单只能包含一个客户。</template>
+          <template v-if="isMideaPct">请优先用「客户名称」和「处理事项完成日」限定范围。默认勾选美的客户可归类的未请款费用；支持一次勾选多个事业部，步骤 3 默认按客户分表批量并发导出，也可按需合并为一张表。</template>
           请在下方点击「查询」，然后在表格中<b>勾选</b>要纳入请款单的费用记录（翻页已选记录会自动保留）。
         </p>
         <div class="selection-status-strip">
@@ -538,6 +541,28 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
             </div>
           </template>
         </div>
+
+        <div class="customer-export-mode">
+          <label class="mixed-customer-toggle" v-hint="'默认不勾选：多客户时按客户分表并发导出（文件名自动带客户名）；勾选后：所有选中客户的费用合并进入同一张表导出。'">
+            <input v-model="allowMixedCustomers" type="checkbox" />
+            <span>允许不同客户合并进入同一张表（默认按客户分表批量并发导出）</span>
+          </label>
+          <div v-if="selectedCustomerGroups.length > 1" class="customer-batch-preview">
+            <span class="batch-preview-title">
+              {{ allowMixedCustomers
+                ? `已启用合表导出：将把 ${selectedCustomerGroups.length} 个客户合并为 1 份请款表`
+                : `将按客户分表流水线并发导出 ${selectedCustomerGroups.length} 份请款表：` }}
+            </span>
+            <span
+              v-for="group in selectedCustomerGroups"
+              :key="group.customer"
+              class="customer-batch-chip"
+              v-hint="`${group.customer}：共 ${group.rows.length} 笔费用`"
+            >
+              {{ group.customer }}（{{ group.rows.length }} 笔）
+            </span>
+          </div>
+        </div>
       </div>
 
       <!-- 最终导出操作卡片 -->
@@ -546,6 +571,7 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
           <span>待填入费用：<b>{{ selectedFeeRows.length }}</b> 笔（未请款 <b>{{ reconciliationInfo.unrequestedCount }}</b>，已立单或状态待核对 <b>{{ reconciliationInfo.requestedCount }}</b>）</span>
           <span>涉及案卷：<b>{{ reconciliationInfo.totalCases }}</b> 个（{{ selectedTemplateId === 'midea-foreign' ? '确认账单日' : '有账单文件' }} <b>{{ reconciliationInfo.matchedCasesCount }}</b>，{{ selectedTemplateId === 'midea-foreign' ? '账单日待核对' : '无账单文件' }} <b>{{ reconciliationInfo.unmatchedCases.length }}</b>）</span>
           <span>目标模板：<b>{{ currentTemplate.label }}</b></span>
+          <span>涉及客户：<b>{{ selectedCustomerGroups.length }}</b> 个（{{ !allowMixedCustomers && selectedCustomerGroups.length > 1 ? `分表 ${selectedCustomerGroups.length} 份` : '单表导出' }}）</span>
           <span v-if="pctSelectedCustomer">EASY 客户：<b>{{ pctSelectedCustomer }}</b></span>
         </div>
 
@@ -560,7 +586,11 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
             :disabled="exportDisabled"
             @click="doExportExcel"
           >
-            {{ exporting ? '正在填表并生成 Excel…' : '导出 Excel 请款表' }}
+            {{ exporting
+              ? (exportProgress ? `正在按客户批量导出 ${exportProgress.done}/${exportProgress.total}…` : '正在填表并生成 Excel…')
+              : (!allowMixedCustomers && selectedCustomerGroups.length > 1
+                ? `批量导出 ${selectedCustomerGroups.length} 份 Excel 请款表`
+                : '导出 Excel 请款表') }}
           </button>
         </div>
 
@@ -1149,5 +1179,52 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
 .export-execute-card .warnings-box ul {
   margin: 4px 0 0 16px;
   padding: 0;
+}
+
+.customer-export-mode {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #f3d4e3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mixed-customer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #5b3b63;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.customer-batch-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff8fb;
+  border: 1px solid #f6d5e6;
+  font-size: 12px;
+  color: #7c5684;
+}
+
+.batch-preview-title {
+  font-weight: 600;
+  color: #9e4577;
+}
+
+.customer-batch-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #f3c1da;
+  color: #4f3659;
 }
 </style>

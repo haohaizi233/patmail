@@ -183,7 +183,8 @@ try {
   }
   await app.setViewportSize({ width: 1440, height: 1000 })
   await feeResultNext.click()
-  await feeResults.getByRole('alert').filter({ hasText: /只能导出同一客户/ }).waitFor()
+  await app.locator('.export-execute-card').getByRole('button', { name: /批量导出 2 份 Excel 请款表/ }).waitFor()
+  await navigation.getByRole('button', { name: '返回费用查询调整' }).click()
   await feeResults.getByRole('button', { name: /只选 美的小家电事业部/ }).click()
   await navigation.getByRole('button', { name: /进入请款单导出.*已选 1 笔/ }).waitFor()
   await app.getByRole('row').filter({ hasText: 'PA124PCT' }).getByRole('checkbox').check()
