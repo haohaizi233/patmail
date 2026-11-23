@@ -81,11 +81,15 @@ export function collectPctExceptions(knownRows: readonly FeeSearchRow[]): PctExc
 
 export function filterPctExportExceptions(
   exceptions: readonly PctExceptionItem[],
-  selectedCustomer: string,
+  selectedCustomer: string | readonly string[],
 ): PctExceptionItem[] {
-  if (!selectedCustomer) return []
+  const customers = typeof selectedCustomer === 'string'
+    ? (selectedCustomer.trim() ? [selectedCustomer.trim()] : [])
+    : selectedCustomer.map(name => name.trim()).filter(Boolean)
+  if (!customers.length) return []
+  const allowed = new Set(customers)
   return exceptions.filter(
-    ({ row }) => !row.customerName.trim() || row.customerName.trim() === selectedCustomer,
+    ({ row }) => !row.customerName.trim() || allowed.has(row.customerName.trim()),
   )
 }
 
@@ -175,7 +179,7 @@ export function validateBillingFeeSelection(input: {
   if (!input.selectedCount) return '步骤 2 还没有勾选费用。请先在费用查询表格中勾选要请款的费用行。'
   if (!input.ready) return '请先确认 EASY 登录会话。'
   if (!input.syncKeyMatches) return '请款范围已变化，请返回步骤 2 重新查询。'
-  return input.isMideaPct ? pctSelectionProblem(input.selectedFeeRows) : ''
+  return input.isMideaPct ? pctSelectionProblem(input.selectedFeeRows, { allowMultipleCustomers: true }) : ''
 }
 
 export function buildMideaPctDefaultExclusion(isMideaPct: boolean): ((row: FeeSearchRow) => string) | undefined {

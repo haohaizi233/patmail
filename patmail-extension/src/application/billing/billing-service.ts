@@ -1,6 +1,6 @@
 import type { PbcRates } from '../../billing/pbc-rates'
-import { formatLocalDate, type BillingInput, type BillingTemplateId } from '../../billing/templates'
-import type { BillingDeskSnapshot, ExportBillingCommand, ExportOutcome } from './billing-contracts'
+import { formatLocalDate, groupBillingRowsByCustomer, type BillingInput, type BillingTemplateId } from '../../billing/templates'
+import type { BatchExportItemOutcome, BillingDeskSnapshot, ExportBillingCommand, ExportOutcome } from './billing-contracts'
 import { validateBillingExportPreconditions } from './billing-validation'
 import type { BillingRecoveryPort } from './ports/billing-recovery-port'
 import type { BillingTemplatePort } from './ports/billing-template-port'
@@ -58,6 +58,144 @@ export class BillingApplicationService {
       }
     }
 
+    const today = command.today ?? new Date()
+    const allowMixed = Boolean(command.parameters.allowMixedCustomers)
+    const groups = groupBillingRowsByCustomer(command.rows)
+    const rawBytes = await this.ports.templates.loadTemplate(command.templateId)
+
+    const buildJobSpec = (input: BillingInput) => (command.downloadScope
+      ? {
+          job: {
+            scope: command.downloadScope,
+            parameters: JSON.stringify({
+              template: command.templateId,
+              input: {
+                ...input,
+                today: formatLocalDate(input.today),
+                rows: input.rows.map(({ raw, ...row }) => ({
+                  ...row,
+                  raw: Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))),
+                })),
+              },
+            }),
+            isStale: command.isStale,
+          },
+        }
+      : {})
+
+    if (!allowMixed && groups.length > 1) {
+      const total = groups.length
+      const concurrency = Math.max(1, Math.min(command.concurrency ?? 4, total))
+      const items = new Array<BatchExportItemOutcome>(total)
+      let cursor = 0
+      let done = 0
+
+      const runWorker = async (): Promise<void> => {
+        while (cursor < total) {
+          const index = cursor++
+          const group = groups[index]
+          if (command.isStale?.()) {
+            items[index] = {
+              customer: group.customer,
+              status: 'failed',
+              fileName: '',
+              blockCount: 0,
+              warnings: [],
+              reason: '生成期间请款范围或导出参数已变化，请核对后重新导出。',
+            }
+            done += 1
+            command.onProgress?.({ done, total, currentCustomer: group.customer })
+            continue
+          }
+          try {
+            const input: BillingInput = {
+              headers: command.parameters.headers,
+              options: command.parameters.options,
+              rates: command.parameters.rates,
+              rateSourceUrl: command.parameters.rateSourceUrl,
+              rateDate: command.parameters.rateDate,
+              rows: group.rows,
+              bills: command.bills,
+              today,
+              allowMixedCustomers: false,
+              fileNameSuffix: group.customer,
+            }
+            const result = await this.ports.spreadsheet.fill(command.templateId, rawBytes, input)
+            if (command.isStale?.()) {
+              items[index] = {
+                customer: group.customer,
+                status: 'failed',
+                fileName: result.fileName,
+                blockCount: result.blockCount,
+                warnings: result.warnings,
+                reason: '生成期间请款范围或导出参数已变化，请核对后重新导出。',
+              }
+            } else {
+              const dl = await this.ports.downloads.download({
+                bytes: result.bytes,
+                fileName: result.fileName,
+                mimeType: XLSX_MIME_TYPE,
+                blockCount: result.blockCount,
+                warnings: result.warnings,
+                ...buildJobSpec(input),
+              })
+              if (dl.status === 'download_completed' || dl.status === 'download_started' || dl.status === 'generated') {
+                items[index] = {
+                  customer: group.customer,
+                  status: dl.status,
+                  fileName: dl.fileName,
+                  savedFileName: dl.status === 'download_completed' ? dl.savedFileName : undefined,
+                  blockCount: dl.blockCount,
+                  warnings: dl.warnings,
+                }
+              } else {
+                items[index] = {
+                  customer: group.customer,
+                  status: dl.status === 'batch_completed' ? 'failed' : dl.status,
+                  fileName: result.fileName,
+                  blockCount: result.blockCount,
+                  warnings: result.warnings,
+                  reason: dl.status === 'batch_completed' ? '批量导出嵌套异常。' : dl.reason,
+                }
+              }
+            }
+          } catch (error) {
+            items[index] = {
+              customer: group.customer,
+              status: 'failed',
+              fileName: '',
+              blockCount: 0,
+              warnings: [],
+              reason: error instanceof Error ? error.message : String(error),
+            }
+          }
+          done += 1
+          command.onProgress?.({ done, total, currentCustomer: group.customer })
+        }
+      }
+
+      await Promise.all(Array.from({ length: concurrency }, () => runWorker()))
+      const isOk = (item: BatchExportItemOutcome) =>
+        item.status === 'download_completed' || item.status === 'download_started' || item.status === 'generated'
+      const successCount = items.filter(isOk).length
+      const failedCount = items.length - successCount
+      const blockCount = items.reduce((sum, item) => sum + (isOk(item) ? item.blockCount : 0), 0)
+      const warnings = items.flatMap(item =>
+        item.warnings.map(warning => `【${item.customer}】${warning}`),
+      )
+      return {
+        outcome: {
+          status: 'batch_completed',
+          totalCount: items.length,
+          successCount,
+          failedCount,
+          blockCount,
+          items,
+          warnings,
+        },
+      }
+    }
+
     const input: BillingInput = {
       headers: command.parameters.headers,
       options: command.parameters.options,
@@ -66,10 +204,11 @@ export class BillingApplicationService {
       rateDate: command.parameters.rateDate,
       rows: command.rows,
       bills: command.bills,
-      today: command.today ?? new Date(),
+      today,
+      ...(allowMixed ? { allowMixedCustomers: true } : {}),
+      ...(allowMixed && groups.length > 1 ? { fileNameSuffix: `多客户合并(${groups.length}个)` } : {}),
     }
 
-    const rawBytes = await this.ports.templates.loadTemplate(command.templateId)
     const result = await this.ports.spreadsheet.fill(command.templateId, rawBytes, input)
 
     if (command.isStale?.()) {
@@ -87,25 +226,7 @@ export class BillingApplicationService {
       mimeType: XLSX_MIME_TYPE,
       blockCount: result.blockCount,
       warnings: result.warnings,
-      ...(command.downloadScope
-        ? {
-            job: {
-              scope: command.downloadScope,
-              parameters: JSON.stringify({
-                template: command.templateId,
-                input: {
-                  ...input,
-                  today: formatLocalDate(input.today),
-                  rows: input.rows.map(({ raw, ...row }) => ({
-                    ...row,
-                    raw: Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))),
-                  })),
-                },
-              }),
-              isStale: command.isStale,
-            },
-          }
-        : {}),
+      ...buildJobSpec(input),
     })
 
     return { outcome: downloadOutcome }
@@ -122,6 +243,20 @@ export function formatExportOutcomeNotice(outcome: ExportOutcome): string {
       return `请款单已生成并触发浏览器下载（尚未确认落盘完成）：${outcome.fileName}（共填入 ${outcome.blockCount} 个事项块/案卷）。`
     case 'generated':
       return `已生成请款单工作簿：${outcome.fileName}（共填入 ${outcome.blockCount} 个事项块/案卷）。`
+    case 'batch_completed': {
+      const okNames = outcome.items
+        .filter(item => item.status === 'download_completed' || item.status === 'download_started' || item.status === 'generated')
+        .map(item => item.savedFileName || item.fileName)
+        .filter(Boolean)
+      const failedSummary = outcome.items
+        .filter(item => item.status !== 'download_completed' && item.status !== 'download_started' && item.status !== 'generated')
+        .map(item => `${item.customer}（${item.reason || '导出失败'}）`)
+      if (outcome.failedCount === 0) {
+        const preview = okNames.slice(0, 3).join('、') + (okNames.length > 3 ? ` 等 ${okNames.length} 份` : '')
+        return `已按客户分表批量导出 ${outcome.successCount}/${outcome.totalCount} 份（共填入 ${outcome.blockCount} 个事项块/案卷）：${preview}。`
+      }
+      return `按客户分表批量导出完成：成功 ${outcome.successCount} 份，失败 ${outcome.failedCount} 份（${failedSummary.join('；')}）。`
+    }
     case 'download_interrupted':
     case 'unknown':
     case 'failed':

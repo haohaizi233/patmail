@@ -174,7 +174,10 @@ export function isMideaPctCustomer(name: string): boolean {
   return name.trim().includes('美的')
 }
 
-export function pctSelectionProblem(rows: FeeSearchRow[]): string {
+export function pctSelectionProblem(
+  rows: FeeSearchRow[],
+  options: { allowMultipleCustomers?: boolean } = {}
+): string {
   const customers = uniqueText(rows.map(row => row.customerName))
   const feeIds = new Set<string>()
   const caseIds = new Map<string, string>()
@@ -193,7 +196,9 @@ export function pctSelectionProblem(rows: FeeSearchRow[]): string {
     if (previous && previous !== id) return `${volume} 对应多个 EASY 案件，请核对后再导出。`
     caseIds.set(volume, id)
   }
-  return customers.length > 1 ? 'PCT 请款单每次只能导出同一客户的费用，请按事业部分别导出。' : ''
+  return !options.allowMultipleCustomers && customers.length > 1
+    ? 'PCT 请款单每次只能导出同一客户的费用，请按事业部分别导出。'
+    : ''
 }
 
 export function round2(value: number): number {

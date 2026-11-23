@@ -130,6 +130,36 @@ export interface BillingInput {
   headers: Record<string, string>
   options: BillingOptions
   today?: Date
+  /** 是否允许不同客户合并进入同一张表（默认 false，按客户分表导出）。 */
+  allowMixedCustomers?: boolean
+  /** 自适应文件名附加段（如分表客户名或「多客户合并(N个)」）。 */
+  fileNameSuffix?: string
+}
+
+export interface CustomerFeeGroup {
+  customer: string
+  rows: FeeSearchRow[]
+}
+
+export function sanitizeFileNameSegment(raw: string): string {
+  const cleaned = Array.from(raw, ch => (ch.charCodeAt(0) < 32 ? '_' : ch))
+    .join('')
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[._\s]+|[._\s]+$/g, '')
+  return cleaned.slice(0, 40)
+}
+
+export function groupBillingRowsByCustomer(rows: readonly FeeSearchRow[]): CustomerFeeGroup[] {
+  const map = new Map<string, FeeSearchRow[]>()
+  for (const row of rows) {
+    const customer = row.customerName.trim() || '未命名客户'
+    const bucket = map.get(customer) ?? []
+    bucket.push(row)
+    map.set(customer, bucket)
+  }
+  return [...map.entries()].map(([customer, groupRows]) => ({ customer, rows: groupRows }))
 }
 
 export interface BillingResult {
@@ -497,7 +527,7 @@ function fillMideaPct(book: XlsxBook, input: BillingInput, warnings: string[]): 
 export async function fillBillingTemplate(id: BillingTemplateId, template: Uint8Array, input: BillingInput): Promise<BillingResult> {
   if (!input.rows.length) throw new Error('还没有选中的费用记录。')
   if (id === 'midea-pct') {
-    const problem = pctSelectionProblem(input.rows)
+    const problem = pctSelectionProblem(input.rows, { allowMultipleCustomers: Boolean(input.allowMixedCustomers) })
     if (problem) throw new Error(problem)
   }
   if (id === 'midea-foreign' && [input.options.reviewFee, input.options.bankFee].some(fee => !Number.isFinite(fee) || fee < 0)) {
@@ -519,16 +549,25 @@ export async function fillBillingTemplate(id: BillingTemplateId, template: Uint8
   const headerSheets = id === 'midea-foreign'
     ? MIDEA_FOREIGN_SHEETS.map(name => book.sheet(name))
     : [book.sheet(id === 'general-foreign' ? (book.sheets[0]?.name ?? '') : PCT_TEMPLATE_SHEET)]
+  const distinctCustomers = uniqueText(input.rows.map(row => row.customerName))
+  const defaultClientText = distinctCustomers.length > 1
+    ? `${distinctCustomers[0]} 等 ${distinctCustomers.length} 个客户`
+    : (distinctCustomers[0] ?? '')
   const headers = id === 'midea-pct' ? {
     ...defaultHeaders(id, today),
     ...input.headers,
     title: input.headers.title?.trim() || '世纪恒程知识产权代理事务所 · 美的 PCT 费用清单',
-    client: input.headers.client?.trim().replace(/^客户名称\s*[：:]\s*/, '') || input.rows[0].customerName.trim()
+    client: input.headers.client?.trim().replace(/^客户名称\s*[：:]\s*/, '') || defaultClientText
+  } : id === 'midea-foreign' && input.fileNameSuffix && distinctCustomers.length === 1 && /^客户名称（发票抬头）[：:]?\s*$/.test((input.headers.client ?? '').trim()) ? {
+    ...input.headers,
+    client: `客户名称（发票抬头）：${distinctCustomers[0]}`
   } : input.headers
   if (id === 'midea-pct') headers.client = `客户名称：${headers.client}`
   applyHeaders(headerSheets, info, headers)
   const unknownCurrency = uniqueText(input.rows.map(row => normalizeCurrency(row.currency))).filter(code => code.length !== 3)
   if (unknownCurrency.length) warnings.push(`币别「${unknownCurrency.join('、')}」不是标准代码，请核对汇率。`)
   const bytes = await book.save()
-  return { bytes, fileName: `${info.fileBase}-${stamp(today)}.xlsx`, warnings, blockCount }
+  const safeSuffix = input.fileNameSuffix ? sanitizeFileNameSegment(input.fileNameSuffix) : ''
+  const fileName = safeSuffix ? `${info.fileBase}-${safeSuffix}-${stamp(today)}.xlsx` : `${info.fileBase}-${stamp(today)}.xlsx`
+  return { bytes, fileName, warnings, blockCount }
 }
