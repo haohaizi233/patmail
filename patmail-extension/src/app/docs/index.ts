@@ -54,7 +54,8 @@ const mechanismEntries: DocEntry[] = Object.keys(mechanismFiles)
 const workflowFiles = import.meta.glob('../../../docs/workflows/*.md', {
   query: '?raw',
   import: 'default',
-}) as Record<string, () => Promise<string>>
+  eager: true,
+})
 
 const workflowOrder = [
   'README.md',
@@ -78,7 +79,7 @@ const workflowEntries: DocEntry[] = Object.keys(workflowFiles)
     title: path.endsWith('/README.md') ? '工作流总览' : usageTitle(path),
     file: path.split('/').pop(),
     path: `patmail-extension/docs/workflows/${path.split('/').pop()}`,
-    load: workflowFiles[path],
+    load: () => Promise.resolve(workflowFiles[path]),
   }))
 
 /** 接口文档直接用仓库 API 目录里的原文，不另抄一份。README 当目录排最前。 */
