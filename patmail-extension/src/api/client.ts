@@ -27,6 +27,17 @@ import {
   type FeeExportTemplate,
   type FeeExportTemplateColumn
 } from './fee-export'
+import { NoticeClient } from './notice-client'
+import type {
+  NoticeActionRequest,
+  NoticeActionResult,
+  NoticeExcelUploadRequest,
+  NoticeExcelUploadResult,
+  NoticeExportRequest,
+  NoticeInitData,
+  NoticeSearchRequest,
+  NoticeSearchResult
+} from './notice-types'
 import { normalizeFeeSearch } from './fee-search-normalizer'
 import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeTypeItem } from './fee-search-types'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
@@ -170,12 +181,19 @@ export class EasyRuntime {
   private listColsel: string | null = null
   private readonly mail: MailExecutionRuntime
   private readonly workflow: WorkflowRuntime
+  private readonly notice: NoticeClient
 
   constructor(private readonly pageOrigin: string, options: RuntimeOptions = {}) {
     this.transport = new EasyTransport(pageOrigin, options)
     this.session = new SessionService(this.transport)
     this.history = new HistoryQueryService(this.transport)
     this.dictionaries = new DictionaryService(this.transport)
+    this.notice = new NoticeClient({
+      transport: this.transport,
+      confirmAccountRead: () => this.confirmAccountRead(),
+      expireSession: () => this.session.expire(),
+      isWriteOpen: () => isWriteSwitchOpen()
+    })
     this.mail = new MailExecutionRuntime(
       this.transport,
       options.mailStore ?? new ExecutionStore(chromeExecutionArea()),
@@ -1430,6 +1448,28 @@ export class EasyRuntime {
     const result = readUserInfo(response.data, userId)
     if (result.ok) this.userInfoCache.set(userId, result.data)
     return result
+  }
+
+  async loadNoticeInit(): Promise<ApiResult<NoticeInitData>> {
+    return this.notice.loadNoticeInit()
+  }
+
+  async searchNotices(request: NoticeSearchRequest, timeoutMs?: number, signal?: AbortSignal): Promise<ApiResult<NoticeSearchResult>> {
+    return this.notice.searchNotices(request, timeoutMs, signal)
+  }
+
+  async executeNoticeAction(request: NoticeActionRequest): Promise<ApiResult<NoticeActionResult>> {
+    return this.notice.executeNoticeAction(request)
+  }
+
+  async exportNoticeExcel(request: NoticeExportRequest): Promise<
+    ApiResult<{ async: boolean; downloadUrl?: string; fileGuid?: string; fileSize?: number | null; message: string }>
+  > {
+    return this.notice.exportNoticeExcel(request)
+  }
+
+  async uploadNoticeExcel(request: NoticeExcelUploadRequest): Promise<ApiResult<NoticeExcelUploadResult>> {
+    return this.notice.uploadNoticeExcel(request)
   }
 
   cancelFileSearch(): void {
