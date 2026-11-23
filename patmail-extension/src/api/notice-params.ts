@@ -1,4 +1,5 @@
 import { buildExportColumnsXml } from './fee-export'
+import { formatWDate } from '../shared/date-defaults'
 import type { EasyOperation } from './transport'
 import type {
   NoticeCertQuery,
@@ -305,12 +306,18 @@ export const NOTICE_DEFAULT_EXPORT_COLUMNS: Record<NoticeExportTab, Array<{ valu
   ]
 }
 
-export function createDefaultNoticeImportQuery(): NoticeImportQuery {
+/** 返回本地当天日期（`yyyy-MM-dd`），用于查询表单默认结束日期。 */
+export function noticeTodayDateText(now: Date = new Date()): string {
+  return formatWDate(now)
+}
+
+export function createDefaultNoticeImportQuery(now: Date = new Date()): NoticeImportQuery {
+  const today = noticeTodayDateText(now)
   return {
     case_volume: '',
     is_fuzzy_query_case_volume: false,
     post_date_s: '',
-    post_date_e: '',
+    post_date_e: today,
     filedesc: '',
     status: '0',
     customer_name: '',
@@ -325,7 +332,7 @@ export function createDefaultNoticeImportQuery(): NoticeImportQuery {
     flow_direction: '',
     assayer: '',
     xiazairq_s: '',
-    xiazairq_e: '',
+    xiazairq_e: today,
     app_area_name: '',
     branch_dept_id: '',
     is_speed_checkd: '',
@@ -335,7 +342,7 @@ export function createDefaultNoticeImportQuery(): NoticeImportQuery {
     is_hz_interfice: false,
     files_is_case: '',
     update_time_s: '',
-    update_time_e: '',
+    update_time_e: today,
     update_time_shmm: '',
     update_time_ehmm: '',
     pageIndex: 1,
@@ -343,26 +350,26 @@ export function createDefaultNoticeImportQuery(): NoticeImportQuery {
   }
 }
 
-export function createDefaultNoticeDownloadQuery(defaultStart = ''): NoticeDownloadQuery {
+export function createDefaultNoticeDownloadQuery(defaultStart = '', now: Date = new Date()): NoticeDownloadQuery {
   return {
     account: '',
     casename: '',
     appno: '',
     startTime: defaultStart,
-    endTime: '',
+    endTime: noticeTodayDateText(now),
     status: 'unprocess',
     pageIndex: 1,
     pageSize: 50
   }
 }
 
-export function createDefaultNoticeCertQuery(): NoticeCertQuery {
+export function createDefaultNoticeCertQuery(now: Date = new Date()): NoticeCertQuery {
   return {
     account: '',
     casename: '',
     appno: '',
     startTime: '',
-    endTime: '',
+    endTime: noticeTodayDateText(now),
     status: '1',
     xlh: '',
     pageIndex: 1,
@@ -370,7 +377,7 @@ export function createDefaultNoticeCertQuery(): NoticeCertQuery {
   }
 }
 
-export function createDefaultNoticeReplayQuery(defaultAccount = ''): NoticeReplayQuery {
+export function createDefaultNoticeReplayQuery(defaultAccount = '', now: Date = new Date()): NoticeReplayQuery {
   return {
     account: defaultAccount,
     applyType: '',
@@ -379,7 +386,7 @@ export function createDefaultNoticeReplayQuery(defaultAccount = ''): NoticeRepla
     noticeName: '',
     xlh: '',
     startTime: '',
-    endTime: '',
+    endTime: noticeTodayDateText(now),
     pageIndex: 1,
     pageSize: 50
   }

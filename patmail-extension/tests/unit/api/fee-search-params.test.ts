@@ -3,7 +3,7 @@ import {
   buildFeeSearchParams,
   buildFeeSearchAmountParams
 } from '../../../src/api/fee-search-params'
-import { FEE_COMMON_CELLS } from '../../../src/api/fee-form'
+import { FEE_COMMON_CELLS, FEE_DATE_CELLS, feeDateDefaults } from '../../../src/api/fee-form'
 
 describe('fee search params builder', () => {
   it('includes mandatory audit field log_pagename=FeeSearch.aspx for EASY Report.ashx', () => {
@@ -115,5 +115,15 @@ describe('fee search params builder', () => {
     expect(amountRes.data.get('Call')).toBe('FeeSearchTotalAmount')
     expect(amountRes.data.get('receive_account_id')).toBe('')
     expect(amountRes.data.get('is_fuzzy_query_case_volume')).toBe('false')
+  })
+
+  it('populates today date for every fee date range end field', () => {
+    const defaults = feeDateDefaults(new Date(2026, 10, 23, 14, 0))
+    expect(FEE_DATE_CELLS).toHaveLength(24)
+    expect(Object.keys(defaults).sort()).toEqual(FEE_DATE_CELLS.map(cell => cell.end).sort())
+    expect(defaults.pay_due_date_to).toBe('2026-11-23')
+    expect(defaults.receive_date_to).toBe('2026-11-23')
+    expect(defaults.filing_date_end).toBe('2026-11-23')
+    expect(Object.values(defaults).every(v => v === '2026-11-23')).toBe(true)
   })
 })

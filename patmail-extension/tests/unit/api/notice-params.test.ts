@@ -14,7 +14,8 @@ import {
   formatCertProcessStatus,
   formatDownloadProcessStatus,
   NOTICE_IMPORT_COMPLETED_COLUMNS,
-  noticeRowKey
+  noticeRowKey,
+  noticeTodayDateText
 } from '../../../src/api/notice-params'
 
 describe('notice-params', () => {
@@ -154,5 +155,30 @@ describe('notice-params', () => {
     expect(formatCertProcessStatus('finish')).toEqual({ text: '解析完成', tone: 'ok' })
     expect(formatCertProcessStatus('error', '证书损坏')).toEqual({ text: '证书损坏', tone: 'fail' })
     expect(formatCertProcessStatus('unknown')).toEqual({ text: '状态异常', tone: 'fail' })
+  })
+
+  it('populates today date as default end date across notice query constructors', () => {
+    const fixedNow = new Date(2026, 10, 23, 9, 15, 0)
+    expect(noticeTodayDateText(fixedNow)).toBe('2026-11-23')
+
+    const imp = createDefaultNoticeImportQuery(fixedNow)
+    expect(imp.post_date_s).toBe('')
+    expect(imp.post_date_e).toBe('2026-11-23')
+    expect(imp.xiazairq_s).toBe('')
+    expect(imp.xiazairq_e).toBe('2026-11-23')
+    expect(imp.update_time_s).toBe('')
+    expect(imp.update_time_e).toBe('2026-11-23')
+
+    const dl = createDefaultNoticeDownloadQuery('2026-10-01', fixedNow)
+    expect(dl.startTime).toBe('2026-10-01')
+    expect(dl.endTime).toBe('2026-11-23')
+
+    const cert = createDefaultNoticeCertQuery(fixedNow)
+    expect(cert.startTime).toBe('')
+    expect(cert.endTime).toBe('2026-11-23')
+
+    const replay = createDefaultNoticeReplayQuery('acc-1', fixedNow)
+    expect(replay.startTime).toBe('')
+    expect(replay.endTime).toBe('2026-11-23')
   })
 })

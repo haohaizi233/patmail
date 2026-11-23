@@ -6,7 +6,7 @@ import WDatePicker from '../shell/components/WDatePicker.vue'
 import { isMultiPickerKey } from '../shared/picker-modes'
 import type { HistoryQueryOption } from '../api/query-history'
 import { CURRENT_ENVIRONMENT } from '../api/config'
-import { LIMIT_BLOCKS, LIMIT_OPTION_KEYS, LIMIT_SELECTS, buildLimitQueryXml, limitColumnLabels, readLimitQueryXml } from '../api/limit-form'
+import { LIMIT_BLOCKS, LIMIT_OPTION_KEYS, LIMIT_SELECTS, buildLimitQueryXml, limitColumnLabels, limitDateDefaults, readLimitQueryXml } from '../api/limit-form'
 import { pageSelectOptions } from '../query/form-page'
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { activateOptionFallback, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, savedChoices, scopeSavedChoices, subscribeOptionFallback } from '../query/option-fallback'
@@ -51,7 +51,7 @@ watch(queryTimeoutMs, value => {
   writeLimitTimeout(value)
 }, { flush: 'sync' })
 
-const values = ref<Record<string, string>>({})
+const values = ref<Record<string, string>>({ ...limitDateDefaults() })
 /** 标记哪些值是用户手打进来的文本，只有这些才原样回显在输入框里。 */
 const typedKeys = ref<Record<string, boolean>>({})
 const displayValues = ref<Record<string, string>>({})
@@ -286,7 +286,7 @@ async function applyTemplate(id: string): Promise<void> {
   selectedId.value = id
   saveNameDirty.value = false
   if (!id || !props.bridge) {
-    values.value = {}
+    values.value = { ...limitDateDefaults() }
     typedKeys.value = {}
     displayValues.value = {}
     unknownFields.value = {}
@@ -307,7 +307,7 @@ async function applyTemplate(id: string): Promise<void> {
     return
   }
   applyingTemplate = true
-  values.value = parsed.data.fields
+  values.value = { ...limitDateDefaults(), ...parsed.data.fields }
   typedKeys.value = {}
   displayValues.value = parsed.data.displayValues
   unknownFields.value = parsed.data.unknownFields
@@ -459,7 +459,7 @@ async function importTemplateJson(event: Event): Promise<void> {
   const fields = read.conditions.fields
   // 和套用模板一样：条件整套换上，选中的模板和名称都清掉，名称由自己再填。
   applyingTemplate = true
-  values.value = { ...fields }
+  values.value = { ...limitDateDefaults(), ...fields }
   typedKeys.value = {}
   displayValues.value = { ...read.conditions.displayValues }
   unknownFields.value = { ...read.conditions.unknownFields }
@@ -505,7 +505,7 @@ function search(): void {
 }
 
 function reset(): void {
-  values.value = {}
+  values.value = { ...limitDateDefaults() }
   typedKeys.value = {}
   displayValues.value = {}
   unknownFields.value = {}
@@ -594,7 +594,7 @@ async function loadPickers(force: boolean, manual = false): Promise<void> {
 
 function applySeed(): void {
   if (!props.seed) return
-  values.value = { ...props.seed }
+  values.value = { ...limitDateDefaults(), ...props.seed }
   typedKeys.value = {}
   selectedId.value = ''
   const hidden = hiddenLimitKeys()
@@ -605,7 +605,7 @@ function applySeed(): void {
 watch(() => props.seedToken, () => {
   if (!props.seed) {
     if (!props.seedToken) return
-    values.value = {}
+    values.value = { ...limitDateDefaults() }
     selectedId.value = ''
     showMore.value = false
     message.value = ''
@@ -702,7 +702,7 @@ watch(() => [valueOf('case_type'), valueOf('proc_type'), valueOf('country')].joi
               <span class="date-pair">
                 <WDatePicker :id="cell.start" :model-value="valueOf(cell.start)" :format="dateFormatOf(cell)" :max="valueOf(cell.end)" placeholder="起" @update:model-value="setValue(cell.start, String($event))" />
                 <em>到</em>
-                <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :format="dateFormatOf(cell)" :min="valueOf(cell.start)" placeholder="止" @update:model-value="setValue(cell.end, String($event))" />
+                <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :format="dateFormatOf(cell)" :min="valueOf(cell.start)" default-today placeholder="止" @update:model-value="setValue(cell.end, String($event))" />
                 <label v-if="cell.empty" class="empty-check"><input :checked="checked(cell.empty)" type="checkbox" @change="onCheck(cell.empty, $event)" />为空</label>
               </span>
             </div>

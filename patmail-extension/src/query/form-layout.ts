@@ -1,4 +1,5 @@
 /** 文件查询页的排版。来源：客户管理-文件管理 DOM，一排三个条件。 */
+import { buildEndDateDefaults } from '../shared/date-defaults'
 
 export interface TextCell { kind: 'text'; key: string; label: string }
 export interface NamedCell { kind: 'named'; key: string; label: string }
@@ -222,3 +223,12 @@ export const QUERY_BLOCKS: QueryBlock[] = [
     ]
   }
 ]
+
+export const FILE_DATE_CELLS: DateCell[] = QUERY_BLOCKS.flatMap(block =>
+  block.cells.filter((cell): cell is DateCell => cell.kind === 'dates')
+)
+
+/** 打开文件管理与重置/恢复模板时，所有文件/案件日期区间的结束日默认填当天（`yyyy-MM-dd`）。 */
+export function fileDateDefaults(now: Date = new Date()): Record<string, string> {
+  return buildEndDateDefaults(FILE_DATE_CELLS, now)
+}

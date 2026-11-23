@@ -920,7 +920,7 @@ onBeforeUnmount(() => {
             <span class="date-pair">
               <WDatePicker :id="cell.start" :model-value="valueOf(cell.start)" :max="valueOf(cell.end)" placeholder="开始" @update:model-value="setValue(cell.start, String($event))" />
               <em>到</em>
-              <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :min="valueOf(cell.start)" placeholder="结束" @update:model-value="setValue(cell.end, String($event))" />
+              <WDatePicker :id="cell.end" :model-value="valueOf(cell.end)" :min="valueOf(cell.start)" default-today placeholder="结束" @update:model-value="setValue(cell.end, String($event))" />
             </span>
           </div>
         </template>

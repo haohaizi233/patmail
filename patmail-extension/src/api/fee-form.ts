@@ -1,4 +1,5 @@
 import { apiError, type ApiResult } from './types'
+import { buildEndDateDefaults } from '../shared/date-defaults'
 
 export interface FeeCheckItem {
   key: string
@@ -507,6 +508,16 @@ export const FEE_ADVANCED_BLOCKS: FeeBlock[] = [
     ]
   }
 ]
+
+export const FEE_DATE_CELLS: FeeDateCell[] = [
+  ...FEE_COMMON_CELLS,
+  ...FEE_ADVANCED_BLOCKS.flatMap(block => block.cells)
+].filter((cell): cell is FeeDateCell => cell.kind === 'dates')
+
+/** 打开页面和重置条件时，所有费用日期区间的结束日默认填当天（`yyyy-MM-dd`）。 */
+export function feeDateDefaults(now: Date = new Date()): Record<string, string> {
+  return buildEndDateDefaults(FEE_DATE_CELLS, now)
+}
 
 export function feeCellKey(cell: FeeCell): string {
   if (cell.kind === 'spacer') return cell.id

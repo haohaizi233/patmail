@@ -1,6 +1,7 @@
 import { apiError, type ApiResult } from './types'
 import { isLimitMonitorInputField } from './limit-monitor-params'
 import { MAX_QUERY_XML_CHARS, MAX_QUERY_XML_NODES } from '../query/xml-parser'
+import { buildEndDateDefaults } from '../shared/date-defaults'
 
 /** 期限监控「全部」页签的控件。来源：案件管理-期限监控 DOM，一排两个条件。 */
 
@@ -174,6 +175,15 @@ export const LIMIT_BLOCKS: LimitBlock[] = [
     ]
   }
 ]
+
+export const LIMIT_DATE_CELLS: LimitDateCell[] = LIMIT_BLOCKS.flatMap(block =>
+  block.cells.filter((cell): cell is LimitDateCell => cell.kind === 'dates')
+)
+
+/** 打开页面和重置条件时，所有期限日期区间的结束日默认填当天（申请日(月日) 按 `MM-dd`，其余按 `yyyy-MM-dd`）。 */
+export function limitDateDefaults(now: Date = new Date()): Record<string, string> {
+  return buildEndDateDefaults(LIMIT_DATE_CELLS, now)
+}
 
 /**
  * 自定义栏位 1-5 的业务名由租户在 `GetFieldColumn` 里配置（API/21），原站按 `column_id` 改表单标题。

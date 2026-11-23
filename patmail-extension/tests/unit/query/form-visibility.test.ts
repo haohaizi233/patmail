@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { scanFileSearchForm } from '../../../src/query/scan-file-search-form.mjs'
 import { hiddenFormFields } from '../../../src/query/form-page'
-import { cellKeys, queryBlocks } from '../../../src/query/form-layout'
+import { FILE_DATE_CELLS, cellKeys, fileDateDefaults, queryBlocks } from '../../../src/query/form-layout'
 
 afterEach(() => { document.body.innerHTML = '' })
 
@@ -61,5 +61,16 @@ describe('文件查询字段与原站折叠状态', () => {
   it('does not reinterpret an unmarked hidden row as a folded section', () => {
     fileForm('img_show', 'tr_hide')
     expect(scanFileSearchForm(document).fields.find(field => field.id === 'filetype')?.visible).toBe(false)
+  })
+
+  it('populates today date for every file/case date range end field', () => {
+    const defaults = fileDateDefaults(new Date(2026, 10, 23, 8, 30))
+    expect(FILE_DATE_CELLS).toHaveLength(14)
+    expect(Object.keys(defaults).sort()).toEqual(FILE_DATE_CELLS.map(cell => cell.end).sort())
+    expect(defaults.post_e).toBe('2026-11-23')
+    expect(defaults.update_e).toBe('2026-11-23')
+    expect(defaults.app_date_e).toBe('2026-11-23')
+    expect(defaults.back_date_end).toBe('2026-11-23')
+    expect(Object.values(defaults).every(v => v === '2026-11-23')).toBe(true)
   })
 })

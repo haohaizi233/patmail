@@ -17,6 +17,7 @@ import {
   FEE_OPTION_KEYS,
   FEE_ADVANCED_KEYS,
   feeCellKey,
+  feeDateDefaults,
   type FeeCell
 } from '../../api/fee-form'
 import { readFilingTimeout, writeFilingTimeout } from '../../api/query-timeout'
@@ -78,8 +79,9 @@ watch(queryTimeoutMs, value => {
   void writeFilingTimeout(value)
 }, { flush: 'sync' })
 
-// Form Values (all default empty matching live FeeSearch.aspx)
+// Form Values (日期结束日默认当天，其余条件默认空)
 const values = ref<Record<string, string>>({
+  ...feeDateDefaults(),
   case_type: '',
   pay_status: '',
   is_close: '',
@@ -957,6 +959,7 @@ function onFeeExported(message: string): void {
 }
 
 const DEFAULT_FEE_VALUES: Record<string, string> = {
+  ...feeDateDefaults(),
   case_type: '',
   pay_status: '',
   is_close: '',
@@ -1362,6 +1365,7 @@ defineExpose({
                   :model-value="valueOf(cell.end)"
                   :min="valueOf(cell.start)"
                   :disabled="Boolean(cell.empty && isChecked(cell.empty))"
+                  default-today
                   placeholder="止"
                   @update:model-value="setValue(cell.end, String($event))"
                 />
@@ -1570,6 +1574,7 @@ defineExpose({
                     :model-value="valueOf(cell.end)"
                     :min="valueOf(cell.start)"
                     :disabled="Boolean(cell.empty && isChecked(cell.empty))"
+                    default-today
                     placeholder="止"
                     @update:model-value="setValue(cell.end, String($event))"
                   />

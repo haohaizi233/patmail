@@ -5,9 +5,17 @@ import { bg, icon } from '../assets'
 import { customers, files } from '../data'
 import ThemeSelect from '../components/ThemeSelect.vue'
 import { textOptions } from '../components/theme-select'
+import { formatWDate } from '../../shared/date-defaults'
 
 const ui = inject('ui')
 const picked = ref(files[0])
+const uploadStartDate = ref('')
+const uploadEndDate = ref(formatWDate())
+function resetFilters() {
+  ui.search.value = ''
+  uploadStartDate.value = ''
+  uploadEndDate.value = formatWDate()
+}
 const rows = computed(() => files.filter((f) => !ui.search.value || f.name.includes(ui.search.value) || f.customer.includes(ui.search.value) || f.desc.includes(ui.search.value)))
 </script>
 
@@ -26,9 +34,9 @@ const rows = computed(() => files.filter((f) => !ui.search.value || f.name.inclu
           <label>客户<ThemeSelect placeholder="请选择客户" :options="customers.map(c => ({ value: c.name, label: c.name }))" /></label>
           <label>文件描述<input v-model="ui.search.value" placeholder="请输入文件描述关键词" /></label>
           <label>发文类型<ThemeSelect :options="textOptions(['全部类型', '官方来文', '客户发文', '内部文件'])" /></label>
-          <label>上传日期<span class="date-pair"><input placeholder="开始日期" /><i>～</i><input placeholder="结束日期" /></span></label>
+          <label>上传日期<span class="date-pair"><input v-model="uploadStartDate" placeholder="开始日期" /><i>～</i><input v-model="uploadEndDate" placeholder="结束日期" /></span></label>
           <label>状态<ThemeSelect :options="textOptions(['全部状态', '已归档', '待处理', '异常'])" /></label>
-          <div class="form-actions"><button class="ghost" @click="ui.search.value = ''">重置</button><button class="solid" @click="ui.notify('查询完成')">查询</button></div>
+          <div class="form-actions"><button class="ghost" @click="resetFilters">重置</button><button class="solid" @click="ui.notify('查询完成')">查询</button></div>
         </div>
       </section>
       <section class="card">

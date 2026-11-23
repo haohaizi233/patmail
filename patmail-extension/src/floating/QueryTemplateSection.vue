@@ -6,7 +6,7 @@ import type { NormalizedDictionary } from '../api/dictionaries'
 import type { HistoryQueryOption } from '../api/query-history'
 import type { CustomerQueryProfile } from '../customer/types'
 import { fieldGroup, fieldLabel, parseQueryXml, resolveQueryTemplate } from '../query'
-import { PAGE_OPTIONS, cellKeys, queryBlocks, type QueryCell, type QuerySection } from '../query/form-layout'
+import { PAGE_OPTIONS, cellKeys, fileDateDefaults, queryBlocks, type QueryCell, type QuerySection } from '../query/form-layout'
 import { cellsFromLiveFields } from '../query/live-fields'
 import { buildQueryXml } from '../query/query-xml'
 import { fallbackFields, formCheckDiff, formFieldKey, hiddenFormFields, mergeFormFields, overlayFieldOptions, pageSelectOptions } from '../query/form-page'
@@ -220,7 +220,7 @@ const accountTemplates = computed(() => [
 ])
 const canSubmit = computed(() => props.canSearch && !baseMissing.value &&
   (props.mode !== 'customer' || Boolean(selectedCustomer.value?.enabled)) &&
-  hasExplicitFileSearchFilter(resolved.value.fields) && unavailableFields.value.length === 0)
+  hasExplicitFileSearchFilter(explicitResolved.value.fields) && unavailableFields.value.length === 0)
 
 /** 查询按钮点不动时，把缺什么直接说清楚，不再只靠按钮变色。 */
 const submitHint = computed(() => {
@@ -248,8 +248,13 @@ const temporaryFields = computed(() => {
   }
   return fields
 })
-const resolved = computed(() => resolveQueryTemplate(
+const explicitResolved = computed(() => resolveQueryTemplate(
   baseMissing.value ? {} : baseFields.value,
+  props.mode === 'customer' ? selectedCustomer.value?.overrides : {},
+  temporaryFields.value
+))
+const resolved = computed(() => resolveQueryTemplate(
+  { ...fileDateDefaults(), ...(baseMissing.value ? {} : baseFields.value) },
   props.mode === 'customer' ? selectedCustomer.value?.overrides : {},
   temporaryFields.value
 ))
@@ -964,7 +969,7 @@ async function importCurrent(): Promise<void> {
 /** 导出 JSON：导出表单当前的查询条件，不含模板名。和保存模板同一套字段口径。 */
 function exportTemplateJson(): void {
   const fields: Record<string, string> = {}
-  for (const [key, value] of Object.entries(resolved.value.fields)) {
+  for (const [key, value] of Object.entries(explicitResolved.value.fields)) {
     if (value.trim()) fields[key] = value
   }
   if (!Object.keys(fields).length) {
@@ -1291,7 +1296,7 @@ async function saveBoth(): Promise<void> {
     return
   }
   const fields: Record<string, string> = {}
-  for (const [key, value] of Object.entries(resolved.value.fields)) {
+  for (const [key, value] of Object.entries(explicitResolved.value.fields)) {
     if (value.trim()) fields[key] = value
   }
   if (!hasExplicitFileSearchFilter(fields)) {
@@ -1676,7 +1681,7 @@ watch(selectedCustomerId, () => {
               <span class="date-pair">
                 <WDatePicker :id="cell.start" :model-value="formValue(cell.start)" :max="formValue(cell.end)" placeholder="起" @update:model-value="setOverride(cell.start, String($event))" />
                 <em>到</em>
-                <WDatePicker :id="cell.end" :model-value="formValue(cell.end)" :min="formValue(cell.start)" placeholder="止" @update:model-value="setOverride(cell.end, String($event))" />
+                <WDatePicker :id="cell.end" :model-value="formValue(cell.end)" :min="formValue(cell.start)" default-today placeholder="止" @update:model-value="setOverride(cell.end, String($event))" />
                 <label v-if="cell.empty" class="empty-check"><input :checked="checked(cell.empty)" type="checkbox" @change="onCheck(cell.empty, $event)" />为空</label>
               </span>
             </div>
