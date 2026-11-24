@@ -80,6 +80,52 @@ it('reconciles a persisted browser ID after a page remount without starting a du
   }
 })
 
+it('releases tracked request intent when verifier fails before Chrome assigns a download ID so retries succeed', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:retry-fixture')
+  const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  try {
+    const ledger = new Map<string, unknown>()
+    const tracking: BillingDownloadTracking = {
+      get: key => Promise.resolve(ledger.get(key)),
+      put: (key, record) => {
+        ledger.set(key, record)
+        return Promise.resolve()
+      },
+      lock: (_key, action) => action(),
+    }
+    const start = vi
+      .fn<() => Promise<number>>()
+      .mockRejectedValueOnce(new Error('浏览器未返回下载编号。'))
+      .mockResolvedValueOnce(88)
+    const search = vi.fn(() => Promise.resolve([{ id: 88, state: 'complete' as const, filename: 'retry.xlsx' }]))
+    const request = {
+      bytes: new Uint8Array([1, 2, 3, 4]),
+      fileName: 'retry.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      blockCount: 1,
+      warnings: [],
+      job: { scope: 'account-retry', parameters: 'retry-params' },
+    }
+    const adapter = () => createTrackedBillingDownloadAdapter({ download: start, search }, tracking)
+    expect(await adapter().download(request)).toEqual({
+      status: 'failed',
+      reason: '浏览器未返回下载编号。',
+    })
+    expect([...ledger.values()][0]).toMatchObject({ state: 'cancelled' })
+    expect(await adapter().download(request)).toMatchObject({
+      status: 'download_completed',
+      downloadId: 88,
+      savedFileName: 'retry.xlsx',
+    })
+    expect(start).toHaveBeenCalledTimes(2)
+  } finally {
+    createUrl.mockRestore()
+    revokeUrl.mockRestore()
+    vi.unstubAllGlobals()
+  }
+})
+
 const TEMPLATE_FILES: Record<BillingTemplateId, string> = {
   'general-foreign': 'qingkuan-general-foreign.xlsx',
   'midea-foreign': 'qingkuan-midea-foreign.xlsx',
@@ -674,7 +720,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
   it('splits multi-customer rows into concurrent per-customer workbooks by default with adaptive file names', async () => {
     const templateLoads: string[] = []
     const downloadedFiles: string[] = []
-    const progressLog: Array<{ done: number; total: number; currentCustomer: string }> = []
+    const progressLog: Array<{ done: number; total: number; currentCustomer: string; phase?: string }> = []
 
     const service = new BillingApplicationService({
       templates: {
@@ -774,7 +820,8 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       ])
     }
     expect(downloadedFiles).toHaveLength(2)
-    expect(progressLog).toHaveLength(2)
+    expect(progressLog.filter(p => p.phase === 'generating')).toHaveLength(2)
+    expect(progressLog.filter(p => p.phase === 'downloading')).toHaveLength(2)
   })
 
   it('merges multiple customers into a single workbook when allowMixedCustomers is true', async () => {
@@ -869,5 +916,175 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       expect(outcome.blockCount).toBe(2)
     }
     expect(downloadedFiles).toEqual(['美的PCT费用清单-多客户合并(2个)-20261123.xlsx'])
+  })
+
+  it('writes a merged multi-customer summary header in midea-pct when allowMixedCustomers is true', async () => {
+    const rows: FeeSearchRow[] = [
+      mockFeeRow({
+        feeId: 'mix-1',
+        caseId: 'c-1',
+        caseVolume: 'PA2602001PCT',
+        businessType: 'PCT国际阶段',
+        feeClass: 'O',
+        feeType: '申请费',
+        amount: 9000,
+        currency: 'CNY',
+        customerName: '美的工业技术事业部',
+        requestStatus: '未请款',
+      }),
+      mockFeeRow({
+        feeId: 'mix-2',
+        caseId: 'c-2',
+        caseVolume: 'PA2602002PCT',
+        businessType: 'PCT国际阶段',
+        feeClass: 'O',
+        feeType: '检索费',
+        amount: 2100,
+        currency: 'CNY',
+        customerName: '美的家用空调',
+        requestStatus: '未请款',
+      }),
+    ]
+    const result = await fillBillingTemplate('midea-pct', readAsset('midea-pct'), {
+      headers: defaultHeaders('midea-pct', new Date('2026-11-23')),
+      options: { reviewFee: 0, bankFee: 0 },
+      allowMixedCustomers: true,
+      rates: { CNY: 1 },
+      rateSourceUrl: '',
+      rateDate: '2026-11-23',
+      rows,
+      bills: {},
+      today: new Date('2026-11-23T00:00:00Z'),
+    })
+    const book = await XlsxBook.open(result.bytes)
+    const summary = book.sheet('账单汇总')
+    expect(String(summary.valueOf('A1'))).toContain('美的工业技术事业部 等 2 个客户 PCT 费用账单汇总')
+    expect(summary.valueOf('B6')).toBe('美的工业技术事业部 等 2 个客户')
+  })
+
+  it('runs a 2-stage streaming pipeline: concurrent workbook generation overlapping ordered serial downloads', async () => {
+    let activeFill = 0
+    let maxActiveFill = 0
+    let activeDownload = 0
+    let maxActiveDownload = 0
+    const timeline: string[] = []
+    const downloadOrder: string[] = []
+    const fillResolvers = new Map<string, () => void>()
+    let notifyAllFillsStarted!: () => void
+    const allFillsStarted = new Promise<void>(res => {
+      notifyAllFillsStarted = res
+    })
+
+    const service = new BillingApplicationService({
+      templates: {
+        loadTemplate: () => Promise.resolve(new Uint8Array([1])),
+      },
+      spreadsheet: {
+        async fill(_templateId, _bytes, input) {
+          const customer = input.rows[0].customerName
+          activeFill += 1
+          maxActiveFill = Math.max(maxActiveFill, activeFill)
+          timeline.push(`fill:start:${customer}`)
+          if (timeline.filter(entry => entry.startsWith('fill:start:')).length === 3) {
+            notifyAllFillsStarted()
+          }
+          await new Promise<void>(resolve => {
+            fillResolvers.set(customer, resolve)
+          })
+          activeFill -= 1
+          timeline.push(`fill:end:${customer}`)
+          return {
+            bytes: new Uint8Array([9]),
+            fileName: `${customer}.xlsx`,
+            warnings: [],
+            blockCount: 1,
+          }
+        },
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-23', perCny: { USD: 7.2 }, sourceUrl: '' }),
+      },
+      downloads: {
+        async download(req) {
+          activeDownload += 1
+          maxActiveDownload = Math.max(maxActiveDownload, activeDownload)
+          timeline.push(`download:start:${req.fileName}`)
+          downloadOrder.push(req.fileName)
+          await new Promise<void>(resolve => setTimeout(resolve, 10))
+          activeDownload -= 1
+          timeline.push(`download:end:${req.fileName}`)
+          return {
+            status: 'download_completed',
+            downloadId: downloadOrder.length,
+            fileName: req.fileName,
+            savedFileName: req.fileName,
+            blockCount: 1,
+            warnings: [],
+          }
+        },
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.resolve(),
+      },
+    })
+
+    const rows: FeeSearchRow[] = [
+      mockFeeRow({ feeId: 's-1', caseId: 'c-1', caseVolume: 'PA01', customerName: '客户甲', currency: 'CNY', requestStatus: '未请款' }),
+      mockFeeRow({ feeId: 's-2', caseId: 'c-2', caseVolume: 'PA02', customerName: '客户乙', currency: 'CNY', requestStatus: '未请款' }),
+      mockFeeRow({ feeId: 's-3', caseId: 'c-3', caseVolume: 'PA03', customerName: '客户丙', currency: 'CNY', requestStatus: '未请款' }),
+    ]
+
+    const exportPromise = service.exportBilling({
+      templateId: 'general-foreign',
+      rows,
+      bills: {},
+      parameters: {
+        headers: defaultHeaders('general-foreign', new Date('2026-11-23')),
+        options: { reviewFee: 0, bankFee: 0 },
+        rates: { CNY: 1 },
+        rateSourceUrl: '',
+        rateDate: '2026-11-23',
+      },
+      fileSelectionIssue: '',
+      feeSelectionIssue: '',
+      reconciliationRequestedCount: 0,
+      confirmExistingFees: false,
+      pctExportExceptionsCount: 0,
+      confirmPctExceptions: false,
+      needsForeignRates: false,
+      ratesCheckedOn: '2026-11-23',
+      ratesLoading: false,
+      missingRateCodes: [],
+      usesManualRate: false,
+      manualRateDate: '',
+      today: new Date('2026-11-23T00:00:00Z'),
+      concurrency: 3,
+      downloadGapMs: 0,
+    })
+
+    await allFillsStarted
+    expect(maxActiveFill).toBe(3)
+    // Slot 0 finishes first; Stage 2 immediately begins downloading 客户甲 while 客户丙/客户乙 still fill.
+    fillResolvers.get('客户甲')?.()
+    await vi.waitFor(() => {
+      expect(timeline).toContain('download:start:客户甲.xlsx')
+    })
+    expect(timeline).not.toContain('fill:end:客户乙')
+    expect(timeline).not.toContain('fill:end:客户丙')
+
+    // Even when 客户丙 finishes before 客户乙, Stage 2 still dispatches strictly in order.
+    fillResolvers.get('客户丙')?.()
+    await Promise.resolve()
+    fillResolvers.get('客户乙')?.()
+
+    const { outcome } = await exportPromise
+    expect(maxActiveDownload).toBe(1)
+    expect(downloadOrder).toEqual(['客户甲.xlsx', '客户乙.xlsx', '客户丙.xlsx'])
+    expect(outcome.status).toBe('batch_completed')
+    if (outcome.status === 'batch_completed') {
+      expect(outcome.successCount).toBe(3)
+      expect(outcome.failedCount).toBe(0)
+    }
   })
 })

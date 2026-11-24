@@ -86,58 +86,126 @@ export class BillingApplicationService {
     if (!allowMixed && groups.length > 1) {
       const total = groups.length
       const concurrency = Math.max(1, Math.min(command.concurrency ?? 4, total))
+      const downloadGapMs = Math.max(0, command.downloadGapMs ?? 120)
       const items = new Array<BatchExportItemOutcome>(total)
-      let cursor = 0
-      let done = 0
 
-      const runWorker = async (): Promise<void> => {
+      type GeneratedSlot =
+        | {
+            ok: true
+            input: BillingInput
+            result: { bytes: Uint8Array; fileName: string; blockCount: number; warnings: string[] }
+          }
+        | { ok: false; outcome: BatchExportItemOutcome }
+
+      interface DeferredSlot {
+        promise: Promise<GeneratedSlot>
+        resolve: (value: GeneratedSlot) => void
+      }
+
+      // 阶段 1（并发填表池）与阶段 2（有序串行下载派发）通过按索引对应的槽位队列接力。
+      const readySlots: DeferredSlot[] = Array.from({ length: total }, () => {
+        let resolve!: (value: GeneratedSlot) => void
+        const promise = new Promise<GeneratedSlot>(res => {
+          resolve = res
+        })
+        return { promise, resolve }
+      })
+
+      let cursor = 0
+      let generatedDone = 0
+      let downloadedDone = 0
+
+      const staleOutcome = (
+        customer: string,
+        fileName = '',
+        blockCount = 0,
+        warnings: string[] = [],
+      ): BatchExportItemOutcome => ({
+        customer,
+        status: 'failed',
+        fileName,
+        blockCount,
+        warnings,
+        reason: '生成期间请款范围或导出参数已变化，请核对后重新导出。',
+      })
+
+      const runGeneratorWorker = async (): Promise<void> => {
         while (cursor < total) {
           const index = cursor++
           const group = groups[index]
           if (command.isStale?.()) {
-            items[index] = {
-              customer: group.customer,
-              status: 'failed',
-              fileName: '',
-              blockCount: 0,
-              warnings: [],
-              reason: '生成期间请款范围或导出参数已变化，请核对后重新导出。',
-            }
-            done += 1
-            command.onProgress?.({ done, total, currentCustomer: group.customer })
-            continue
-          }
-          try {
-            const input: BillingInput = {
-              headers: command.parameters.headers,
-              options: command.parameters.options,
-              rates: command.parameters.rates,
-              rateSourceUrl: command.parameters.rateSourceUrl,
-              rateDate: command.parameters.rateDate,
-              rows: group.rows,
-              bills: command.bills,
-              today,
-              allowMixedCustomers: false,
-              fileNameSuffix: group.customer,
-            }
-            const result = await this.ports.spreadsheet.fill(command.templateId, rawBytes, input)
-            if (command.isStale?.()) {
-              items[index] = {
-                customer: group.customer,
-                status: 'failed',
-                fileName: result.fileName,
-                blockCount: result.blockCount,
-                warnings: result.warnings,
-                reason: '生成期间请款范围或导出参数已变化，请核对后重新导出。',
+            readySlots[index].resolve({ ok: false, outcome: staleOutcome(group.customer) })
+          } else {
+            try {
+              const input: BillingInput = {
+                headers: command.parameters.headers,
+                options: command.parameters.options,
+                rates: command.parameters.rates,
+                rateSourceUrl: command.parameters.rateSourceUrl,
+                rateDate: command.parameters.rateDate,
+                rows: group.rows,
+                bills: command.bills,
+                today,
+                allowMixedCustomers: false,
+                fileNameSuffix: group.customer,
               }
-            } else {
+              const result = await this.ports.spreadsheet.fill(command.templateId, rawBytes, input)
+              if (command.isStale?.()) {
+                readySlots[index].resolve({
+                  ok: false,
+                  outcome: staleOutcome(group.customer, result.fileName, result.blockCount, result.warnings),
+                })
+              } else {
+                readySlots[index].resolve({ ok: true, input, result })
+              }
+            } catch (error) {
+              readySlots[index].resolve({
+                ok: false,
+                outcome: {
+                  customer: group.customer,
+                  status: 'failed',
+                  fileName: '',
+                  blockCount: 0,
+                  warnings: [],
+                  reason: error instanceof Error ? error.message : String(error),
+                },
+              })
+            }
+          }
+          generatedDone += 1
+          command.onProgress?.({
+            done: downloadedDone,
+            total,
+            currentCustomer: group.customer,
+            phase: 'generating',
+            generatedDone,
+            downloadedDone,
+          })
+        }
+      }
+
+      const runDownloadDispatcher = async (): Promise<void> => {
+        for (let index = 0; index < total; index += 1) {
+          const group = groups[index]
+          const slot = await readySlots[index].promise
+          if (!slot.ok) {
+            items[index] = slot.outcome
+          } else if (command.isStale?.()) {
+            items[index] = staleOutcome(
+              group.customer,
+              slot.result.fileName,
+              slot.result.blockCount,
+              slot.result.warnings,
+            )
+          } else {
+            try {
               const dl = await this.ports.downloads.download({
-                bytes: result.bytes,
-                fileName: result.fileName,
+                bytes: slot.result.bytes,
+                fileName: slot.result.fileName,
                 mimeType: XLSX_MIME_TYPE,
-                blockCount: result.blockCount,
-                warnings: result.warnings,
-                ...buildJobSpec(input),
+                blockCount: slot.result.blockCount,
+                warnings: slot.result.warnings,
+                ...buildJobSpec(slot.input),
               })
               if (dl.status === 'download_completed' || dl.status === 'download_started' || dl.status === 'generated') {
                 items[index] = {
@@ -152,29 +220,42 @@ export class BillingApplicationService {
                 items[index] = {
                   customer: group.customer,
                   status: dl.status === 'batch_completed' ? 'failed' : dl.status,
-                  fileName: result.fileName,
-                  blockCount: result.blockCount,
-                  warnings: result.warnings,
+                  fileName: slot.result.fileName,
+                  blockCount: slot.result.blockCount,
+                  warnings: slot.result.warnings,
                   reason: dl.status === 'batch_completed' ? '批量导出嵌套异常。' : dl.reason,
                 }
               }
+            } catch (error) {
+              items[index] = {
+                customer: group.customer,
+                status: 'failed',
+                fileName: slot.result.fileName,
+                blockCount: slot.result.blockCount,
+                warnings: slot.result.warnings,
+                reason: error instanceof Error ? error.message : String(error),
+              }
             }
-          } catch (error) {
-            items[index] = {
-              customer: group.customer,
-              status: 'failed',
-              fileName: '',
-              blockCount: 0,
-              warnings: [],
-              reason: error instanceof Error ? error.message : String(error),
+            if (index < total - 1 && downloadGapMs > 0 && !command.isStale?.()) {
+              await new Promise<void>(resolve => setTimeout(resolve, downloadGapMs))
             }
           }
-          done += 1
-          command.onProgress?.({ done, total, currentCustomer: group.customer })
+          downloadedDone += 1
+          command.onProgress?.({
+            done: downloadedDone,
+            total,
+            currentCustomer: group.customer,
+            phase: 'downloading',
+            generatedDone,
+            downloadedDone,
+          })
         }
       }
 
-      await Promise.all(Array.from({ length: concurrency }, () => runWorker()))
+      await Promise.all([
+        ...Array.from({ length: concurrency }, () => runGeneratorWorker()),
+        runDownloadDispatcher(),
+      ])
       const isOk = (item: BatchExportItemOutcome) =>
         item.status === 'download_completed' || item.status === 'download_started' || item.status === 'generated'
       const successCount = items.filter(isOk).length

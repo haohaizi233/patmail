@@ -16,6 +16,9 @@ export interface BatchExportProgress {
   done: number
   total: number
   currentCustomer: string
+  phase?: 'generating' | 'downloading'
+  generatedDone?: number
+  downloadedDone?: number
 }
 
 /**
@@ -102,6 +105,8 @@ export interface ExportBillingCommand {
   today?: Date
   /** 多客户分表流水线并发度（默认 4）。 */
   concurrency?: number
+  /** Stage 2 顺序下载派发之间的间隔毫秒数（默认 120）。 */
+  downloadGapMs?: number
   /** 多客户分表流水线进度回调。 */
   onProgress?: (progress: BatchExportProgress) => void
   /** Account scope used to associate a browser download with this export. */

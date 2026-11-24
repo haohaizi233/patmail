@@ -472,7 +472,11 @@ const PCT_TEMPLATE_SHEET = 'PCT费用明细'
 function fillMideaPct(book: XlsxBook, input: BillingInput, warnings: string[]): number {
   const sheet = book.sheet(PCT_TEMPLATE_SHEET)
   const summary = book.sheet('账单汇总')
-  const customer = input.rows[0].customerName.trim()
+  const distinctCustomers = uniqueText(input.rows.map(row => row.customerName))
+  const customer =
+    distinctCustomers.length > 1
+      ? `${distinctCustomers[0]} 等 ${distinctCustomers.length} 个客户`
+      : (distinctCustomers[0] ?? '')
   const dates = input.rows.map(row => excelSerial(row.finishDate))
   const knownDates = dates.filter(date => date !== null).sort((a, b) => a - b)
   const toDateText = (serial: number) => new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000).toISOString().slice(0, 10)

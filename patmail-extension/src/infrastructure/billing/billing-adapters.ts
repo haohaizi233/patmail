@@ -73,7 +73,8 @@ export interface ChromeDownloadDelta {
 
 export interface ChromeDownloadsVerifier {
   download(options: { url: string; filename: string; saveAs?: boolean }): Promise<number>
-  search(query: { id: number }): Promise<Array<{
+  search(query: { id?: number; url?: string }): Promise<Array<{
+    id?: number
     state: 'in_progress' | 'interrupted' | 'complete'
     error?: string
     filename?: string
@@ -89,6 +90,7 @@ export interface VerifiedDownloadOptions {
 }
 
 const DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS = 15_000
+const STALE_UNCONFIRMED_REQUEST_MS = 60_000
 
 async function readDownloadItem(verifier: ChromeDownloadsVerifier, id: number) {
   let timer: number | undefined
@@ -158,7 +160,19 @@ export function createChromeExtensionDownloadsVerifier(): ChromeDownloadsVerifie
       }
       const timer = setTimeout(() => {
         cleanup()
-        reject(new Error('浏览器未返回下载编号。'))
+        void chrome.downloads.search({ url }).then(
+          items => {
+            const matched = items[0]
+            if (matched && typeof matched.id === 'number') {
+              resolve(matched.id)
+              return
+            }
+            reject(new Error('浏览器未返回下载编号。'))
+          },
+          () => {
+            reject(new Error('浏览器未返回下载编号。'))
+          },
+        )
       }, DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS)
       try {
         created.addListener(onCreated)
@@ -171,6 +185,7 @@ export function createChromeExtensionDownloadsVerifier(): ChromeDownloadsVerifie
     search: async query => {
       const items = await chrome.downloads.search(query)
       return items.map(item => ({
+        id: item.id,
         state: item.state,
         filename: item.filename,
         ...(item.error ? { error: String(item.error) } : {}),
@@ -404,20 +419,23 @@ export function createTrackedBillingDownloadAdapter(
           }
         }
         if (prior?.state === 'requested' || prior?.state === 'started') {
-          if (prior.id === undefined) return unknown()
-          const id = prior.id
-          try {
-            const [item] = await verifier.search({ id })
-            const terminal = item && terminalOutcomeFromState(item.state, request, id, item.error, browserDownloadName(item.filename))
-            if (!terminal) return unknown(id)
-            await storage.put(key, {
-              state: item.state === 'complete' ? 'completed' : 'interrupted',
-              id,
-              at: Date.now(),
-            })
-            return terminal
-          } catch {
-            return unknown(id)
+          if (prior.id === undefined) {
+            if (Date.now() - prior.at < STALE_UNCONFIRMED_REQUEST_MS) return unknown()
+          } else {
+            const id = prior.id
+            try {
+              const [item] = await verifier.search({ id })
+              const terminal = item && terminalOutcomeFromState(item.state, request, id, item.error, browserDownloadName(item.filename))
+              if (!terminal) return unknown(id)
+              await storage.put(key, {
+                state: item.state === 'complete' ? 'completed' : 'interrupted',
+                id,
+                at: Date.now(),
+              })
+              return terminal
+            } catch {
+              return unknown(id)
+            }
           }
         }
         try {
@@ -442,6 +460,14 @@ export function createTrackedBillingDownloadAdapter(
         const result = await tracked.download(request)
         if (notDispatched) {
           // Only release an intent when this page can prove the call never happened.
+          await storage.put(key, { state: 'cancelled', at: Date.now() }).catch(() => undefined)
+          return result
+        }
+        if (
+          id === undefined &&
+          result.status === 'failed' &&
+          /浏览器未返回下载编号|浏览器未能发起下载/.test(result.reason)
+        ) {
           await storage.put(key, { state: 'cancelled', at: Date.now() }).catch(() => undefined)
           return result
         }
