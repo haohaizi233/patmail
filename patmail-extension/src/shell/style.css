@@ -604,3 +604,19 @@ button.home-tool-btn:disabled { opacity: .5; cursor: not-allowed; }
 .sidebar .nav-children { display: grid; gap: 3px; margin: 4px 0 4px 14px; padding-left: 8px; border-left: 1px solid #ffc0da; }
 .sidebar nav .nav-children button { font-size: 13px; height: 38px; padding: 0 8px; }
 .sidebar .nav-chevron { margin-left: auto; font-size: 18px; }
+
+/* 页签/步骤切换隐藏时保留 Chromium 排版对象缓存，避免 display:none 销毁后再切回引发全量重排卡顿。 */
+.is-hidden-pane {
+  content-visibility: hidden !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}

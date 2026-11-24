@@ -85,6 +85,7 @@ const flowView = ref<WorkflowFlowView>('steps')
 const flowGuideSeen = ref(false)
 const billingMounted = ref(false)
 watch(screen, next => { if (next === 'billing') billingMounted.value = true }, { immediate: true })
+const mainScreenHidden = computed(() => screen.value === 'jihua' || screen.value === 'hague' || screen.value === 'billing')
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
 const draft = ref<WorkflowDefinition | null>(null)
 const selectedId = ref('')
@@ -574,7 +575,13 @@ function chooseProc(param: WorkflowParam, id: string): void {
 </script>
 
 <template>
-  <div v-show="screen !== 'jihua' && screen !== 'hague' && screen !== 'billing'" class="workflow-main">
+  <div class="workflow-page-root">
+  <div
+    class="workflow-main"
+    :class="{ 'is-hidden-pane': mainScreenHidden }"
+    :inert="mainScreenHidden"
+    :aria-hidden="mainScreenHidden ? 'true' : undefined"
+  >
     <header v-if="screen === 'flow' && draft" class="page-head flow-head">
       <Bunny />
       <div class="flow-head-fields">
@@ -834,7 +841,12 @@ function chooseProc(param: WorkflowParam, id: string): void {
       <HaguePage embedded :is-active="screen === 'hague' && hagueView === 'use'" />
     </WorkflowWorkspace>
   </div>
-  <div v-show="screen === 'jihua'" class="workflow-jihua">
+  <div
+    class="workflow-jihua"
+    :class="{ 'is-hidden-pane': screen !== 'jihua' }"
+    :inert="screen !== 'jihua'"
+    :aria-hidden="screen !== 'jihua' ? 'true' : undefined"
+  >
     <WorkflowWorkspace
       v-model:view="jihuaView" title="季华实验室-文件导入"
       description="先看流程与材料规则，或直接使用工作台整理并上传文件。"
@@ -843,7 +855,13 @@ function chooseProc(param: WorkflowParam, id: string): void {
       <JihuaUploadPage embedded @back="screen = 'sea'" />
     </WorkflowWorkspace>
   </div>
-  <div v-if="billingMounted" v-show="screen === 'billing'" class="workflow-billing">
+  <div
+    v-if="billingMounted"
+    class="workflow-billing"
+    :class="{ 'is-hidden-pane': screen !== 'billing' }"
+    :inert="screen !== 'billing'"
+    :aria-hidden="screen !== 'billing' ? 'true' : undefined"
+  >
     <WorkflowWorkspace
       v-model:view="billingView" title="请款"
       description="先选请款模板智能预填查询条件：涉外自动抓账单查第三方费用，PCT 查官费与我方代理费，保留 Excel 原式导出。"
@@ -851,5 +869,6 @@ function chooseProc(param: WorkflowParam, id: string): void {
     >
       <BillingWorkflowPage embedded :is-active="screen === 'billing' && billingView === 'use'" @back="screen = 'sea'" />
     </WorkflowWorkspace>
+  </div>
   </div>
 </template>

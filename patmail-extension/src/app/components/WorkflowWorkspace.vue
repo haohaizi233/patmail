@@ -44,23 +44,32 @@ function navigateTabs(event: KeyboardEvent): void {
       @click="view = 'use'" @keydown="navigateTabs"
     >开始使用</button>
   </div>
-  <section
-    v-show="view === 'guide'" :id="`${id}-guide-panel`" class="card workflow-guide"
-    role="tabpanel" :aria-labelledby="`${id}-guide-tab`" tabindex="0"
-  >
-    <DocsMarkdown v-if="guideSeen" :source="guideSource" />
-  </section>
-  <section
-    v-show="view === 'use'" :id="`${id}-use-panel`" class="workflow-use"
-    role="tabpanel" :aria-labelledby="`${id}-use-tab`" tabindex="0"
-  >
-    <slot />
-  </section>
+  <div class="workflow-panels">
+    <section
+      :id="`${id}-guide-panel`" class="card workflow-guide"
+      :class="{ 'is-hidden-pane': view !== 'guide' }"
+      :inert="view !== 'guide'"
+      :aria-hidden="view !== 'guide' ? 'true' : undefined"
+      role="tabpanel" :aria-labelledby="`${id}-guide-tab`" tabindex="0"
+    >
+      <DocsMarkdown v-if="guideSeen" :source="guideSource" />
+    </section>
+    <section
+      :id="`${id}-use-panel`" class="workflow-use"
+      :class="{ 'is-hidden-pane': view !== 'use' }"
+      :inert="view !== 'use'"
+      :aria-hidden="view !== 'use' ? 'true' : undefined"
+      role="tabpanel" :aria-labelledby="`${id}-use-tab`" tabindex="0"
+    >
+      <slot />
+    </section>
+  </div>
 </template>
 
 <style scoped>
 .workflow-view-tabs { margin-bottom: 16px; }
 .workflow-view-tabs button { cursor: pointer; }
+.workflow-panels { position: relative; min-width: 0; }
 .workflow-guide, .workflow-use { min-width: 0; }
 .workflow-guide { overflow-x: auto; }
 .workflow-guide :deep(.docs-md) { margin-inline: auto; }

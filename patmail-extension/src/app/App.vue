@@ -60,6 +60,10 @@ function readRoute(): string {
 }
 
 const route = ref(readRoute())
+const visitedRoutes = ref<string[]>([route.value])
+watch(route, next => {
+  if (!visitedRoutes.value.includes(next)) visitedRoutes.value.push(next)
+})
 const scrollTops = new Map<string, number>()
 const workspace = useWorkspace()
 
@@ -67,7 +71,6 @@ function workspaceScroller(): HTMLElement | null {
   return document.querySelector('.workspace')
 }
 const pageName = computed(() => route.value === '/settings' ? '系统设置' : route.value === '/contacts' ? CASE_CONTACT_CUSTOMER_NAME : routeItems.find(item => item.hash === route.value)?.name ?? '首页')
-const page = computed(() => pages[route.value as keyof typeof pages] ?? HomePage)
 const profileName = computed(() => workspace.connection.value.displayName || '未登录')
 const mode = ref<CustomerMode>(customerMode())
 const modeBusy = ref(false)
@@ -159,9 +162,18 @@ onUnmounted(() => window.removeEventListener('hashchange', onHash))
       <AgentDock />
       <DocsDock />
     </template>
-    <KeepAlive>
-      <component :is="page" :key="route" />
-    </KeepAlive>
+    <div class="route-panes">
+      <div
+        v-for="path in visitedRoutes"
+        :key="path"
+        class="route-pane"
+        :class="{ 'is-hidden-pane': path !== route }"
+        :inert="path !== route"
+        :aria-hidden="path !== route ? 'true' : undefined"
+      >
+        <component :is="pages[path as keyof typeof pages] ?? HomePage" />
+      </div>
+    </div>
   </Shell>
   <AppDialog />
   <div v-if="zoomed" class="avatar-zoom" @click="closeZoom">
