@@ -193,4 +193,44 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
       root.remove()
     }
   })
+
+  it('defaults confirmPctExceptions to true and keeps it checked across selection changes', async () => {
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.resolve(),
+      },
+    })
+
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await nextTick()
+      expect(api.confirmPctExceptions.value).toBe(true)
+      api.confirmPctExceptions.value = false
+      api.onFeeSelectionChange([feeRow()])
+      await nextTick()
+      expect(api.confirmPctExceptions.value).toBe(true)
+    } finally {
+      app.unmount()
+      root.remove()
+    }
+  })
 })

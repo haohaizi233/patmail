@@ -1,6 +1,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { FeeSearchRow } from '../../api/fee-search-types'
-import type { BatchExportProgress, BillingDeskSnapshot } from '../../application/billing/billing-contracts'
+import type { BatchExportItemOutcome, BatchExportProgress, BillingDeskSnapshot } from '../../application/billing/billing-contracts'
 import {
   BillingApplicationService,
   formatExportOutcomeNotice,
@@ -183,9 +183,9 @@ export function useBillingWorkflow(options: {
   const pctExportExceptions = computed(() =>
     filterPctExportExceptions(pctExceptions.value, pctSelectedCustomers.value),
   )
-  const confirmPctExceptions = ref(false)
+  const confirmPctExceptions = ref(true)
   watch([selectedFeeRows, pctExportExceptions], () => {
-    confirmPctExceptions.value = false
+    confirmPctExceptions.value = true
   })
 
   function selectPctCustomer(rows: FeeSearchRow[]): void {
@@ -291,7 +291,7 @@ export function useBillingWorkflow(options: {
 
   const shouldWatchRates = computed(() => currentStep.value === 3 && needsForeignRates.value && (options.isActive?.() ?? true))
   function checkRatesWhileVisible(): void {
-    if (!shouldWatchRates.value || document.visibilityState === 'hidden') return
+    if (exporting.value || !shouldWatchRates.value || document.visibilityState === 'hidden') return
     const today = formatLocalDate()
     if (ratesCheckedOn !== today || ratesDate.value < today || ratesError.value) void loadPbcRates()
   }
@@ -350,6 +350,7 @@ export function useBillingWorkflow(options: {
   const exporting = ref(false)
   const exportResultNotice = ref('')
   const exportWarnings = ref<string[]>([])
+  const exportBatchItems = ref<BatchExportItemOutcome[]>([])
   const confirmExistingFees = ref(false)
   const canAdvanceFromFees = computed(
     () =>
@@ -365,10 +366,26 @@ export function useBillingWorkflow(options: {
       (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
       (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value),
   )
+  const exportDisabledReason = computed((): string => {
+    if (exporting.value) return '正在导出请款表，请稍候…'
+    if (ratesLoading.value) return '正在获取央行汇率，请稍候…'
+    if (fileSelectionIssue.value) return fileSelectionIssue.value
+    if (feeSelectionIssue.value) return feeSelectionIssue.value
+    const confirmReasons: string[] = []
+    if (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value) {
+      confirmReasons.push(`有 ${pctExportExceptions.value.length} 笔未请款异常费用待在上方勾选确认`)
+    }
+    if (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) {
+      confirmReasons.push(`有 ${reconciliationInfo.value.requestedCount} 笔已立单或状态待核对费用待在上方勾选确认`)
+    }
+    if (confirmReasons.length) return `请先完成确认：${confirmReasons.join('；')}。`
+    return ''
+  })
   watch(selectedFeeRows, () => {
     confirmExistingFees.value = false
     exportResultNotice.value = ''
     exportWarnings.value = []
+    exportBatchItems.value = []
   })
   const exportProgress = ref<BatchExportProgress | null>(null)
   const exportParameters = computed(() => ({
@@ -431,7 +448,12 @@ export function useBillingWorkflow(options: {
         downloadScope: scope,
         onProgress: (progress: BatchExportProgress) => {
           exportProgress.value = progress
-          exportResultNotice.value = `正在按客户流水线批量导出 ${progress.done}/${progress.total}（${progress.currentCustomer}）…`
+          const generated = progress.generatedDone ?? progress.done
+          const downloaded = progress.downloadedDone ?? progress.done
+          exportResultNotice.value =
+            progress.phase === 'generating'
+              ? `正在并发生成工作簿 ${generated}/${progress.total}（已提交下载 ${downloaded}/${progress.total}，当前：${progress.currentCustomer}）…`
+              : `正在顺序触发下载 ${downloaded}/${progress.total}（已生成 ${generated}/${progress.total}，当前：${progress.currentCustomer}）…`
         },
         isStale: () => selectionChanged() || parameters !== exportParameters.value,
       }
@@ -448,6 +470,7 @@ export function useBillingWorkflow(options: {
         ? `正在按客户流水线并发导出 ${splitCount} 份 Excel 请款表…`
         : '正在生成 Excel 请款表…'
       exportWarnings.value = []
+      exportBatchItems.value = []
       const { outcome } = await service.exportBilling(exportCommand)
       if (
         outcome.status === 'download_started' ||
@@ -456,6 +479,9 @@ export function useBillingWorkflow(options: {
         outcome.status === 'batch_completed'
       ) {
         exportWarnings.value = outcome.warnings
+      }
+      if (outcome.status === 'batch_completed') {
+        exportBatchItems.value = outcome.items
       }
       exportResultNotice.value = formatExportOutcomeNotice(outcome)
     } catch (err) {
@@ -665,9 +691,11 @@ export function useBillingWorkflow(options: {
     exportProgress,
     exportResultNotice,
     exportWarnings,
+    exportBatchItems,
     confirmExistingFees,
     canAdvanceFromFees,
     exportDisabled,
+    exportDisabledReason,
     doExportExcel,
     recoveryNotice,
   }
