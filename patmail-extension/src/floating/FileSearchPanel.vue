@@ -47,6 +47,8 @@ defineExpose({
   selectAllPages: (billsOnly = false) => queryRef.value?.selectAllPages(billsOnly),
   getBillingSelectionIssue: () => queryRef.value?.getBillingSelectionIssue() ?? '',
   hasRecoveredQuery: computed(() => queryRef.value?.hasRecoveredQuery ?? false),
+  refreshing: computed(() => queryRef.value?.refreshing ?? false),
+  searchError: computed(() => queryRef.value?.searchError ?? ''),
   canRefresh: computed(() => queryRef.value?.canRefresh ?? false),
   refresh: (scrollOnSuccess = true) => queryRef.value?.refresh(scrollOnSuccess),
 })

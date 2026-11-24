@@ -243,7 +243,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   font-size: 13px; line-height: 1; cursor: pointer;
 }
 .filter-chip-del:hover { color: #e23b7e; }
+.active-filters-actions {
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .active-filters-clear { margin-inline-start: auto; font-size: 12px; }
+.active-filters-actions .active-filters-clear,
+.active-filters-actions .active-filters-reset { margin-inline-start: 0; font-size: 12px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

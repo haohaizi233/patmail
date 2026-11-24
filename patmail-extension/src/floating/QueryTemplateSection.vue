@@ -498,7 +498,7 @@ function restoreRecoveryState(state: unknown): void {
   openExtra.value = nextOpen
 }
 watch(() => Object.values(recoveryRefs).map(field => field.value), () => emit('recovery-change'), { deep: true })
-defineExpose({ currentDownloadSelection, currentSearchTemplateName: () => baseMissing.value ? '' : baseName.value, recoveryState, restoreRecoveryState })
+defineExpose({ currentDownloadSelection, currentSearchTemplateName: () => baseMissing.value ? '' : baseName.value, recoveryState, restoreRecoveryState, restoreSeedDefaults })
 function setOverride(key: string, value: string, fromText = false): void {
   temporaryActive.value = { ...temporaryActive.value, [key]: true }
   temporary.value = { ...temporary.value, [key]: value }
@@ -1522,11 +1522,11 @@ function search(): void {
   emit('search', { resolvedFields: fields, pageIndex: 1, pageSize }, fileSearchTimeoutMs(queryTimeoutMs.value))
 }
 
-function applySeed(): void {
-  const seed = props.seed
-  if (!seed || !props.seedToken) return
-  const nextActive = { ...temporaryActive.value }
-  const next = { ...temporary.value }
+const hasSeedDefaults = computed(() => Boolean(props.seed && Object.keys(props.seed).length > 0))
+
+function populateSeedFields(seed: Record<string, string>, baseActive: Record<string, boolean>, baseValues: Record<string, string>): void {
+  const nextActive = { ...baseActive }
+  const next = { ...baseValues }
   for (const [key, value] of Object.entries(seed)) {
     if (!isFileSearchBusinessField(key)) continue
     const text = value.trim()
@@ -1549,6 +1549,23 @@ function applySeed(): void {
     if (extraFilled(block, next)) copy[block.title] = true
   }
   openExtra.value = copy
+}
+
+function applySeed(): void {
+  const seed = props.seed
+  if (!seed || !props.seedToken) return
+  populateSeedFields(seed, temporaryActive.value, temporary.value)
+}
+
+function restoreSeedDefaults(): void {
+  const seed = props.seed
+  if (!seed || !Object.keys(seed).length) return
+  selectedBaseId.value = ''
+  selectedCustomerId.value = ''
+  resetBase()
+  typedKeys.value = {}
+  populateSeedFields(seed, {}, {})
+  emit('recovery-change')
 }
 
 watch(() => [props.userId, props.mode, props.origin] as const, () => {
@@ -1787,13 +1804,25 @@ watch(selectedCustomerId, () => {
       <p v-if="checkMessage" class="hint">{{ checkMessage }}</p>
       <p v-if="resolved.warnings.length" class="hint">{{ resolved.warnings[0] }}</p>
     </div>
-    <div v-if="canSearch && activeFilterChips.length" class="active-filters-bar" aria-label="当前生效查询条件">
-      <span class="active-filters-title">当前生效条件（{{ activeFilterChips.length }}）：</span>
-      <span v-for="chip in activeFilterChips" :key="chip.key" class="filter-chip">
-        <span class="filter-chip-text clip" v-hint.clip="chip.fullText">{{ chip.label }}：{{ chip.valueText }}</span>
-        <button type="button" class="filter-chip-del" :aria-label="`清除${chip.label}`" v-hint="`清除「${chip.label}」`" @click="setOverride(chip.key, '')">×</button>
+    <div v-if="canSearch && (activeFilterChips.length || hasSeedDefaults)" class="active-filters-bar" aria-label="当前生效查询条件">
+      <template v-if="activeFilterChips.length">
+        <span class="active-filters-title">当前生效条件（{{ activeFilterChips.length }}）：</span>
+        <span v-for="chip in activeFilterChips" :key="chip.key" class="filter-chip">
+          <span class="filter-chip-text clip" v-hint.clip="chip.fullText">{{ chip.label }}：{{ chip.valueText }}</span>
+          <button type="button" class="filter-chip-del" :aria-label="`清除${chip.label}`" v-hint="`清除「${chip.label}」`" @click="setOverride(chip.key, '')">×</button>
+        </span>
+      </template>
+      <span v-else class="active-filters-title">当前未设置查询条件</span>
+      <span class="active-filters-actions">
+        <button
+          v-if="hasSeedDefaults"
+          type="button"
+          class="text-button active-filters-reset"
+          v-hint="'清除手工修改和已套用模板，恢复当前流程默认预填条件'"
+          @click="restoreSeedDefaults"
+        >恢复默认预填</button>
+        <button v-if="activeFilterChips.length" type="button" class="text-button active-filters-clear" @click="clearAllFilters">清空条件</button>
       </span>
-      <button type="button" class="text-button active-filters-clear" @click="clearAllFilters">清空条件</button>
     </div>
     <button v-if="canSearch" type="button" class="search-submit" :disabled="!canSubmit" v-hint="submitHint" @click="search">查询文件</button>
     <p v-if="canSearch && !canSubmit" class="hint" role="status">{{ submitHint }}</p>

@@ -353,21 +353,37 @@ function selectOptions(key: string): Array<{ value: string; label: string }> {
   return FEE_SELECTS[key] ?? []
 }
 
-// FeeType cascading & duplicate disambiguation (exact port of FeeSearch.js L1305-1393)
-function computeFeeTypeChoices(): FeeOptionItem[] {
+const EMPTY_TREE_OPTIONS: FeeOptionItem[] = []
+
+const ALL_TREE_CELL_KEYS = Array.from(new Set([
+  ...[...FEE_COMMON_CELLS, ...FEE_ADVANCED_BLOCKS.flatMap(block => block.cells)]
+    .filter((cell): cell is Extract<FeeCell, { kind: 'named' | 'select' }> =>
+      cell.kind === 'named' || (cell.kind === 'select' && Boolean(cell.searchable)),
+    )
+    .map(cell => cell.key),
+  ...Object.keys(FEE_STATIC_TREES),
+  ...Object.keys(FEE_OPTION_KEYS),
+]))
+
+// FeeType cascading & duplicate disambiguation (O(N) Map grouping, exact match to FeeSearch.js L1305-1393)
+const feeTypeChoices = computed<FeeOptionItem[]>(() => {
   const init = feeInit.value
-  if (!init?.feeTypes.length) return []
+  if (!init?.feeTypes.length) return EMPTY_TREE_OPTIONS
   const caseType = valueOf('case_type')
   const country = valueOf('country')
   const applyType = valueOf('apply_type')
   const feeClass = valueOf('fee_class')
 
+  const feeClassSet = feeClass ? new Set(feeClass.split(',')) : null
+  const countrySet = country ? new Set(country.split(',')) : null
+  const applyTypeSet = applyType ? new Set(applyType.split(',')) : null
+
   const filtered = init.feeTypes
     .filter(row => {
-      if (feeClass && !feeClass.split(',').includes(row.feeClass)) return false
+      if (feeClassSet && !feeClassSet.has(row.feeClass)) return false
       const matchCase = !caseType || row.caseTypeId === caseType || row.caseTypeId === 'ALL'
-      const matchCountry = !country || country.split(',').includes(row.countryId) || row.countryId === 'ALL'
-      const matchApply = !applyType || applyType.split(',').includes(row.applyTypeId) || row.applyTypeId === 'ALL'
+      const matchCountry = !countrySet || countrySet.has(row.countryId) || row.countryId === 'ALL'
+      const matchApply = !applyTypeSet || applyTypeSet.has(row.applyTypeId) || row.applyTypeId === 'ALL'
       return matchCase && matchCountry && matchApply
     })
     .map(row => ({
@@ -380,37 +396,37 @@ function computeFeeTypeChoices(): FeeOptionItem[] {
       currencyName: row.currencyName
     }))
 
-  for (let i = 0; i < filtered.length; i++) {
-    for (let j = i + 1; j < filtered.length; j++) {
-      if (filtered[i].name === filtered[j].name) {
-        if (filtered[i].countryName !== filtered[j].countryName) {
-          if (filtered[i].countryName) filtered[i].name += `(${filtered[i].countryName})`
-          if (filtered[j].countryName) filtered[j].name += `(${filtered[j].countryName})`
-        }
-        if (filtered[i].applyTypeName !== filtered[j].applyTypeName) {
-          if (filtered[i].applyTypeName) filtered[i].name += `(${filtered[i].applyTypeName})`
-          if (filtered[j].applyTypeName) filtered[j].name += `(${filtered[j].applyTypeName})`
-        }
-        if (filtered[i].caseTypeName !== filtered[j].caseTypeName) {
-          if (filtered[i].caseTypeName) filtered[i].name += `(${filtered[i].caseTypeName})`
-          if (filtered[j].caseTypeName) filtered[j].name += `(${filtered[j].caseTypeName})`
-        }
-        if (filtered[i].feeClassName !== filtered[j].feeClassName) {
-          if (filtered[i].feeClassName) filtered[i].name += `(${filtered[i].feeClassName})`
-          if (filtered[j].feeClassName) filtered[j].name += `(${filtered[j].feeClassName})`
-        }
-        if (filtered[i].currencyName !== filtered[j].currencyName) {
-          if (filtered[i].currencyName) filtered[i].name += `(${filtered[i].currencyName})`
-          if (filtered[j].currencyName) filtered[j].name += `(${filtered[j].currencyName})`
-        }
-      }
+  const groups = new Map<string, typeof filtered>()
+  for (const item of filtered) {
+    let group = groups.get(item.name)
+    if (!group) {
+      group = []
+      groups.set(item.name, group)
+    }
+    group.push(item)
+  }
+
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue
+    const first = group[0]
+    const diffCountry = group.some(item => item.countryName !== first.countryName)
+    const diffApply = group.some(item => item.applyTypeName !== first.applyTypeName)
+    const diffCase = group.some(item => item.caseTypeName !== first.caseTypeName)
+    const diffClass = group.some(item => item.feeClassName !== first.feeClassName)
+    const diffCurrency = group.some(item => item.currencyName !== first.currencyName)
+    for (const item of group) {
+      if (diffCountry && item.countryName) item.name += `(${item.countryName})`
+      if (diffApply && item.applyTypeName) item.name += `(${item.applyTypeName})`
+      if (diffCase && item.caseTypeName) item.name += `(${item.caseTypeName})`
+      if (diffClass && item.feeClassName) item.name += `(${item.feeClassName})`
+      if (diffCurrency && item.currencyName) item.name += `(${item.currencyName})`
     }
   }
-  return filtered.map(item => ({ value: item.id, label: item.name }))
-}
 
-// TreeOptionSelect choices for all named fields (exact alignment with FeeSearch.js)
-function treeChoices(key: string): FeeOptionItem[] {
+  return filtered.map(item => ({ value: item.id, label: item.name }))
+})
+
+function computeTreeChoices(key: string): FeeOptionItem[] {
   const init = feeInit.value
   const caseType = valueOf('case_type')
   const country = valueOf('country')
@@ -434,28 +450,28 @@ function treeChoices(key: string): FeeOptionItem[] {
     return FEE_STATIC_TREES.app_date_month
   }
   if (key === 'case_agency_precorditem' || key === 'case_agency') {
-    return init?.agencies ?? []
+    return init?.agencies ?? EMPTY_TREE_OPTIONS
   }
   if (key === 'fee_type') {
-    if (!caseType) return []
-    return computeFeeTypeChoices()
+    if (!caseType) return EMPTY_TREE_OPTIONS
+    return feeTypeChoices.value
   }
   if (key === 'apply_type') {
-    if (!caseType) return []
+    if (!caseType) return EMPTY_TREE_OPTIONS
     if (init?.applyTypes.length) {
       return init.applyTypes.filter(i => !i.caseTypeId || i.caseTypeId === 'ALL' || i.caseTypeId === caseType)
     }
     return choicesFromDictionary(dictionaries.value['limitApplyType'], caseType, country)
   }
   if (key === 'case_status') {
-    if (!caseType) return []
+    if (!caseType) return EMPTY_TREE_OPTIONS
     if (init?.caseStatuses.length) {
       return init.caseStatuses.filter(i => i.caseTypeId === caseType)
     }
     return choicesFromDictionary(dictionaries.value['limitCaseStatus'], caseType, country)
   }
   if (key === 'customer_status') {
-    if (!caseType) return []
+    if (!caseType) return EMPTY_TREE_OPTIONS
     if (init?.customerStatuses.length) {
       return init.customerStatuses.filter(i => i.caseTypeId === caseType)
     }
@@ -466,7 +482,7 @@ function treeChoices(key: string): FeeOptionItem[] {
     if (init?.reviewStages.length) {
       return init.reviewStages.filter(i => !i.caseTypeId || i.caseTypeId === targetCaseType)
     }
-    return []
+    return EMPTY_TREE_OPTIONS
   }
   if (key === 'business_type') {
     if (init?.bussTypes.length) {
@@ -477,18 +493,37 @@ function treeChoices(key: string): FeeOptionItem[] {
     return choicesFromDictionary(dictionaries.value['limitBussType'], caseType, country)
   }
   if (key === 'currency_id') {
-    return init?.currencies ?? []
+    return init?.currencies ?? EMPTY_TREE_OPTIONS
   }
   if (key === 'product_name') {
-    return init?.products ?? []
+    return init?.products ?? EMPTY_TREE_OPTIONS
   }
   if (key === 'technical_field') {
-    return init?.technicals ?? []
+    return init?.technicals ?? EMPTY_TREE_OPTIONS
   }
 
   const dictKey = FEE_OPTION_KEYS[key]
-  if (!dictKey) return []
+  if (!dictKey) return EMPTY_TREE_OPTIONS
   return choicesFromDictionary(dictionaries.value[dictKey], caseType, country)
+}
+
+const baseTreeChoicesByKey = computed<Record<string, FeeOptionItem[]>>(() => {
+  const map: Record<string, FeeOptionItem[]> = {}
+  for (const key of ALL_TREE_CELL_KEYS) {
+    if (key === 'fee_type') continue
+    map[key] = computeTreeChoices(key)
+  }
+  return map
+})
+
+const treeChoicesByKey = computed<Record<string, FeeOptionItem[]>>(() => ({
+  ...baseTreeChoicesByKey.value,
+  fee_type: valueOf('case_type') ? feeTypeChoices.value : EMPTY_TREE_OPTIONS,
+}))
+
+// TreeOptionSelect choices for all named fields (exact alignment with FeeSearch.js)
+function treeChoices(key: string): FeeOptionItem[] {
+  return treeChoicesByKey.value[key] ?? computeTreeChoices(key)
 }
 
 function needsCaseType(cell: Extract<FeeCell, { kind: 'named' }>): boolean {
@@ -936,6 +971,8 @@ async function fetchTotalAmounts(q: FeeSearchQuery, gen: number, signal: AbortSi
   }
 }
 
+const hasInitialDefaults = computed(() => Boolean(props.initialValues && Object.keys(props.initialValues).length > 0))
+
 function resetForm(): void {
   void applyTemplate('')
   exportNotice.value = ''
@@ -943,6 +980,16 @@ function resetForm(): void {
   userPickedPageSize.value = false
   pageSize.value = DEFAULT_FEE_PAGE_SIZE
   invalidateSearch()
+}
+
+async function restoreInitialDefaults(): Promise<void> {
+  await applyTemplate('')
+  exportNotice.value = ''
+  showTypeMode.value = 'all'
+  userPickedPageSize.value = false
+  pageSize.value = DEFAULT_FEE_PAGE_SIZE
+  invalidateSearch()
+  applyInitialValues()
 }
 
 function changePage(delta: number): void {
@@ -1444,7 +1491,7 @@ defineExpose({
             <TreeOptionSelect
               v-else
               :model-value="valueOf(cell.key)"
-              :options="treeChoices(cell.key)"
+              :options="treeChoicesByKey[cell.key] ?? EMPTY_TREE_OPTIONS"
               :multiple="cell.multiple !== false"
               :empty-text="emptyTextOf(cell)"
               @update:model-value="setValue(cell.key, String($event))"
@@ -1648,7 +1695,7 @@ defineExpose({
                 <TreeOptionSelect
                   v-else
                   :model-value="valueOf(cell.key)"
-                  :options="treeChoices(cell.key)"
+                  :options="treeChoicesByKey[cell.key] ?? EMPTY_TREE_OPTIONS"
                   :multiple="cell.multiple !== false"
                   :empty-text="emptyTextOf(cell)"
                   @update:model-value="setValue(cell.key, String($event))"
@@ -1664,7 +1711,7 @@ defineExpose({
                 <TreeOptionSelect
                   v-if="cell.searchable"
                   :model-value="valueOf(cell.key)"
-                  :options="treeChoices(cell.key)"
+                  :options="treeChoicesByKey[cell.key] ?? EMPTY_TREE_OPTIONS"
                   :multiple="false"
                   :empty-text="`暂无${cell.label}可选项`"
                   @update:model-value="setValue(cell.key, String($event))"
@@ -1732,6 +1779,15 @@ defineExpose({
         <button class="ghost" type="button" @click="templateJsonInput?.click()">导入 JSON</button>
         <input ref="templateJsonInput" type="file" accept=".json,application/json" hidden aria-label="导入费用模板 JSON" @change="importTemplateJson" />
         <button class="ghost" type="button" @click="resetForm">重置</button>
+        <button
+          v-if="hasInitialDefaults"
+          class="ghost"
+          type="button"
+          v-hint="'清除当前自定义条件与已选客户，恢复本模板默认预填条件与带入文号'"
+          @click="restoreInitialDefaults"
+        >
+          恢复默认预填
+        </button>
         <template v-if="!manage">
           <button
             class="ghost"
@@ -2233,7 +2289,7 @@ defineExpose({
 }
 .primary-search { min-width: 76px; }
 
-.fee-results-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.fee-results-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; contain: layout style; }
 .filter-radios-bar { display: flex; flex-wrap: wrap; gap: 10px 18px; padding-bottom: 12px; border-bottom: 1px solid #f0e1eb; }
 
 .amount-summary-box { background: #fff6fa; border: 1px solid #f3d7e5; border-radius: 12px; padding: 12px 14px; font-size: 12px; }

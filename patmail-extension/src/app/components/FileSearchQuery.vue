@@ -335,8 +335,10 @@ watch(() => props.canSearch, allowed => {
   scheduleSurface()
 })
 const hasRecoveredQuery = computed(() => needsRevalidation.value && Boolean(lastQuery.value))
+const refreshing = computed(() => searchState.value === 'loading')
+const searchError = computed(() => searchState.value === 'error' ? searchMessage.value : '')
 const canRefresh = computed(() => props.canSearch && Boolean(lastQuery.value) && searchState.value !== 'loading' && !selectingAll.value)
-defineExpose({ protectSurface, selectAllPages, getBillingSelectionIssue, hasRecoveredQuery, canRefresh, refresh })
+defineExpose({ protectSurface, selectAllPages, getBillingSelectionIssue, hasRecoveredQuery, refreshing, searchError, canRefresh, refresh })
 
 function getBillingSelectionIssue(): string {
   if (searchState.value === 'loading' || selectingAll.value) return '账单还在读取，请等待完成。'
@@ -1253,6 +1255,11 @@ onBeforeUnmount(() => {
 .file-export-actions button:not(:disabled):hover { filter: brightness(.97); }
 .file-export-notice { margin: 0; color: var(--text, #243056); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .row-detail-trigger { cursor: help; }
+.file-results { contain: layout style; }
+.file-search-query .grid tbody tr {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 38px;
+}
 .file-results > .section-heading .file-results-tools {
   margin-left: auto;
   display: inline-flex;
