@@ -1,4 +1,6 @@
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { createLeadingFrameCoalescer } from '../frame-coalesce'
+import { toPlainCloneable } from '../plain-snapshot'
 import type { FeeSearchRow } from '../../api/fee-search-types'
 import type { BatchExportItemOutcome, BatchExportProgress, BillingDeskSnapshot } from '../../application/billing/billing-contracts'
 import {
@@ -42,12 +44,14 @@ export interface FileSearchPanelHandle {
   getBillingSelectionIssue: () => string
   hasRecoveredQuery: boolean
   canRefresh: boolean
-  refresh: (scrollOnSuccess?: boolean) => void
+  refresh: (scrollOnSuccess?: boolean) => Promise<void> | void | undefined
 }
 
 export interface FeeSearchQueryHandle {
   selectionPending: boolean
   selectionIncomplete: boolean
+  selectingAll?: boolean
+  snapshotRevision?: number
   getKnownRows: () => Iterable<FeeSearchRow>
   replaceBillingSelection: (rows: FeeSearchRow[]) => void
   billingSnapshot: () => unknown
@@ -90,13 +94,61 @@ export function useBillingWorkflow(options: {
   const stepNavigation = ref<HTMLElement | null>(null)
 
   const filePanelRef = ref<FileSearchPanelHandle | null>(null)
-  const fileSelection = ref<Record<string, SelectedPatentFile>>({})
-  const recoveredBills = ref<Record<string, BillInfo[]>>({})
+  const fileSelection = shallowRef<Record<string, SelectedPatentFile>>({})
+  const recoveredBills = shallowRef<Record<string, BillInfo[]>>({})
+  const filesByVolume = computed(() => {
+    const map = new Map<string, SelectedPatentFile[]>()
+    for (const item of Object.values(fileSelection.value)) {
+      const vol = item.caseVolume?.trim()
+      if (!vol) continue
+      let list = map.get(vol)
+      if (!list) {
+        list = []
+        map.set(vol, list)
+      }
+      list.push(item)
+    }
+    return map
+  })
+  const RECOVERED_BILL_REVALIDATE_ISSUE = '请先刷新验证已恢复的账单查询。'
+  const revalidatingRecoveredBills = ref(false)
+  let revalidatingBillsTask: Promise<boolean> | null = null
+  let revalidatingBillsGen = 0
   const fileSelectionIssue = computed(() =>
     currentTemplate.value.queryPreset.fileStepOptional
       ? ''
       : (filePanelRef.value?.getBillingSelectionIssue() ?? ''),
   )
+  const canAutoRevalidateRecoveredBills = computed(
+    () =>
+      !currentTemplate.value.queryPreset.fileStepOptional &&
+      Boolean(filePanelRef.value?.hasRecoveredQuery && filePanelRef.value?.canRefresh),
+  )
+  const blockingFileSelectionIssue = computed(() =>
+    fileSelectionIssue.value === RECOVERED_BILL_REVALIDATE_ISSUE && canAutoRevalidateRecoveredBills.value
+      ? ''
+      : fileSelectionIssue.value,
+  )
+
+  async function revalidateRecoveredBills(): Promise<boolean> {
+    if (revalidatingBillsTask) return revalidatingBillsTask
+    const panel = filePanelRef.value
+    if (!panel || currentTemplate.value.queryPreset.fileStepOptional || !panel.hasRecoveredQuery) {
+      return !fileSelectionIssue.value
+    }
+    if (!panel.canRefresh) return false
+    const taskGen = ++revalidatingBillsGen
+    revalidatingRecoveredBills.value = true
+    revalidatingBillsTask = Promise.resolve(panel.refresh(false))
+      .then(() => !fileSelectionIssue.value)
+      .finally(() => {
+        if (revalidatingBillsGen === taskGen) {
+          revalidatingRecoveredBills.value = false
+          revalidatingBillsTask = null
+        }
+      })
+    return revalidatingBillsTask
+  }
 
   const fileSeed = ref<Record<string, string>>({ ...BILLING_TEMPLATES[0].queryPreset.fileFields })
   const fileSeedToken = ref(1)
@@ -125,10 +177,14 @@ export function useBillingWorkflow(options: {
       .split(/[\s,;\n\r]+/)
       .map(s => s.trim())
       .filter(Boolean)
+    const excludedSet = new Set(excludedVolumes.value)
+    const nextExtra = [...extraVolumes.value]
     for (const p of parts) {
-      excludedVolumes.value = excludedVolumes.value.filter(v => v !== p)
-      if (!extraVolumes.value.includes(p)) extraVolumes.value.push(p)
+      excludedSet.delete(p)
+      if (!nextExtra.includes(p)) nextExtra.push(p)
     }
+    excludedVolumes.value = [...excludedSet]
+    extraVolumes.value = nextExtra
     customVolumeInput.value = ''
   }
 
@@ -157,7 +213,7 @@ export function useBillingWorkflow(options: {
     ...BILLING_TEMPLATES[0].queryPreset.feeFields,
   })
   const feeInitialToken = ref(1)
-  const selectedFeeRows = ref<FeeSearchRow[]>([])
+  const selectedFeeRows = shallowRef<FeeSearchRow[]>([])
   const lastAppliedFeeSyncKey = ref('')
   const isMideaPct = computed(() => selectedTemplateId.value === 'midea-pct')
   const defaultSelectionExclusion = computed(() => buildMideaPctDefaultExclusion(isMideaPct.value))
@@ -307,12 +363,25 @@ export function useBillingWorkflow(options: {
     }
   }
 
-  function setStep(target: BillingWorkflowStep, fromResults = false): void {
+  let stepTransitionGen = 0
+
+  async function setStep(target: BillingWorkflowStep, fromResults = false): Promise<void> {
+    const gen = ++stepTransitionGen
     noticeInResults.value = fromResults
-    const issue =
-      target === 1 || (target === 2 && currentStep.value === 3)
-        ? ''
-        : fileSelectionIssue.value || (target === 3 ? feeSelectionIssue.value : '')
+    if (target === 1 || (target === 2 && currentStep.value === 3)) {
+      stepNotice.value = ''
+      currentStep.value = target
+      return
+    }
+    const needsAutoRevalidate =
+      (fileSelectionIssue.value === RECOVERED_BILL_REVALIDATE_ISSUE && canAutoRevalidateRecoveredBills.value) ||
+      (fileSelectionIssue.value === '账单还在读取，请等待完成。' && revalidatingBillsTask !== null)
+    if (needsAutoRevalidate) {
+      stepNotice.value = '正在自动验证已恢复的账单查询…'
+      await revalidateRecoveredBills()
+      if (gen !== stepTransitionGen || disposed) return
+    }
+    const issue = fileSelectionIssue.value || (target === 3 ? feeSelectionIssue.value : '')
     if (issue) {
       stepNotice.value = issue
       return
@@ -325,7 +394,7 @@ export function useBillingWorkflow(options: {
   }
 
   async function advanceFromResults(target: 2 | 3): Promise<void> {
-    setStep(target, true)
+    await setStep(target, true)
     if (currentStep.value !== target) return
     await nextTick()
     stepNavigation.value?.scrollIntoView({ block: 'start' })
@@ -354,6 +423,12 @@ export function useBillingWorkflow(options: {
     if (!restoring.value && !Object.keys(fileSelection.value).length) recoveredBills.value = {}
   }
 
+  function onFeeSearch(): void {
+    if (!restoring.value && canAutoRevalidateRecoveredBills.value) {
+      void revalidateRecoveredBills()
+    }
+  }
+
   const reconciliationInfo = computed(() =>
     computeBillingReconciliation(selectedTemplateId.value, selectedFeeRows.value, billMap.value),
   )
@@ -372,15 +447,17 @@ export function useBillingWorkflow(options: {
   const exportDisabled = computed(
     () =>
       exporting.value ||
+      revalidatingRecoveredBills.value ||
       (needsForeignRates.value && ratesLoading.value) ||
-      Boolean(fileSelectionIssue.value || feeSelectionIssue.value) ||
+      Boolean(blockingFileSelectionIssue.value || feeSelectionIssue.value) ||
       (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
       (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value),
   )
   const exportDisabledReason = computed((): string => {
     if (exporting.value) return '正在导出请款表，请稍候…'
+    if (revalidatingRecoveredBills.value) return '正在自动验证已恢复的账单查询，请稍候…'
     if (needsForeignRates.value && ratesLoading.value) return '正在获取央行汇率，请稍候…'
-    if (fileSelectionIssue.value) return fileSelectionIssue.value
+    if (blockingFileSelectionIssue.value) return blockingFileSelectionIssue.value
     if (feeSelectionIssue.value) return feeSelectionIssue.value
     const confirmReasons: string[] = []
     if (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value) {
@@ -423,37 +500,41 @@ export function useBillingWorkflow(options: {
 
   async function doExportExcel(): Promise<void> {
     if (exporting.value) return
-    const templateId = selectedTemplateId.value
-    const rows = selectedFeeRows.value
-    const bills = billMap.value
-    const account = connection.value.operatorId
-    const origin = connection.value.easyOrigin
-    const scope = billingScope.value
-    const selection = () => ({
-      fileSelectionIssue: fileSelectionIssue.value,
-      feeSelectionIssue: feeSelectionIssue.value,
-      reconciliationRequestedCount: reconciliationInfo.value.requestedCount,
-      confirmExistingFees: confirmExistingFees.value,
-      pctExportExceptionsCount: pctExportExceptions.value.length,
-      confirmPctExceptions: confirmPctExceptions.value,
-    })
-    const selectionIssue = billingExportSelectionIssue(selection())
-    if (selectionIssue) {
-      exportResultNotice.value = selectionIssue
-      return
-    }
     if (needsForeignRates.value && ratesLoading.value) return
-    const selectionChanged = () =>
-      selectedTemplateId.value !== templateId ||
-      selectedFeeRows.value !== rows ||
-      connection.value.operatorId !== account ||
-      connection.value.easyOrigin !== origin ||
-      billingScope.value !== scope ||
-      billMap.value !== bills ||
-      Boolean(billingExportSelectionIssue(selection()))
-
     exporting.value = true
     try {
+      if (canAutoRevalidateRecoveredBills.value || revalidatingBillsTask) {
+        exportResultNotice.value = '正在自动验证已恢复的账单查询…'
+        await revalidateRecoveredBills()
+      }
+      const templateId = selectedTemplateId.value
+      const rows = selectedFeeRows.value
+      const bills = billMap.value
+      const account = connection.value.operatorId
+      const origin = connection.value.easyOrigin
+      const scope = billingScope.value
+      const selection = () => ({
+        fileSelectionIssue: fileSelectionIssue.value,
+        feeSelectionIssue: feeSelectionIssue.value,
+        reconciliationRequestedCount: reconciliationInfo.value.requestedCount,
+        confirmExistingFees: confirmExistingFees.value,
+        pctExportExceptionsCount: pctExportExceptions.value.length,
+        confirmPctExceptions: confirmPctExceptions.value,
+      })
+      const selectionIssue = billingExportSelectionIssue(selection())
+      if (selectionIssue) {
+        exportResultNotice.value = selectionIssue
+        return
+      }
+      const selectionChanged = () =>
+        selectedTemplateId.value !== templateId ||
+        selectedFeeRows.value !== rows ||
+        connection.value.operatorId !== account ||
+        connection.value.easyOrigin !== origin ||
+        billingScope.value !== scope ||
+        billMap.value !== bills ||
+        Boolean(billingExportSelectionIssue(selection()))
+
       if (needsForeignRates.value) await loadPbcRates()
       if (selectionChanged()) {
         exportResultNotice.value = '请款范围已变化，请核对后重新导出。'
@@ -461,6 +542,14 @@ export function useBillingWorkflow(options: {
       }
       const parameters = exportParameters.value
       const parametersJson = JSON.stringify(parameters)
+      let lastProgressPhase = ''
+      let latestProgress: BatchExportProgress | null = null
+      let latestProgressNotice = ''
+      const exportProgressCoalescer = createLeadingFrameCoalescer(() => {
+        if (!latestProgress) return
+        exportProgress.value = latestProgress
+        exportResultNotice.value = latestProgressNotice
+      })
       const exportCommand = {
         templateId, rows, bills, parameters, ...selection(),
         needsForeignRates: needsForeignRates.value,
@@ -471,13 +560,17 @@ export function useBillingWorkflow(options: {
         manualRateDate: manualRateDate.value,
         downloadScope: scope,
         onProgress: (progress: BatchExportProgress) => {
-          exportProgress.value = progress
           const generated = progress.generatedDone ?? progress.done
           const downloaded = progress.downloadedDone ?? progress.done
-          exportResultNotice.value =
+          const nextPhase = progress.phase ?? 'downloading'
+          const phaseChanged = nextPhase !== lastProgressPhase
+          lastProgressPhase = nextPhase
+          latestProgress = progress
+          latestProgressNotice =
             progress.phase === 'generating'
               ? `正在并发生成工作簿 ${generated}/${progress.total}（已提交下载 ${downloaded}/${progress.total}，当前：${progress.currentCustomer}）…`
               : `正在顺序触发下载 ${downloaded}/${progress.total}（已生成 ${generated}/${progress.total}，当前：${progress.currentCustomer}）…`
+          exportProgressCoalescer.trigger(phaseChanged)
         },
         isStale: () => selectionChanged() || JSON.stringify(exportParameters.value) !== parametersJson,
       }
@@ -495,19 +588,23 @@ export function useBillingWorkflow(options: {
         : '正在生成 Excel 请款表…'
       exportWarnings.value = []
       exportBatchItems.value = []
-      const { outcome } = await service.exportBilling(exportCommand)
-      if (
-        outcome.status === 'download_started' ||
-        outcome.status === 'download_completed' ||
-        outcome.status === 'generated' ||
-        outcome.status === 'batch_completed'
-      ) {
-        exportWarnings.value = outcome.warnings
+      try {
+        const { outcome } = await service.exportBilling(exportCommand)
+        if (
+          outcome.status === 'download_started' ||
+          outcome.status === 'download_completed' ||
+          outcome.status === 'generated' ||
+          outcome.status === 'batch_completed'
+        ) {
+          exportWarnings.value = outcome.warnings
+        }
+        if (outcome.status === 'batch_completed') {
+          exportBatchItems.value = outcome.items
+        }
+        exportResultNotice.value = formatExportOutcomeNotice(outcome)
+      } finally {
+        exportProgressCoalescer.cancel()
       }
-      if (outcome.status === 'batch_completed') {
-        exportBatchItems.value = outcome.items
-      }
-      exportResultNotice.value = formatExportOutcomeNotice(outcome)
     } catch (err) {
       exportResultNotice.value = err instanceof Error ? err.message : '请款表生成失败'
     } finally {
@@ -519,13 +616,24 @@ export function useBillingWorkflow(options: {
   watch(shouldWatchRates, active => { if (active) checkRatesWhileVisible() }, { immediate: true })
 
   let persistTimer: ReturnType<typeof setTimeout> | undefined
-  let lastSnapshot = ''
+  let persistIdleId: number | undefined
+  let draftRevision = 0
+  let lastFlushedRevision = 0
   let disposed = false
   let restoreGeneration = 0
   const recoveryNotice = ref('')
 
+  function cancelPendingPersist(): void {
+    clearTimeout(persistTimer)
+    persistTimer = undefined
+    if (persistIdleId !== undefined && typeof globalThis.cancelIdleCallback === 'function') {
+      globalThis.cancelIdleCallback(persistIdleId)
+      persistIdleId = undefined
+    }
+  }
+
   function billingSnapshot(): BillingDeskSnapshot {
-    return {
+    return toPlainCloneable({
       version: 1,
       template: selectedTemplateId.value,
       step: currentStep.value,
@@ -541,33 +649,80 @@ export function useBillingWorkflow(options: {
       clearedRates: clearedRates.value,
       rateDate: manualRateDate.value,
       fees: feeQueryRef.value?.billingSnapshot(),
-    }
+    })
   }
 
   function flushBilling(): void {
-    clearTimeout(persistTimer)
+    cancelPendingPersist()
     const scope = billingScope.value
     if (!scope || restoring.value || !feeQueryRef.value) return
-    const serialized = JSON.stringify(billingSnapshot())
-    if (serialized === lastSnapshot) return
-    lastSnapshot = serialized
+    if (draftRevision === lastFlushedRevision) return
+    const flushedRev = draftRevision
+    lastFlushedRevision = flushedRev
+    const snapshot = billingSnapshot()
     void service
-      .saveDraft(scope, JSON.parse(serialized) as BillingDeskSnapshot)
+      .saveDraft(scope, snapshot)
       .catch(() => {
         if (billingScope.value !== scope) return
-        if (lastSnapshot === serialized) lastSnapshot = ''
+        if (lastFlushedRevision === flushedRev) lastFlushedRevision = -1
         recoveryNotice.value = '请款草稿未能保存，刷新前请保留当前页面。'
       })
   }
 
+  function scheduleBillingPersist(delayMs = 300): void {
+    if (!billingScope.value || restoring.value) return
+    if (exporting.value || feeQueryRef.value?.selectingAll) return
+    cancelPendingPersist()
+    persistTimer = setTimeout(() => {
+      persistTimer = undefined
+      if (typeof globalThis.requestIdleCallback === 'function') {
+        persistIdleId = globalThis.requestIdleCallback(() => {
+          persistIdleId = undefined
+          flushBilling()
+        }, { timeout: 800 })
+      } else {
+        flushBilling()
+      }
+    }, delayMs)
+  }
+
   watch(
-    billingSnapshot,
+    [
+      selectedTemplateId,
+      currentStep,
+      allowMixedCustomers,
+      extraVolumes,
+      excludedVolumes,
+      customVolumeInput,
+      billMap,
+      lastAppliedFeeSyncKey,
+      manualRateDate,
+      () => feeQueryRef.value?.snapshotRevision,
+    ],
     () => {
-      if (!billingScope.value || restoring.value) return
-      clearTimeout(persistTimer)
-      persistTimer = setTimeout(flushBilling, 120)
+      if (restoring.value) return
+      draftRevision += 1
+      scheduleBillingPersist()
+    },
+  )
+
+  watch(
+    [headerValues, billingOptions, customRates, clearedRates],
+    () => {
+      if (restoring.value) return
+      draftRevision += 1
+      scheduleBillingPersist()
     },
     { deep: true },
+  )
+
+  watch(
+    [exporting, () => feeQueryRef.value?.selectingAll],
+    ([isExporting, isSelectingAll], [wasExporting, wasSelectingAll]) => {
+      if (!isExporting && !isSelectingAll && (wasExporting || wasSelectingAll)) {
+        scheduleBillingPersist(50)
+      }
+    },
   )
 
   watch(
@@ -580,7 +735,8 @@ export function useBillingWorkflow(options: {
       restoring.value = true
       billingScope.value = scope
       billingOwner.value = { origin: connection.value.easyOrigin, userId: connection.value.operatorId }
-      lastSnapshot = ''
+      draftRevision = 0
+      lastFlushedRevision = 0
       recoveryNotice.value = ''
       currentStep.value = 1
       selectedTemplateId.value = 'general-foreign'
@@ -628,6 +784,8 @@ export function useBillingWorkflow(options: {
         await nextTick()
       }
       if (!stillCurrent()) return
+      draftRevision = 0
+      lastFlushedRevision = 0
       restoring.value = false
     },
     { immediate: true },
@@ -642,6 +800,7 @@ export function useBillingWorkflow(options: {
   window.addEventListener('pagehide', flushBilling)
   onBeforeUnmount(() => {
     flushBilling()
+    cancelPendingPersist()
     disposed = true
     document.removeEventListener('visibilitychange', onBillingVisibility)
     window.removeEventListener('focus', checkRatesWhileVisible)
@@ -669,6 +828,7 @@ export function useBillingWorkflow(options: {
     setStep,
     filePanelRef,
     fileSelection,
+    filesByVolume,
     fileSelectionIssue,
     fileSeed,
     fileSeedToken,
@@ -681,6 +841,7 @@ export function useBillingWorkflow(options: {
     restoreExcludedVolumes,
     triggerSelectAllBills,
     onFileSearch,
+    onFeeSearch,
     feeQueryRef,
     feeInitialValues,
     feeInitialToken,

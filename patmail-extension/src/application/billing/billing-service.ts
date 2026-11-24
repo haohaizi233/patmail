@@ -63,15 +63,18 @@ export class BillingApplicationService {
     const groups = groupBillingRowsByCustomer(command.rows)
     const rawBytes = await this.ports.templates.loadTemplate(command.templateId)
 
+    const canonicalBills = command.downloadScope
+      ? Object.fromEntries(
+          Object.keys(command.bills)
+            .sort((a, b) => a.localeCompare(b))
+            .map(volume => [volume, command.bills[volume]]),
+        )
+      : command.bills
+
     const buildJobSpec = (input: BillingInput) => {
       if (!command.downloadScope) return {}
       const needsRates = hasForeignCurrencyRows(input.rows)
       const todayText = formatLocalDate(input.today)
-      const canonicalBills = Object.fromEntries(
-        Object.keys(input.bills)
-          .sort((a, b) => a.localeCompare(b))
-          .map(volume => [volume, input.bills[volume]]),
-      )
       const canonicalParameters = JSON.stringify({
         template: command.templateId,
         input: {
@@ -219,6 +222,9 @@ export class BillingApplicationService {
             generatedDone,
             downloadedDone,
           })
+          if (cursor < total) {
+            await new Promise<void>(resolve => setTimeout(resolve, 0))
+          }
         }
       }
 

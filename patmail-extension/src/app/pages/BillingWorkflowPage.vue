@@ -41,6 +41,7 @@ const {
   setStep,
   filePanelRef,
   fileSelection,
+  filesByVolume,
   fileSeed,
   fileSeedToken,
   recognizedBillsCount,
@@ -52,6 +53,7 @@ const {
   restoreExcludedVolumes,
   triggerSelectAllBills,
   onFileSearch,
+  onFeeSearch,
   feeQueryRef,
   feeInitialValues,
   feeInitialToken,
@@ -97,16 +99,33 @@ const {
   recoveryNotice
 } = useBillingWorkflow({ isActive: () => props.isActive })
 
+const VOLUME_PREVIEW_LIMIT = 40
+const showAllVolumes = ref(false)
+const visibleVolumes = computed(() =>
+  showAllVolumes.value || activeVolumes.value.length <= VOLUME_PREVIEW_LIMIT
+    ? activeVolumes.value
+    : activeVolumes.value.slice(0, VOLUME_PREVIEW_LIMIT),
+)
+
+const volumeDetailMap = computed(() => {
+  const cache = new Map<string, string>()
+  for (const [vol, matched] of filesByVolume.value) {
+    const names = matched.slice(0, 5).map(item => item.fileName).filter(Boolean)
+    const extra = matched.length > 5 ? `\n…等共 ${matched.length} 个文件` : ''
+    cache.set(vol, `我方文号：${vol}\n已选账单：${matched.length} 个\n${names.join('\n')}${extra}`)
+  }
+  return cache
+})
+
 function volumeDetail(vol: string): string {
-  const matched = Object.values(fileSelection.value).filter(item => item.caseVolume?.trim() === vol)
-  if (!matched.length) return `我方文号：${vol}\n来源：手工添加`
-  const names = matched.slice(0, 5).map(item => item.fileName).filter(Boolean)
-  const extra = matched.length > 5 ? `\n…等共 ${matched.length} 个文件` : ''
-  return `我方文号：${vol}\n已选账单：${matched.length} 个\n${names.join('\n')}${extra}`
+  return volumeDetailMap.value.get(vol) ?? `我方文号：${vol}\n来源：手工添加`
 }
 
+const pctExceptionDetailCache = new WeakMap<FeeSearchRow, { reason: string; text: string }>()
 function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
-  return [
+  const cached = pctExceptionDetailCache.get(row)
+  if (cached && cached.reason === reason) return cached.text
+  const text = [
     `待核对原因：${reason}`,
     row.customerName ? `客户名称：${row.customerName}` : '',
     row.caseVolume ? `我方文号：${row.caseVolume}` : '',
@@ -117,6 +136,8 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
     row.ctrlProc ? `处理事项：${row.ctrlProc}` : '',
     row.requestStatus ? `请款状态：${row.requestStatus}` : ''
   ].filter(Boolean).join('\n')
+  pctExceptionDetailCache.set(row, { reason, text })
+  return text
 }
 
 const step3SectionRef = ref<HTMLElement | null>(null)
@@ -413,9 +434,23 @@ function batchItemStatusLabel(status: string): string {
           >
             恢复已排除 ({{ excludedVolumes.length }})
           </button>
+          <button
+            v-if="activeVolumes.length > VOLUME_PREVIEW_LIMIT"
+            type="button"
+            class="text-button"
+            @click="showAllVolumes = !showAllVolumes"
+          >
+            {{ showAllVolumes ? '收起文号清单' : `展开全部 ${activeVolumes.length} 个文号` }}
+          </button>
         </div>
         <div class="volume-tags-flow">
-          <span v-for="vol in activeVolumes" :key="vol" class="volume-tag" v-hint="volumeDetail(vol)">
+          <span
+            v-for="vol in visibleVolumes"
+            :key="vol"
+            v-memo="[vol, volumeDetail(vol)]"
+            class="volume-tag"
+            v-hint="volumeDetail(vol)"
+          >
             {{ vol }}
             <button
               type="button"
@@ -425,6 +460,14 @@ function batchItemStatusLabel(status: string): string {
               @click="removeVolume(vol)"
             >×</button>
           </span>
+          <button
+            v-if="!showAllVolumes && activeVolumes.length > VOLUME_PREVIEW_LIMIT"
+            type="button"
+            class="volume-expand-chip"
+            @click="showAllVolumes = true"
+          >
+            还有 {{ activeVolumes.length - VOLUME_PREVIEW_LIMIT }} 个文号，点击展开全部
+          </button>
         </div>
         <div class="add-custom-volume-row">
           <input
@@ -497,6 +540,7 @@ function batchItemStatusLabel(status: string): string {
         :initial-token="feeInitialToken"
         :default-selection-exclusion="defaultSelectionExclusion"
         :include-translation-word-counts="selectedTemplateId !== 'midea-pct'"
+        @searched="onFeeSearch"
         @selection-change="onFeeSelectionChange"
       >
         <template #result-actions>
@@ -524,7 +568,12 @@ function batchItemStatusLabel(status: string): string {
           <details v-if="pctExceptions.length" class="reconcile-warn">
             <summary>PCT 待核对费用（{{ pctExceptions.length }} 笔）</summary>
             <ul>
-              <li v-for="{ row, reason } in pctExceptions" :key="row.feeId" v-hint="pctExceptionDetail(row, reason)">
+              <li
+                v-for="{ row, reason } in pctExceptions"
+                :key="row.feeId"
+                v-memo="[row, reason]"
+                v-hint="pctExceptionDetail(row, reason)"
+              >
                 {{ row.customerName || '客户待核对' }} · {{ row.caseVolume }} · {{ row.feeType || row.feeId }} · {{ row.amount }} {{ row.currency }}（{{ reason }}）
               </li>
             </ul>
@@ -538,7 +587,12 @@ function batchItemStatusLabel(status: string): string {
       <details v-if="pctExportExceptions.length" class="reconcile-warn" open>
         <summary>有 {{ pctExportExceptions.length }} 笔未请款费用待处理</summary>
         <ul>
-          <li v-for="{ row, reason } in pctExportExceptions" :key="row.feeId" v-hint="pctExceptionDetail(row, reason)">
+          <li
+            v-for="{ row, reason } in pctExportExceptions"
+            :key="row.feeId"
+            v-memo="[row, reason]"
+            v-hint="pctExceptionDetail(row, reason)"
+          >
             {{ row.customerName || '客户待核对' }} · {{ row.caseVolume }} · {{ row.feeType || row.feeId }} · {{ row.amount }} {{ row.currency }}（{{ reason }}）
           </li>
         </ul>
@@ -662,6 +716,7 @@ function batchItemStatusLabel(status: string): string {
             <span
               v-for="group in selectedCustomerGroups"
               :key="group.customer"
+              v-memo="[group.customer, group.rows.length]"
               class="customer-batch-chip"
               v-hint="`${group.customer}：共 ${group.rows.length} 笔费用`"
             >
@@ -717,6 +772,7 @@ function batchItemStatusLabel(status: string): string {
           <li
             v-for="item in exportBatchItems"
             :key="item.customer"
+            v-memo="[item.customer, item.status, item.savedFileName, item.fileName, item.reason]"
             class="batch-result-item"
             :class="{
               pending: item.status === 'download_started' || item.status === 'generated' || item.status === 'unknown',
@@ -1008,6 +1064,20 @@ function batchItemStatusLabel(status: string): string {
   font-weight: bold;
   cursor: pointer;
   padding: 0;
+}
+
+.extracted-volumes-card .volume-tags-flow .volume-expand-chip {
+  padding: 4px 10px;
+  border: 1px dashed #c8dff6;
+  border-radius: 6px;
+  background: #f5faff;
+  color: #2b6cb0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.extracted-volumes-card .volume-tags-flow .volume-expand-chip:hover {
+  background: #ebf8ff;
 }
 
 .extracted-volumes-card .add-custom-volume-row {

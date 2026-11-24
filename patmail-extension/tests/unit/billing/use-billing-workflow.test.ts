@@ -101,7 +101,7 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
     try {
       await vi.advanceTimersByTimeAsync(0)
       api.onFeeSelectionChange([feeRow()])
-      api.setStep(3)
+      void api.setStep(3)
       await vi.advanceTimersByTimeAsync(0)
       expect(api.ratesDate.value).toBe('2026-11-20')
       await vi.advanceTimersByTimeAsync(180_000)
@@ -385,7 +385,7 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
         feeRow({ feeId: 'cny-1', caseVolume: 'PA01PCT', businessType: 'PCT国际阶段', currency: 'CNY', customerName: '美的小家电事业部' }),
         feeRow({ feeId: 'cny-2', caseVolume: 'PA02PCT', businessType: 'PCT国际阶段', currency: 'CNY', customerName: '美的新能源事业部' }),
       ])
-      api.setStep(3)
+      void api.setStep(3)
       await nextTick()
       expect(api.ratesLoading.value).toBe(true)
 
@@ -454,7 +454,7 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
     try {
       await vi.advanceTimersByTimeAsync(0)
       api.onFeeSelectionChange([feeRow({ currency: 'USD', amount: 100 })])
-      api.setStep(3)
+      void api.setStep(3)
       await vi.advanceTimersByTimeAsync(0)
       expect(api.ratesDate.value).toBe('2026-11-23')
 
@@ -472,6 +472,221 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
       app.unmount()
       root.remove()
       vi.useRealTimers()
+    }
+  })
+
+  it('indexes filesByVolume in O(1), updates activeVolumes immutably, and persists drafts after bulk selection finishes', async () => {
+    vi.useFakeTimers()
+    const saveMock = vi.fn<(scope: string, snapshot: BillingDeskSnapshot) => Promise<void>>(() => Promise.resolve())
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: saveMock,
+      },
+    })
+
+    const mockSelectingAll = ref(true)
+    const mockSnapshotRevision = ref(0)
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        api.feeQueryRef.value = {
+          selectionPending: false,
+          selectionIncomplete: false,
+          get selectingAll() {
+            return mockSelectingAll.value
+          },
+          get snapshotRevision() {
+            return mockSnapshotRevision.value
+          },
+          getKnownRows: () => [],
+          replaceBillingSelection: () => {},
+          billingSnapshot: () => ({ selectedIds: ['fee-1'] }),
+          restoreBillingSnapshot: () => {},
+        }
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(api.ready.value).toBe(true)
+
+      api.fileSelection.value = {
+        f1: { fileId: 'f1', fileName: '10001 PA250001US 费用账单 20261101.pdf', fileDescription: '付款INVOICE', customerName: '测试客户', caseVolume: 'PA250001US' },
+        f2: { fileId: 'f2', fileName: '10002 PA250001US 补充账单 20261102.pdf', fileDescription: '付款INVOICE', customerName: '测试客户', caseVolume: 'PA250001US' },
+      }
+      await nextTick()
+      expect(api.filesByVolume.value.get('PA250001US')).toHaveLength(2)
+
+      api.customVolumeInput.value = 'PA250002US\nPA250003US'
+      api.addCustomVolume()
+      expect(api.activeVolumes.value).toEqual(['PA250001US', 'PA250002US', 'PA250003US'])
+
+      // 批量翻页期间跳过增量 WAL 保存
+      mockSnapshotRevision.value += 1
+      await nextTick()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(saveMock).not.toHaveBeenCalled()
+
+      // 批量翻页结束后自动触发草稿持久化
+      mockSelectingAll.value = false
+      await nextTick()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(saveMock).toHaveBeenCalledTimes(1)
+      expect(saveMock.mock.calls[0]?.[1].extra).toEqual(['PA250002US', 'PA250003US'])
+    } finally {
+      app.unmount()
+      root.remove()
+      vi.useRealTimers()
+    }
+  })
+
+  it('auto-revalidates recovered Step 1 bill queries in the background on fee search, step advance, and export', async () => {
+    const filledFiles: string[] = []
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: (_id, _bytes, input) => {
+          filledFiles.push(input.fileNameSuffix ?? 'ok')
+          return Promise.resolve({ bytes: new Uint8Array([1]), fileName: 'out.xlsx', blockCount: 1, warnings: [] })
+        },
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: req =>
+          Promise.resolve({
+            status: 'download_completed' as const,
+            downloadId: 11,
+            fileName: req.fileName,
+            savedFileName: req.fileName,
+            blockCount: 1,
+            warnings: [],
+          }),
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.resolve(),
+      },
+    })
+
+    const hasRecoveredQuery = ref(true)
+    const canRefresh = ref(true)
+    const searchError = ref(false)
+    let simulateNextRefreshFail = false
+    const refreshCalls: boolean[] = []
+    let resolveRefresh: (() => void) | null = null
+
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        api.filePanelRef.value = {
+          selectAllPages: () => undefined,
+          getBillingSelectionIssue: () =>
+            searchError.value
+              ? '账单查询失败，请重新查询。'
+              : hasRecoveredQuery.value
+                ? '请先刷新验证已恢复的账单查询。'
+                : '',
+          get hasRecoveredQuery() {
+            return hasRecoveredQuery.value
+          },
+          get canRefresh() {
+            return canRefresh.value
+          },
+          refresh: (scrollOnSuccess = true) => {
+            refreshCalls.push(scrollOnSuccess)
+            return new Promise<void>(resolve => {
+              resolveRefresh = () => {
+                if (simulateNextRefreshFail) {
+                  searchError.value = true
+                } else {
+                  searchError.value = false
+                  hasRecoveredQuery.value = false
+                }
+                resolve()
+              }
+            })
+          },
+        }
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      api.onFeeSelectionChange([feeRow({ currency: 'CNY', customerName: '歌尔股份有限公司' })])
+      await nextTick()
+
+      // 1. Step 2 query kicks off background Step 1 revalidation silently (scrollOnSuccess = false).
+      api.onFeeSearch()
+      expect(refreshCalls).toEqual([false])
+      expect(resolveRefresh).not.toBeNull()
+      resolveRefresh!()
+      resolveRefresh = null
+      await vi.waitFor(() => expect(api.fileSelectionIssue.value).toBe(''))
+
+      // 2. Step 3 advance automatically awaits recovered-query refresh and enters Step 3 on success.
+      hasRecoveredQuery.value = true
+      await nextTick()
+      const step3Promise = api.setStep(3)
+      expect(api.stepNotice.value).toContain('正在自动验证已恢复的账单查询')
+      await vi.waitFor(() => expect(resolveRefresh).not.toBeNull())
+      resolveRefresh!()
+      resolveRefresh = null
+      await step3Promise
+      expect(api.currentStep.value).toBe(3)
+      expect(api.stepNotice.value).toBe('')
+      expect(refreshCalls).toEqual([false, false])
+
+      // 3. Failed refresh surfaces real error instead of advancing silently.
+      api.currentStep.value = 2
+      hasRecoveredQuery.value = true
+      searchError.value = false
+      simulateNextRefreshFail = true
+      await nextTick()
+      const failedStepPromise = api.setStep(3)
+      await vi.waitFor(() => expect(resolveRefresh).not.toBeNull())
+      resolveRefresh!()
+      resolveRefresh = null
+      await failedStepPromise
+      expect(api.currentStep.value).toBe(2)
+      expect(api.stepNotice.value).toBe('账单查询失败，请重新查询。')
+
+      // 4. Direct Step 3 export auto-revalidates before generating workbook.
+      simulateNextRefreshFail = false
+      searchError.value = false
+      api.currentStep.value = 3
+      hasRecoveredQuery.value = true
+      await nextTick()
+      expect(api.exportDisabled.value).toBe(false)
+      const exportPromise = api.doExportExcel()
+      await vi.waitFor(() => expect(resolveRefresh).not.toBeNull())
+      resolveRefresh!()
+      resolveRefresh = null
+      await exportPromise
+      expect(hasRecoveredQuery.value).toBe(false)
+      expect(filledFiles).toHaveLength(1)
+      expect(api.exportResultNotice.value).toContain('已导出并确认下载完成')
+    } finally {
+      app.unmount()
+      root.remove()
     }
   })
 })
