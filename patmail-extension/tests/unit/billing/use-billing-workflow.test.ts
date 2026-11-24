@@ -1,5 +1,5 @@
 import { createApp, h, nextTick, ref } from 'vue'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LARGE_CUSTOMER_ORIGIN } from '../../../src/api/config'
 import type { FeeSearchRow } from '../../../src/api/fee-search-types'
 import type { BillingDeskSnapshot } from '../../../src/application/billing/billing-contracts'
@@ -23,6 +23,11 @@ vi.mock('../../../src/app/composables/useWorkspace', () => ({
     }),
   }),
 }))
+
+// 激活模板按账号持久化到 localStorage；用例间清理，避免跨用例泄漏启动模板。
+afterEach(() => {
+  localStorage.clear()
+})
 
 function feeRow(overrides: Partial<FeeSearchRow> = {}): FeeSearchRow {
   return {
