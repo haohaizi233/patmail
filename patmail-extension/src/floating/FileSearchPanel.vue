@@ -20,9 +20,10 @@ const props = withDefaults(defineProps<{
   seed?: Record<string, string> | null
   seedToken?: number
   recoverySurface?: string
+  legacyRecoverySurface?: string
   autoSelectBills?: boolean
   workspaceUserId?: string
-}>(), { showSession: true, seed: null, seedToken: 0, recoverySurface: '', autoSelectBills: false, workspaceUserId: undefined })
+}>(), { showSession: true, seed: null, seedToken: 0, recoverySurface: '', legacyRecoverySurface: '', autoSelectBills: false, workspaceUserId: undefined })
 const emit = defineEmits<{
   searched: [query: FileSearchRequest]
   'download-name': [selection: FileDownloadSelection | null, problem: string]
@@ -179,6 +180,7 @@ onBeforeUnmount(() => {
       selectable
       :show-mail-actions="showSession"
       :recovery-surface="recoverySurface || (showSession ? 'floating-files' : 'workspace-files')"
+      :legacy-recovery-surface="legacyRecoverySurface"
       :auto-select-bills="autoSelectBills"
       :search-on-seed-change="!autoSelectBills"
       :user-id="queryUserId"

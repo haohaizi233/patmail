@@ -18,7 +18,8 @@ const recoveryRows = vi.hoisted(() => new Map<string, unknown>())
 const recoveryGate = vi.hoisted(() => ({ wait: null as Promise<void> | null, read: null as Promise<void> | null }))
 vi.mock('../../../src/recovery/wal-ledger', () => ({
   recallRecovery: async (_slot: string, scope: string) => { if (recoveryGate.read) await recoveryGate.read; return recoveryRows.get(scope) ?? null },
-  rememberRecovery: async (_slot: string, scope: string, payload: unknown) => { recoveryRows.set(scope, JSON.parse(JSON.stringify(payload))); if (recoveryGate.wait) await recoveryGate.wait }
+  rememberRecovery: async (_slot: string, scope: string, payload: unknown) => { recoveryRows.set(scope, JSON.parse(JSON.stringify(payload))); if (recoveryGate.wait) await recoveryGate.wait },
+  forgetRecovery: async (_slot: string, scope: string) => { recoveryRows.delete(scope) },
 }))
 
 vi.mock('../../../src/floating/QueryTemplateSection.vue', async () => {
@@ -1228,5 +1229,78 @@ describe('file query durable remount', () => {
     expect(pageSizeEl).not.toBeNull()
     expect(refreshBtn?.textContent?.trim()).toBe('刷新')
     expect(Array.from(tools!.children)).toEqual([nav, pageSizeEl, refreshBtn])
+  })
+
+  it('当前模板工作面为空快照且 legacyRecoverySurface 延迟到达时自动迁移旧版 billing-files 查询', async () => {
+    const origin = 'http://183.36.43.66:88'
+    const userId = 'test'
+    const targetSurface = 'billing-files:midea-foreign'
+    const legacySurface = 'billing-files'
+    const targetScope = JSON.stringify([origin, userId, targetSurface])
+    const legacyScope = JSON.stringify([origin, userId, legacySurface])
+
+    // 模拟升级后曾写出过空工作面快照，以及尚未迁移的旧版查询快照
+    recoveryRows.set(targetScope, {
+      version: 1,
+      owner: [origin, userId, targetSurface],
+      query: null,
+      result: null,
+      selected: {},
+      form: null,
+      downloadSelection: null,
+      stripAppNoDot: true,
+      pageSize: 100,
+      templateName: '',
+      readPages: [],
+      activeTask: null,
+    })
+    recoveryRows.set(legacyScope, {
+      version: 1,
+      owner: [origin, userId, legacySurface],
+      query: { resolvedFields: { case_volume: 'PA-LEGACY-MIGRATE' }, pageIndex: 1, pageSize: 100 },
+      result: null,
+      selected: {},
+      form: null,
+      downloadSelection: null,
+      stripAppNoDot: true,
+      pageSize: 100,
+      templateName: '',
+      readPages: [],
+      activeTask: null,
+    })
+
+    const selected = ref<Record<string, SelectedPatentFile>>({})
+    const legacySurfaceRef = ref('')
+    const request = vi.fn(async () => ({ type: MessageType.Error, payload: { message: 'unused' } }))
+    app = createApp({
+      render: () => h('div', [
+        h(CheckRainbow),
+        h(FileSearchQuery, {
+          userId,
+          origin,
+          canSearch: true,
+          selectable: true,
+          recoverySurface: targetSurface,
+          legacyRecoverySurface: legacySurfaceRef.value,
+          selected: selected.value,
+          'onUpdate:selected': (value: Record<string, SelectedPatentFile>) => { selected.value = value },
+        }),
+      ]),
+    })
+    app.provide('bridge', { request })
+    app.directive('hint', {})
+    app.mount(document.body.appendChild(document.createElement('div')))
+    await settle()
+
+    // 在归属模板尚未确定时保持等待，确认后立即自动迁移并清除旧键
+    expect(recoveryRows.has(legacyScope)).toBe(true)
+    legacySurfaceRef.value = legacySurface
+    await settle()
+
+    expect(recoveryRows.has(legacyScope)).toBe(false)
+    const migrated = recoveryRows.get(targetScope) as { owner?: string[]; query?: { resolvedFields?: { case_volume?: string } } } | undefined
+    expect(migrated?.owner).toEqual([origin, userId, targetSurface])
+    expect(migrated?.query?.resolvedFields?.case_volume).toBe('PA-LEGACY-MIGRATE')
+    expect(document.body.textContent).toContain('已恢复本地查询与选择')
   })
 })

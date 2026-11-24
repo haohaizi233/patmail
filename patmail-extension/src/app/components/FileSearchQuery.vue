@@ -23,7 +23,7 @@ import { DOWNLOAD_PROGRESS_CHANNEL, isDownloadProgress } from '../../shared/down
 import { newUuid } from '../../utils/uuid'
 import { templateArchiveName } from '../../api/file-download'
 import { isRecord } from '../../shared/guards'
-import { recallRecovery, rememberRecovery } from '../../recovery/wal-ledger'
+import { forgetRecovery, recallRecovery, rememberRecovery } from '../../recovery/wal-ledger'
 import { fileQueryOwner, fileQueryScope, restoredFileQuery, type FileQuerySnapshot, type FileQueryTask } from '../../recovery/file-query'
 import { chooseBrowserDownloadTarget, releaseBrowserDownloadTarget } from '../../browser-download/target'
 
@@ -37,9 +37,10 @@ const props = withDefaults(defineProps<{
   showMailActions?: boolean
   epoch?: number
   recoverySurface?: string
+  legacyRecoverySurface?: string
   autoSelectBills?: boolean
   searchOnSeedChange?: boolean
-}>(), { seed: null, seedToken: 0, selectable: false, showMailActions: true, epoch: 0, recoverySurface: 'file-query', autoSelectBills: false, searchOnSeedChange: true })
+}>(), { seed: null, seedToken: 0, selectable: false, showMailActions: true, epoch: 0, recoverySurface: 'file-query', legacyRecoverySurface: '', autoSelectBills: false, searchOnSeedChange: true })
 
 const selected = defineModel<Record<string, SelectedPatentFile>>('selected', { default: () => ({}) })
 
@@ -1030,6 +1031,71 @@ async function retryFailedPages(): Promise<void> {
   }
 }
 
+function hasMeaningfulFileQuery(snap: FileQuerySnapshot | null): snap is FileQuerySnapshot {
+  return Boolean(snap && (snap.query || snap.result || Object.keys(snap.selected).length > 0 || snap.activeTask))
+}
+
+async function applyRestoredSnapshot(restored: FileQuerySnapshot, current: number): Promise<void> {
+  lastQuery.value = restored.query
+  result.value = restored.result ? toRawFileResult(restored.result) : null
+  deduplicate.value = restored.deduplicate ?? true
+  candidateSelection.value = restored.candidateSelection ?? restored.selected
+  pageSize.value = restored.pageSize ?? 100
+  resultTemplateName.value = restored.templateName ?? ''
+  stripAppNoDot.value = restored.stripAppNoDot ?? true
+  downloadSelection.value = restored.downloadSelection
+  activeTask.value = restored.activeTask
+  downloadConnectionRecovered.value = props.canSearch && restored.activeTask?.status === 'paused'
+  if (restored.activeTask?.status === 'paused' && /正在确认暂停|重新确认暂停/.test(restored.activeTask.notice)) {
+    pauseConfirmation.value = { taskId: restored.activeTask.id, pending: false, problem: '上次暂停尚未确认。' }
+  }
+  readPages.value = restored.readPages ?? []
+  querySessionId.value = ''
+  searchState.value = restored.result ? (restored.result.total ? 'success' : 'empty') : 'idle'
+  needsRevalidation.value = true
+  await nextTick()
+  if (current !== recoveryGeneration || disposed) return
+  queryForm.value?.restoreRecoveryState?.(restored.form)
+  if (restored.query) emit('searched', restored.query)
+  emit('download-name', restored.downloadSelection, '')
+}
+
+async function tryMigrateLegacyFileQuery(
+  origin: string,
+  userId: string,
+  surface: string,
+  legacySurface: string | undefined,
+  scope: string,
+): Promise<FileQuerySnapshot | null> {
+  if (!legacySurface || legacySurface === surface) return null
+  const legacyScope = fileQueryScope(origin, userId, legacySurface)
+  const legacySaved = await recallRecovery('file-query', legacyScope)
+  const legacyRestored = restoredFileQuery(legacySaved, origin, userId, legacySurface)
+  if (!hasMeaningfulFileQuery(legacyRestored)) return null
+  const migrated: FileQuerySnapshot = {
+    ...legacyRestored,
+    owner: fileQueryOwner(origin, userId, surface),
+  }
+  try {
+    await rememberRecovery('file-query', scope, migrated)
+    await forgetRecovery('file-query', legacyScope).catch(() => {})
+  } catch {
+    // 写入新作用域失败时不移除旧记录，保证恢复不丢失
+  }
+  return migrated
+}
+
+function canRestoreIdleSurface(currentRecGen: number, initialSearchGen: number): boolean {
+  return (
+    currentRecGen === recoveryGeneration &&
+    !disposed &&
+    searchGeneration === initialSearchGen &&
+    searchState.value !== 'loading' &&
+    !selectingAll.value &&
+    !hasMeaningfulFileQuery(surfaceSnapshot())
+  )
+}
+
 watch(snapshotIdentity, async scope => {
   pageCache.clear()
   preview?.clear()
@@ -1053,35 +1119,58 @@ watch(snapshotIdentity, async scope => {
     const initialGeneration = searchGeneration
     const saved = await recallRecovery('file-query', scope)
     if (current !== recoveryGeneration || disposed) return
-    const restored = restoredFileQuery(saved, props.origin, props.userId, props.recoverySurface)
+    let restored = restoredFileQuery(saved, props.origin, props.userId, props.recoverySurface)
+    if (!hasMeaningfulFileQuery(restored)) {
+      const migrated = await tryMigrateLegacyFileQuery(
+        props.origin,
+        props.userId,
+        props.recoverySurface,
+        props.legacyRecoverySurface,
+        scope,
+      )
+      if (current !== recoveryGeneration || disposed) return
+      if (migrated) restored = migrated
+    }
     if (restored && searchGeneration === initialGeneration) {
-      lastQuery.value = restored.query
-      result.value = restored.result ? toRawFileResult(restored.result) : null
-      deduplicate.value = restored.deduplicate ?? true
-      candidateSelection.value = restored.candidateSelection ?? restored.selected
-      pageSize.value = restored.pageSize ?? 100
-      resultTemplateName.value = restored.templateName ?? ''
-      stripAppNoDot.value = restored.stripAppNoDot ?? true
-      downloadSelection.value = restored.downloadSelection
-      activeTask.value = restored.activeTask
-      downloadConnectionRecovered.value = props.canSearch && restored.activeTask?.status === 'paused'
-      if (restored.activeTask?.status === 'paused' && /正在确认暂停|重新确认暂停/.test(restored.activeTask.notice)) {
-        pauseConfirmation.value = { taskId: restored.activeTask.id, pending: false, problem: '上次暂停尚未确认。' }
-      }
-      readPages.value = restored.readPages ?? []
-      querySessionId.value = ''
-      searchState.value = restored.result ? (restored.result.total ? 'success' : 'empty') : 'idle'
-      needsRevalidation.value = true
-      await nextTick()
-      queryForm.value?.restoreRecoveryState?.(restored.form)
-      if (restored.query) emit('searched', restored.query)
-      emit('download-name', restored.downloadSelection, '')
+      await applyRestoredSnapshot(restored, current)
+      if (current !== recoveryGeneration || disposed) return
     }
     recoveryReady = true
+    if (props.legacyRecoverySurface && canRestoreIdleSurface(current, initialGeneration)) {
+      const lateMigrated = await tryMigrateLegacyFileQuery(
+        props.origin,
+        props.userId,
+        props.recoverySurface,
+        props.legacyRecoverySurface,
+        scope,
+      )
+      if (lateMigrated && canRestoreIdleSurface(current, initialGeneration)) {
+        await applyRestoredSnapshot(lateMigrated, current)
+      }
+    }
   } catch (error) {
     if (current === recoveryGeneration) recoveryNotice.value = error instanceof Error ? error.message : '恢复账本不可用。'
   }
 }, { immediate: true })
+
+watch(() => props.legacyRecoverySurface, async legacySurface => {
+  if (!legacySurface || !recoveryReady || disposed) return
+  const scope = snapshotScope
+  const surface = props.recoverySurface
+  const origin = props.origin
+  const userId = props.userId
+  if (!scope || !origin || !userId || !surface || legacySurface === surface) return
+  const current = recoveryGeneration
+  const initialGeneration = searchGeneration
+  if (!canRestoreIdleSurface(current, initialGeneration)) return
+  try {
+    const migrated = await tryMigrateLegacyFileQuery(origin, userId, surface, legacySurface, scope)
+    if (!migrated || !canRestoreIdleSurface(current, initialGeneration)) return
+    await applyRestoredSnapshot(migrated, current)
+  } catch (error) {
+    if (current === recoveryGeneration) recoveryNotice.value = error instanceof Error ? error.message : '恢复账本不可用。'
+  }
+})
 
 watch(() => props.epoch, () => { stopBulk(); generation += 1 })
 watch(() => props.seedToken, () => {
