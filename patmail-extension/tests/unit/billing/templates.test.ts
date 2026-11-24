@@ -100,7 +100,7 @@ describe('billing templates filler', () => {
       options: { reviewFee: 0, bankFee: 0 }
     })
     const book = await XlsxBook.open(result.bytes)
-    expect(book.sheets[0].name).toBe('格尔2026年10月涉外')
+    expect(book.sheets[0].name).toBe('歌尔2026年10月涉外')
     const sheet = book.sheet(book.sheets[0].name)
     expect(result.blockCount).toBe(1)
     expect(['K5', 'P5', 'T5', 'U5', 'V5'].map(cell => sheet.valueOf(cell))).toEqual([52, 1527, 6630, 4420, 6500])
@@ -160,7 +160,7 @@ describe('billing templates filler', () => {
       today: new Date('2026-11-19')
     })
 
-    expect(result.fileName).toBe('格尔涉外请款单-20261119.xlsx')
+    expect(result.fileName).toBe('歌尔涉外请款单-20261119.xlsx')
     expect(result.blockCount).toBe(3) // 3 distinct (caseVolume + ctrlProc) events
 
     // Verify output xlsx structure

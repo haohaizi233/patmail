@@ -51,7 +51,7 @@ export interface BillingTemplateInfo {
 
 export const BILLING_TEMPLATES: BillingTemplateInfo[] = [
   {
-    id: 'general-foreign', label: '格尔涉外请款单', fileBase: '格尔涉外请款单',
+    id: 'general-foreign', label: '歌尔涉外请款单', fileBase: '歌尔涉外请款单',
     summary: '一事项一行：官费按新申请/年费/生效/IDS/RCE/授权分列，外所代理费、汇率、税费、翻译费、内所代理费。',
     queryPreset: {
       fileFields: { flow_direction: 'IO', filetype: '付款INVOICE' },
@@ -191,7 +191,7 @@ function amountText(amount: number, currency: string): string {
   return `${amount}${currency}`
 }
 
-// ---------------------------------------------------------------- 格尔涉外请款单
+// ---------------------------------------------------------------- 歌尔涉外请款单
 
 const GENERAL_COLUMN: Partial<Record<OfficialKind, string>> = {
   new: 'I', annual: 'J', validation: 'K', ids: 'L', rce: 'M', grant: 'N'
@@ -312,7 +312,7 @@ function fillGeneral(book: XlsxBook, input: BillingInput, warnings: string[]): n
   const today = input.today ?? new Date()
   const year = period?.[1] ?? today.getFullYear()
   const month = period ? Number(period[2]) : today.getMonth() + 1
-  book.renameSheet(sheetName, `格尔${year}年${month}月涉外`)
+  book.renameSheet(sheetName, `歌尔${year}年${month}月涉外`)
   return events.length
 }
 
