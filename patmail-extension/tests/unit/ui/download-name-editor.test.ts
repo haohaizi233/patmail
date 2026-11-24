@@ -60,6 +60,10 @@ async function mount(historyXml = '') {
 function selects() { return Array.from(document.querySelectorAll<HTMLSelectElement>('.download-name-row select')) }
 async function choose(select: HTMLSelectElement, value: string) { select.value = value; select.dispatchEvent(new Event('change')); await settle() }
 function button(label: string) { return Array.from(document.querySelectorAll('button')).find(node => node.textContent?.trim() === label)! }
+function caseVolumeInput() {
+  return Array.from(document.querySelectorAll('.query-cell'))
+    .find(cell => cell.textContent?.trim() === '我方文号')!.querySelector<HTMLInputElement>('input')!
+}
 
 describe('文件下载名称的动态配方', () => {
   it('选用保存的查询模板会恢复下载命名模板，下载配置仍不进入搜索参数', async () => {
@@ -146,13 +150,34 @@ describe('文件下载名称的动态配方', () => {
     expect(document.body.textContent).toContain('第2段固定字符不能为空')
     expect(() => exposed.currentDownloadSelection()).toThrow('第2段固定字符不能为空')
   })
-  it('手工新建配方后恢复模板会清掉本次编辑', async () => {
+  it('未选查询模板时禁用恢复，保留手填查询条件和命名配方', async () => {
     await mount()
+    const input = caseVolumeInput()
+    input.value = 'PA-MANUAL'
+    input.dispatchEvent(new Event('input'))
     await choose(selects()[1], 'app_no')
+    const restore = button('恢复模板')
+    expect(restore.disabled).toBe(true)
+    expect(document.body.textContent).toContain('选用查询模板后才能恢复模板值')
+    restore.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await settle()
+    expect(input.value).toBe('PA-MANUAL')
     expect(exposed.currentDownloadSelection()?.newFilename).toBe('app_no')
-    button('恢复模板').click(); await settle()
-    expect(exposed.currentDownloadSelection()).toBeNull()
-    expect(selects()[1].value).toBe('')
+  })
+  it('选用查询模板后仅在有临时修改时开放恢复，并回填模板值', async () => {
+    await mount('<xmlRoot><case_volume>PA-SAVED</case_volume><selfilename1>app_no</selfilename1></xmlRoot>')
+    button('季华递交合并档EASY').click(); await settle()
+    const restore = button('恢复模板')
+    expect(restore.disabled).toBe(true)
+    const input = caseVolumeInput()
+    input.value = 'PA-CHANGED'
+    input.dispatchEvent(new Event('input'))
+    await choose(selects()[1], 'case_name')
+    expect(restore.disabled).toBe(false)
+    restore.click(); await settle()
+    expect(input.value).toBe('PA-SAVED')
+    expect(exposed.currentDownloadSelection()?.newFilename).toBe('app_no')
+    expect(restore.disabled).toBe(true)
   })
   it('同值模板选择仍会恢复配方，空项可以清掉手工配方', async () => {
     await mount()

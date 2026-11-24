@@ -670,12 +670,19 @@ function onCheck(key: string, event: Event): void {
 function cellClass(cell: QueryCell): string {
   return cell.kind === 'files' || cell.kind === 'checks' || cell.kind === 'download-name' ? 'query-cell span-all' : 'query-cell'
 }
-function restoreTemplate(): void {
+const hasRestorableTemplate = computed(() => Boolean(selectedBaseId.value && baseName.value && !baseMissing.value))
+const hasTemplateEdits = computed(() => Object.values(temporaryActive.value).some(Boolean) || namePartsEdited.value)
+const canRestoreTemplate = computed(() => hasRestorableTemplate.value && hasTemplateEdits.value)
+
+function resetTemporaryEdits(): void {
   temporaryActive.value = {}
   temporary.value = {}
   typedKeys.value = {}
   namePartsEdited.value = false
   nameParts.value = storedDownloadParts()
+}
+function restoreTemplate(): void {
+  if (canRestoreTemplate.value) resetTemporaryEdits()
 }
 function dictionaryFor(key: string): { name: string; dictionary: NormalizedDictionary } | undefined {
   const flowKey = key === 'file_status' ? 'fileStatus' : key === 'flow_direction' ? 'caseDirection' : key === 'proc_status' ? 'procStatus'
@@ -894,7 +901,7 @@ function resetBase(): void {
   baseName.value = ''
   fileDropNote.value = ''
   collapsedByUser.value = {}
-  restoreTemplate()
+  resetTemporaryEdits()
 }
 function startApply(id: string): void {
   recoveredForm = false
@@ -1726,9 +1733,13 @@ watch(selectedCustomerId, () => {
             <ThemeSelect v-model="queryTimeoutMs" :options="timeoutOptions" />
           </label>
           <button type="button" class="text-button" :disabled="checkingForm" @click="checkAgainstPage">校对最新字段</button>
-          <button type="button" class="text-button" @click="restoreTemplate">恢复模板</button>
+          <button type="button" class="text-button" :disabled="!canRestoreTemplate"
+            v-hint="'撤销临时修改，恢复所选模板的查询条件和下载命名'" @click="restoreTemplate">恢复模板</button>
         </span>
       </div>
+      <p v-if="hasTemplateEdits && !hasRestorableTemplate" class="hint">
+        {{ baseMissing ? '当前模板不可用，已保留你填写的条件。' : '选用查询模板后才能恢复模板值。' }}
+      </p>
       <p class="hint">往下滚动会从原网站读取其余查询字段。保存会同时写入本机和原网站的查询模板。</p>
       <p v-if="dictionaryNote" class="hint">{{ dictionaryNote }}</p>
       <p v-if="mode === 'customer' && selectedCustomer" class="hint">当前客户：{{ selectedCustomer.name }}</p>
