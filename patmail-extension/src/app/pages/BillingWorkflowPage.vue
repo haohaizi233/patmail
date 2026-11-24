@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import FileSearchPanel from '../../floating/FileSearchPanel.vue'
 import FeeSearchQuery from '../components/FeeSearchQuery.vue'
 import type { FeeSearchRow } from '../../api/fee-search-types'
 import { useBillingWorkflow } from '../composables/useBillingWorkflow'
+import { confirmDialog } from '../dialog'
 
 const props = withDefaults(
   defineProps<{
@@ -86,9 +88,11 @@ const {
   exportProgress,
   exportResultNotice,
   exportWarnings,
+  exportBatchItems,
   confirmExistingFees,
   canAdvanceFromFees,
   exportDisabled,
+  exportDisabledReason,
   doExportExcel,
   recoveryNotice
 } = useBillingWorkflow({ isActive: () => props.isActive })
@@ -113,6 +117,60 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
     row.ctrlProc ? `处理事项：${row.ctrlProc}` : '',
     row.requestStatus ? `请款状态：${row.requestStatus}` : ''
   ].filter(Boolean).join('\n')
+}
+
+const step3SectionRef = ref<HTMLElement | null>(null)
+
+const hasPendingConfirmCheck = computed(
+  () =>
+    (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value) ||
+    (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value),
+)
+
+const exportButtonLabel = computed(() => {
+  if (exporting.value) {
+    if (!exportProgress.value) return '正在生成 Excel…'
+    const downloaded = exportProgress.value.downloadedDone ?? exportProgress.value.done
+    const generated = exportProgress.value.generatedDone ?? exportProgress.value.done
+    if (exportProgress.value.phase === 'generating' && downloaded === 0) {
+      return `正在并发生成 ${generated}/${exportProgress.value.total}…`
+    }
+    return `正在按客户批量导出 ${downloaded}/${exportProgress.value.total}…`
+  }
+  if (!allowMixedCustomers.value && selectedCustomerGroups.value.length > 1) {
+    return `批量导出 ${selectedCustomerGroups.value.length} 份 Excel 请款表`
+  }
+  return '导出 Excel 请款表'
+})
+
+function scrollToExportConfirm(): void {
+  const target = step3SectionRef.value?.querySelector<HTMLElement>('.reconcile-warn')
+  target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+async function handleExportClick(): Promise<void> {
+  if (exportDisabled.value || exporting.value) return
+  if (pctExportExceptions.value.length > 0) {
+    const confirmed = await confirmDialog({
+      title: `有 ${pctExportExceptions.value.length} 笔未请款 PCT 费用未纳入本次导出`,
+      message: '以下未请款费用因模板无对应 PCT 官费列或客户待核对，本次不会纳入导出，需要另行处理。确认继续导出其余可归类费用吗？',
+      warn: true,
+      table: {
+        headers: ['客户名称', '我方文号', '费用名称', '金额', '原因'],
+        rows: pctExportExceptions.value.map(({ row, reason }) => [
+          row.customerName || '客户待核对',
+          row.caseVolume || '-',
+          row.feeType || row.feeId,
+          `${row.amount} ${row.currency}`,
+          reason,
+        ]),
+      },
+      confirmLabel: '确认继续导出',
+      cancelLabel: '取消',
+    })
+    if (!confirmed || exportDisabled.value || exporting.value) return
+  }
+  await doExportExcel()
 }
 </script>
 
@@ -236,8 +294,39 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
         </button>
         <template v-else>
           <button type="button" class="ghost back-btn" @click="setStep(2)">← 返回费用查询调整</button>
-          <button type="button" class="solid next-btn" :disabled="exportDisabled" @click="doExportExcel">
-            {{ exporting ? '正在生成 Excel…' : '导出 Excel 请款表' }}
+          <div class="top-customer-mode-switch" role="group" aria-label="客户分表或合表导出">
+            <span class="mode-thumb" :class="{ merged: allowMixedCustomers }" aria-hidden="true"></span>
+            <button
+              type="button"
+              class="mode-opt"
+              :class="{ active: !allowMixedCustomers }"
+              :aria-pressed="!allowMixedCustomers"
+              :disabled="exporting"
+              v-hint="'默认：多客户按客户分表批量并发导出（文件名自动带客户名）'"
+              @click="allowMixedCustomers = false"
+            >
+              按客户分表
+            </button>
+            <button
+              type="button"
+              class="mode-opt"
+              :class="{ active: allowMixedCustomers }"
+              :aria-pressed="allowMixedCustomers"
+              :disabled="exporting"
+              v-hint="'允许不同客户合并进入同一张请款表导出'"
+              @click="allowMixedCustomers = true"
+            >
+              合并单表
+            </button>
+          </div>
+          <button
+            type="button"
+            class="solid next-btn export-step-btn"
+            :disabled="exportDisabled"
+            v-hint="exportDisabledReason"
+            @click="handleExportClick"
+          >
+            {{ exportButtonLabel }}
           </button>
         </template>
       </div>
@@ -428,7 +517,7 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
     </section>
 
     <!-- ============================================================== 步骤 3 -->
-    <section v-show="currentStep === 3" class="step-section step-3-section">
+    <section v-show="currentStep === 3" ref="step3SectionRef" class="step-section step-3-section">
       <details v-if="pctExportExceptions.length" class="reconcile-warn" open>
         <summary>有 {{ pctExportExceptions.length }} 笔未请款费用待处理</summary>
         <ul>
@@ -579,24 +668,46 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
           ℹ️ 提示：有 <b>{{ reconciliationInfo.unmatchedCases.length }}</b> 个案卷有事项未能确认海外账单日（{{ reconciliationInfo.unmatchedCases.slice(0, 4).join('、') }}{{ reconciliationInfo.unmatchedCases.length > 4 ? ' 等' : '' }}），导出时对应事项的账单日将留空。
         </p>
 
+        <p v-if="exportDisabledReason && !exporting" class="export-disabled-hint" role="note">
+          <span>{{ exportDisabledReason }}</span>
+          <button
+            v-if="hasPendingConfirmCheck"
+            type="button"
+            class="text-button scroll-confirm-btn"
+            @click="scrollToExportConfirm"
+          >
+            去勾选确认 ↑
+          </button>
+        </p>
+
         <div class="button-row">
           <button
             type="button"
             class="solid export-btn"
             :disabled="exportDisabled"
-            @click="doExportExcel"
+            v-hint="exportDisabledReason"
+            @click="handleExportClick"
           >
-            {{ exporting
-              ? (exportProgress ? `正在按客户批量导出 ${exportProgress.done}/${exportProgress.total}…` : '正在填表并生成 Excel…')
-              : (!allowMixedCustomers && selectedCustomerGroups.length > 1
-                ? `批量导出 ${selectedCustomerGroups.length} 份 Excel 请款表`
-                : '导出 Excel 请款表') }}
+            {{ exportButtonLabel }}
           </button>
         </div>
 
         <p v-if="exportResultNotice" class="export-notice-text" :class="{ error: exportResultNotice.includes('失败') || exportResultNotice.includes('缺少') }">
           {{ exportResultNotice }}
         </p>
+
+        <ul v-if="exportBatchItems.length" class="batch-results-list" aria-label="分表导出明细">
+          <li
+            v-for="item in exportBatchItems"
+            :key="item.customer"
+            class="batch-result-item"
+            :class="{ failed: item.status !== 'download_completed' && item.status !== 'download_started' && item.status !== 'generated' }"
+          >
+            <span class="batch-item-customer">{{ item.customer }}</span>
+            <span class="batch-item-file">{{ item.savedFileName || item.fileName || '未生成文件' }}</span>
+            <span v-if="item.reason" class="batch-item-reason">{{ item.reason }}</span>
+          </li>
+        </ul>
 
         <div v-if="exportWarnings.length" class="warnings-box">
           <b>提示信息：</b>
@@ -733,6 +844,7 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
 .flow-steps-bar .step-quick-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
 }
 
@@ -745,6 +857,14 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
 .flow-steps-bar .step-quick-actions .next-btn {
   padding: 8px 16px;
   font-weight: 600;
+}
+
+.flow-steps-bar .step-quick-actions .export-step-btn {
+  min-width: 204px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
 }
 
 .flow-steps-bar .step-quick-actions .back-btn {
@@ -1149,6 +1269,7 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
 }
 
 .export-execute-card .export-btn {
+  min-width: 228px;
   padding: 12px 28px;
   font-size: 15px;
   font-weight: 700;
@@ -1226,5 +1347,142 @@ function pctExceptionDetail(row: FeeSearchRow, reason: string): string {
   background: #fff;
   border: 1px solid #f3c1da;
   color: #4f3659;
+}
+
+.export-disabled-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fff5f5;
+  border-left: 3px solid #e53e3e;
+  color: #c53030;
+  font-size: 13px;
+}
+
+.scroll-confirm-btn {
+  font-weight: 600;
+  color: #b83280;
+}
+
+.batch-results-list {
+  margin: 10px 0 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.batch-result-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #f0fff4;
+  border: 1px solid #c6f6d5;
+  font-size: 12px;
+  color: #276749;
+}
+
+.batch-result-item.failed {
+  background: #fff5f5;
+  border-color: #fed7d7;
+  color: #c53030;
+}
+
+.batch-item-customer {
+  font-weight: 600;
+}
+
+.batch-item-file {
+  color: #4a5568;
+}
+
+.batch-item-reason {
+  color: #c53030;
+}
+
+.top-customer-mode-switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  height: 36px;
+  padding: 3px;
+  border-radius: 999px;
+  background: #fff8fb;
+  border: 1px solid #f3c1da;
+  flex: none;
+  isolation: isolate;
+}
+
+.top-customer-mode-switch:has(.mode-opt:focus-visible) {
+  outline: 2px solid var(--focus, #9b3060);
+  outline-offset: 2px;
+}
+
+.top-customer-mode-switch .mode-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ff78ae, #ff4f93);
+  box-shadow: 0 2px 6px rgba(255, 79, 147, 0.28);
+  transform: translateX(0);
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.top-customer-mode-switch .mode-thumb.merged {
+  transform: translateX(100%);
+}
+
+.top-customer-mode-switch .mode-opt {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-width: 78px;
+  border: none;
+  background: transparent;
+  color: #6b4c72;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.18s ease;
+}
+
+.top-customer-mode-switch .mode-opt:focus-visible {
+  outline: none;
+}
+
+.top-customer-mode-switch .mode-opt.active {
+  color: #ffffff;
+}
+
+.top-customer-mode-switch .mode-opt:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .top-customer-mode-switch .mode-thumb,
+  .top-customer-mode-switch .mode-opt {
+    transition: none;
+  }
 }
 </style>

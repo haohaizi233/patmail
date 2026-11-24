@@ -117,6 +117,13 @@ try {
     assert.ok((await notice.innerText()).includes(savedName), 'UI must report the filename Chrome actually saved')
     return found[0]
   }
+  const confirmPctExceptionDialog = async () => {
+    const dialog = app.getByRole('dialog')
+    await dialog.waitFor({ timeout: 5_000 })
+    assert.match(await dialog.innerText(), /未请款 PCT 费用未纳入本次导出/)
+    await dialog.getByRole('button', { name: '确认继续导出', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden' })
+  }
   await app.getByText('测试员', { exact: true }).waitFor({ timeout: 15_000 })
 
   // 工作台卡片「请款」→ 请款工作流（默认格尔涉外模板 + 步骤 1）
@@ -183,7 +190,54 @@ try {
   }
   await app.setViewportSize({ width: 1440, height: 1000 })
   await feeResultNext.click()
-  await app.locator('.export-execute-card').getByRole('button', { name: /批量导出 2 份 Excel 请款表/ }).waitFor()
+  const topBatchExport = navigation.getByRole('button', { name: '批量导出 2 份 Excel 请款表', exact: true })
+  const bottomBatchExport = app.locator('.export-execute-card').getByRole('button', { name: /批量导出 2 份 Excel 请款表/ })
+  await bottomBatchExport.waitFor()
+  await topBatchExport.waitFor()
+  const exceptionBox = app.getByRole('checkbox', { name: /以上费用另行处理/ })
+  assert.equal(await exceptionBox.isChecked(), true, 'PCT 待核对费用确认项默认勾选')
+  assert.equal(await bottomBatchExport.isEnabled(), true)
+  assert.equal(await topBatchExport.isEnabled(), true)
+
+  const splitSwitchBtn = navigation.getByRole('button', { name: '按客户分表', exact: true })
+  const mergeSwitchBtn = navigation.getByRole('button', { name: '合并单表', exact: true })
+  const mixedCheckbox = app.getByRole('checkbox', { name: /允许不同客户合并进入同一张表/ })
+  const switchBefore = await app.locator('.top-customer-mode-switch').boundingBox()
+  assert.ok(switchBefore)
+  assert.equal(await splitSwitchBtn.getAttribute('aria-pressed'), 'true')
+  await mergeSwitchBtn.click()
+  assert.equal(await mergeSwitchBtn.getAttribute('aria-pressed'), 'true')
+  assert.equal(await mixedCheckbox.isChecked(), true)
+  await navigation.getByRole('button', { name: '导出 Excel 请款表', exact: true }).waitFor()
+  const switchAfter = await app.locator('.top-customer-mode-switch').boundingBox()
+  assert.ok(switchAfter)
+  assert.ok(Math.abs(switchAfter.x - switchBefore.x) <= 1, 'switch horizontal position stays stable after toggle')
+  assert.ok(Math.abs(switchAfter.y - switchBefore.y) <= 1, 'switch vertical position stays stable after toggle')
+  assert.ok(Math.abs(switchAfter.width - switchBefore.width) <= 1, 'switch width stays stable after toggle')
+  await splitSwitchBtn.click()
+  assert.equal(await splitSwitchBtn.getAttribute('aria-pressed'), 'true')
+  assert.equal(await mixedCheckbox.isChecked(), false)
+  await topBatchExport.waitFor()
+
+  // 点击导出弹出 PCT 异常提示框，点击取消则不触发浏览器下载
+  await topBatchExport.click()
+  const warnDialog = app.getByRole('dialog')
+  await warnDialog.waitFor({ timeout: 5_000 })
+  assert.match(await warnDialog.innerText(), /优先权文件传送费（PCT国际）/)
+  await warnDialog.getByRole('button', { name: '取消', exact: true }).click()
+  await warnDialog.waitFor({ state: 'hidden' })
+  assert.equal((await app.evaluate(() => chrome.downloads.search({}))).length, 0)
+
+  // 手工取消勾选时仍禁用导出并展示定位提示
+  await exceptionBox.uncheck()
+  assert.equal(await bottomBatchExport.isDisabled(), true)
+  assert.equal(await topBatchExport.isDisabled(), true)
+  const disabledHint = app.locator('.export-disabled-hint')
+  await disabledHint.waitFor()
+  assert.match(await disabledHint.innerText(), /待在上方勾选确认/)
+  await disabledHint.getByRole('button', { name: /去勾选确认/ }).click()
+  await exceptionBox.check()
+
   await navigation.getByRole('button', { name: '返回费用查询调整' }).click()
   await feeResults.getByRole('button', { name: /只选 美的小家电事业部/ }).click()
   await navigation.getByRole('button', { name: /进入请款单导出.*已选 1 笔/ }).waitFor()
@@ -195,8 +249,8 @@ try {
   assert.equal(await topExport.isDisabled(), true)
   assert.equal(await bottomExport.isDisabled(), true)
   await app.getByRole('checkbox', { name: /已核对并确认导出/ }).check()
-  assert.equal(await topExport.isDisabled(), true)
-  await app.getByRole('checkbox', { name: /以上费用另行处理/ }).check()
+  assert.equal(await exceptionBox.isChecked(), true)
+  assert.equal(await topExport.isEnabled(), true)
   await app.evaluate(() => {
     const original = window.fetch
     window.fetch = (resource, init) => {
@@ -208,13 +262,16 @@ try {
     }
   })
   await topExport.click()
+  await confirmPctExceptionDialog()
   await app.getByRole('status').filter({ hasText: '请款表模板读取失败（HTTP 503）' }).waitFor()
   assert.match(await app.locator('.export-execute-card .summary-line').innerText(), /待填入费用：2 笔/)
   assert.equal(await topExport.isEnabled(), true)
   await topExport.click()
+  await confirmPctExceptionDialog()
   const download = await completedDownload('美的PCT费用清单')
   const workbook = await readFile(download.filename)
   await topExport.click()
+  await confirmPctExceptionDialog()
   assert.equal((await completedDownload('美的PCT费用清单')).id, download.id, 'same export must reuse the browser download')
   assert.equal(workbook.subarray(0, 4).toString('hex'), '504b0304')
   const pctZip = new ZipReader(new Uint8ArrayReader(workbook))
@@ -235,6 +292,38 @@ try {
   } finally {
     await pctZip.close()
   }
+
+  // 多客户分表批量并发导出 E2E 验证（Stage 1 并发生成 + Stage 2 有序串行下载 + 明细列表）
+  await navigation.getByRole('button', { name: '返回费用查询调整' }).click()
+  await app.getByRole('row').filter({ hasText: 'PA125PCT' }).getByRole('checkbox').check()
+  await navigation.getByRole('button', { name: /进入请款单导出.*已选 3 笔/ }).waitFor()
+  await feeResultNext.click()
+  await bottomBatchExport.waitFor()
+  const requestedConfirm = app.getByRole('checkbox', { name: /已核对并确认导出/ })
+  if (!(await requestedConfirm.isChecked())) await requestedConfirm.check()
+  const exceptionConfirm = app.getByRole('checkbox', { name: /以上费用另行处理/ })
+  assert.equal(await exceptionConfirm.isChecked(), true)
+  assert.equal(await bottomBatchExport.isEnabled(), true)
+  assert.equal(await topBatchExport.isEnabled(), true)
+  await bottomBatchExport.click()
+  await confirmPctExceptionDialog()
+  await app.locator('.export-execute-card .export-notice-text')
+    .filter({ hasText: /已按客户分表批量导出 2\/2 份/ })
+    .waitFor({ timeout: 15_000 })
+  const batchItems = app.locator('.batch-results-list .batch-result-item')
+  assert.equal(await batchItems.count(), 2)
+  const batchListText = await app.locator('.batch-results-list').innerText()
+  assert.match(batchListText, /美的小家电事业部/)
+  assert.match(batchListText, /美的新能源事业部/)
+  const batchDownloads = await app.evaluate(() => chrome.downloads.search({ state: 'complete' }))
+  for (const customer of ['美的小家电事业部', '美的新能源事业部']) {
+    const item = batchDownloads.find(entry => entry.filename.includes(`美的PCT费用清单-${customer}-`))
+    assert.ok(item, `expected completed download for ${customer}`)
+    const bytes = await readFile(item.filename)
+    assert.equal(bytes.subarray(0, 4).toString('hex'), '504b0304')
+  }
+  report.pass('2-stage streaming pipeline exports multi-customer split workbooks and renders per-customer receipts')
+
   await app.locator('.template-preset-bar').getByText('格尔涉外请款单', { exact: true }).click()
   await app.getByRole('button', { name: /进入请款单导出.*已选 0 笔/ }).waitFor()
   assert.equal(await step2Next.isDisabled(), true)
