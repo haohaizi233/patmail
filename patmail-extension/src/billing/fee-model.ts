@@ -330,3 +330,23 @@ export function missingCurrencies(rows: FeeSearchRow[], rates: Record<string, nu
   }
   return [...missing]
 }
+
+export const BILLING_SNAPSHOT_RAW_FIELDS = [
+  'word_count',
+  'fee_desc',
+  'out_bill_date',
+  'agency_name_cn',
+  'country',
+  'law_fee_date',
+] as const
+
+/** 规范化单条费用行：仅保留填表与请款查重所需的原始字段，保证首导与草稿恢复指纹一致。 */
+export function cleanFeeRowForSnapshot(row: FeeSearchRow): FeeSearchRow {
+  const raw = Object.fromEntries(
+    BILLING_SNAPSHOT_RAW_FIELDS.flatMap(key => {
+      const value = row.raw[key]
+      return typeof value === 'string' || typeof value === 'number' ? [[key, value]] : []
+    }),
+  )
+  return { ...row, raw }
+}

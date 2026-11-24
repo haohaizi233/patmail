@@ -101,6 +101,7 @@ export interface ExportBillingCommand {
   ratesLoading: boolean
   missingRateCodes: string[]
   usesManualRate: boolean
+  manualRatesComplete?: boolean
   manualRateDate: string
   today?: Date
   /** 多客户分表流水线并发度（默认 4）。 */

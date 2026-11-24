@@ -7,6 +7,7 @@ import { BillingApplicationService, formatExportOutcomeNotice } from '../../../s
 import {
   buildBillingSyncKey,
   buildMideaPctDefaultExclusion,
+  cleanFeeRowForSnapshot,
   collectInvolvedCurrencies,
   collectPctCandidates,
   collectPctExceptions,
@@ -29,7 +30,7 @@ import {
   type ChromeDownloadDelta,
   type BillingDownloadTracking,
 } from '../../../src/infrastructure/billing/billing-adapters'
-import { defaultHeaders, fillBillingTemplate, type BillingTemplateId } from '../../../src/billing/templates'
+import { defaultHeaders, fillBillingTemplate, formatLocalDate, type BillingTemplateId } from '../../../src/billing/templates'
 import { XlsxBook } from '../../../src/billing/xlsx-engine'
 
 const ASSETS_DIR = path.resolve(__dirname, '../../../src/assets/billing')
@@ -80,7 +81,7 @@ it('reconciles a persisted browser ID after a page remount without starting a du
   }
 })
 
-it('releases tracked request intent when verifier fails before Chrome assigns a download ID so retries succeed', async () => {
+it('keeps tracked request in pending unknown state when verifier fails after calling download without an ID', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:retry-fixture')
   const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
@@ -109,17 +110,84 @@ it('releases tracked request intent when verifier fails before Chrome assigns a 
     }
     const adapter = () => createTrackedBillingDownloadAdapter({ download: start, search }, tracking)
     expect(await adapter().download(request)).toEqual({
-      status: 'failed',
-      reason: '浏览器未返回下载编号。',
+      status: 'unknown',
+      reason: '这份请款表已有待确认的下载，请先核对浏览器下载记录。',
     })
-    expect([...ledger.values()][0]).toMatchObject({ state: 'cancelled' })
-    expect(await adapter().download(request)).toMatchObject({
-      status: 'download_completed',
-      downloadId: 88,
-      savedFileName: 'retry.xlsx',
+    expect([...ledger.values()][0]).toMatchObject({ state: 'requested' })
+    expect(await adapter().download(request)).toEqual({
+      status: 'unknown',
+      reason: '这份请款表已有待确认的下载，请先核对浏览器下载记录。',
     })
-    expect(start).toHaveBeenCalledTimes(2)
+    expect(start).toHaveBeenCalledTimes(1)
   } finally {
+    createUrl.mockRestore()
+    revokeUrl.mockRestore()
+    vi.unstubAllGlobals()
+  }
+})
+
+it('releases tracked intent and allows retry when download fails provably before browser dispatch', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pre-dispatch')
+  const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  const origChrome = (globalThis as { chrome?: unknown }).chrome
+  try {
+    const ledger = new Map<string, unknown>()
+    const tracking: BillingDownloadTracking = {
+      get: key => Promise.resolve(ledger.get(key)),
+      put: (key, record) => {
+        ledger.set(key, record)
+        return Promise.resolve()
+      },
+      lock: (_key, action) => action(),
+    }
+    const addListener = vi
+      .fn<(cb: unknown) => void>()
+      .mockImplementationOnce(() => {
+        throw new Error('下载事件监听尚未就绪')
+      })
+      .mockImplementation(cb => {
+        // Trigger synchronous onCreated callback on retry.
+        ;(cb as (item: { id: number; url: string }) => void)({ id: 91, url: 'blob:pre-dispatch' })
+      })
+    vi.stubGlobal('chrome', {
+      downloads: {
+        search: vi.fn(() => Promise.resolve([{ id: 91, state: 'complete', filename: 'C:/Downloads/retried.xlsx' }])),
+        onCreated: {
+          addListener,
+          removeListener: vi.fn(),
+        },
+        onChanged: {
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+        },
+      },
+    })
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      const verifier = createChromeExtensionDownloadsVerifier()
+      expect(verifier).not.toBeNull()
+      const request = {
+        bytes: new Uint8Array([1, 2, 3, 4]),
+        fileName: 'retried.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        blockCount: 1,
+        warnings: [],
+        job: { scope: 'account-pre-dispatch', parameters: 'pre-dispatch-params' },
+      }
+      const first = await createTrackedBillingDownloadAdapter(verifier!, tracking).download(request)
+      expect(first).toEqual({ status: 'failed', reason: '下载事件监听尚未就绪' })
+      expect([...ledger.values()][0]).toMatchObject({ state: 'cancelled' })
+      expect(clickSpy).not.toHaveBeenCalled()
+
+      const second = await createTrackedBillingDownloadAdapter(verifier!, tracking).download(request)
+      expect(second).toMatchObject({ status: 'download_completed', downloadId: 91, savedFileName: 'retried.xlsx' })
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      clickSpy.mockRestore()
+    }
+  } finally {
+    vi.stubGlobal('chrome', origChrome)
     createUrl.mockRestore()
     revokeUrl.mockRestore()
     vi.unstubAllGlobals()
@@ -386,7 +454,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
 
     const completeAdapter = createVerifiedChromeDownloadAdapter({
       download: () => Promise.resolve(42),
-      search: () => Promise.resolve([{ state: 'complete', filename: 'C:/Downloads/格尔涉外请款单 (1).xlsx' }]),
+      search: () => Promise.resolve([{ state: 'complete', filename: 'C:/Downloads/歌尔涉外请款单 (1).xlsx' }]),
     })
     const completedOutcome = await completeAdapter.download({
       bytes: new Uint8Array([1, 2]),
@@ -396,7 +464,7 @@ describe('BillingApplicationService Golden Master & Ports', () => {
       warnings: [],
     })
     expect(completedOutcome.status).toBe('download_completed')
-    expect(formatExportOutcomeNotice(completedOutcome)).toContain('已导出并确认下载完成：格尔涉外请款单 (1).xlsx')
+    expect(formatExportOutcomeNotice(completedOutcome)).toContain('已导出并确认下载完成：歌尔涉外请款单 (1).xlsx')
     expect(formatExportOutcomeNotice(completedOutcome)).not.toContain('C:/Downloads')
 
     const interruptedAdapter = createVerifiedChromeDownloadAdapter({
@@ -985,12 +1053,13 @@ describe('BillingApplicationService Golden Master & Ports', () => {
           activeFill += 1
           maxActiveFill = Math.max(maxActiveFill, activeFill)
           timeline.push(`fill:start:${customer}`)
+          const fillDone = new Promise<void>(resolve => {
+            fillResolvers.set(customer, resolve)
+          })
           if (timeline.filter(entry => entry.startsWith('fill:start:')).length === 3) {
             notifyAllFillsStarted()
           }
-          await new Promise<void>(resolve => {
-            fillResolvers.set(customer, resolve)
-          })
+          await fillDone
           activeFill -= 1
           timeline.push(`fill:end:${customer}`)
           return {
@@ -1085,6 +1154,363 @@ describe('BillingApplicationService Golden Master & Ports', () => {
     if (outcome.status === 'batch_completed') {
       expect(outcome.successCount).toBe(3)
       expect(outcome.failedCount).toBe(0)
+    }
+  })
+
+  it('reuses completed download ledger across full live FeeSearch row and WAL-restored snapshot row', async () => {
+    vi.stubGlobal('crypto', webcrypto)
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:wal-dedupe')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    try {
+      const ledger = new Map<string, unknown>()
+      const tracking: BillingDownloadTracking = {
+        get: key => Promise.resolve(ledger.get(key)),
+        put: (key, record) => {
+          ledger.set(key, record)
+          return Promise.resolve()
+        },
+        lock: (_key, action) => action(),
+      }
+      const start = vi.fn(() => Promise.resolve(95))
+      const search = vi.fn(() => Promise.resolve([{ id: 95, state: 'complete' as const, filename: 'C:/Downloads/美的PCT费用清单-20261124.xlsx' }]))
+
+      const service = new BillingApplicationService({
+        templates: { loadTemplate: id => Promise.resolve(readAsset(id)) },
+        spreadsheet: { fill: fillBillingTemplate },
+        exchangeRates: { fetchRates: () => Promise.resolve({ date: '2026-11-24', perCny: { USD: 7.2 }, sourceUrl: '' }) },
+        downloads: createTrackedBillingDownloadAdapter({ download: start, search }, tracking),
+        recovery: { load: () => Promise.resolve(null), save: () => Promise.resolve() },
+      })
+
+      const liveRow = mockFeeRow({
+        feeId: 'pct-wal-1',
+        caseId: 'c-wal-1',
+        caseVolume: 'PA2603001PCT',
+        businessType: 'PCT国际阶段',
+        feeClass: 'O',
+        feeType: '申请费',
+        amount: 9000,
+        currency: 'CNY',
+        customerName: '美的小家电事业部',
+        requestStatus: '未请款',
+        raw: {
+          fee_id: 'pct-wal-1',
+          create_time: '2026-11-24 09:00:00',
+          word_count: '4,420',
+          extra_noise_col: 'not-saved-in-wal',
+        },
+      })
+
+      const baseCmd = {
+        templateId: 'midea-pct' as const,
+        bills: {},
+        fileSelectionIssue: '',
+        feeSelectionIssue: '',
+        reconciliationRequestedCount: 0,
+        confirmExistingFees: false,
+        pctExportExceptionsCount: 0,
+        confirmPctExceptions: false,
+        needsForeignRates: false,
+        ratesCheckedOn: '2026-11-24',
+        ratesLoading: false,
+        missingRateCodes: [],
+        usesManualRate: false,
+        manualRateDate: '',
+        downloadScope: 'scope-wal-dedupe',
+        today: new Date('2026-11-24T00:00:00Z'),
+      }
+
+      const first = await service.exportBilling({
+        ...baseCmd,
+        rows: [liveRow],
+        parameters: {
+          headers: defaultHeaders('midea-pct', new Date('2026-11-24')),
+          options: { reviewFee: 0, bankFee: 0 },
+          rates: { CNY: 1 },
+          rateSourceUrl: '',
+          rateDate: '2026-11-24',
+        },
+      })
+      const restored = await service.exportBilling({
+        ...baseCmd,
+        rows: [cleanFeeRowForSnapshot(liveRow)],
+        parameters: {
+          headers: defaultHeaders('midea-pct', new Date('2026-11-24')),
+          options: { reviewFee: 0, bankFee: 0 },
+          rates: { CNY: 1, USD: 7.2 },
+          rateSourceUrl: 'https://www.pbc.gov.cn',
+          rateDate: '2026-11-24',
+        },
+      })
+
+      expect(first.outcome).toMatchObject({ status: 'download_completed', downloadId: 95 })
+      expect(restored.outcome).toMatchObject({ status: 'download_completed', downloadId: 95 })
+      expect(start).toHaveBeenCalledTimes(1)
+    } finally {
+      createUrl.mockRestore()
+      revokeUrl.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('distinguishes download_started and generated from confirmed completed downloads in formatExportOutcomeNotice', () => {
+    const startedNotice = formatExportOutcomeNotice({
+      status: 'batch_completed',
+      totalCount: 2,
+      successCount: 2,
+      failedCount: 0,
+      blockCount: 4,
+      items: [
+        { customer: '客户A', status: 'download_started', fileName: 'A.xlsx', blockCount: 2, warnings: [] },
+        { customer: '客户B', status: 'download_started', fileName: 'B.xlsx', blockCount: 2, warnings: [] },
+      ],
+      warnings: [],
+    })
+    expect(startedNotice).toContain('触发浏览器下载 2/2 份（尚未确认落盘完成')
+    expect(startedNotice).not.toContain('已按客户分表批量导出 2/2 份')
+
+    const generatedNotice = formatExportOutcomeNotice({
+      status: 'batch_completed',
+      totalCount: 2,
+      successCount: 2,
+      failedCount: 0,
+      blockCount: 2,
+      items: [
+        { customer: '客户A', status: 'generated', fileName: 'A.xlsx', blockCount: 1, warnings: [] },
+        { customer: '客户B', status: 'generated', fileName: 'B.xlsx', blockCount: 1, warnings: [] },
+      ],
+      warnings: [],
+    })
+    expect(generatedNotice).toContain('生成请款工作簿 2/2 份（尚未触发浏览器下载')
+
+    const mixedFailureNotice = formatExportOutcomeNotice({
+      status: 'batch_completed',
+      totalCount: 3,
+      successCount: 2,
+      failedCount: 1,
+      blockCount: 2,
+      items: [
+        { customer: '客户A', status: 'download_completed', fileName: 'A.xlsx', savedFileName: 'A.xlsx', blockCount: 1, warnings: [] },
+        { customer: '客户B', status: 'download_started', fileName: 'B.xlsx', blockCount: 1, warnings: [] },
+        { customer: '客户C', status: 'unknown', fileName: 'C.xlsx', blockCount: 1, warnings: [], reason: '状态待核对' },
+      ],
+      warnings: [],
+    })
+    expect(mixedFailureNotice).toContain('已确认下载完成 1 份')
+    expect(mixedFailureNotice).toContain('已触发下载（尚未确认落盘完成）1 份')
+    expect(mixedFailureNotice).toContain('失败/待核对 1 份')
+    expect(mixedFailureNotice).not.toContain('成功 2 份')
+  })
+
+  it('reuses legacy pre-upgrade download ledger receipts (completed and started) without duplicate downloads', async () => {
+    vi.stubGlobal('crypto', webcrypto)
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:legacy-compat')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    try {
+      const ledger = new Map<string, unknown>()
+      const tracking: BillingDownloadTracking = {
+        get: key => Promise.resolve(ledger.get(key)),
+        put: (key, record) => {
+          ledger.set(key, record)
+          return Promise.resolve()
+        },
+        lock: (_key, action) => action(),
+      }
+      const start = vi.fn(() => Promise.resolve(99))
+      const search = vi.fn(() =>
+        Promise.resolve([{ id: 77, state: 'complete' as const, filename: 'C:/Downloads/歌尔涉外请款单-20261124.xlsx' }]),
+      )
+      const service = new BillingApplicationService({
+        templates: { loadTemplate: id => Promise.resolve(readAsset(id)) },
+        spreadsheet: { fill: fillBillingTemplate },
+        exchangeRates: { fetchRates: () => Promise.resolve({ date: '2026-11-24', perCny: { USD: 7.1 }, sourceUrl: '' }) },
+        downloads: createTrackedBillingDownloadAdapter({ download: start, search }, tracking),
+        recovery: { load: () => Promise.resolve(null), save: () => Promise.resolve() },
+      })
+
+      const today = new Date('2026-11-24T00:00:00Z')
+      const todayText = formatLocalDate(today)
+      const headers = defaultHeaders('general-foreign', today)
+      const legacyRow = mockFeeRow({
+        feeId: 'legacy-1',
+        caseId: 'c-legacy',
+        caseVolume: 'PA2609001CN-US',
+        currency: 'USD',
+        amount: 200,
+        raw: { extra_col: 'v1', word_count: '500' },
+      })
+      const legacyJson = JSON.stringify({
+        template: 'general-foreign',
+        input: {
+          headers,
+          options: { reviewFee: 0, bankFee: 0 },
+          rates: { USD: 7.1, CNY: 1 },
+          rateSourceUrl: 'https://www.pbc.gov.cn/mock',
+          rateDate: '2026-11-24',
+          rows: [{ ...legacyRow, raw: { extra_col: 'v1', word_count: '500' } }],
+          bills: { B2: [], B1: [] },
+          today: todayText,
+        },
+      })
+      const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(legacyJson))
+      const legacyFp = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')
+      const legacyKey = JSON.stringify(['phase3-download', 'scope-legacy', legacyFp])
+      ledger.set(legacyKey, { state: 'completed', id: 77, at: Date.now() })
+
+      const res = await service.exportBilling({
+        templateId: 'general-foreign',
+        rows: [legacyRow],
+        bills: { B2: [], B1: [] },
+        parameters: {
+          headers,
+          options: { reviewFee: 0, bankFee: 0 },
+          rates: { USD: 7.1, CNY: 1 },
+          rateSourceUrl: 'https://www.pbc.gov.cn/mock',
+          rateDate: '2026-11-24',
+        },
+        fileSelectionIssue: '',
+        feeSelectionIssue: '',
+        reconciliationRequestedCount: 0,
+        confirmExistingFees: false,
+        pctExportExceptionsCount: 0,
+        confirmPctExceptions: false,
+        needsForeignRates: true,
+        ratesCheckedOn: todayText,
+        ratesLoading: false,
+        missingRateCodes: [],
+        usesManualRate: false,
+        manualRateDate: '',
+        downloadScope: 'scope-legacy',
+        today,
+      })
+
+      expect(res.outcome).toMatchObject({
+        status: 'download_completed',
+        downloadId: 77,
+        savedFileName: '歌尔涉外请款单-20261124.xlsx',
+      })
+      expect(start).not.toHaveBeenCalled()
+
+      // Also verify an active legacy 'started' receipt reconciles without spawning a second download.
+      const ledgerStarted = new Map<string, unknown>([[legacyKey, { state: 'started', id: 77, at: Date.now() }]])
+      const serviceStarted = new BillingApplicationService({
+        templates: { loadTemplate: id => Promise.resolve(readAsset(id)) },
+        spreadsheet: { fill: fillBillingTemplate },
+        exchangeRates: { fetchRates: () => Promise.resolve({ date: '2026-11-24', perCny: { USD: 7.1 }, sourceUrl: '' }) },
+        downloads: createTrackedBillingDownloadAdapter(
+          { download: start, search },
+          {
+            get: key => Promise.resolve(ledgerStarted.get(key)),
+            put: (key, rec) => {
+              ledgerStarted.set(key, rec)
+              return Promise.resolve()
+            },
+            lock: (_k, fn) => fn(),
+          },
+        ),
+        recovery: { load: () => Promise.resolve(null), save: () => Promise.resolve() },
+      })
+      const reconciled = await serviceStarted.exportBilling({
+        templateId: 'general-foreign',
+        rows: [legacyRow],
+        bills: { B2: [], B1: [] },
+        parameters: {
+          headers,
+          options: { reviewFee: 0, bankFee: 0 },
+          rates: { USD: 7.1, CNY: 1 },
+          rateSourceUrl: 'https://www.pbc.gov.cn/mock',
+          rateDate: '2026-11-24',
+        },
+        fileSelectionIssue: '',
+        feeSelectionIssue: '',
+        reconciliationRequestedCount: 0,
+        confirmExistingFees: false,
+        pctExportExceptionsCount: 0,
+        confirmPctExceptions: false,
+        needsForeignRates: true,
+        ratesCheckedOn: todayText,
+        ratesLoading: false,
+        missingRateCodes: [],
+        usesManualRate: false,
+        manualRateDate: '',
+        downloadScope: 'scope-legacy',
+        today,
+      })
+      expect(reconciled.outcome).toMatchObject({ status: 'download_completed', downloadId: 77 })
+      expect(start).not.toHaveBeenCalled()
+
+      // Also verify pre-upgrade receipts saved from WAL-restored draft rows (including manual rateSourceUrl: '') reuse ID 78.
+      const walRow = cleanFeeRowForSnapshot(legacyRow)
+      const walLegacyJson = JSON.stringify({
+        template: 'general-foreign',
+        input: {
+          headers,
+          options: { reviewFee: 0, bankFee: 0 },
+          rates: { USD: 7.15, CNY: 1 },
+          rateSourceUrl: '',
+          rateDate: '手工 2026-11-24',
+          rows: [walRow],
+          bills: { B2: [], B1: [] },
+          today: todayText,
+        },
+      })
+      const walDigest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(walLegacyJson))
+      const walLegacyFp = Array.from(new Uint8Array(walDigest), b => b.toString(16).padStart(2, '0')).join('')
+      const walLegacyKey = JSON.stringify(['phase3-download', 'scope-legacy-wal', walLegacyFp])
+      const ledgerWal = new Map<string, unknown>([[walLegacyKey, { state: 'completed', id: 78, at: Date.now() }]])
+      const searchWal = vi.fn(() =>
+        Promise.resolve([{ id: 78, state: 'complete' as const, filename: 'C:/Downloads/歌尔涉外请款单-20261124.xlsx' }]),
+      )
+      const serviceWal = new BillingApplicationService({
+        templates: { loadTemplate: id => Promise.resolve(readAsset(id)) },
+        spreadsheet: { fill: fillBillingTemplate },
+        exchangeRates: { fetchRates: () => Promise.resolve({ date: '2026-11-24', perCny: { USD: 7.1 }, sourceUrl: '' }) },
+        downloads: createTrackedBillingDownloadAdapter(
+          { download: start, search: searchWal },
+          {
+            get: key => Promise.resolve(ledgerWal.get(key)),
+            put: (key, rec) => {
+              ledgerWal.set(key, rec)
+              return Promise.resolve()
+            },
+            lock: (_k, fn) => fn(),
+          },
+        ),
+        recovery: { load: () => Promise.resolve(null), save: () => Promise.resolve() },
+      })
+      const reusedWal = await serviceWal.exportBilling({
+        templateId: 'general-foreign',
+        rows: [walRow],
+        bills: { B2: [], B1: [] },
+        parameters: {
+          headers,
+          options: { reviewFee: 0, bankFee: 0 },
+          rates: { USD: 7.15, CNY: 1 },
+          rateSourceUrl: '手工填写',
+          rateDate: '手工 2026-11-24',
+        },
+        fileSelectionIssue: '',
+        feeSelectionIssue: '',
+        reconciliationRequestedCount: 0,
+        confirmExistingFees: false,
+        pctExportExceptionsCount: 0,
+        confirmPctExceptions: false,
+        needsForeignRates: true,
+        ratesCheckedOn: todayText,
+        ratesLoading: false,
+        missingRateCodes: [],
+        usesManualRate: true,
+        manualRatesComplete: true,
+        manualRateDate: '2026-11-24',
+        downloadScope: 'scope-legacy-wal',
+        today,
+      })
+      expect(reusedWal.outcome).toMatchObject({ status: 'download_completed', downloadId: 78 })
+      expect(start).not.toHaveBeenCalled()
+    } finally {
+      createUrl.mockRestore()
+      revokeUrl.mockRestore()
+      vi.unstubAllGlobals()
     }
   })
 })

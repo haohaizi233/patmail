@@ -1,7 +1,9 @@
 import { computed, reactive, ref, watch, type Ref } from 'vue'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
 import type { FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
-import { isUnrequestedFee, sortFeeRows } from '../../application/billing/billing-validation'
+import { cleanFeeRowForSnapshot, isUnrequestedFee, sortFeeRows } from '../../application/billing/billing-validation'
+
+export { cleanFeeRowForSnapshot }
 
 export interface UseFeeSelectionOptions {
   result: Ref<FeeSearchResult | null>
@@ -12,25 +14,6 @@ export interface UseFeeSelectionOptions {
   quickFeeSelectMode?: Ref<'' | 'O' | 'A'>
   getDefaultSelectionExclusion?: () => ((row: FeeSearchRow) => string) | undefined
   onSelectionChange?: (rows: FeeSearchRow[]) => void
-}
-
-const SNAPSHOT_RAW_FIELDS = [
-  'word_count',
-  'fee_desc',
-  'out_bill_date',
-  'agency_name_cn',
-  'country',
-  'law_fee_date',
-] as const
-
-export function cleanFeeRowForSnapshot(row: FeeSearchRow): FeeSearchRow {
-  const raw = Object.fromEntries(
-    SNAPSHOT_RAW_FIELDS.flatMap(key => {
-      const value = row.raw[key]
-      return typeof value === 'string' || typeof value === 'number' ? [[key, value]] : []
-    }),
-  )
-  return { ...row, raw }
 }
 
 export function useFeeSelection(options: UseFeeSelectionOptions) {

@@ -1,7 +1,7 @@
 import type { PbcRates } from '../../billing/pbc-rates'
 import { formatLocalDate, groupBillingRowsByCustomer, type BillingInput, type BillingTemplateId } from '../../billing/templates'
 import type { BatchExportItemOutcome, BillingDeskSnapshot, ExportBillingCommand, ExportOutcome } from './billing-contracts'
-import { validateBillingExportPreconditions } from './billing-validation'
+import { cleanFeeRowForSnapshot, hasForeignCurrencyRows, validateBillingExportPreconditions } from './billing-validation'
 import type { BillingRecoveryPort } from './ports/billing-recovery-port'
 import type { BillingTemplatePort } from './ports/billing-template-port'
 import type { DownloadPort } from './ports/download-port'
@@ -63,25 +63,63 @@ export class BillingApplicationService {
     const groups = groupBillingRowsByCustomer(command.rows)
     const rawBytes = await this.ports.templates.loadTemplate(command.templateId)
 
-    const buildJobSpec = (input: BillingInput) => (command.downloadScope
-      ? {
-          job: {
-            scope: command.downloadScope,
-            parameters: JSON.stringify({
-              template: command.templateId,
-              input: {
-                ...input,
-                today: formatLocalDate(input.today),
-                rows: input.rows.map(({ raw, ...row }) => ({
-                  ...row,
-                  raw: Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))),
-                })),
-              },
-            }),
-            isStale: command.isStale,
+    const buildJobSpec = (input: BillingInput) => {
+      if (!command.downloadScope) return {}
+      const needsRates = hasForeignCurrencyRows(input.rows)
+      const todayText = formatLocalDate(input.today)
+      const canonicalBills = Object.fromEntries(
+        Object.keys(input.bills)
+          .sort((a, b) => a.localeCompare(b))
+          .map(volume => [volume, input.bills[volume]]),
+      )
+      const canonicalParameters = JSON.stringify({
+        template: command.templateId,
+        input: {
+          ...input,
+          bills: canonicalBills,
+          rates: needsRates
+            ? Object.fromEntries(Object.entries(input.rates).sort(([a], [b]) => a.localeCompare(b)))
+            : { CNY: 1 },
+          rateSourceUrl: needsRates ? input.rateSourceUrl : '',
+          rateDate: needsRates ? input.rateDate : todayText,
+          today: todayText,
+          rows: input.rows.map(row => {
+            const { raw, ...rest } = cleanFeeRowForSnapshot(row)
+            return {
+              ...rest,
+              raw: Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))),
+            }
+          }),
+        },
+      })
+      const sortedRawRows = input.rows.map(({ raw, ...row }) => ({
+        ...row,
+        raw: Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))),
+      }))
+      const buildLegacyJson = (override: Partial<BillingInput> = {}) =>
+        JSON.stringify({
+          template: command.templateId,
+          input: {
+            ...input,
+            ...override,
+            today: todayText,
+            rows: sortedRawRows,
           },
-        }
-      : {})
+        })
+      const legacyCandidates = [buildLegacyJson()]
+      if (input.rateSourceUrl === '手工填写') {
+        legacyCandidates.push(buildLegacyJson({ rateSourceUrl: '' }))
+      }
+      const legacyParameters = [...new Set(legacyCandidates)].filter(candidate => candidate !== canonicalParameters)
+      return {
+        job: {
+          scope: command.downloadScope,
+          parameters: canonicalParameters,
+          ...(legacyParameters.length ? { legacyParameters } : {}),
+          isStale: command.isStale,
+        },
+      }
+    }
 
     if (!allowMixed && groups.length > 1) {
       const total = groups.length
@@ -325,6 +363,9 @@ export function formatExportOutcomeNotice(outcome: ExportOutcome): string {
     case 'generated':
       return `已生成请款单工作簿：${outcome.fileName}（共填入 ${outcome.blockCount} 个事项块/案卷）。`
     case 'batch_completed': {
+      const completedCount = outcome.items.filter(item => item.status === 'download_completed').length
+      const startedCount = outcome.items.filter(item => item.status === 'download_started').length
+      const generatedCount = outcome.items.filter(item => item.status === 'generated').length
       const okNames = outcome.items
         .filter(item => item.status === 'download_completed' || item.status === 'download_started' || item.status === 'generated')
         .map(item => item.savedFileName || item.fileName)
@@ -332,11 +373,27 @@ export function formatExportOutcomeNotice(outcome: ExportOutcome): string {
       const failedSummary = outcome.items
         .filter(item => item.status !== 'download_completed' && item.status !== 'download_started' && item.status !== 'generated')
         .map(item => `${item.customer}（${item.reason || '导出失败'}）`)
-      if (outcome.failedCount === 0) {
-        const preview = okNames.slice(0, 3).join('、') + (okNames.length > 3 ? ` 等 ${okNames.length} 份` : '')
+      const preview = okNames.slice(0, 3).join('、') + (okNames.length > 3 ? ` 等 ${okNames.length} 份` : '')
+      if (outcome.failedCount === 0 && completedCount === outcome.totalCount) {
         return `已按客户分表批量导出 ${outcome.successCount}/${outcome.totalCount} 份（共填入 ${outcome.blockCount} 个事项块/案卷）：${preview}。`
       }
-      return `按客户分表批量导出完成：成功 ${outcome.successCount} 份，失败 ${outcome.failedCount} 份（${failedSummary.join('；')}）。`
+      const parts: string[] = []
+      if (completedCount > 0) parts.push(`已确认下载完成 ${completedCount} 份`)
+      if (startedCount > 0) parts.push(`已触发下载（尚未确认落盘完成）${startedCount} 份`)
+      if (generatedCount > 0) parts.push(`已生成工作簿（未下载）${generatedCount} 份`)
+      if (outcome.failedCount > 0) {
+        parts.push(`失败/待核对 ${outcome.failedCount} 份（${failedSummary.join('；')}）`)
+      }
+      if (outcome.failedCount === 0) {
+        if (startedCount === outcome.totalCount) {
+          return `已按客户分表触发浏览器下载 ${startedCount}/${outcome.totalCount} 份（尚未确认落盘完成，共填入 ${outcome.blockCount} 个事项块/案卷）：${preview}。`
+        }
+        if (generatedCount === outcome.totalCount) {
+          return `已按客户分表生成请款工作簿 ${generatedCount}/${outcome.totalCount} 份（尚未触发浏览器下载，共填入 ${outcome.blockCount} 个事项块/案卷）：${preview}。`
+        }
+        return `按客户分表批量处理 ${outcome.totalCount} 份（共填入 ${outcome.blockCount} 个事项块/案卷）：${parts.join('，')}：${preview}。`
+      }
+      return `按客户分表批量导出结束：${parts.join('，')}。`
     }
     case 'download_interrupted':
     case 'unknown':

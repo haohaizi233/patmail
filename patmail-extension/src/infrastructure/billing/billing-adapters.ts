@@ -29,15 +29,29 @@ export function createPbcExchangeRateAdapter(): ExchangeRatePort {
   }
 }
 
+class DownloadNotDispatchedError extends Error {
+  readonly notDispatched = true
+}
+
 function clickNamedDownload(url: string, fileName: string): void {
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fileName
+  let clicked = false
+  let link: HTMLAnchorElement | undefined
   try {
+    link = document.createElement('a')
+    link.href = url
+    link.download = fileName
     document.body.appendChild(link)
+    clicked = true
     link.click()
+  } catch (error) {
+    if (!clicked) {
+      throw error instanceof DownloadNotDispatchedError
+        ? error
+        : new DownloadNotDispatchedError(error instanceof Error ? error.message : '浏览器未能发起下载。')
+    }
+    throw error
   } finally {
-    link.remove()
+    link?.remove()
   }
 }
 
@@ -90,7 +104,6 @@ export interface VerifiedDownloadOptions {
 }
 
 const DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS = 15_000
-const STALE_UNCONFIRMED_REQUEST_MS = 60_000
 
 async function readDownloadItem(verifier: ChromeDownloadsVerifier, id: number) {
   let timer: number | undefined
@@ -174,11 +187,21 @@ export function createChromeExtensionDownloadsVerifier(): ChromeDownloadsVerifie
           },
         )
       }, DEFAULT_DOWNLOAD_SETTLE_TIMEOUT_MS)
+      let dispatched = false
       try {
         created.addListener(onCreated)
+        dispatched = true
         clickNamedDownload(url, filename)
       } catch (error) {
         cleanup()
+        if (!dispatched || error instanceof DownloadNotDispatchedError) {
+          reject(
+            error instanceof DownloadNotDispatchedError
+              ? error
+              : new DownloadNotDispatchedError(error instanceof Error ? error.message : '浏览器未能发起下载。'),
+          )
+          return
+        }
         reject(error instanceof Error ? error : new Error('浏览器未能发起下载。'))
       }
     }),
@@ -384,6 +407,12 @@ function downloadRecord(value: unknown): BillingDownloadRecord | null {
   return { state: value.state, at: value.at, ...(typeof id === 'number' ? { id } : {}) }
 }
 
+async function ledgerKey(scope: string, parameters: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(parameters))
+  const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+  return JSON.stringify(['phase3-download', scope, fingerprint])
+}
+
 /** Browser download IDs live across extension pages and service-worker restarts. */
 export function createTrackedBillingDownloadAdapter(
   verifier: ChromeDownloadsVerifier,
@@ -394,15 +423,17 @@ export function createTrackedBillingDownloadAdapter(
     async download(request) {
       const job = request.job
       if (!job) return delegate.download(request)
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(job.parameters))
-      const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-      const key = JSON.stringify(['phase3-download', job.scope, fingerprint])
+      const key = await ledgerKey(job.scope, job.parameters)
+      const legacyKeys = [...new Set(await Promise.all((job.legacyParameters ?? []).map(p => ledgerKey(job.scope, p))))].filter(
+        k => k !== key,
+      )
       return storage.lock(key, async () => {
         const unknown = (id?: number): ExportOutcome => ({
           status: 'unknown',
           ...(id === undefined ? {} : { downloadId: id }),
           reason: '这份请款表已有待确认的下载，请先核对浏览器下载记录。',
         })
+        let priorKey = key
         let prior: BillingDownloadRecord | null
         try {
           prior = downloadRecord(await storage.get(key))
@@ -410,32 +441,59 @@ export function createTrackedBillingDownloadAdapter(
           return { status: 'failed', reason: '无法读取请款下载账本，未发起下载。' }
         }
         if (job.isStale?.()) return { status: 'failed', reason: '请款范围或账号已变化，未发起下载。' }
-        if (prior?.state === 'completed' && prior.id !== undefined && Date.now() - prior.at < 86_400_000) {
-          const item = await readDownloadItem(verifier, prior.id)
+        const isReusableCompleted = async (record: BillingDownloadRecord | null): Promise<ExportOutcome | null> => {
+          if (record?.state !== 'completed' || record.id === undefined || Date.now() - record.at >= 86_400_000) {
+            return null
+          }
+          const item = await readDownloadItem(verifier, record.id)
           const savedName = browserDownloadName(item?.filename)
           // An explicit export click can replace a completed legacy receipt whose Blob UUID became the filename.
           if (!savedName || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?: \(\d+\))?\.xlsx$/i.test(savedName)) {
-            return terminalOutcomeFromState('complete', request, prior.id, undefined, savedName) ?? unknown(prior.id)
+            return terminalOutcomeFromState('complete', request, record.id, undefined, savedName) ?? unknown(record.id)
+          }
+          return null
+        }
+        const reusableOutcome = await isReusableCompleted(prior)
+        if (reusableOutcome) return reusableOutcome
+
+        if (!prior || prior.state === 'cancelled' || prior.state === 'interrupted' || prior.state === 'completed') {
+          for (const legacyKey of legacyKeys) {
+            let legacyRecord: BillingDownloadRecord | null = null
+            try {
+              legacyRecord = downloadRecord(await storage.get(legacyKey))
+            } catch {
+              continue
+            }
+            if (!legacyRecord) continue
+            const legacyCompleted = await isReusableCompleted(legacyRecord)
+            if (legacyCompleted) {
+              await storage.put(key, legacyRecord).catch(() => undefined)
+              return legacyCompleted
+            }
+            if (legacyRecord.state === 'requested' || legacyRecord.state === 'started') {
+              prior = legacyRecord
+              priorKey = legacyKey
+              break
+            }
           }
         }
         if (prior?.state === 'requested' || prior?.state === 'started') {
-          if (prior.id === undefined) {
-            if (Date.now() - prior.at < STALE_UNCONFIRMED_REQUEST_MS) return unknown()
-          } else {
-            const id = prior.id
-            try {
-              const [item] = await verifier.search({ id })
-              const terminal = item && terminalOutcomeFromState(item.state, request, id, item.error, browserDownloadName(item.filename))
-              if (!terminal) return unknown(id)
-              await storage.put(key, {
-                state: item.state === 'complete' ? 'completed' : 'interrupted',
-                id,
-                at: Date.now(),
-              })
-              return terminal
-            } catch {
-              return unknown(id)
+          if (prior.id === undefined) return unknown()
+          const id = prior.id
+          try {
+            const [item] = await verifier.search({ id })
+            const terminal = item && terminalOutcomeFromState(item.state, request, id, item.error, browserDownloadName(item.filename))
+            if (!terminal) return unknown(id)
+            const settledRecord: BillingDownloadRecord = {
+              state: item.state === 'complete' ? 'completed' : 'interrupted',
+              id,
+              at: Date.now(),
             }
+            await storage.put(priorKey, settledRecord)
+            if (priorKey !== key) await storage.put(key, settledRecord).catch(() => undefined)
+            return terminal
+          } catch {
+            return unknown(id)
           }
         }
         try {
@@ -444,30 +502,34 @@ export function createTrackedBillingDownloadAdapter(
           return { status: 'failed', reason: '无法记录请款下载意图，未发起下载。' }
         }
         let id: number | undefined
+        let dispatchAttempted = false
         let notDispatched = false
         const tracked = createVerifiedChromeDownloadAdapter({
           ...verifier,
           async download(options) {
             if (job.isStale?.()) {
               notDispatched = true
-              throw new Error('请款范围或账号已变化，未发起下载。')
+              throw new DownloadNotDispatchedError('请款范围或账号已变化，未发起下载。')
             }
-            id = await verifier.download(options)
+            dispatchAttempted = true
+            try {
+              id = await verifier.download(options)
+            } catch (error) {
+              if (
+                error instanceof DownloadNotDispatchedError ||
+                (typeof error === 'object' && error !== null && 'notDispatched' in error && error.notDispatched === true)
+              ) {
+                notDispatched = true
+              }
+              throw error
+            }
             await storage.put(key, { state: 'started', id, at: Date.now() }).catch(() => undefined)
             return id
           },
         })
         const result = await tracked.download(request)
-        if (notDispatched) {
+        if (notDispatched || !dispatchAttempted) {
           // Only release an intent when this page can prove the call never happened.
-          await storage.put(key, { state: 'cancelled', at: Date.now() }).catch(() => undefined)
-          return result
-        }
-        if (
-          id === undefined &&
-          result.status === 'failed' &&
-          /浏览器未返回下载编号|浏览器未能发起下载/.test(result.reason)
-        ) {
           await storage.put(key, { state: 'cancelled', at: Date.now() }).catch(() => undefined)
           return result
         }

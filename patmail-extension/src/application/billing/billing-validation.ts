@@ -1,6 +1,7 @@
 import type { FeeSearchRow } from '../../api/fee-search-types'
 import {
   billInfoFromFile,
+  cleanFeeRowForSnapshot as normalizeSnapshotFeeRow,
   isMideaPctCustomer,
   isPctCase,
   isUnrequestedFee as checkUnrequestedFee,
@@ -15,6 +16,10 @@ import { normalizeCurrency } from '../../billing/pbc-rates'
 import { BILLING_TEMPLATES, formatLocalDate, mideaForeignGroups, type BillingTemplateId } from '../../billing/templates'
 import type { SelectedPatentFile } from '../../mail/types'
 import type { ExportBillingCommand, PctExceptionItem, ReconciliationSummary } from './billing-contracts'
+
+export function cleanFeeRowForSnapshot(row: FeeSearchRow): FeeSearchRow {
+  return normalizeSnapshotFeeRow(row)
+}
 
 export function isUnrequestedFee(row: FeeSearchRow): boolean {
   return checkUnrequestedFee(row)
@@ -214,11 +219,11 @@ export function validateBillingExportPreconditions(
 ): { ok: true } | { ok: false; needsRateRefresh?: boolean; reason: string } {
   const issue = billingExportSelectionIssue(command)
   if (issue) return { ok: false, reason: issue }
-  if (command.ratesLoading) {
+  if (command.needsForeignRates && command.ratesLoading) {
     return { ok: false, reason: '' }
   }
   const todayText = formatLocalDate(command.today)
-  if (command.needsForeignRates && command.ratesCheckedOn !== todayText) {
+  if (command.needsForeignRates && command.ratesCheckedOn !== todayText && !command.manualRatesComplete) {
     return {
       ok: false,
       needsRateRefresh: true,
