@@ -13,18 +13,28 @@ export interface BillInfo {
   versionSuffix: string
 }
 
+const BILL_INFO_CACHE_MAX = 5000
+const billInfoCache = new Map<string, BillInfo | null>()
+
 export function billInfoFromFile(file: { fileName: string; caseVolume?: string }): BillInfo | null {
+  const normalizedVolume = file.caseVolume?.trim() ?? ''
+  const cacheKey = `${file.fileName}\u0000${normalizedVolume}`
+  const cached = billInfoCache.get(cacheKey)
+  if (cached !== undefined) return cached
   const parsed = parseBillFileName(file.fileName, file.caseVolume)
-  if (!parsed.isBill) return null
-  const date = formatBillDate(parsed.date)
-  return {
-    fileName: file.fileName,
-    caseVolume: file.caseVolume?.trim() || parsed.caseNo || '',
-    billNo: parsed.billNo ?? '',
-    matter: parsed.matter ?? '',
-    date,
-    versionSuffix: parsed.versionSuffix ?? ''
-  }
+  const info: BillInfo | null = parsed.isBill
+    ? {
+        fileName: file.fileName,
+        caseVolume: normalizedVolume || parsed.caseNo || '',
+        billNo: parsed.billNo ?? '',
+        matter: parsed.matter ?? '',
+        date: formatBillDate(parsed.date),
+        versionSuffix: parsed.versionSuffix ?? ''
+      }
+    : null
+  if (billInfoCache.size >= BILL_INFO_CACHE_MAX) billInfoCache.clear()
+  billInfoCache.set(cacheKey, info)
+  return info
 }
 
 function formatBillDate(raw: string | undefined): string {

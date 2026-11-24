@@ -9,6 +9,40 @@ import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } from '@zip.j
 const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+const USE_NATIVE_ZIP_STREAM =
+  typeof globalThis.CompressionStream === 'function' &&
+  typeof globalThis.DecompressionStream === 'function'
+const unpackedZipCache = new WeakMap<Uint8Array, Promise<Map<string, Uint8Array>>>()
+
+async function unpackZipEntries(data: Uint8Array): Promise<Map<string, Uint8Array>> {
+  const existing = unpackedZipCache.get(data)
+  if (existing) return existing
+  const pending = (async () => {
+    const entries = new Map<string, Uint8Array>()
+    const reader = new ZipReader(new Uint8ArrayReader(data), {
+      useWebWorkers: false,
+      useCompressionStream: USE_NATIVE_ZIP_STREAM,
+    })
+    try {
+      for (const entry of await reader.getEntries()) {
+        if (entry.directory) continue
+        entries.set(entry.filename, await entry.getData(new Uint8ArrayWriter()))
+      }
+    } finally {
+      await reader.close()
+    }
+    return entries
+  })().catch(error => {
+    if (unpackedZipCache.get(data) === pending) unpackedZipCache.delete(data)
+    throw error
+  })
+  unpackedZipCache.set(data, pending)
+  return pending
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0))
+}
 
 export function colToNumber(col: string): number {
   let value = 0
@@ -397,16 +431,10 @@ export class XlsxBook {
 
   static async open(data: Uint8Array): Promise<XlsxBook> {
     const book = new XlsxBook()
-    const reader = new ZipReader(new Uint8ArrayReader(data))
-    try {
-      for (const entry of await reader.getEntries()) {
-        if (entry.directory) continue
-        book.files.set(entry.filename, await entry.getData(new Uint8ArrayWriter()))
-      }
-    } finally {
-      await reader.close()
-    }
+    const baseFiles = await unpackZipEntries(data)
+    book.files = new Map(baseFiles)
     book.readSheetList()
+    await yieldToMain()
     for (const sheet of book.sheets) book.expandSharedFormulas(book.doc(sheet.path))
     return book
   }
@@ -552,12 +580,17 @@ export class XlsxBook {
         cell.removeAttribute('t')
       }
     }
+    await yieldToMain()
     const serializer = new XMLSerializer()
     for (const [path, doc] of this.docs) {
       const text = serializer.serializeToString(doc).replace(/^<\?xml[^>]*\?>\s*/, '')
       this.files.set(path, new TextEncoder().encode(XML_DECL + text))
     }
-    const writer = new ZipWriter(new Uint8ArrayWriter())
+    await yieldToMain()
+    const writer = new ZipWriter(new Uint8ArrayWriter(), {
+      useWebWorkers: false,
+      useCompressionStream: USE_NATIVE_ZIP_STREAM,
+    })
     const names = Array.from(this.files.keys()).sort((a, b) => (a === '[Content_Types].xml' ? -1 : b === '[Content_Types].xml' ? 1 : 0))
     for (const name of names) await writer.add(name, new Uint8ArrayReader(this.files.get(name) as Uint8Array))
     return writer.close()

@@ -9,9 +9,21 @@ const URLS: Record<BillingTemplateId, string> = {
   'midea-pct': mideaPctUrl
 }
 
-/** 内置的三份请款表模板（随扩展打包，只读）。 */
-export async function loadBillingTemplate(id: BillingTemplateId): Promise<Uint8Array> {
-  const response = await fetch(URLS[id])
-  if (!response.ok) throw new Error(`请款表模板读取失败（HTTP ${response.status}）。`)
-  return new Uint8Array(await response.arrayBuffer())
+const templateCache = new Map<BillingTemplateId, Promise<Uint8Array>>()
+
+/** 内置的三份请款表模板（随扩展打包，只读），按模板 ID 缓存在内存中。 */
+export function loadBillingTemplate(id: BillingTemplateId): Promise<Uint8Array> {
+  const cached = templateCache.get(id)
+  if (cached) return cached
+  const pending = fetch(URLS[id])
+    .then(async response => {
+      if (!response.ok) throw new Error(`请款表模板读取失败（HTTP ${response.status}）。`)
+      return new Uint8Array(await response.arrayBuffer())
+    })
+    .catch(error => {
+      if (templateCache.get(id) === pending) templateCache.delete(id)
+      throw error
+    })
+  templateCache.set(id, pending)
+  return pending
 }

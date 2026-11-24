@@ -124,4 +124,16 @@ describe('xlsx 数据块伸缩', () => {
     expect(sheet.formulaOf('N4')).toBe('L4+M4')
     expect(sheet.formulaOf('L7')).toBe('SUM(L4:L6)')
   })
+
+  it('并发复用同一模板字节的解压缓存时各工作簿互不污染', async () => {
+    const templateBytes = await buildBook()
+    const [bookA, bookB] = await Promise.all([XlsxBook.open(templateBytes), XlsxBook.open(templateBytes)])
+    bookA.sheet('明细').setCell('B2', 999)
+    await bookA.save()
+
+    expect(bookB.sheet('明细').valueOf('B2')).toBe(10)
+    expect(() => bookB.doc('xl/calcChain.xml')).not.toThrow()
+    const savedB = await XlsxBook.open(await bookB.save())
+    expect(savedB.sheet('明细').valueOf('B2')).toBe(10)
+  })
 })
