@@ -113,6 +113,11 @@ try {
   await app.getByRole('button', { name: '全选所有', exact: true }).click()
   await app.getByRole('button', { name: '全选所有', exact: true }).waitFor({ timeout: 30000 })
   const elapsedMs = Date.now() - began
+  const topPagerBox = await app.locator('.file-results > .section-heading .file-results-tools nav[aria-label="文件顶部分页"]').boundingBox()
+  const pageSizeBox = await app.locator('.file-results > .section-heading .file-results-tools .page-size').boundingBox()
+  assert.ok(topPagerBox && pageSizeBox, '顶部分页应与每页数量同处 .file-results-tools')
+  assert.ok(topPagerBox.x + topPagerBox.width <= pageSizeBox.x + 2, '顶部分页紧靠每页数量左侧排列')
+  assert.ok(Math.abs(topPagerBox.y - pageSizeBox.y) <= 10, '顶部分页与每页数量保持同一行基线')
   const selected = await app.getByText(/^已选 1597 个文件/).count()
   const completionNotices = await app.getByText(/^已全选 /).allTextContents()
   await app.waitForTimeout(2500) // 有意跨过旧版2秒清除时间，验证完成进度保留。

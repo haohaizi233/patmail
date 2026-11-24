@@ -1213,4 +1213,20 @@ describe('file query durable remount', () => {
       await settle()
     }
   })
+
+  it('顶部分页与每页数量、刷新按钮同组收拢到右侧 .file-results-tools 内', async () => {
+    mount(async message => message.type === MessageType.SearchFiles ? reply(message, 250) : { type: MessageType.Error, payload: { message: 'unused' } })
+    button('测试查询').click()
+    await settle()
+
+    const tools = document.querySelector('.file-results > .section-heading .file-results-tools')
+    expect(tools).not.toBeNull()
+    const nav = tools!.querySelector('nav[aria-label="文件顶部分页"].toolbar-pagination')
+    const pageSizeEl = tools!.querySelector('label.page-size')
+    const refreshBtn = tools!.querySelector('button.text-button')
+    expect(nav).not.toBeNull()
+    expect(pageSizeEl).not.toBeNull()
+    expect(refreshBtn?.textContent?.trim()).toBe('刷新')
+    expect(Array.from(tools!.children)).toEqual([nav, pageSizeEl, refreshBtn])
+  })
 })
