@@ -31,7 +31,12 @@ const STYLE = `
 `
 
 type HintHost = Document | ShadowRoot
-type HintEl = HTMLElement & { __hintCleanup?: () => void; __hintText?: string }
+type HintEl = HTMLElement & {
+  __hintText?: string
+  __hintClip?: boolean
+  __hintDirective?: boolean
+  __hintHost?: HintHost
+}
 
 const CLIP_SELECTOR = '.clip, .col-name-clip, .picked-name, .theme-select-value, .theme-select-label, [class*="clip"]'
 const installedHosts = new WeakSet<HintHost>()
@@ -68,22 +73,29 @@ export function absorbNativeTitle(node: Element): void {
 function scanTitles(node: Node): void {
   if (!(node instanceof Element)) return
   absorbNativeTitle(node)
-  node.querySelectorAll('[title]').forEach(child => { absorbNativeTitle(child) })
+  if (node.childElementCount > 0) {
+    node.querySelectorAll('[title]').forEach(child => { absorbNativeTitle(child) })
+  }
 }
 
-function absorbAncestors(target: Element, stopAt: ParentNode): void {
+function inspectAncestors(target: Element, stopAt: ParentNode): HintEl | null {
   let cur: Element | null = target
+  let directiveEl: HintEl | null = null
   while (cur) {
     absorbNativeTitle(cur)
+    if (!directiveEl && (cur as HintEl).__hintDirective === true) {
+      directiveEl = cur as HintEl
+    }
     if (cur === stopAt) break
     cur = cur.parentElement
   }
+  return directiveEl
 }
 
 function hasMountedDirective(el: Element | null): boolean {
   let cur: Element | null = el
   while (cur) {
-    if ((cur as HintEl).__hintCleanup) return true
+    if ((cur as HintEl).__hintDirective === true) return true
     cur = cur.parentElement
   }
   return false
@@ -209,10 +221,25 @@ export function installHintHost(target: HintHost | Element = document): void {
   const onEnter = (event: Event): void => {
     const targetNode = event.target
     if (!(targetNode instanceof Element)) return
-    absorbAncestors(targetNode, parent)
+    const directiveEl = inspectAncestors(targetNode, parent)
+
+    if (directiveEl) {
+      const content = (directiveEl.textContent ?? '').replace(/\s+/g, ' ')
+      const tip = visibleHint(
+        directiveEl.__hintText ?? '',
+        content,
+        Boolean(directiveEl.__hintClip),
+        isTextClipped(directiveEl),
+      )
+      if (tip) {
+        activeDelegated.set(root, directiveEl)
+        showBubble(directiveEl, tip)
+        return
+      }
+    }
 
     const hintAnchor = targetNode.closest('[data-patmail-hint]')
-    if (hintAnchor instanceof HTMLElement && !(hintAnchor as HintEl).__hintCleanup) {
+    if (hintAnchor instanceof HTMLElement && !(hintAnchor as HintEl).__hintDirective) {
       const tip = (hintAnchor.dataset.patmailHint ?? '').trim()
       if (tip) {
         activeDelegated.set(root, hintAnchor)
@@ -248,32 +275,28 @@ export function installHintHost(target: HintHost | Element = document): void {
 
 export const hintDirective = {
   mounted(el: HintEl, binding: { value: unknown; modifiers: { clip?: boolean } }) {
-    installHintHost(el)
+    const root = hostOf(el)
+    el.__hintHost = root
+    installHintHost(root)
     absorbNativeTitle(el)
     remember(el, binding.value)
-    const show = (): void => {
-      const content = (el.textContent ?? '').replace(/\s+/g, ' ')
-      const tip = visibleHint(el.__hintText ?? '', content, Boolean(binding.modifiers.clip), isTextClipped(el))
-      if (tip) showBubble(el, tip)
-    }
-    const hide = (): void => hideBubble(hostOf(el))
-    el.addEventListener('mouseenter', show)
-    el.addEventListener('mouseleave', hide)
-    el.addEventListener('focusin', show)
-    el.addEventListener('focusout', hide)
-    el.__hintCleanup = () => {
-      el.removeEventListener('mouseenter', show)
-      el.removeEventListener('mouseleave', hide)
-      el.removeEventListener('focusin', show)
-      el.removeEventListener('focusout', hide)
-      hide()
-    }
+    el.__hintClip = Boolean(binding.modifiers.clip)
+    el.__hintDirective = true
   },
-  updated(el: HintEl, binding: { value: unknown }) {
+  updated(el: HintEl, binding: { value: unknown; modifiers: { clip?: boolean } }) {
     absorbNativeTitle(el)
     remember(el, binding.value)
+    el.__hintClip = Boolean(binding.modifiers.clip)
   },
   unmounted(el: HintEl) {
-    el.__hintCleanup?.()
+    const root = el.isConnected ? hostOf(el) : (el.__hintHost ?? hostOf(el))
+    if (activeDelegated.get(root) === el) {
+      activeDelegated.delete(root)
+      hideBubble(root)
+    }
+    el.__hintDirective = false
+    el.__hintText = undefined
+    el.__hintClip = undefined
+    el.__hintHost = undefined
   }
 }

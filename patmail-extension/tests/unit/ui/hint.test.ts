@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { absorbNativeTitle, installHintHost, isTextClipped, visibleHint } from '../../../src/shell/components/hint'
+import { absorbNativeTitle, hintDirective, installHintHost, isTextClipped, visibleHint } from '../../../src/shell/components/hint'
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -86,5 +86,48 @@ describe('悬停气泡', () => {
     const bubble = document.body.querySelector<HTMLElement>(':scope > .patmail-hint')
     expect(bubble?.hidden).toBe(false)
     expect(bubble?.textContent).toBe('深圳市世纪恒程知识产权代理事务所（超长截断全称）')
+  })
+
+  it('v-hint 指令通过宿主委托弹出和隐藏气泡，支持普通模式、.clip 修饰符与卸载清理', () => {
+    const tag = document.createElement('span')
+    const child = document.createElement('b')
+    child.textContent = 'PA2610021PCT'
+    tag.appendChild(child)
+    document.body.appendChild(tag)
+
+    hintDirective.mounted(tag, { value: '文号详情：PA2610021PCT', modifiers: {} })
+    child.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    const bubble = document.body.querySelector<HTMLElement>(':scope > .patmail-hint')
+    expect(bubble?.hidden).toBe(false)
+    expect(bubble?.textContent).toBe('文号详情：PA2610021PCT')
+
+    hintDirective.updated(tag, { value: '更新后说明', modifiers: {} })
+    child.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    expect(bubble?.textContent).toBe('更新后说明')
+
+    tag.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
+    expect(bubble?.hidden).toBe(true)
+
+    const clipEl = document.createElement('span')
+    clipEl.className = 'clip'
+    clipEl.textContent = '短名称'
+    Object.defineProperty(clipEl, 'scrollWidth', { value: 80, configurable: true })
+    Object.defineProperty(clipEl, 'clientWidth', { value: 80, configurable: true })
+    document.body.appendChild(clipEl)
+
+    hintDirective.mounted(clipEl, { value: '短名称', modifiers: { clip: true } })
+    clipEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    expect(bubble?.hidden).toBe(true)
+
+    Object.defineProperty(clipEl, 'scrollWidth', { value: 240, configurable: true })
+    clipEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    expect(bubble?.hidden).toBe(false)
+    expect(bubble?.textContent).toBe('短名称')
+
+    hintDirective.unmounted(clipEl)
+    expect(bubble?.hidden).toBe(true)
+    clipEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    // 卸载后 __hintDirective 已清空，但自身有 .clip 且溢出仍走原生委托兜底；移除 DOM 验证不再依赖实例监听器
+    clipEl.remove()
   })
 })
