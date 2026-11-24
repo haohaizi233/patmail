@@ -27,6 +27,30 @@ const goerCaseId = '7C842A11-A2E8-467D-9079-D3C766928198'
 const goerFeeId = 'goer-translation'
 let wordCountRequests = 0
 let recoveredBillQueries = 0
+let pbcRequests = 0
+const pbcNow = new Date()
+const pbcYear = pbcNow.getFullYear()
+const pbcMonth = pbcNow.getMonth() + 1
+const pbcDay = pbcNow.getDate()
+const pbcDateIso = `${pbcYear}-${String(pbcMonth).padStart(2, '0')}-${String(pbcDay).padStart(2, '0')}`
+const pbcFolderStamp = `${pbcYear}${String(pbcMonth).padStart(2, '0')}${String(pbcDay).padStart(2, '0')}09150000001`
+await context.route('https://www.pbc.gov.cn/**', async route => {
+  const url = route.request().url()
+  if (url.includes(`/125925/${pbcFolderStamp}/index.html`)) {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: `<html><body><p>${pbcYear}年${pbcMonth}月${pbcDay}日银行间外汇市场人民币汇率中间价为：1美元对人民币7.1234元，1欧元对人民币7.7890元，100日元对人民币4.6500元，1港元对人民币0.9150元，1英镑对人民币9.0123元，1瑞士法郎对人民币8.0500元。</p></body></html>`,
+    })
+    return
+  }
+  pbcRequests++
+  await route.fulfill({
+    status: 200,
+    contentType: 'text/html; charset=utf-8',
+    body: `<html><body><a href="/zhengcehuobisi/125207/125217/125925/${pbcFolderStamp}/index.html">${pbcYear}年${pbcMonth}月${pbcDay}日中国外汇交易中心受权公布人民币汇率中间价公告</a></body></html>`,
+  })
+})
 await context.route('http://183.36.43.66:88/**', async route => {
   const params = new URLSearchParams(route.request().postData() ?? '')
   if (params.get('Call') !== 'GetSearchFiles') return route.fallback()
@@ -126,18 +150,18 @@ try {
   }
   await app.getByText('测试员', { exact: true }).waitFor({ timeout: 15_000 })
 
-  // 工作台卡片「请款」→ 请款工作流（默认格尔涉外模板 + 步骤 1）
+  // 工作台卡片「请款」→ 请款工作流（默认歌尔涉外模板 + 步骤 1）
   await app.locator('.billing-workflow-card .sea-open').click()
   await app.locator('.billing-workflow-page').waitFor({ timeout: 15_000 })
   report.pass('billing workflow opens from the workflow catalogue card')
 
-  for (const label of ['格尔涉外请款单', '美的涉外费用清单', '美的 PCT 费用清单']) {
+  for (const label of ['歌尔涉外请款单', '美的涉外费用清单', '美的 PCT 费用清单']) {
     await app.locator('.template-preset-bar').getByText(label, { exact: true }).waitFor({ timeout: 15_000 })
   }
   const selectedTitle = app.locator('.template-radio-item.selected .tpl-title-line b')
-  assert.equal(await selectedTitle.innerText(), '格尔涉外请款单', '默认选中通用涉外模板')
+  assert.equal(await selectedTitle.innerText(), '歌尔涉外请款单', '默认选中通用涉外模板')
   const presetBadge = app.locator('.template-preset-bar .preset-badge')
-  assert.ok((await presetBadge.innerText()).includes('官费 + 代理费 + 第三方费用'), '格尔模板预填全部三类费用')
+  assert.ok((await presetBadge.innerText()).includes('官费 + 代理费 + 第三方费用'), '歌尔模板预填全部三类费用')
   assert.ok((await app.locator('.flow-steps-bar .step-title').first().innerText()).includes('文件管理（账单抓取）'))
   report.pass('billing template picker lists three presets with general-foreign default')
 
@@ -198,6 +222,9 @@ try {
   assert.equal(await exceptionBox.isChecked(), true, 'PCT 待核对费用确认项默认勾选')
   assert.equal(await bottomBatchExport.isEnabled(), true)
   assert.equal(await topBatchExport.isEnabled(), true)
+  await app.locator('.pbc-rates-card').getByText(`公布日期：${pbcDateIso}`).waitFor({ timeout: 10_000 })
+  await app.locator('.pbc-rates-card').getByText('¥ 7.1234').waitFor({ timeout: 10_000 })
+  assert.ok(pbcRequests >= 1, 'entering Step 3 with CNY-only rows automatically scrapes PBC rates')
 
   const splitSwitchBtn = navigation.getByRole('button', { name: '按客户分表', exact: true })
   const mergeSwitchBtn = navigation.getByRole('button', { name: '合并单表', exact: true })
@@ -324,7 +351,7 @@ try {
   }
   report.pass('2-stage streaming pipeline exports multi-customer split workbooks and renders per-customer receipts')
 
-  await app.locator('.template-preset-bar').getByText('格尔涉外请款单', { exact: true }).click()
+  await app.locator('.template-preset-bar').getByText('歌尔涉外请款单', { exact: true }).click()
   await app.getByRole('button', { name: /进入请款单导出.*已选 0 笔/ }).waitFor()
   assert.equal(await step2Next.isDisabled(), true)
   report.pass('PCT filters the fixture, downloads a workbook and invalidates selection on template change')
@@ -337,9 +364,9 @@ try {
     const date = new Date()
     return [date.getFullYear(), date.getMonth() + 1, date.getDate()].map(value => String(value).padStart(2, '0')).join('')
   })
-  await writeFile(join(downloadPath, `格尔涉外请款单-${todayStamp}.xlsx`), '', { flag: 'wx' })
+  await writeFile(join(downloadPath, `歌尔涉外请款单-${todayStamp}.xlsx`), '', { flag: 'wx' })
   await topExport.click()
-  const goer = await completedDownload('格尔涉外请款单', true)
+  const goer = await completedDownload('歌尔涉外请款单', true)
   assert.notEqual(goer.id, download.id)
   const zip = new ZipReader(new Uint8ArrayReader(await readFile(goer.filename)))
   try {
@@ -354,7 +381,7 @@ try {
   report.pass('Goer reads translation word count by fee ID and fills T, U and V')
 
   const titleField = app.locator('.template-params-grid input').first()
-  await titleField.fill('2026年11月格尔请款恢复测试')
+  await titleField.fill('2026年11月歌尔请款恢复测试')
   await easyPage.bringToFront()
   await app.bringToFront()
   await app.evaluate(async () => {
@@ -376,7 +403,7 @@ try {
       document.dispatchEvent(new Event('visibilitychange'))
     }).finally(() => { chrome.runtime.sendMessage = original })
   })
-  assert.equal(await titleField.inputValue(), '2026年11月格尔请款恢复测试')
+  assert.equal(await titleField.inputValue(), '2026年11月歌尔请款恢复测试')
   await app.evaluate(() => { location.hash = '#/settings' })
   await app.locator('.billing-workflow-page').waitFor({ state: 'hidden' })
   await app.evaluate(() => { location.hash = '#/workflow' })
@@ -387,11 +414,15 @@ try {
     })
     const draft = reply?.value?.payload?.payload
     return draft?.step === 3 && draft.fees?.selectedIds?.length === 2 &&
-      draft.headers?.title === '2026年11月格尔请款恢复测试'
+      draft.headers?.title === '2026年11月歌尔请款恢复测试'
   })
+  const pbcBeforeReload = pbcRequests
   await app.reload()
   await app.locator('.step-3-section').waitFor({ state: 'visible' })
-  assert.equal(await titleField.inputValue(), '2026年11月格尔请款恢复测试')
+  await app.locator('.pbc-rates-card').getByText(`公布日期：${pbcDateIso}`).waitFor({ timeout: 10_000 })
+  await app.locator('.pbc-rates-card').getByText('¥ 7.1234').waitFor({ timeout: 10_000 })
+  assert.ok(pbcRequests > pbcBeforeReload, 'restoring Step 3 from WAL automatically scrapes PBC rates again')
+  assert.equal(await titleField.inputValue(), '2026年11月歌尔请款恢复测试')
   assert.match(await app.locator('.export-execute-card .summary-line').innerText(), /待填入费用：2 笔/)
   await navigation.getByRole('button', { name: '返回费用查询调整' }).click()
   assert.equal(await feeResults.getByRole('row').filter({ hasText: 'PA925-EP' }).count(), 2)

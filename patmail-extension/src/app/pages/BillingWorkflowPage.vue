@@ -172,6 +172,23 @@ async function handleExportClick(): Promise<void> {
   }
   await doExportExcel()
 }
+
+function batchItemStatusLabel(status: string): string {
+  switch (status) {
+    case 'download_completed':
+      return '已确认下载完成'
+    case 'download_started':
+      return '已触发下载（待确认落盘）'
+    case 'generated':
+      return '已生成工作簿'
+    case 'download_interrupted':
+      return '下载已中断'
+    case 'unknown':
+      return '状态待核对'
+    default:
+      return '导出失败'
+  }
+}
 </script>
 
 <template>
@@ -701,9 +718,13 @@ async function handleExportClick(): Promise<void> {
             v-for="item in exportBatchItems"
             :key="item.customer"
             class="batch-result-item"
-            :class="{ failed: item.status !== 'download_completed' && item.status !== 'download_started' && item.status !== 'generated' }"
+            :class="{
+              pending: item.status === 'download_started' || item.status === 'generated' || item.status === 'unknown',
+              failed: item.status === 'failed' || item.status === 'download_interrupted',
+            }"
           >
             <span class="batch-item-customer">{{ item.customer }}</span>
+            <span class="batch-item-status">{{ batchItemStatusLabel(item.status) }}</span>
             <span class="batch-item-file">{{ item.savedFileName || item.fileName || '未生成文件' }}</span>
             <span v-if="item.reason" class="batch-item-reason">{{ item.reason }}</span>
           </li>
@@ -1390,6 +1411,12 @@ async function handleExportClick(): Promise<void> {
   color: #276749;
 }
 
+.batch-result-item.pending {
+  background: #fffaf0;
+  border-color: #fbd38d;
+  color: #9c4221;
+}
+
 .batch-result-item.failed {
   background: #fff5f5;
   border-color: #fed7d7;
@@ -1397,6 +1424,13 @@ async function handleExportClick(): Promise<void> {
 }
 
 .batch-item-customer {
+  font-weight: 600;
+}
+
+.batch-item-status {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
   font-weight: 600;
 }
 

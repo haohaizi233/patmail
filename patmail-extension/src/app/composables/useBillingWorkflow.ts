@@ -240,12 +240,18 @@ export function useBillingWorkflow(options: {
   const effectiveRates = computed<Record<string, number>>(() =>
     computeEffectiveExchangeRates(pbcPerCny.value, customRates.value, clearedRates.value),
   )
+  const manualOnlyRates = computed<Record<string, number>>(() =>
+    computeEffectiveExchangeRates({}, customRates.value, clearedRates.value),
+  )
   const usesManualRate = computed(() =>
     selectedFeeRows.value.some(row => Boolean(customRates.value[normalizeCurrency(row.currency)])),
   )
   const missingRateCodes = computed(() => findMissingRates(selectedFeeRows.value, effectiveRates.value))
   const involvedCurrencies = computed(() => collectInvolvedCurrencies(selectedFeeRows.value))
   const needsForeignRates = computed(() => hasForeignCurrencyRows(selectedFeeRows.value))
+  const manualRatesComplete = computed(
+    () => needsForeignRates.value && findMissingRates(selectedFeeRows.value, manualOnlyRates.value).length === 0,
+  )
 
 
   async function loadPbcRates(): Promise<void> {
@@ -289,11 +295,16 @@ export function useBillingWorkflow(options: {
     delete clearedRates.value[code]
   }
 
-  const shouldWatchRates = computed(() => currentStep.value === 3 && needsForeignRates.value && (options.isActive?.() ?? true))
+  const shouldWatchRates = computed(
+    () => currentStep.value === 3 && !restoring.value && (options.isActive?.() ?? true),
+  )
   function checkRatesWhileVisible(): void {
     if (exporting.value || !shouldWatchRates.value || document.visibilityState === 'hidden') return
     const today = formatLocalDate()
-    if (ratesCheckedOn !== today || ratesDate.value < today || ratesError.value) void loadPbcRates()
+    const hasPbcRates = Object.keys(pbcPerCny.value).length > 0
+    if (!hasPbcRates || ratesCheckedOn !== today || ratesDate.value < today || ratesError.value) {
+      void loadPbcRates()
+    }
   }
 
   function setStep(target: BillingWorkflowStep, fromResults = false): void {
@@ -361,14 +372,14 @@ export function useBillingWorkflow(options: {
   const exportDisabled = computed(
     () =>
       exporting.value ||
-      ratesLoading.value ||
+      (needsForeignRates.value && ratesLoading.value) ||
       Boolean(fileSelectionIssue.value || feeSelectionIssue.value) ||
       (reconciliationInfo.value.requestedCount > 0 && !confirmExistingFees.value) ||
       (pctExportExceptions.value.length > 0 && !confirmPctExceptions.value),
   )
   const exportDisabledReason = computed((): string => {
     if (exporting.value) return '正在导出请款表，请稍候…'
-    if (ratesLoading.value) return '正在获取央行汇率，请稍候…'
+    if (needsForeignRates.value && ratesLoading.value) return '正在获取央行汇率，请稍候…'
     if (fileSelectionIssue.value) return fileSelectionIssue.value
     if (feeSelectionIssue.value) return feeSelectionIssue.value
     const confirmReasons: string[] = []
@@ -388,16 +399,27 @@ export function useBillingWorkflow(options: {
     exportBatchItems.value = []
   })
   const exportProgress = ref<BatchExportProgress | null>(null)
-  const exportParameters = computed(() => ({
-    headers: { ...headerValues.value },
-    options: { ...billingOptions.value },
-    allowMixedCustomers: allowMixedCustomers.value,
-    rates: { ...effectiveRates.value },
-    rateSourceUrl: ratesSourceUrl.value,
-    rateDate: usesManualRate.value
-      ? `手工 ${manualRateDate.value}${ratesDate.value ? ` / 央行 ${ratesDate.value}` : ''}`
-      : ratesDate.value || formatLocalDate(),
-  }))
+  const exportParameters = computed(() => {
+    const today = formatLocalDate()
+    const foreign = needsForeignRates.value
+    const usesPbcRates = foreign && !manualRatesComplete.value
+    return {
+      headers: { ...headerValues.value },
+      options: { ...billingOptions.value },
+      allowMixedCustomers: allowMixedCustomers.value,
+      rates: foreign ? { ...effectiveRates.value } : { CNY: 1 },
+      rateSourceUrl: !foreign
+        ? ''
+        : usesPbcRates
+          ? (ratesCheckedOn === today ? ratesSourceUrl.value : '')
+          : '手工填写',
+      rateDate: !foreign
+        ? today
+        : usesManualRate.value
+          ? `手工 ${manualRateDate.value}${usesPbcRates && ratesDate.value && ratesCheckedOn === today ? ` / 央行 ${ratesDate.value}` : ''}`
+          : ratesDate.value || today,
+    }
+  })
 
   async function doExportExcel(): Promise<void> {
     if (exporting.value) return
@@ -420,7 +442,7 @@ export function useBillingWorkflow(options: {
       exportResultNotice.value = selectionIssue
       return
     }
-    if (ratesLoading.value) return
+    if (needsForeignRates.value && ratesLoading.value) return
     const selectionChanged = () =>
       selectedTemplateId.value !== templateId ||
       selectedFeeRows.value !== rows ||
@@ -438,12 +460,14 @@ export function useBillingWorkflow(options: {
         return
       }
       const parameters = exportParameters.value
+      const parametersJson = JSON.stringify(parameters)
       const exportCommand = {
         templateId, rows, bills, parameters, ...selection(),
         needsForeignRates: needsForeignRates.value,
         ratesCheckedOn, ratesLoading: ratesLoading.value,
         missingRateCodes: missingRateCodes.value,
         usesManualRate: usesManualRate.value,
+        manualRatesComplete: manualRatesComplete.value,
         manualRateDate: manualRateDate.value,
         downloadScope: scope,
         onProgress: (progress: BatchExportProgress) => {
@@ -455,7 +479,7 @@ export function useBillingWorkflow(options: {
               ? `正在并发生成工作簿 ${generated}/${progress.total}（已提交下载 ${downloaded}/${progress.total}，当前：${progress.currentCustomer}）…`
               : `正在顺序触发下载 ${downloaded}/${progress.total}（已生成 ${generated}/${progress.total}，当前：${progress.currentCustomer}）…`
         },
-        isStale: () => selectionChanged() || parameters !== exportParameters.value,
+        isStale: () => selectionChanged() || JSON.stringify(exportParameters.value) !== parametersJson,
       }
       const precheck = validateBillingExportPreconditions(exportCommand)
       if (!precheck.ok) {
@@ -492,7 +516,7 @@ export function useBillingWorkflow(options: {
     }
   }
 
-  watch(shouldWatchRates, active => { if (active) checkRatesWhileVisible() })
+  watch(shouldWatchRates, active => { if (active) checkRatesWhileVisible() }, { immediate: true })
 
   let persistTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshot = ''
@@ -614,11 +638,13 @@ export function useBillingWorkflow(options: {
     else checkRatesWhileVisible()
   }
   document.addEventListener('visibilitychange', onBillingVisibility)
+  window.addEventListener('focus', checkRatesWhileVisible)
   window.addEventListener('pagehide', flushBilling)
   onBeforeUnmount(() => {
     flushBilling()
     disposed = true
     document.removeEventListener('visibilitychange', onBillingVisibility)
+    window.removeEventListener('focus', checkRatesWhileVisible)
     window.removeEventListener('pagehide', flushBilling)
   })
 
