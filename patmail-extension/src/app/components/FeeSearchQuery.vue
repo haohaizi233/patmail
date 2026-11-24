@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, markRaw, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { fileSearchTimeoutMs, type FileSearchTimeoutMs } from '../../api/file-search-params'
 import type { NormalizedDictionary } from '../../api/dictionaries'
 import { choicesFromDictionary } from '../../api/dictionaries/picker-catalog'
@@ -521,7 +521,11 @@ function onApplicantGuardClick(): void {
 // Search State & Pagination
 const searchState = ref<'idle' | 'loading' | 'error' | 'empty' | 'success'>('idle')
 const searchMessage = ref('')
-const result = ref<FeeSearchResult | null>(null)
+const result = shallowRef<FeeSearchResult | null>(null)
+function toRawFeeResult(data: FeeSearchResult): FeeSearchResult {
+  for (const row of data.rows) markRaw(row)
+  return markRaw(data)
+}
 const DEFAULT_FEE_PAGE_SIZE = 100
 const pageIndex = ref(1)
 const pageSize = ref(DEFAULT_FEE_PAGE_SIZE)
@@ -544,6 +548,7 @@ const {
   selectedCount,
   selectedFeeIds,
   allKnownRows,
+  rowsRevision,
   selectedRowsList,
   selectingAll,
   failedPages,
@@ -555,11 +560,13 @@ const {
   displayRows,
   totalPages,
   isRowSelected,
+  registerKnownRows,
+  finishBulkSelection,
+  applyBulkPageRows,
   toggleRow,
   selectCurrentPage,
   clearAllSelected,
   deselectAllPages,
-  selectBulkRow,
   applyQuickFeeSelect,
   replaceBillingSelection,
   resetSelectionState,
@@ -614,7 +621,7 @@ async function selectAllPages(unrequestedOnly = false): Promise<void> {
   const res = result.value
   if (!res?.total || selectionPending.value) return
   unrequestedOnlyBatch.value = unrequestedOnly
-  for (const row of allKnownRows.value.values()) selectBulkRow(row, unrequestedOnly)
+  applyBulkPageRows(allKnownRows.value.values(), unrequestedOnly)
   const pages = Array.from({ length: totalPages.value }, (_, i) => i + 1)
     .filter(page => !cachedPages.has(page))
   await readSelectionPages(pages)
@@ -638,15 +645,18 @@ async function readSelectionPages(pages: number[]): Promise<void> {
     paintPaging(missed.length ? 'fail' : 'done')
     const exclusions: string[] = []
     if (unrequestedOnly) {
-      const rows = [...allKnownRows.value.values()]
-      const unrequested = rows.filter(isUnrequestedFee)
-      const statusExcluded = rows.length - unrequested.length
-      if (statusExcluded) exclusions.push(`${statusExcluded} 项有请款单号或状态并非明确未请款`)
+      let statusExcluded = 0
       const perReason = new Map<string, number>()
-      for (const row of unrequested) {
-        const reason = props.defaultSelectionExclusion?.(row)
+      const exclude = props.defaultSelectionExclusion
+      for (const row of allKnownRows.value.values()) {
+        if (!isUnrequestedFee(row)) {
+          statusExcluded += 1
+          continue
+        }
+        const reason = exclude?.(row)
         if (reason) perReason.set(reason, (perReason.get(reason) ?? 0) + 1)
       }
+      if (statusExcluded) exclusions.push(`${statusExcluded} 项有请款单号或状态并非明确未请款`)
       for (const [reason, count] of perReason) exclusions.push(`${count} 项${reason}`)
     }
     selectionNotice.value = missed.length
@@ -701,18 +711,14 @@ async function readSelectionPages(pages: number[]): Promise<void> {
       signal,
       onPage: (page, rows) => {
         if (gen !== currentSearchGeneration.value) return
-        cachedPages.set(page, new Set(rows.map(row => row.feeId)))
-        for (const row of rows) {
-          allKnownRows.value.set(row.feeId, row)
-          selectBulkRow(row, unrequestedOnly)
-        }
+        applyBulkPageRows(rows, unrequestedOnly, page)
         tickPage()
       }
     })
 
     if (gen === currentSearchGeneration.value) announce(missed)
   } finally {
-    if (gen === currentSearchGeneration.value) selectingAll.value = false
+    if (gen === currentSearchGeneration.value) finishBulkSelection()
   }
 }
 
@@ -843,12 +849,12 @@ async function doSearch(page = 1, newSearch = true): Promise<void> {
         return
       }
 
-      const data = resp.payload.data
+      const rawData = toRawFeeResult(resp.payload.data)
       const previousIds = cachedPages.get(page)
       const changed = previousIds
-        ? data.rows.length !== previousIds.size || data.rows.some(row => !previousIds.has(row.feeId))
-        : data.rows.some(row => allKnownRows.value.has(row.feeId))
-      if (!newSearch && (changed || data.total !== result.value?.total)) {
+        ? rawData.rows.length !== previousIds.size || rawData.rows.some(row => !previousIds.has(row.feeId))
+        : rawData.rows.some(row => allKnownRows.value.has(row.feeId))
+      if (!newSearch && (changed || rawData.total !== result.value?.total)) {
         invalidateSearch()
         searchState.value = 'error'
         searchMessage.value = '费用查询的结果已变化，请重新查询后再勾选。'
@@ -856,12 +862,10 @@ async function doSearch(page = 1, newSearch = true): Promise<void> {
       }
       pageIndex.value = page
       if (newSearch) lastQuery.value = q
-      result.value = data
-      for (const row of data.rows) {
-        allKnownRows.value.set(row.feeId, row)
-      }
-      cachedPages.set(page, new Set(data.rows.map(row => row.feeId)))
-      if (data.total === 0 || data.rows.length === 0) {
+      result.value = rawData
+      cachedPages.set(page, new Set(rawData.rows.map(row => row.feeId)))
+      registerKnownRows(rawData.rows, true)
+      if (rawData.total === 0 || rawData.rows.length === 0) {
         searchState.value = 'empty'
         clearAllSelected()
       } else {
@@ -869,7 +873,7 @@ async function doSearch(page = 1, newSearch = true): Promise<void> {
         if (newSearch) {
           void selectAllPages(true)
         } else if (failedPages.value.includes(page)) {
-          for (const row of data.rows) selectBulkRow(row, unrequestedOnlyBatch.value)
+          applyBulkPageRows(rawData.rows, unrequestedOnlyBatch.value, page)
           failedPages.value = failedPages.value.filter(failed => failed !== page)
           if (!failedPages.value.length) selectionNotice.value = ''
         }
@@ -988,7 +992,10 @@ function feeCellHint(row: FeeSearchRow, key: string): string {
   return text === '-' ? '' : text
 }
 
+const feeDetailCache = new WeakMap<FeeSearchRow, string>()
 function feeRowDetail(row: FeeSearchRow): string {
+  const cached = feeDetailCache.get(row)
+  if (cached !== undefined) return cached
   const lines: string[] = []
   const add = (label: string, value: unknown) => {
     const text = value === null || value === undefined ? '' : String(value).trim()
@@ -1008,13 +1015,17 @@ function feeRowDetail(row: FeeSearchRow): string {
   add('申请人', row.applicant)
   add('缴费期限', row.payDueDate)
   add('完成日期', row.finishDate)
-  return lines.join('\n')
+  const detail = lines.join('\n')
+  feeDetailCache.set(row, detail)
+  return detail
 }
 
 // 原站高级导出弹窗（1:1 对齐 IhgAdvExport.aspx：导出清单 / 导出勾选费用 / 导出汇总数据）
 const exportModalOpen = ref(false)
 const exportModalMode = ref<FeeExportMode>('cond')
 const exportNotice = ref('')
+const EMPTY_EXPORT_QUERY: FeeSearchQuery = { pageIndex: 1, pageSize: DEFAULT_FEE_PAGE_SIZE }
+const EMPTY_EXPORT_IDS: string[] = []
 
 async function openExportModal(mode: FeeExportMode): Promise<void> {
   if (!props.canSearch) {
@@ -1167,6 +1178,33 @@ onBeforeUnmount(() => {
   resetTaskCheckProgress()
 })
 
+const snapshotRevision = ref(0)
+watch(
+  [values, checkedBoxes, selectedCustomers, selectedRuleOutCustomers],
+  () => {
+    snapshotRevision.value += 1
+  },
+  { deep: true },
+)
+watch(
+  [
+    pageIndex,
+    pageSize,
+    lastQuery,
+    result,
+    selectedIds,
+    rowsRevision,
+    failedPages,
+    unrequestedOnlyBatch,
+    selectionPending,
+    selectionIncomplete,
+    totalAmountInfo,
+  ],
+  () => {
+    snapshotRevision.value += 1
+  },
+)
+
 function billingSnapshot() {
   return {
     values: values.value, checks: checkedBoxes.value,
@@ -1190,11 +1228,15 @@ function restoreBillingSnapshot(state: ReturnType<typeof billingSnapshot>): void
   pageSize.value = state.result && state.query ? state.query.pageSize : DEFAULT_FEE_PAGE_SIZE
   pageIndex.value = state.pageIndex
   lastQuery.value = state.query
-  result.value = state.result
+  result.value = state.result ? toRawFeeResult(state.result) : null
   unrequestedOnlyBatch.value = state.unrequestedOnly
   totalAmountInfo.value = state.totals
-  for (const row of state.rows) allKnownRows.value.set(row.feeId, row)
-  selectedIds.value = Object.fromEntries(state.selectedIds.filter(id => allKnownRows.value.has(id)).map(id => [id, true]))
+  registerKnownRows(state.rows, true)
+  const nextIds: Record<string, true> = {}
+  for (const id of state.selectedIds) {
+    if (allKnownRows.value.has(id)) nextIds[id] = true
+  }
+  selectedIds.value = nextIds
   for (const [page, ids] of state.pages) cachedPages.set(page, new Set(ids))
   failedPages.value = state.failed
   if (state.pending && state.result && state.query) {
@@ -1209,6 +1251,7 @@ function restoreBillingSnapshot(state: ReturnType<typeof billingSnapshot>): void
 defineExpose({
   billingSnapshot,
   restoreBillingSnapshot,
+  snapshotRevision,
   getSelectedRows: () => selectedRowsList.value,
   getKnownRows: () => allKnownRows.value.values(),
   replaceBillingSelection,
@@ -1832,7 +1875,11 @@ defineExpose({
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(row, idx) in displayRows" :key="row.feeId || idx">
+            <tr
+              v-for="(row, idx) in displayRows"
+              :key="row.feeId || idx"
+              v-memo="[row, isRowSelected(row), selectingAll]"
+            >
               <td class="check-col">
                 <input
                   type="checkbox"
@@ -1880,8 +1927,8 @@ defineExpose({
       :open="exportModalOpen"
       :mode="exportModalMode"
       :bridge="activeBridge()"
-      :query="buildCurrentQuery()"
-      :fee-ids="selectedFeeIds"
+      :query="exportModalOpen ? buildCurrentQuery() : EMPTY_EXPORT_QUERY"
+      :fee-ids="exportModalOpen ? selectedFeeIds : EMPTY_EXPORT_IDS"
       :case-type="valueOf('case_type')"
       :field-columns="feeInit?.fieldColumns ?? {}"
       :timeout-ms="queryTimeoutMs"

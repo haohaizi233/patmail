@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch, type Ref } from 'vue'
+import { computed, markRaw, ref, shallowRef, triggerRef, watch, type Ref } from 'vue'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
 import type { FeeSearchResult, FeeSearchRow } from '../../api/fee-search-types'
 import { cleanFeeRowForSnapshot, isUnrequestedFee, sortFeeRows } from '../../application/billing/billing-validation'
@@ -17,32 +17,32 @@ export interface UseFeeSelectionOptions {
 }
 
 export function useFeeSelection(options: UseFeeSelectionOptions) {
-  const selectedIds = ref<Record<string, boolean>>({})
-  const selectedCount = computed(() => Object.values(selectedIds.value).filter(Boolean).length)
-  const selectedFeeIds = computed(() =>
-    Object.entries(selectedIds.value)
-      .filter(([, checked]) => checked)
-      .map(([id]) => id),
-  )
-  const allKnownRows = ref<Map<string, FeeSearchRow>>(new Map())
+  const selectedIds = shallowRef<Record<string, true>>({})
+  const selectedFeeIds = computed(() => Object.keys(selectedIds.value))
+  const selectedCount = computed(() => selectedFeeIds.value.length)
+  const allKnownRows = shallowRef<Map<string, FeeSearchRow>>(new Map())
+  const rowsRevision = ref(0)
 
   const selectedRowsList = computed(() => {
-    const list = selectedFeeIds.value.map(id => allKnownRows.value.get(id)).filter((r): r is FeeSearchRow => Boolean(r))
+    void rowsRevision.value
+    const known = allKnownRows.value
+    const list: FeeSearchRow[] = []
+    for (const id of selectedFeeIds.value) {
+      const row = known.get(id)
+      if (row) list.push(row)
+    }
     return sortFeeRows(list)
   })
 
-  watch(
-    selectedRowsList,
-    rows => {
-      options.onSelectionChange?.(rows)
-    },
-    { deep: true },
-  )
-
   const selectingAll = ref(false)
+  watch([selectedIds, rowsRevision, selectingAll], () => {
+    if (selectingAll.value) return
+    options.onSelectionChange?.(selectedRowsList.value)
+  })
+
   const failedPages = ref<number[]>([])
   const selectionNotice = ref('')
-  const cachedPages = reactive(new Map<number, Set<string>>())
+  const cachedPages = new Map<number, Set<string>>()
   const unrequestedOnlyBatch = ref(false)
   const selectionPending = computed(() => selectingAll.value || options.searchState.value === 'loading')
   const selectionIncomplete = computed(() => failedPages.value.length > 0 || options.searchState.value === 'error')
@@ -64,15 +64,56 @@ export function useFeeSelection(options: UseFeeSelectionOptions) {
     return Boolean(selectedIds.value[row.feeId])
   }
 
+  function registerKnownRows(rows: Iterable<FeeSearchRow>, emitTrigger = !selectingAll.value): void {
+    let changed = false
+    const map = allKnownRows.value
+    for (const row of rows) {
+      const raw = markRaw(row)
+      if (map.get(raw.feeId) !== raw) {
+        map.set(raw.feeId, raw)
+        changed = true
+      }
+    }
+    if (changed && emitTrigger) {
+      triggerRef(allKnownRows)
+      rowsRevision.value += 1
+    }
+  }
+
+  function finishBulkSelection(): void {
+    triggerRef(allKnownRows)
+    rowsRevision.value += 1
+    selectingAll.value = false
+  }
+
   function toggleRow(row: FeeSearchRow, checked: boolean): void {
-    selectedIds.value[row.feeId] = checked
+    const next = { ...selectedIds.value }
+    if (checked) {
+      if (next[row.feeId]) return
+      next[row.feeId] = true
+    } else {
+      if (!next[row.feeId]) return
+      delete next[row.feeId]
+    }
+    selectedIds.value = next
   }
 
   function selectCurrentPage(select: boolean): void {
     if (!options.result.value) return
+    const next = { ...selectedIds.value }
+    let changed = false
     for (const row of options.result.value.rows) {
-      selectedIds.value[row.feeId] = select
+      if (select) {
+        if (!next[row.feeId]) {
+          next[row.feeId] = true
+          changed = true
+        }
+      } else if (next[row.feeId]) {
+        delete next[row.feeId]
+        changed = true
+      }
     }
+    if (changed) selectedIds.value = next
   }
 
   function clearAllSelected(): void {
@@ -87,24 +128,63 @@ export function useFeeSelection(options: UseFeeSelectionOptions) {
 
   function selectBulkRow(row: FeeSearchRow, unrequestedOnly: boolean): void {
     const exclude = options.getDefaultSelectionExclusion?.()
-    selectedIds.value[row.feeId] = !unrequestedOnly || (isUnrequestedFee(row) && !exclude?.(row))
+    const shouldSelect = !unrequestedOnly || (isUnrequestedFee(row) && !exclude?.(row))
+    const next = { ...selectedIds.value }
+    if (shouldSelect) {
+      if (next[row.feeId]) return
+      next[row.feeId] = true
+    } else {
+      if (!next[row.feeId]) return
+      delete next[row.feeId]
+    }
+    selectedIds.value = next
+  }
+
+  function applyBulkPageRows(rows: Iterable<FeeSearchRow>, unrequestedOnly: boolean, page?: number): void {
+    const rowList = Array.isArray(rows) ? (rows as readonly FeeSearchRow[]) : Array.from(rows)
+    if (page !== undefined) {
+      cachedPages.set(page, new Set(rowList.map(row => row.feeId)))
+    }
+    registerKnownRows(rowList)
+    const exclude = options.getDefaultSelectionExclusion?.()
+    const next = { ...selectedIds.value }
+    let selectedChanged = false
+    for (const row of rowList) {
+      const shouldSelect = !unrequestedOnly || (isUnrequestedFee(row) && !exclude?.(row))
+      if (shouldSelect) {
+        if (!next[row.feeId]) {
+          next[row.feeId] = true
+          selectedChanged = true
+        }
+      } else if (next[row.feeId]) {
+        delete next[row.feeId]
+        selectedChanged = true
+      }
+    }
+    if (selectedChanged) selectedIds.value = next
+    else if (page !== undefined) rowsRevision.value += 1
   }
 
   function applyQuickFeeSelect(mode: 'O' | 'A'): void {
     if (options.quickFeeSelectMode) options.quickFeeSelectMode.value = mode
     if (!options.result.value) return
     const targetLabel = mode === 'O' ? '官费' : '代理费'
+    const next = { ...selectedIds.value }
     for (const row of options.result.value.rows) {
       const matched = row.feeClass === mode || row.feeClassName === targetLabel
-      selectedIds.value[row.feeId] = matched
+      if (matched) next[row.feeId] = true
+      else delete next[row.feeId]
     }
+    selectedIds.value = next
   }
 
   function replaceBillingSelection(rows: FeeSearchRow[]): void {
     if (selectionPending.value || selectionIncomplete.value) return
-    selectedIds.value = Object.fromEntries(
-      rows.filter(row => allKnownRows.value.has(row.feeId)).map(row => [row.feeId, true]),
-    )
+    const next: Record<string, true> = {}
+    for (const row of rows) {
+      if (allKnownRows.value.has(row.feeId)) next[row.feeId] = true
+    }
+    selectedIds.value = next
     selectionNotice.value = ''
   }
 
@@ -113,6 +193,8 @@ export function useFeeSelection(options: UseFeeSelectionOptions) {
     failedPages.value = []
     allKnownRows.value.clear()
     cachedPages.clear()
+    triggerRef(allKnownRows)
+    rowsRevision.value += 1
     clearAllSelected()
   }
 
@@ -121,6 +203,7 @@ export function useFeeSelection(options: UseFeeSelectionOptions) {
     selectedCount,
     selectedFeeIds,
     allKnownRows,
+    rowsRevision,
     selectedRowsList,
     selectingAll,
     failedPages,
@@ -132,6 +215,9 @@ export function useFeeSelection(options: UseFeeSelectionOptions) {
     displayRows,
     totalPages,
     isRowSelected,
+    registerKnownRows,
+    finishBulkSelection,
+    applyBulkPageRows,
     toggleRow,
     selectCurrentPage,
     clearAllSelected,
