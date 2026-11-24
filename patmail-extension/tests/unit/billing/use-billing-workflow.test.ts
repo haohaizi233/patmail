@@ -1677,4 +1677,163 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('does not cancel scheduled auto-save for template B when overwrite on template A finishes in background', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+
+    const ledgerStore = memoryRecoveryStore()
+    const authority = new RecoveryAuthority(() => openRecoveryLedger(ledgerStore))
+    const clientA = createRecoveryClient(request => authority.dispatch(request))
+    const clientB = createRecoveryClient(request => authority.dispatch(request))
+
+    const serviceFor = (client: ReturnType<typeof createRecoveryClient>) =>
+      new BillingApplicationService({
+        templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+        spreadsheet: {
+          fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+        },
+        exchangeRates: {
+          fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+        },
+        downloads: {
+          download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+        },
+        recovery: {
+          load: async scope => {
+            const raw = await client.get('billing-desk', scope)
+            return raw && typeof raw === 'object' ? (raw as BillingDeskSnapshot) : null
+          },
+          save: async (scope, snapshot) => {
+            await client.put('billing-desk', scope, snapshot)
+          },
+        },
+      })
+
+    const goerScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111', 'general-foreign'])
+    const mideaScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111', 'midea-pct'])
+
+    await clientB.put('billing-desk', goerScope, {
+      version: 1,
+      template: 'general-foreign',
+      step: 1,
+      headers: { title: '初始草稿' },
+      options: { reviewFee: 0, bankFee: 0 },
+      allowMixedCustomers: false,
+      extra: [],
+      excluded: [],
+      volumeInput: '',
+      bills: {},
+      syncKey: '',
+      rates: {},
+      clearedRates: {},
+      rateDate: '',
+    })
+
+    function mountTab(client: ReturnType<typeof createRecoveryClient>) {
+      let api!: ReturnType<typeof useBillingWorkflow>
+      const snapshotRev = ref(0)
+      let currentFees: string[] = []
+      const root = document.createElement('div')
+      const app = createApp({
+        setup() {
+          api = useBillingWorkflow({ service: serviceFor(client) })
+          api.feeQueryRef.value = {
+            selectionPending: false,
+            selectionIncomplete: false,
+            get snapshotRevision() {
+              return snapshotRev.value
+            },
+            getKnownRows: () => [],
+            replaceBillingSelection: () => {},
+            billingSnapshot: () => ({ selectedIds: [...currentFees] }),
+            restoreBillingSnapshot: raw => {
+              const obj = raw as { selectedIds?: string[] } | undefined
+              currentFees = [...(obj?.selectedIds ?? [])]
+            },
+          }
+          return () => h('div')
+        },
+      })
+      app.mount(root)
+      return {
+        api,
+        app,
+        root,
+        setFees(ids: string[]) {
+          currentFees = ids
+          snapshotRev.value += 1
+        },
+        getFees() {
+          return currentFees
+        },
+      }
+    }
+
+    const tabA = mountTab(clientA)
+    try {
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+
+      // 标签页 B 推进 goerScope 修订号至 2
+      const remoteSnap = (await clientB.get('billing-desk', goerScope)) as BillingDeskSnapshot
+      await clientB.put('billing-desk', goerScope, {
+        ...remoteSnap,
+        headers: { ...remoteSnap.headers, title: '标签页B推进的修订版' },
+      })
+
+      // 标签页 A 本地编辑后切模板触发 RECOVERY_CONFLICT
+      tabA.api.headerValues.value.title = '标签页A初始冲突编辑'
+      await nextTick()
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      // 切回歌尔模板，显示冲突提示
+      tabA.api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      expect(tabA.api.hasDraftConflict.value).toBe(true)
+
+      // 在模板 A 点击「以当前页覆盖保存」
+      const overwritePromise = tabA.api.overwriteConflictedDraft()
+
+      // 等待期间切换到模板 B 并编辑（不编辑 A）
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      tabA.api.headerValues.value.title = '模板B自动保存内容'
+      tabA.api.customVolumeInput.value = 'PA-MIDEA-AUTOSAVE'
+      tabA.api.addCustomVolume()
+      await nextTick()
+
+      // 覆盖保存操作返回成功
+      const result = await overwritePromise
+      expect(result).toBe(true)
+
+      // 超过自动保存等待时间后，模板 B 的编辑必须已自动落盘
+      await vi.waitFor(async () => {
+        const headB = await authority.dispatch({ op: 'get', slot: 'billing-desk', scope: mideaScope })
+        const payloadB = headB.payload as BillingDeskSnapshot
+        expect(payloadB?.headers?.title).toBe('模板B自动保存内容')
+        expect(payloadB?.extra).toContain('PA-MIDEA-AUTOSAVE')
+      }, { timeout: 2000 })
+    } finally {
+      tabA.app.unmount()
+      tabA.root.remove()
+      visibility.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
 })

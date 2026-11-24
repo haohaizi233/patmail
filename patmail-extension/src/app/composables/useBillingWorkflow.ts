@@ -930,14 +930,15 @@ export function useBillingWorkflow(options: {
       if (getDraftSeq(targetScope) !== mySeq) {
         return true
       }
-      cancelPendingPersist()
-      const snapshotToSave =
+      const isStillOnSameTemplate =
         selectedTemplateId.value === templateId &&
         billingScope.value === accountScope &&
-        feeQueryRef.value
-          ? billingSnapshot(templateId)
-          : snapshot
-      const flushedRev = draftRevision
+        Boolean(feeQueryRef.value)
+      if (isStillOnSameTemplate) {
+        cancelPendingPersist()
+      }
+      const snapshotToSave = isStillOnSameTemplate ? billingSnapshot(templateId) : snapshot
+      const flushedRev = isStillOnSameTemplate ? draftRevision : undefined
       pendingDrafts.set(targetScope, {
         accountScope,
         templateId,
@@ -956,6 +957,8 @@ export function useBillingWorkflow(options: {
       setDraftConflict(targetScope, false)
       setRecoveryNotice(targetScope, '')
       if (
+        isStillOnSameTemplate &&
+        flushedRev !== undefined &&
         billingScope.value === accountScope &&
         selectedTemplateId.value === templateId
       ) {
