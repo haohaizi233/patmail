@@ -28,6 +28,7 @@ const {
   billingScope,
   billingOwner,
   billingFileSurface,
+  legacyBillingFileSurface,
   billingTenantKey,
   restoring,
   ready,
@@ -98,7 +99,11 @@ const {
   exportDisabled,
   exportDisabledReason,
   doExportExcel,
-  recoveryNotice
+  recoveryNotice,
+  hasDraftConflict,
+  resolvingDraftConflict,
+  overwriteConflictedDraft,
+  reloadLatestDraft
 } = useBillingWorkflow({ isActive: () => props.isActive })
 
 const VOLUME_PREVIEW_LIMIT = 40
@@ -426,7 +431,32 @@ function batchItemStatusLabel(status: string): string {
         @click="setStep(1)"
       >去步骤 1 刷新验证</button>
     </p>
-    <p v-if="recoveryNotice" class="step-notice-alert" role="status">{{ recoveryNotice }}</p>
+    <div
+      v-if="recoveryNotice"
+      class="step-notice-alert recovery-status-bar"
+      :class="{ 'is-busy': resolvingDraftConflict }"
+      role="status"
+    >
+      <span>{{ recoveryNotice }}</span>
+      <div v-if="hasDraftConflict" class="recovery-conflict-actions">
+        <button
+          type="button"
+          class="solid"
+          :disabled="resolvingDraftConflict"
+          @click="overwriteConflictedDraft"
+        >
+          以当前页覆盖保存
+        </button>
+        <button
+          type="button"
+          class="ghost"
+          :disabled="resolvingDraftConflict"
+          @click="reloadLatestDraft"
+        >
+          载入最新草稿
+        </button>
+      </div>
+    </div>
     <p v-else-if="billingScope && !confirmedScope" class="step-notice-alert" role="status">请款进度已保留，恢复同一 EASY 账号连接后可继续。</p>
 
     <!-- ============================================================== 步骤 1 -->
@@ -544,6 +574,7 @@ function batchItemStatusLabel(status: string): string {
         :workspace-user-id="billingOwner.userId"
         :show-session="false"
         :recovery-surface="billingFileSurface"
+        :legacy-recovery-surface="legacyBillingFileSurface"
         :auto-select-bills="true"
         :seed="fileSeed"
         :seed-token="fileSeedToken"
@@ -1032,13 +1063,30 @@ function batchItemStatusLabel(status: string): string {
   gap: 10px;
 }
 
-.recovered-bill-notice.is-busy {
+.recovery-status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.recovery-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.recovered-bill-notice.is-busy,
+.recovery-status-bar.is-busy {
   background: #fff8fb;
   border-left-color: var(--brand, #ff5d98);
   color: #9b3060;
 }
 
-.recovered-bill-notice .solid:disabled {
+.recovered-bill-notice .solid:disabled,
+.recovery-status-bar button:disabled {
   opacity: 0.65;
   cursor: wait;
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { createApp, h, nextTick, ref } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LARGE_CUSTOMER_ORIGIN } from '../../../src/api/config'
@@ -5,6 +7,13 @@ import type { FeeSearchRow } from '../../../src/api/fee-search-types'
 import type { BillingDeskSnapshot } from '../../../src/application/billing/billing-contracts'
 import { BillingApplicationService } from '../../../src/application/billing/billing-service'
 import { useBillingWorkflow } from '../../../src/app/composables/useBillingWorkflow'
+import { RecoveryAuthority } from '../../../src/background/recovery'
+import { createRecoveryClient } from '../../../src/recovery/client'
+import { memoryRecoveryStore, openRecoveryLedger, useRecoveryWasm } from '../../../src/recovery/wal-ledger'
+
+const nodeRequire = createRequire(import.meta.url)
+const recoveryWasm = readFileSync(nodeRequire.resolve('sql.js/dist/sql-wasm.wasm'))
+useRecoveryWasm(recoveryWasm.buffer.slice(recoveryWasm.byteOffset, recoveryWasm.byteOffset + recoveryWasm.byteLength))
 
 vi.mock('../../../src/app/composables/useWorkspace', () => ({
   useWorkspace: () => ({
@@ -26,7 +35,9 @@ vi.mock('../../../src/app/composables/useWorkspace', () => ({
 
 // 激活模板按账号持久化到 localStorage；用例间清理，避免跨用例泄漏启动模板。
 afterEach(() => {
-  localStorage.clear()
+  if (typeof globalThis.localStorage?.clear === 'function') {
+    globalThis.localStorage.clear()
+  }
 })
 
 function feeRow(overrides: Partial<FeeSearchRow> = {}): FeeSearchRow {
@@ -906,9 +917,763 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
       expect(api.headerValues.value.title).toBe('旧版美的涉外草稿')
       expect(api.activeVolumes.value).toEqual(['PA-LEGACY-1'])
       expect(api.currentStep.value).toBe(2)
+      expect(api.legacyBillingFileSurface.value).toBe('billing-files')
+      api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.legacyBillingFileSurface.value).toBe('')
     } finally {
       app.unmount()
       root.remove()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('attributes legacy billing-files surface to general-foreign when no legacy billing-desk draft exists', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.resolve(),
+      },
+    })
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.selectedTemplateId.value).toBe('general-foreign')
+      expect(api.legacyBillingFileSurface.value).toBe('billing-files')
+      api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.legacyBillingFileSurface.value).toBe('')
+    } finally {
+      app.unmount()
+      root.remove()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('retains unsaved drafts and scopes save errors per template on saveDraft failure during switch', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    const wal = new Map<string, BillingDeskSnapshot>()
+    const goerScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111', 'general-foreign'])
+    let failGoerSave = true
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      recovery: {
+        load: scope => Promise.resolve(wal.get(scope) ?? null),
+        save: (scope, snapshot) => {
+          if (scope === goerScope && failGoerSave) {
+            return Promise.reject(new Error('ledger conflict'))
+          }
+          wal.set(scope, structuredClone(snapshot))
+          return Promise.resolve()
+        },
+      },
+    })
+
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const snapshotRev = ref(0)
+    let currentFees: string[] = []
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        api.feeQueryRef.value = {
+          selectionPending: false,
+          selectionIncomplete: false,
+          get snapshotRevision() {
+            return snapshotRev.value
+          },
+          getKnownRows: () => [],
+          replaceBillingSelection: () => {},
+          billingSnapshot: () => ({ selectedIds: [...currentFees] }),
+          restoreBillingSnapshot: raw => {
+            const obj = raw as { selectedIds?: string[] } | undefined
+            currentFees = [...(obj?.selectedIds ?? [])]
+          },
+        }
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      api.headerValues.value.title = '未落盘歌尔草稿'
+      api.customVolumeInput.value = 'PA-PENDING-1'
+      api.addCustomVolume()
+      await api.setStep(2)
+      currentFees = ['pending-fee-1']
+      snapshotRev.value += 1
+      await nextTick()
+
+      // 切换模板触发异步保存并在失败后，不应在新模板页显示错误提示
+      api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      await Promise.resolve()
+      await nextTick()
+      expect(wal.has(goerScope)).toBe(false)
+      expect(api.recoveryNotice.value).toBe('')
+
+      // 切回歌尔模板应从待写缓存恢复未落盘的编辑，且保留失败提示直至重试成功
+      api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.headerValues.value.title).toBe('未落盘歌尔草稿')
+      expect(api.activeVolumes.value).toEqual(['PA-PENDING-1'])
+      expect(api.currentStep.value).toBe(2)
+      expect(currentFees).toEqual(['pending-fee-1'])
+      expect(api.recoveryNotice.value).toContain('请款草稿未能保存')
+
+      failGoerSave = false
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.waitFor(() => expect(wal.get(goerScope)?.headers.title).toBe('未落盘歌尔草稿'))
+      await vi.waitFor(() => expect(api.recoveryNotice.value).toBe(''))
+    } finally {
+      app.unmount()
+      root.remove()
+      visibility.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('isolates in-flight export progress, warnings, and batch receipts to the originating template', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    let notifyFillEntered!: () => void
+    const fillEntered = new Promise<void>(resolve => {
+      notifyFillEntered = resolve
+    })
+    let releaseFill!: () => void
+    const fillGate = new Promise<void>(resolve => {
+      releaseFill = resolve
+    })
+    let fillCount = 0
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        async fill(_id, _bytes, input) {
+          fillCount += 1
+          if (fillCount === 1) notifyFillEntered()
+          await fillGate
+          return {
+            bytes: new Uint8Array([1]),
+            fileName: `${input.fileNameSuffix ?? 'out'}.xlsx`,
+            blockCount: 1,
+            warnings: ['源模板导出提示'],
+          }
+        },
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: req =>
+          Promise.resolve({
+            status: 'download_completed' as const,
+            downloadId: 31,
+            fileName: req.fileName,
+            savedFileName: req.fileName,
+            blockCount: 1,
+            warnings: req.warnings,
+          }),
+      },
+      recovery: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.resolve(),
+      },
+    })
+
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.selectedTemplateId.value).toBe('general-foreign')
+      api.onFeeSelectionChange([
+        feeRow({ feeId: 'g-1', caseVolume: 'PA01', currency: 'CNY', customerName: '客户甲' }),
+        feeRow({ feeId: 'g-2', caseVolume: 'PA02', currency: 'CNY', customerName: '客户乙' }),
+      ])
+      void api.setStep(3)
+      await nextTick()
+
+      const exportPromise = api.doExportExcel()
+      await fillEntered
+      expect(api.exporting.value).toBe(true)
+      expect(api.exportResultNotice.value).toContain('正在按客户流水线并发导出 2 份')
+
+      // 导出途中切到美的 PCT，新模板页必须保持干净，不受上一模板在途进度和完成回执影响
+      api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.exporting.value).toBe(false)
+      expect(api.exportProgress.value).toBeNull()
+      expect(api.exportResultNotice.value).toBe('')
+      expect(api.exportWarnings.value).toEqual([])
+      expect(api.exportBatchItems.value).toEqual([])
+
+      releaseFill()
+      await exportPromise
+      await nextTick()
+
+      expect(api.selectedTemplateId.value).toBe('midea-pct')
+      expect(api.exporting.value).toBe(false)
+      expect(api.exportProgress.value).toBeNull()
+      expect(api.exportResultNotice.value).toBe('')
+      expect(api.exportWarnings.value).toEqual([])
+      expect(api.exportBatchItems.value).toEqual([])
+
+      // 切回歌尔涉外模板后应能看到该次导出的完成回执与分表明细
+      api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.exporting.value).toBe(false)
+      expect(api.exportResultNotice.value).toContain('已按客户分表批量导出 2/2 份')
+      expect(api.exportWarnings.value).toEqual(['【客户甲】源模板导出提示', '【客户乙】源模板导出提示'])
+      expect(api.exportBatchItems.value.map(item => item.customer)).toEqual(['客户甲', '客户乙'])
+    } finally {
+      app.unmount()
+      root.remove()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('does not authorize general-foreign to migrate legacy billing-files when reading legacy billing-desk fails', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    const legacyScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111'])
+    let legacyReadFails = true
+    const mideaLegacyDraft: BillingDeskSnapshot = {
+      version: 1,
+      template: 'midea-foreign',
+      step: 1,
+      headers: { title: '美的涉外旧草稿' },
+      options: { reviewFee: 0, bankFee: 0 },
+      extra: [],
+      excluded: [],
+      volumeInput: '',
+      bills: {},
+      syncKey: 'midea-foreign\u0001',
+      rates: {},
+      clearedRates: {},
+      rateDate: '',
+    }
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      recovery: {
+        load: scope => {
+          if (scope === legacyScope) {
+            return legacyReadFails
+              ? Promise.reject(new Error('SQLite temporary read failure'))
+              : Promise.resolve(mideaLegacyDraft)
+          }
+          return Promise.resolve(null)
+        },
+        save: () => Promise.resolve(),
+      },
+    })
+
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.selectedTemplateId.value).toBe('general-foreign')
+      expect(api.legacyBillingFileSurface.value).toBe('')
+
+      api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.legacyBillingFileSurface.value).toBe('')
+
+      // 恢复后再次切回/切换模板，才能按实际归属授权对应模板迁移
+      legacyReadFails = false
+      api.selectedTemplateId.value = 'midea-foreign'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.legacyBillingFileSurface.value).toBe('billing-files')
+
+      api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.legacyBillingFileSurface.value).toBe('')
+    } finally {
+      app.unmount()
+      root.remove()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('resolves cross-tab RECOVERY_CONFLICT against real RecoveryLedger via overwrite or reload without losing edits', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+
+    const ledgerStore = memoryRecoveryStore()
+    const authority = new RecoveryAuthority(() => openRecoveryLedger(ledgerStore))
+    const clientA = createRecoveryClient(request => authority.dispatch(request))
+    const clientB = createRecoveryClient(request => authority.dispatch(request))
+
+    const serviceFor = (client: ReturnType<typeof createRecoveryClient>) =>
+      new BillingApplicationService({
+        templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+        spreadsheet: {
+          fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+        },
+        exchangeRates: {
+          fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+        },
+        downloads: {
+          download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+        },
+        recovery: {
+          load: async scope => {
+            const raw = await client.get('billing-desk', scope)
+            return raw && typeof raw === 'object' ? (raw as BillingDeskSnapshot) : null
+          },
+          save: async (scope, snapshot) => {
+            await client.put('billing-desk', scope, snapshot)
+          },
+        },
+      })
+
+    const goerScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111', 'general-foreign'])
+    const mountTab = (client: ReturnType<typeof createRecoveryClient>) => {
+      let api!: ReturnType<typeof useBillingWorkflow>
+      const snapshotRev = ref(0)
+      let currentFees: string[] = []
+      const root = document.createElement('div')
+      const app = createApp({
+        setup() {
+          api = useBillingWorkflow({ service: serviceFor(client) })
+          api.feeQueryRef.value = {
+            selectionPending: false,
+            selectionIncomplete: false,
+            get snapshotRevision() {
+              return snapshotRev.value
+            },
+            getKnownRows: () => [],
+            replaceBillingSelection: () => {},
+            billingSnapshot: () => ({ selectedIds: [...currentFees] }),
+            restoreBillingSnapshot: raw => {
+              const obj = raw as { selectedIds?: string[] } | undefined
+              currentFees = [...(obj?.selectedIds ?? [])]
+            },
+          }
+          return () => h('div')
+        },
+      })
+      app.mount(root)
+      return {
+        api,
+        app,
+        root,
+        setFees(ids: string[]) {
+          currentFees = ids
+          snapshotRev.value += 1
+        },
+        getFees() {
+          return currentFees
+        },
+      }
+    }
+
+    const tabA = mountTab(clientA)
+    try {
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      tabA.api.headerValues.value.title = '标签页A第一版'
+      await nextTick()
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      await vi.waitFor(async () => {
+        const reply = await authority.dispatch({ op: 'get', slot: 'billing-desk', scope: goerScope })
+        expect((reply.payload as BillingDeskSnapshot | null)?.headers.title).toBe('标签页A第一版')
+      })
+
+      tabA.api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+
+      // 另一标签页 B 在真实恢复账本推进 goerScope 的修订号
+      const remoteSnap = (await clientB.get('billing-desk', goerScope)) as BillingDeskSnapshot
+      await clientB.put('billing-desk', goerScope, {
+        ...remoteSnap,
+        headers: { ...remoteSnap.headers, title: '标签页B最新保存' },
+        extra: ['PA-FROM-B-V2'],
+      })
+
+      // 标签页 A 编辑并切换模板：saveDraft 提交过期修订号并触发 RECOVERY_CONFLICT
+      tabA.api.headerValues.value.title = '标签页A未保存覆盖版'
+      tabA.api.customVolumeInput.value = 'PA-CONFLICT-A'
+      tabA.api.addCustomVolume()
+      await tabA.api.setStep(2)
+      tabA.setFees(['conflict-fee-a'])
+      await nextTick()
+
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(tabA.api.hasDraftConflict.value).toBe(false)
+      expect(tabA.api.recoveryNotice.value).toBe('')
+
+      // 后台自动重试不得静默覆盖标签页 B
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise(resolve => setTimeout(resolve, 20))
+      const afterHidden = await authority.dispatch({ op: 'get', slot: 'billing-desk', scope: goerScope })
+      expect((afterHidden.payload as BillingDeskSnapshot).headers.title).toBe('标签页B最新保存')
+
+      // 切回歌尔模板应保留未保存修改与冲突操作入口
+      tabA.api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      expect(tabA.api.headerValues.value.title).toBe('标签页A未保存覆盖版')
+      expect(tabA.api.activeVolumes.value).toEqual(['PA-CONFLICT-A'])
+      expect(tabA.getFees()).toEqual(['conflict-fee-a'])
+      expect(tabA.api.hasDraftConflict.value).toBe(true)
+      expect(tabA.api.recoveryNotice.value).toContain('其他标签页更新')
+
+      // 路径 1：以当前页覆盖保存，刷新修订号并持久化，新开客户端/重启后可恢复
+      const overwritten = await tabA.api.overwriteConflictedDraft()
+      expect(overwritten).toBe(true)
+      expect(tabA.api.hasDraftConflict.value).toBe(false)
+      expect(tabA.api.recoveryNotice.value).toBe('')
+
+      const coldTab = mountTab(createRecoveryClient(request => authority.dispatch(request)))
+      try {
+        await vi.waitFor(() => expect(coldTab.api.ready.value).toBe(true))
+        expect(coldTab.api.headerValues.value.title).toBe('标签页A未保存覆盖版')
+        expect(coldTab.api.activeVolumes.value).toEqual(['PA-CONFLICT-A'])
+        expect(coldTab.getFees()).toEqual(['conflict-fee-a'])
+      } finally {
+        coldTab.app.unmount()
+        coldTab.root.remove()
+      }
+
+      // 路径 2：再次制造跨页冲突，使用「载入最新草稿」对齐 B 后继续编辑并保存
+      const latestForB = (await clientB.get('billing-desk', goerScope)) as BillingDeskSnapshot
+      await clientB.put('billing-desk', goerScope, {
+        ...latestForB,
+        step: 2,
+        headers: { ...latestForB.headers, title: '标签页B二次更新' },
+        extra: ['PA-FROM-B'],
+        syncKey: 'general-foreign\u0001PA-FROM-B',
+        fees: { selectedIds: ['fee-from-b'] },
+      })
+
+      tabA.api.headerValues.value.title = '将被放弃的A本地修改'
+      await nextTick()
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      tabA.api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      expect(tabA.api.headerValues.value.title).toBe('将被放弃的A本地修改')
+      expect(tabA.api.hasDraftConflict.value).toBe(true)
+
+      const reloaded = await tabA.api.reloadLatestDraft()
+      expect(reloaded).toBe(true)
+      expect(tabA.api.hasDraftConflict.value).toBe(false)
+      expect(tabA.api.recoveryNotice.value).toBe('')
+      expect(tabA.api.headerValues.value.title).toBe('标签页B二次更新')
+      expect(tabA.api.activeVolumes.value).toEqual(['PA-FROM-B'])
+      expect(tabA.getFees()).toEqual(['fee-from-b'])
+
+      // 对齐修订号后继续编辑切出，可直接无冲突落盘
+      tabA.api.headerValues.value.title = '载入后继续编辑保存'
+      await nextTick()
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      await vi.waitFor(async () => {
+        const finalHead = await authority.dispatch({ op: 'get', slot: 'billing-desk', scope: goerScope })
+        expect((finalHead.payload as BillingDeskSnapshot).headers.title).toBe('载入后继续编辑保存')
+      })
+    } finally {
+      tabA.app.unmount()
+      tabA.root.remove()
+      visibility.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('does not overwrite newly persisted edits when form is edited and template switched during overwriteConflictedDraft', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+
+    const ledgerStore = memoryRecoveryStore()
+    const authority = new RecoveryAuthority(() => openRecoveryLedger(ledgerStore))
+    const clientA = createRecoveryClient(request => authority.dispatch(request))
+    const clientB = createRecoveryClient(request => authority.dispatch(request))
+
+    const serviceFor = (client: ReturnType<typeof createRecoveryClient>) =>
+      new BillingApplicationService({
+        templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+        spreadsheet: {
+          fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+        },
+        exchangeRates: {
+          fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+        },
+        downloads: {
+          download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+        },
+        recovery: {
+          load: async scope => {
+            const raw = await client.get('billing-desk', scope)
+            return raw && typeof raw === 'object' ? (raw as BillingDeskSnapshot) : null
+          },
+          save: async (scope, snapshot) => {
+            await client.put('billing-desk', scope, snapshot)
+          },
+        },
+      })
+
+    const goerScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111', 'general-foreign'])
+
+    await clientB.put('billing-desk', goerScope, {
+      version: 1,
+      template: 'general-foreign',
+      step: 1,
+      headers: { title: '初始草稿' },
+      options: { reviewFee: 0, bankFee: 0 },
+      allowMixedCustomers: false,
+      extra: [],
+      excluded: [],
+      volumeInput: '',
+      bills: {},
+      syncKey: '',
+      rates: {},
+      clearedRates: {},
+      rateDate: '',
+    })
+
+    vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+      cb()
+      return 1
+    })
+
+    function mountTab(client: ReturnType<typeof createRecoveryClient>) {
+      let api!: ReturnType<typeof useBillingWorkflow>
+      const snapshotRev = ref(0)
+      let currentFees: string[] = []
+      const root = document.createElement('div')
+      const app = createApp({
+        setup() {
+          api = useBillingWorkflow({ service: serviceFor(client) })
+          api.feeQueryRef.value = {
+            selectionPending: false,
+            selectionIncomplete: false,
+            get snapshotRevision() {
+              return snapshotRev.value
+            },
+            getKnownRows: () => [],
+            replaceBillingSelection: () => {},
+            billingSnapshot: () => ({ selectedIds: [...currentFees] }),
+            restoreBillingSnapshot: raw => {
+              const obj = raw as { selectedIds?: string[] } | undefined
+              currentFees = [...(obj?.selectedIds ?? [])]
+            },
+          }
+          return () => h('div')
+        },
+      })
+      app.mount(root)
+      return {
+        api,
+        app,
+        root,
+        setFees(ids: string[]) {
+          currentFees = ids
+          snapshotRev.value += 1
+        },
+        getFees() {
+          return currentFees
+        },
+      }
+    }
+
+    const tabA = mountTab(clientA)
+    try {
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+
+      // 标签页 B 推进 goerScope 修订号至 2
+      const remoteSnap = (await clientB.get('billing-desk', goerScope)) as BillingDeskSnapshot
+      await clientB.put('billing-desk', goerScope, {
+        ...remoteSnap,
+        headers: { ...remoteSnap.headers, title: '标签页B推进的修订版' },
+      })
+
+      // 标签页 A 本地编辑后切模板触发 RECOVERY_CONFLICT
+      tabA.api.headerValues.value.title = '标签页A初始冲突编辑'
+      await nextTick()
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      // 切回歌尔模板，显示冲突提示
+      tabA.api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+      expect(tabA.api.hasDraftConflict.value).toBe(true)
+
+      // 点击「以当前页覆盖保存」
+      const overwritePromise = tabA.api.overwriteConflictedDraft()
+
+      // 覆盖保存尚未完成时，用户在同一模板继续编辑并切换模板
+      tabA.api.headerValues.value.title = '覆盖保存中途最新编辑'
+      tabA.api.customVolumeInput.value = 'PA-RACE-SURVIVOR'
+      tabA.api.addCustomVolume()
+      await nextTick()
+      tabA.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(tabA.api.ready.value).toBe(true))
+
+      // 覆盖保存返回成功
+      const result = await overwritePromise
+      expect(result).toBe(true)
+
+      // 恢复账本中必须保存的是最新编辑，不能被旧快照覆盖
+      await vi.waitFor(async () => {
+        const head = await authority.dispatch({ op: 'get', slot: 'billing-desk', scope: goerScope })
+        const payload = head.payload as BillingDeskSnapshot
+        expect(payload.headers.title).toBe('覆盖保存中途最新编辑')
+        expect(payload.extra).toContain('PA-RACE-SURVIVOR')
+      })
+
+      // 新开冷标签页切回歌尔模板，验证恢复出的是最新编辑
+      const coldTab = mountTab(createRecoveryClient(request => authority.dispatch(request)))
+      try {
+        await vi.waitFor(() => expect(coldTab.api.ready.value).toBe(true))
+        coldTab.api.selectedTemplateId.value = 'general-foreign'
+        await vi.waitFor(() => expect(coldTab.api.ready.value).toBe(true))
+        expect(coldTab.api.headerValues.value.title).toBe('覆盖保存中途最新编辑')
+        expect(coldTab.api.activeVolumes.value).toContain('PA-RACE-SURVIVOR')
+      } finally {
+        coldTab.app.unmount()
+        coldTab.root.remove()
+      }
+    } finally {
+      tabA.app.unmount()
+      tabA.root.remove()
+      visibility.mockRestore()
       vi.unstubAllGlobals()
     }
   })

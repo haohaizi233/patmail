@@ -448,26 +448,73 @@ try {
   assert.equal(wordCountRequests, 1, 'restoring the draft does not repeat the fee query')
   report.pass('billing keeps step three and restores draft after tab switch, navigation and reload')
 
-  const saved = await app.evaluate(async origin => {
-    const owner = [origin, '11111111-1111-1111-1111-111111111111', 'billing-files:general-foreign']
-    const scope = JSON.stringify(owner)
+  const legacySeeded = await app.evaluate(async origin => {
+    const userId = '11111111-1111-1111-1111-111111111111'
+    const legacyOwner = [origin, userId, 'billing-files']
+    const legacyScope = JSON.stringify(legacyOwner)
+    const templateScope = JSON.stringify([origin, userId, 'billing-files:general-foreign'])
     const send = request => chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request })
-    const previous = await send({ op: 'get', slot: 'file-query', scope })
-    return send({ op: 'put', slot: 'file-query', scope, expectedRevision: previous.value?.revision ?? 0, payload: {
-      version: 1, owner, query: { caseVolume: 'BILL-RECOVERY', pageIndex: 1, pageSize: 100 }, result: null,
+    const prevTemplate = await send({ op: 'get', slot: 'file-query', scope: templateScope })
+    if (prevTemplate.value?.payload) {
+      await send({
+        op: 'put',
+        slot: 'file-query',
+        scope: templateScope,
+        expectedRevision: prevTemplate.value?.revision ?? 0,
+        payload: { forgotten: true },
+      })
+    }
+    const prevLegacy = await send({ op: 'get', slot: 'file-query', scope: legacyScope })
+    return send({ op: 'put', slot: 'file-query', scope: legacyScope, expectedRevision: prevLegacy.value?.revision ?? 0, payload: {
+      version: 1, owner: legacyOwner, query: { caseVolume: 'LEGACY-BILL-RECOVERY', pageIndex: 1, pageSize: 100 }, result: null,
       selected: {}, form: null, downloadSelection: null, stripAppNoDot: true, pageSize: 100,
       templateName: '', readPages: [], activeTask: null,
     } })
   }, new URL(easyUrl).origin)
-  assert.equal(saved.ok, true)
+  assert.equal(legacySeeded.ok, true)
   await app.reload()
   await app.locator('.flow-steps-bar .step-item').first().click()
   const recoveredRefresh = app.getByRole('button', { name: '刷新验证账单', exact: true })
   await recoveredRefresh.waitFor()
-  assert.equal(recoveredBillQueries, 0, 'restoring the saved query must not dispatch automatically')
+  await app.waitForFunction(async origin => {
+    const userId = '11111111-1111-1111-1111-111111111111'
+    const send = request => chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request })
+    const legacy = await send({ op: 'get', slot: 'file-query', scope: JSON.stringify([origin, userId, 'billing-files']) })
+    const migrated = await send({ op: 'get', slot: 'file-query', scope: JSON.stringify([origin, userId, 'billing-files:general-foreign']) })
+    return legacy?.value?.payload == null &&
+      migrated?.value?.payload?.query?.caseVolume === 'LEGACY-BILL-RECOVERY' &&
+      migrated?.value?.payload?.owner?.[2] === 'billing-files:general-foreign'
+  }, new URL(easyUrl).origin)
+  assert.equal(recoveredBillQueries, 0, 'migrating legacy billing-files must not dispatch automatically')
   await recoveredRefresh.click()
   await app.locator('.recovered-bill-notice').waitFor({ state: 'hidden' })
   assert.equal(recoveredBillQueries, 1)
+  report.pass('legacy billing-files WAL entry migrates on upgrade and restores refresh verification')
+
+  await app.waitForTimeout(250)
+  const saved = await app.evaluate(async origin => {
+    const owner = [origin, '11111111-1111-1111-1111-111111111111', 'billing-files:general-foreign']
+    const scope = JSON.stringify(owner)
+    const send = request => chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const previous = await send({ op: 'get', slot: 'file-query', scope })
+      const res = await send({ op: 'put', slot: 'file-query', scope, expectedRevision: previous.value?.revision ?? 0, payload: {
+        version: 1, owner, query: { caseVolume: 'BILL-RECOVERY', pageIndex: 1, pageSize: 100 }, result: null,
+        selected: {}, form: null, downloadSelection: null, stripAppNoDot: true, pageSize: 100,
+        templateName: '', readPages: [], activeTask: null,
+      } })
+      if (res?.ok) return res
+    }
+    return { ok: false }
+  }, new URL(easyUrl).origin)
+  assert.equal(saved.ok, true)
+  await app.reload()
+  await app.locator('.flow-steps-bar .step-item').first().click()
+  await recoveredRefresh.waitFor()
+  assert.equal(recoveredBillQueries, 1, 'restoring the saved query must not dispatch automatically')
+  await recoveredRefresh.click()
+  await app.locator('.recovered-bill-notice').waitFor({ state: 'hidden' })
+  assert.equal(recoveredBillQueries, 2)
   report.pass('WAL-restored bill query can be verified from the top of step one')
 
   // 使用说明：请款.md 的 mermaid 图完整渲染且无错误

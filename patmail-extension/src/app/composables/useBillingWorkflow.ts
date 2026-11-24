@@ -119,7 +119,18 @@ export function useBillingWorkflow(options: {
 
   const selectedTemplateId = ref<BillingTemplateId>('general-foreign')
   const billingFileSurface = computed(() => `billing-files:${selectedTemplateId.value}`)
+  const legacyFileSurfaceOwner = ref<BillingTemplateId | ''>('')
+  const legacyBillingFileSurface = computed(() =>
+    legacyFileSurfaceOwner.value && selectedTemplateId.value === legacyFileSurfaceOwner.value
+      ? 'billing-files'
+      : '',
+  )
   const billingTenantKey = computed(() => (billingScope.value ? `${billingScope.value}:${selectedTemplateId.value}` : ''))
+  const currentTenantScope = computed(() =>
+    billingScope.value
+      ? templateDraftScope(billingOwner.value.origin, billingOwner.value.userId, selectedTemplateId.value)
+      : '',
+  )
   const currentTemplate = computed(
     () => BILLING_TEMPLATES.find(t => t.id === selectedTemplateId.value) ?? BILLING_TEMPLATES[0],
   )
@@ -461,10 +472,57 @@ export function useBillingWorkflow(options: {
     computeBillingReconciliation(selectedTemplateId.value, selectedFeeRows.value, billMap.value),
   )
 
-  const exporting = ref(false)
-  const exportResultNotice = ref('')
-  const exportWarnings = ref<string[]>([])
-  const exportBatchItems = ref<BatchExportItemOutcome[]>([])
+  interface TemplateExportState {
+    exporting: boolean
+    progress: BatchExportProgress | null
+    resultNotice: string
+    warnings: string[]
+    batchItems: BatchExportItemOutcome[]
+  }
+
+  const EMPTY_EXPORT_STATE: TemplateExportState = {
+    exporting: false,
+    progress: null,
+    resultNotice: '',
+    warnings: [],
+    batchItems: [],
+  }
+
+  const exportScopeKey = computed(() => currentTenantScope.value || `__unbound__:${selectedTemplateId.value}`)
+  const exportStates = shallowRef<Record<string, TemplateExportState>>({})
+
+  function getExportState(scopeKey: string): TemplateExportState {
+    return exportStates.value[scopeKey] ?? EMPTY_EXPORT_STATE
+  }
+
+  function patchExportState(scopeKey: string, patch: Partial<TemplateExportState>): void {
+    const current = getExportState(scopeKey)
+    exportStates.value = {
+      ...exportStates.value,
+      [scopeKey]: { ...current, ...patch },
+    }
+  }
+
+  const exporting = computed<boolean>({
+    get: () => getExportState(exportScopeKey.value).exporting,
+    set: value => patchExportState(exportScopeKey.value, { exporting: value }),
+  })
+  const exportProgress = computed<BatchExportProgress | null>({
+    get: () => getExportState(exportScopeKey.value).progress,
+    set: value => patchExportState(exportScopeKey.value, { progress: value }),
+  })
+  const exportResultNotice = computed<string>({
+    get: () => getExportState(exportScopeKey.value).resultNotice,
+    set: value => patchExportState(exportScopeKey.value, { resultNotice: value }),
+  })
+  const exportWarnings = computed<string[]>({
+    get: () => getExportState(exportScopeKey.value).warnings,
+    set: value => patchExportState(exportScopeKey.value, { warnings: value }),
+  })
+  const exportBatchItems = computed<BatchExportItemOutcome[]>({
+    get: () => getExportState(exportScopeKey.value).batchItems,
+    set: value => patchExportState(exportScopeKey.value, { batchItems: value }),
+  })
   const confirmExistingFees = ref(false)
   const canAdvanceFromFees = computed(
     () =>
@@ -497,13 +555,19 @@ export function useBillingWorkflow(options: {
     if (confirmReasons.length) return `请先完成确认：${confirmReasons.join('；')}。`
     return ''
   })
-  watch(selectedFeeRows, () => {
-    confirmExistingFees.value = false
-    exportResultNotice.value = ''
-    exportWarnings.value = []
-    exportBatchItems.value = []
-  })
-  const exportProgress = ref<BatchExportProgress | null>(null)
+  watch(
+    selectedFeeRows,
+    () => {
+      confirmExistingFees.value = false
+      if (restoring.value) return
+      patchExportState(exportScopeKey.value, {
+        resultNotice: '',
+        warnings: [],
+        batchItems: [],
+      })
+    },
+    { flush: 'sync' },
+  )
   const exportParameters = computed(() => {
     const today = formatLocalDate()
     const foreign = needsForeignRates.value
@@ -527,15 +591,29 @@ export function useBillingWorkflow(options: {
   })
 
   async function doExportExcel(): Promise<void> {
-    if (exporting.value) return
+    const jobTemplateId = selectedTemplateId.value
+    const jobScope = exportScopeKey.value
+    if (getExportState(jobScope).exporting) return
     if (needsForeignRates.value && ratesLoading.value) return
-    exporting.value = true
+    const initialAccount = connection.value.operatorId
+    const initialOrigin = connection.value.easyOrigin
+    const initialBillingScope = billingScope.value
+    patchExportState(jobScope, { exporting: true })
     try {
       if (canAutoRevalidateRecoveredBills.value || revalidatingBillsTask) {
-        exportResultNotice.value = '正在自动验证已恢复的账单查询…'
+        patchExportState(jobScope, { resultNotice: '正在自动验证已恢复的账单查询…' })
         await revalidateRecoveredBills()
       }
-      const templateId = selectedTemplateId.value
+      if (
+        selectedTemplateId.value !== jobTemplateId ||
+        connection.value.operatorId !== initialAccount ||
+        connection.value.easyOrigin !== initialOrigin ||
+        billingScope.value !== initialBillingScope
+      ) {
+        patchExportState(jobScope, { resultNotice: '请款范围已变化，请核对后重新导出。' })
+        return
+      }
+      const templateId = jobTemplateId
       const rows = selectedFeeRows.value
       const bills = billMap.value
       const account = connection.value.operatorId
@@ -551,21 +629,30 @@ export function useBillingWorkflow(options: {
       })
       const selectionIssue = billingExportSelectionIssue(selection())
       if (selectionIssue) {
-        exportResultNotice.value = selectionIssue
+        patchExportState(jobScope, { resultNotice: selectionIssue })
         return
       }
-      const selectionChanged = () =>
-        selectedTemplateId.value !== templateId ||
-        selectedFeeRows.value !== rows ||
+      const accountOrScopeChanged = () =>
         connection.value.operatorId !== account ||
         connection.value.easyOrigin !== origin ||
-        billingScope.value !== scope ||
+        billingScope.value !== scope
+      const preStartSelectionChanged = () =>
+        selectedTemplateId.value !== templateId ||
+        selectedFeeRows.value !== rows ||
+        accountOrScopeChanged() ||
         billMap.value !== bills ||
         Boolean(billingExportSelectionIssue(selection()))
+      const activeJobSelectionChanged = () =>
+        accountOrScopeChanged() ||
+        (selectedTemplateId.value === templateId &&
+          !restoring.value &&
+          (selectedFeeRows.value !== rows ||
+            billMap.value !== bills ||
+            Boolean(billingExportSelectionIssue(selection()))))
 
       if (needsForeignRates.value) await loadPbcRates()
-      if (selectionChanged()) {
-        exportResultNotice.value = '请款范围已变化，请核对后重新导出。'
+      if (preStartSelectionChanged()) {
+        patchExportState(jobScope, { resultNotice: '请款范围已变化，请核对后重新导出。' })
         return
       }
       const parameters = exportParameters.value
@@ -575,8 +662,10 @@ export function useBillingWorkflow(options: {
       let latestProgressNotice = ''
       const exportProgressCoalescer = createLeadingFrameCoalescer(() => {
         if (!latestProgress) return
-        exportProgress.value = latestProgress
-        exportResultNotice.value = latestProgressNotice
+        patchExportState(jobScope, {
+          progress: latestProgress,
+          resultNotice: latestProgressNotice,
+        })
       })
       const exportCommand = {
         templateId, rows, bills, parameters, ...selection(),
@@ -600,48 +689,79 @@ export function useBillingWorkflow(options: {
               : `正在顺序触发下载 ${downloaded}/${progress.total}（已生成 ${generated}/${progress.total}，当前：${progress.currentCustomer}）…`
           exportProgressCoalescer.trigger(phaseChanged)
         },
-        isStale: () => selectionChanged() || JSON.stringify(exportParameters.value) !== parametersJson,
+        isStale: () =>
+          activeJobSelectionChanged() ||
+          (selectedTemplateId.value === templateId &&
+            !restoring.value &&
+            JSON.stringify(exportParameters.value) !== parametersJson),
       }
       const precheck = validateBillingExportPreconditions(exportCommand)
       if (!precheck.ok) {
-        exportResultNotice.value = precheck.needsRateRefresh && ratesError.value ? ratesError.value : precheck.reason
+        patchExportState(jobScope, {
+          resultNotice: precheck.needsRateRefresh && ratesError.value ? ratesError.value : precheck.reason,
+        })
         return
       }
-      exportProgress.value = null
       const splitCount = !parameters.allowMixedCustomers && selectedCustomerGroups.value.length > 1
         ? selectedCustomerGroups.value.length
         : 0
-      exportResultNotice.value = splitCount
-        ? `正在按客户流水线并发导出 ${splitCount} 份 Excel 请款表…`
-        : '正在生成 Excel 请款表…'
-      exportWarnings.value = []
-      exportBatchItems.value = []
+      patchExportState(jobScope, {
+        progress: null,
+        resultNotice: splitCount
+          ? `正在按客户流水线并发导出 ${splitCount} 份 Excel 请款表…`
+          : '正在生成 Excel 请款表…',
+        warnings: [],
+        batchItems: [],
+      })
       try {
         const { outcome } = await service.exportBilling(exportCommand)
+        const outcomePatch: Partial<TemplateExportState> = {
+          resultNotice: formatExportOutcomeNotice(outcome),
+        }
         if (
           outcome.status === 'download_started' ||
           outcome.status === 'download_completed' ||
           outcome.status === 'generated' ||
           outcome.status === 'batch_completed'
         ) {
-          exportWarnings.value = outcome.warnings
+          outcomePatch.warnings = outcome.warnings
         }
         if (outcome.status === 'batch_completed') {
-          exportBatchItems.value = outcome.items
+          outcomePatch.batchItems = outcome.items
         }
-        exportResultNotice.value = formatExportOutcomeNotice(outcome)
+        patchExportState(jobScope, outcomePatch)
       } finally {
         exportProgressCoalescer.cancel()
       }
     } catch (err) {
-      exportResultNotice.value = err instanceof Error ? err.message : '请款表生成失败'
+      patchExportState(jobScope, {
+        resultNotice: err instanceof Error ? err.message : '请款表生成失败',
+      })
     } finally {
-      exportProgress.value = null
-      exporting.value = false
+      patchExportState(jobScope, {
+        progress: null,
+        exporting: false,
+      })
     }
   }
 
   watch(shouldWatchRates, active => { if (active) checkRatesWhileVisible() }, { immediate: true })
+
+  interface PendingBillingDraft {
+    accountScope: string
+    templateId: BillingTemplateId
+    snapshot: BillingDeskSnapshot
+    failed: boolean
+    conflict: boolean
+  }
+
+  type LegacyDraftLookup =
+    | { ok: true; draft: BillingDeskSnapshot | null }
+    | { ok: false; draft: null }
+
+  function isRecoveryConflictError(err: unknown): boolean {
+    return err instanceof Error && err.message.includes('RECOVERY_CONFLICT')
+  }
 
   let persistTimer: ReturnType<typeof setTimeout> | undefined
   let persistIdleId: number | undefined
@@ -651,7 +771,38 @@ export function useBillingWorkflow(options: {
   let restoreGeneration = 0
   let legacyDraftScopeChecked = ''
   let cachedLegacyDraft: BillingDeskSnapshot | null = null
-  const recoveryNotice = ref('')
+  const pendingDrafts = new Map<string, PendingBillingDraft>()
+  const recoveryNoticeByScope = ref<Record<string, string>>({})
+  const draftConflictByScope = ref<Record<string, boolean>>({})
+  const resolvingDraftConflict = ref(false)
+
+  function setRecoveryNotice(scopeKey: string, message: string): void {
+    if (!scopeKey) return
+    const next = { ...recoveryNoticeByScope.value }
+    if (message) next[scopeKey] = message
+    else delete next[scopeKey]
+    recoveryNoticeByScope.value = next
+  }
+
+  function setDraftConflict(scopeKey: string, conflicted: boolean): void {
+    if (!scopeKey) return
+    const next = { ...draftConflictByScope.value }
+    if (conflicted) next[scopeKey] = true
+    else delete next[scopeKey]
+    draftConflictByScope.value = next
+  }
+
+  const recoveryNotice = computed<string>({
+    get: () => (currentTenantScope.value ? (recoveryNoticeByScope.value[currentTenantScope.value] ?? '') : ''),
+    set: value => {
+      if (!currentTenantScope.value) return
+      setRecoveryNotice(currentTenantScope.value, value)
+    },
+  })
+
+  const hasDraftConflict = computed(() =>
+    Boolean(currentTenantScope.value && draftConflictByScope.value[currentTenantScope.value]),
+  )
 
   function cancelPendingPersist(): void {
     clearTimeout(persistTimer)
@@ -682,6 +833,65 @@ export function useBillingWorkflow(options: {
     })
   }
 
+  const draftSeqByScope = new Map<string, number>()
+  function getDraftSeq(scopeKey: string): number {
+    return draftSeqByScope.get(scopeKey) ?? 0
+  }
+  function bumpDraftSeq(scopeKey: string): number {
+    const next = getDraftSeq(scopeKey) + 1
+    draftSeqByScope.set(scopeKey, next)
+    return next
+  }
+
+  function persistDraftSnapshot(
+    targetScope: string,
+    accountScope: string,
+    templateId: BillingTemplateId,
+    snapshot: BillingDeskSnapshot,
+    flushedRev?: number,
+  ): void {
+    const seq = bumpDraftSeq(targetScope)
+    pendingDrafts.set(targetScope, { accountScope, templateId, snapshot, failed: false, conflict: false })
+    setRecoveryNotice(targetScope, '')
+    setDraftConflict(targetScope, false)
+    void service
+      .saveDraft(targetScope, snapshot)
+      .then(() => {
+        if (getDraftSeq(targetScope) !== seq) return
+        const current = pendingDrafts.get(targetScope)
+        if (current && current.snapshot === snapshot) {
+          pendingDrafts.delete(targetScope)
+          setRecoveryNotice(targetScope, '')
+          setDraftConflict(targetScope, false)
+        }
+      })
+      .catch(err => {
+        if (getDraftSeq(targetScope) !== seq) return
+        const conflict = isRecoveryConflictError(err)
+        const current = pendingDrafts.get(targetScope)
+        if (current && current.snapshot === snapshot) {
+          current.failed = true
+          current.conflict = conflict
+          setDraftConflict(targetScope, conflict)
+          setRecoveryNotice(
+            targetScope,
+            conflict
+              ? '草稿已在其他标签页更新，当前页未保存。可选择「以当前页覆盖保存」或「载入最新草稿」。'
+              : '请款草稿未能保存，刷新前请保留当前页面。',
+          )
+        }
+        if (
+          !conflict &&
+          flushedRev !== undefined &&
+          billingScope.value === accountScope &&
+          selectedTemplateId.value === templateId &&
+          lastFlushedRevision === flushedRev
+        ) {
+          lastFlushedRevision = -1
+        }
+      })
+  }
+
   function flushBilling(targetTemplateId: BillingTemplateId = selectedTemplateId.value): void {
     cancelPendingPersist()
     const scope = billingScope.value
@@ -691,13 +901,91 @@ export function useBillingWorkflow(options: {
     lastFlushedRevision = flushedRev
     const targetScope = templateDraftScope(billingOwner.value.origin, billingOwner.value.userId, targetTemplateId)
     const snapshot = billingSnapshot(targetTemplateId)
-    void service
-      .saveDraft(targetScope, snapshot)
-      .catch(() => {
-        if (billingScope.value !== scope) return
-        if (lastFlushedRevision === flushedRev) lastFlushedRevision = -1
-        recoveryNotice.value = '请款草稿未能保存，刷新前请保留当前页面。'
+    persistDraftSnapshot(targetScope, scope, targetTemplateId, snapshot, flushedRev)
+  }
+
+  function retryPendingDrafts(accountScope: string = billingScope.value): void {
+    if (!accountScope || disposed) return
+    for (const [targetScope, entry] of [...pendingDrafts.entries()]) {
+      if (!entry.failed || entry.conflict || entry.accountScope !== accountScope) continue
+      persistDraftSnapshot(targetScope, entry.accountScope, entry.templateId, entry.snapshot)
+    }
+  }
+
+  async function overwriteConflictedDraft(): Promise<boolean> {
+    const accountScope = billingScope.value
+    const targetScope = currentTenantScope.value
+    const templateId = selectedTemplateId.value
+    if (!accountScope || !targetScope || resolvingDraftConflict.value) return false
+    const snapshot = feeQueryRef.value ? billingSnapshot(templateId) : pendingDrafts.get(targetScope)?.snapshot
+    if (!snapshot) return false
+    cancelPendingPersist()
+    resolvingDraftConflict.value = true
+    const mySeq = bumpDraftSeq(targetScope)
+    pendingDrafts.set(targetScope, { accountScope, templateId, snapshot, failed: false, conflict: false })
+    setDraftConflict(targetScope, false)
+    setRecoveryNotice(targetScope, '')
+    try {
+      await service.loadDraft(targetScope)
+      if (getDraftSeq(targetScope) !== mySeq) {
+        return true
+      }
+      cancelPendingPersist()
+      const snapshotToSave =
+        selectedTemplateId.value === templateId &&
+        billingScope.value === accountScope &&
+        feeQueryRef.value
+          ? billingSnapshot(templateId)
+          : snapshot
+      const flushedRev = draftRevision
+      pendingDrafts.set(targetScope, {
+        accountScope,
+        templateId,
+        snapshot: snapshotToSave,
+        failed: false,
+        conflict: false,
       })
+      await service.saveDraft(targetScope, snapshotToSave)
+      if (getDraftSeq(targetScope) !== mySeq) {
+        return true
+      }
+      const current = pendingDrafts.get(targetScope)
+      if (current && current.snapshot === snapshotToSave) {
+        pendingDrafts.delete(targetScope)
+      }
+      setDraftConflict(targetScope, false)
+      setRecoveryNotice(targetScope, '')
+      if (
+        billingScope.value === accountScope &&
+        selectedTemplateId.value === templateId
+      ) {
+        lastFlushedRevision = flushedRev
+        if (draftRevision !== flushedRev) {
+          scheduleBillingPersist(50)
+        }
+      }
+      return true
+    } catch (err) {
+      if (getDraftSeq(targetScope) !== mySeq) {
+        return true
+      }
+      const conflict = isRecoveryConflictError(err)
+      const current = pendingDrafts.get(targetScope)
+      if (current) {
+        current.failed = true
+        current.conflict = conflict
+      }
+      setDraftConflict(targetScope, conflict)
+      setRecoveryNotice(
+        targetScope,
+        conflict
+          ? '草稿仍在其他标签页发生更新，请再次点击「以当前页覆盖保存」或「载入最新草稿」。'
+          : '请款草稿未能保存，刷新前请保留当前页面。',
+      )
+      return false
+    } finally {
+      resolvingDraftConflict.value = false
+    }
   }
 
   function scheduleBillingPersist(delayMs = 300): void {
@@ -773,9 +1061,6 @@ export function useBillingWorkflow(options: {
     manualRateDate.value = ''
     confirmExistingFees.value = false
     stepNotice.value = ''
-    exportResultNotice.value = ''
-    exportWarnings.value = []
-    exportBatchItems.value = []
     syncFeeQueryIfNeeded(true)
   }
 
@@ -803,18 +1088,76 @@ export function useBillingWorkflow(options: {
     await nextTick()
   }
 
-  async function readLegacyDraftIfNeeded(accountScope: string): Promise<BillingDeskSnapshot | null> {
-    if (legacyDraftScopeChecked === accountScope) return cachedLegacyDraft
-    const legacy = await service.loadDraft(accountScope).catch(() => null)
-    legacyDraftScopeChecked = accountScope
-    cachedLegacyDraft = legacy?.version === 1 && isValidBillingTemplateId(legacy.template) ? legacy : null
-    return cachedLegacyDraft
+  async function readLegacyDraftIfNeeded(accountScope: string): Promise<LegacyDraftLookup> {
+    if (legacyDraftScopeChecked === accountScope) {
+      return { ok: true, draft: cachedLegacyDraft }
+    }
+    try {
+      const legacy = await service.loadDraft(accountScope)
+      legacyDraftScopeChecked = accountScope
+      cachedLegacyDraft = legacy?.version === 1 && isValidBillingTemplateId(legacy.template) ? legacy : null
+      return { ok: true, draft: cachedLegacyDraft }
+    } catch {
+      return { ok: false, draft: null }
+    }
+  }
+
+  async function reloadLatestDraft(): Promise<boolean> {
+    const accountScope = billingScope.value
+    const targetScope = currentTenantScope.value
+    const templateId = selectedTemplateId.value
+    if (!accountScope || !targetScope || resolvingDraftConflict.value) return false
+    resolvingDraftConflict.value = true
+    const mySeq = bumpDraftSeq(targetScope)
+    const generation = ++restoreGeneration
+    const stillCurrent = () => !disposed && generation === restoreGeneration
+    restoring.value = true
+    cancelPendingPersist()
+    try {
+      const latest = await service.loadDraft(targetScope)
+      if (!stillCurrent() || getDraftSeq(targetScope) !== mySeq) return false
+      pendingDrafts.delete(targetScope)
+      setDraftConflict(targetScope, false)
+      setRecoveryNotice(targetScope, '')
+      if (latest?.version === 1 && latest.template === templateId) {
+        await applyRestoredDraft(latest, stillCurrent)
+        if (!stillCurrent()) return false
+      } else {
+        applyTemplateDefaults(templateId, 1)
+      }
+      draftRevision = 0
+      lastFlushedRevision = 0
+      return true
+    } catch (err) {
+      if (stillCurrent() && getDraftSeq(targetScope) === mySeq) {
+        setRecoveryNotice(
+          targetScope,
+          err instanceof Error ? `载入最新草稿失败：${err.message}` : '载入最新草稿失败，请稍后重试。',
+        )
+      }
+      return false
+    } finally {
+      if (stillCurrent()) restoring.value = false
+      resolvingDraftConflict.value = false
+    }
   }
 
   watch(
     confirmedScope,
     async scope => {
-      if (!scope || scope === billingScope.value) return
+      if (!scope) {
+        legacyFileSurfaceOwner.value = ''
+        return
+      }
+      if (scope === billingScope.value) {
+        if (!legacyFileSurfaceOwner.value) {
+          const legacyLookup = await readLegacyDraftIfNeeded(scope)
+          if (!disposed && confirmedScope.value === scope && legacyLookup.ok) {
+            legacyFileSurfaceOwner.value = legacyLookup.draft?.template ?? 'general-foreign'
+          }
+        }
+        return
+      }
       const generation = ++restoreGeneration
       const stillCurrent = () => !disposed && generation === restoreGeneration
       flushBilling()
@@ -823,37 +1166,66 @@ export function useBillingWorkflow(options: {
       billingOwner.value = { origin: connection.value.easyOrigin, userId: connection.value.operatorId }
       legacyDraftScopeChecked = ''
       cachedLegacyDraft = null
+      legacyFileSurfaceOwner.value = ''
       draftRevision = 0
       lastFlushedRevision = 0
-      recoveryNotice.value = ''
       const preferredTemplate = readSavedActiveTemplate(scope)
       const initialTemplate: BillingTemplateId = preferredTemplate ?? 'general-foreign'
+      const initialTargetScope = templateDraftScope(
+        connection.value.easyOrigin,
+        connection.value.operatorId,
+        initialTemplate,
+      )
+      const initialPending = pendingDrafts.get(initialTargetScope)
+      if (!initialPending?.failed) {
+        setRecoveryNotice(initialTargetScope, '')
+        setDraftConflict(initialTargetScope, false)
+      }
       selectedTemplateId.value = initialTemplate
       applyTemplateDefaults(initialTemplate, 1)
-      let state = await service
-        .loadDraft(templateDraftScope(connection.value.easyOrigin, connection.value.operatorId, initialTemplate))
-        .catch(() => {
-          if (stillCurrent()) recoveryNotice.value = '请款草稿暂时无法读取。'
-          return null
-        })
-      if (!stillCurrent()) return
-      if (!state) {
-        const legacy = await readLegacyDraftIfNeeded(scope)
+      let state: BillingDeskSnapshot | null = initialPending?.snapshot ?? null
+      let activePending = initialPending
+      if (!initialPending) {
+        state = await service
+          .loadDraft(initialTargetScope)
+          .catch(() => {
+            if (stillCurrent()) setRecoveryNotice(initialTargetScope, '请款草稿暂时无法读取。')
+            return null
+          })
         if (!stillCurrent()) return
-        if (legacy && (!preferredTemplate || legacy.template === initialTemplate)) {
+      }
+      const legacyLookup = await readLegacyDraftIfNeeded(scope)
+      if (!stillCurrent()) return
+      if (legacyLookup.ok) {
+        legacyFileSurfaceOwner.value = legacyLookup.draft?.template ?? 'general-foreign'
+        const legacy = legacyLookup.draft
+        if (!state && legacy && (!preferredTemplate || legacy.template === initialTemplate)) {
           state = legacy
           writeSavedActiveTemplate(scope, legacy.template)
           if (legacy.template !== initialTemplate) {
+            const switchedScope = templateDraftScope(
+              connection.value.easyOrigin,
+              connection.value.operatorId,
+              legacy.template,
+            )
+            activePending = pendingDrafts.get(switchedScope)
+            if (activePending) state = activePending.snapshot
             selectedTemplateId.value = legacy.template
             applyTemplateDefaults(legacy.template, 1)
           }
         }
       }
       if (state?.version === 1 && isValidBillingTemplateId(state.template)) {
+        const finalScopeKey = templateDraftScope(
+          billingOwner.value.origin,
+          billingOwner.value.userId,
+          state.template,
+        )
+        activePending = pendingDrafts.get(finalScopeKey) ?? activePending
         await applyRestoredDraft(state, stillCurrent)
       }
       if (!stillCurrent()) return
-      draftRevision = 0
+      draftRevision = activePending?.failed && !activePending.conflict ? 1 : 0
       lastFlushedRevision = 0
       restoring.value = false
     },
@@ -873,43 +1245,63 @@ export function useBillingWorkflow(options: {
     restoring.value = true
     draftRevision = 0
     lastFlushedRevision = 0
-    recoveryNotice.value = ''
+    const nextTargetScope = accountScope ? templateDraftScope(ownerOrigin, ownerUserId, nextId) : ''
+    const pending = nextTargetScope ? pendingDrafts.get(nextTargetScope) : undefined
+    if (nextTargetScope && !pending?.failed) {
+      setRecoveryNotice(nextTargetScope, '')
+      setDraftConflict(nextTargetScope, false)
+    }
     applyTemplateDefaults(nextId, fallbackStep)
     if (!accountScope) {
       restoring.value = false
       return
     }
-    let state = await service.loadDraft(templateDraftScope(ownerOrigin, ownerUserId, nextId)).catch(() => {
-      if (stillCurrent()) recoveryNotice.value = '请款草稿暂时无法读取。'
-      return null
-    })
-    if (!stillCurrent()) return
-    if (!state) {
-      const legacy = await readLegacyDraftIfNeeded(accountScope)
+    let state: BillingDeskSnapshot | null = pending?.snapshot ?? null
+    if (!pending) {
+      state = await service.loadDraft(nextTargetScope).catch(() => {
+        if (stillCurrent()) setRecoveryNotice(nextTargetScope, '请款草稿暂时无法读取。')
+        return null
+      })
       if (!stillCurrent()) return
-      if (legacy?.template === nextId) state = legacy
+    }
+    if (!state || !legacyFileSurfaceOwner.value) {
+      const legacyLookup = await readLegacyDraftIfNeeded(accountScope)
+      if (!stillCurrent()) return
+      if (legacyLookup.ok) {
+        legacyFileSurfaceOwner.value = legacyLookup.draft?.template ?? 'general-foreign'
+        if (!state && legacyLookup.draft?.template === nextId) {
+          state = legacyLookup.draft
+        }
+      }
     }
     if (state?.version === 1 && state.template === nextId) {
       await applyRestoredDraft(state, stillCurrent)
       if (!stillCurrent()) return
     }
-    draftRevision = 0
+    const finalPending = pendingDrafts.get(nextTargetScope)
+    draftRevision = finalPending?.failed && !finalPending.conflict ? 1 : 0
     lastFlushedRevision = 0
     restoring.value = false
   }, { flush: 'sync' })
 
   function onBillingVisibility(): void {
-    if (document.visibilityState === 'hidden') flushBilling()
-    else checkRatesWhileVisible()
+    if (document.visibilityState === 'hidden') {
+      flushBilling()
+      retryPendingDrafts()
+    } else {
+      checkRatesWhileVisible()
+    }
   }
   function onBillingPageHide(): void {
     flushBilling()
+    retryPendingDrafts()
   }
   document.addEventListener('visibilitychange', onBillingVisibility)
   window.addEventListener('focus', checkRatesWhileVisible)
   window.addEventListener('pagehide', onBillingPageHide)
   onBeforeUnmount(() => {
     flushBilling()
+    retryPendingDrafts()
     cancelPendingPersist()
     disposed = true
     document.removeEventListener('visibilitychange', onBillingVisibility)
@@ -925,6 +1317,7 @@ export function useBillingWorkflow(options: {
     billingScope,
     billingOwner,
     billingFileSurface,
+    legacyBillingFileSurface,
     billingTenantKey,
     restoring,
     ready,
@@ -997,5 +1390,9 @@ export function useBillingWorkflow(options: {
     exportDisabledReason,
     doExportExcel,
     recoveryNotice,
+    hasDraftConflict,
+    resolvingDraftConflict,
+    overwriteConflictedDraft,
+    reloadLatestDraft,
   }
 }
