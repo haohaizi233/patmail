@@ -43,6 +43,8 @@ export interface FileSearchPanelHandle {
   selectAllPages: (billsOnly?: boolean) => Promise<void> | undefined
   getBillingSelectionIssue: () => string
   hasRecoveredQuery: boolean
+  refreshing?: boolean
+  searchError?: string
   canRefresh: boolean
   refresh: (scrollOnSuccess?: boolean) => Promise<void> | void | undefined
 }
@@ -59,6 +61,41 @@ export interface FeeSearchQueryHandle {
 }
 
 export type BillingWorkflowStep = 1 | 2 | 3
+
+const ACTIVE_TEMPLATE_STORAGE_PREFIX = 'patmail:billing:active-template:'
+
+function templateDraftScope(origin: string, userId: string, templateId: BillingTemplateId): string {
+  return JSON.stringify([origin, userId, templateId])
+}
+
+function activeTemplateStorage(): Storage | undefined {
+  try {
+    const candidate = globalThis.localStorage
+    if (candidate && typeof candidate.getItem === 'function' && typeof candidate.setItem === 'function') {
+      return candidate
+    }
+  } catch {
+    // 忽略受限存储上下文中的异常
+  }
+  return undefined
+}
+
+function readSavedActiveTemplate(accountScope: string): BillingTemplateId | null {
+  try {
+    const raw = activeTemplateStorage()?.getItem(`${ACTIVE_TEMPLATE_STORAGE_PREFIX}${accountScope}`)
+    return raw && isValidBillingTemplateId(raw) ? raw : null
+  } catch {
+    return null
+  }
+}
+
+function writeSavedActiveTemplate(accountScope: string, templateId: BillingTemplateId): void {
+  try {
+    activeTemplateStorage()?.setItem(`${ACTIVE_TEMPLATE_STORAGE_PREFIX}${accountScope}`, templateId)
+  } catch {
+    // 忽略受限存储上下文中的异常
+  }
+}
 
 export function useBillingWorkflow(options: {
   service?: BillingApplicationService
@@ -81,6 +118,8 @@ export function useBillingWorkflow(options: {
   )
 
   const selectedTemplateId = ref<BillingTemplateId>('general-foreign')
+  const billingFileSurface = computed(() => `billing-files:${selectedTemplateId.value}`)
+  const billingTenantKey = computed(() => (billingScope.value ? `${billingScope.value}:${selectedTemplateId.value}` : ''))
   const currentTemplate = computed(
     () => BILLING_TEMPLATES.find(t => t.id === selectedTemplateId.value) ?? BILLING_TEMPLATES[0],
   )
@@ -400,17 +439,6 @@ export function useBillingWorkflow(options: {
     stepNavigation.value?.scrollIntoView({ block: 'start' })
   }
 
-  watch(selectedTemplateId, nextId => {
-    if (restoring.value) return
-    const tpl = BILLING_TEMPLATES.find(t => t.id === nextId) ?? BILLING_TEMPLATES[0]
-    headerValues.value = defaultHeaders(nextId)
-    billingOptions.value = { ...tpl.queryPreset.defaultOptions }
-    fileSeed.value = { ...tpl.queryPreset.fileFields }
-    fileSeedToken.value += 1
-    syncFeeQueryIfNeeded(true)
-    if (currentStep.value === 3) currentStep.value = 2
-  })
-
   watch(activeVolumes, () => {
     if (!restoring.value && currentStep.value !== 1) syncFeeQueryIfNeeded(false)
   })
@@ -621,6 +649,8 @@ export function useBillingWorkflow(options: {
   let lastFlushedRevision = 0
   let disposed = false
   let restoreGeneration = 0
+  let legacyDraftScopeChecked = ''
+  let cachedLegacyDraft: BillingDeskSnapshot | null = null
   const recoveryNotice = ref('')
 
   function cancelPendingPersist(): void {
@@ -632,10 +662,10 @@ export function useBillingWorkflow(options: {
     }
   }
 
-  function billingSnapshot(): BillingDeskSnapshot {
+  function billingSnapshot(templateId: BillingTemplateId = selectedTemplateId.value): BillingDeskSnapshot {
     return toPlainCloneable({
       version: 1,
-      template: selectedTemplateId.value,
+      template: templateId,
       step: currentStep.value,
       headers: headerValues.value,
       options: billingOptions.value,
@@ -652,16 +682,17 @@ export function useBillingWorkflow(options: {
     })
   }
 
-  function flushBilling(): void {
+  function flushBilling(targetTemplateId: BillingTemplateId = selectedTemplateId.value): void {
     cancelPendingPersist()
     const scope = billingScope.value
     if (!scope || restoring.value || !feeQueryRef.value) return
     if (draftRevision === lastFlushedRevision) return
     const flushedRev = draftRevision
     lastFlushedRevision = flushedRev
-    const snapshot = billingSnapshot()
+    const targetScope = templateDraftScope(billingOwner.value.origin, billingOwner.value.userId, targetTemplateId)
+    const snapshot = billingSnapshot(targetTemplateId)
     void service
-      .saveDraft(scope, snapshot)
+      .saveDraft(targetScope, snapshot)
       .catch(() => {
         if (billingScope.value !== scope) return
         if (lastFlushedRevision === flushedRev) lastFlushedRevision = -1
@@ -688,7 +719,6 @@ export function useBillingWorkflow(options: {
 
   watch(
     [
-      selectedTemplateId,
       currentStep,
       allowMixedCustomers,
       extraVolumes,
@@ -725,6 +755,62 @@ export function useBillingWorkflow(options: {
     },
   )
 
+  function applyTemplateDefaults(templateId: BillingTemplateId, targetStep: BillingWorkflowStep): void {
+    const tpl = BILLING_TEMPLATES.find(t => t.id === templateId) ?? BILLING_TEMPLATES[0]
+    currentStep.value = targetStep
+    headerValues.value = defaultHeaders(templateId)
+    billingOptions.value = { ...tpl.queryPreset.defaultOptions }
+    allowMixedCustomers.value = false
+    fileSeed.value = { ...tpl.queryPreset.fileFields }
+    fileSeedToken.value += 1
+    fileSelection.value = {}
+    recoveredBills.value = {}
+    extraVolumes.value = []
+    excludedVolumes.value = []
+    customVolumeInput.value = ''
+    customRates.value = {}
+    clearedRates.value = {}
+    manualRateDate.value = ''
+    confirmExistingFees.value = false
+    stepNotice.value = ''
+    exportResultNotice.value = ''
+    exportWarnings.value = []
+    exportBatchItems.value = []
+    syncFeeQueryIfNeeded(true)
+  }
+
+  async function applyRestoredDraft(state: BillingDeskSnapshot, stillCurrent: () => boolean): Promise<void> {
+    selectedTemplateId.value = state.template
+    headerValues.value = state.headers
+    billingOptions.value = state.options
+    allowMixedCustomers.value = Boolean(state.allowMixedCustomers)
+    fileSeed.value = { ...currentTemplate.value.queryPreset.fileFields }
+    fileSeedToken.value += 1
+    extraVolumes.value = state.extra
+    excludedVolumes.value = state.excluded
+    customVolumeInput.value = state.volumeInput
+    recoveredBills.value = state.bills
+    customRates.value = state.rates
+    clearedRates.value = state.clearedRates
+    manualRateDate.value = state.rateDate
+    syncFeeQueryIfNeeded(true)
+    await nextTick()
+    if (!stillCurrent()) return
+    if (state.fees && state.syncKey === buildFeeSyncKey()) {
+      feeQueryRef.value?.restoreBillingSnapshot(state.fees)
+    }
+    currentStep.value = state.step === 2 || state.step === 3 ? state.step : 1
+    await nextTick()
+  }
+
+  async function readLegacyDraftIfNeeded(accountScope: string): Promise<BillingDeskSnapshot | null> {
+    if (legacyDraftScopeChecked === accountScope) return cachedLegacyDraft
+    const legacy = await service.loadDraft(accountScope).catch(() => null)
+    legacyDraftScopeChecked = accountScope
+    cachedLegacyDraft = legacy?.version === 1 && isValidBillingTemplateId(legacy.template) ? legacy : null
+    return cachedLegacyDraft
+  }
+
   watch(
     confirmedScope,
     async scope => {
@@ -735,53 +821,36 @@ export function useBillingWorkflow(options: {
       restoring.value = true
       billingScope.value = scope
       billingOwner.value = { origin: connection.value.easyOrigin, userId: connection.value.operatorId }
+      legacyDraftScopeChecked = ''
+      cachedLegacyDraft = null
       draftRevision = 0
       lastFlushedRevision = 0
       recoveryNotice.value = ''
-      currentStep.value = 1
-      selectedTemplateId.value = 'general-foreign'
-      headerValues.value = defaultHeaders('general-foreign')
-      billingOptions.value = { ...BILLING_TEMPLATES[0].queryPreset.defaultOptions }
-      allowMixedCustomers.value = false
-      fileSeed.value = { ...BILLING_TEMPLATES[0].queryPreset.fileFields }
-      fileSelection.value = {}
-      recoveredBills.value = {}
-      extraVolumes.value = []
-      excludedVolumes.value = []
-      customVolumeInput.value = ''
-      customRates.value = {}
-      clearedRates.value = {}
-      manualRateDate.value = ''
-      confirmExistingFees.value = false
-      stepNotice.value = ''
-      syncFeeQueryIfNeeded(true)
-      const state = await service.loadDraft(scope).catch(() => {
-        if (stillCurrent()) recoveryNotice.value = '请款草稿暂时无法读取。'
-        return null
-      })
+      const preferredTemplate = readSavedActiveTemplate(scope)
+      const initialTemplate: BillingTemplateId = preferredTemplate ?? 'general-foreign'
+      selectedTemplateId.value = initialTemplate
+      applyTemplateDefaults(initialTemplate, 1)
+      let state = await service
+        .loadDraft(templateDraftScope(connection.value.easyOrigin, connection.value.operatorId, initialTemplate))
+        .catch(() => {
+          if (stillCurrent()) recoveryNotice.value = '请款草稿暂时无法读取。'
+          return null
+        })
       if (!stillCurrent()) return
-      if (state?.version === 1 && isValidBillingTemplateId(state.template)) {
-        selectedTemplateId.value = state.template
-        headerValues.value = state.headers
-        billingOptions.value = state.options
-        allowMixedCustomers.value = Boolean(state.allowMixedCustomers)
-        fileSeed.value = { ...currentTemplate.value.queryPreset.fileFields }
-        fileSeedToken.value += 1
-        extraVolumes.value = state.extra
-        excludedVolumes.value = state.excluded
-        customVolumeInput.value = state.volumeInput
-        recoveredBills.value = state.bills
-        customRates.value = state.rates
-        clearedRates.value = state.clearedRates
-        manualRateDate.value = state.rateDate
-        syncFeeQueryIfNeeded(true)
-        await nextTick()
+      if (!state) {
+        const legacy = await readLegacyDraftIfNeeded(scope)
         if (!stillCurrent()) return
-        if (state.fees && state.syncKey === buildFeeSyncKey()) {
-          feeQueryRef.value?.restoreBillingSnapshot(state.fees)
+        if (legacy && (!preferredTemplate || legacy.template === initialTemplate)) {
+          state = legacy
+          writeSavedActiveTemplate(scope, legacy.template)
+          if (legacy.template !== initialTemplate) {
+            selectedTemplateId.value = legacy.template
+            applyTemplateDefaults(legacy.template, 1)
+          }
         }
-        currentStep.value = state.step === 2 || state.step === 3 ? state.step : 1
-        await nextTick()
+      }
+      if (state?.version === 1 && isValidBillingTemplateId(state.template)) {
+        await applyRestoredDraft(state, stillCurrent)
       }
       if (!stillCurrent()) return
       draftRevision = 0
@@ -791,20 +860,61 @@ export function useBillingWorkflow(options: {
     { immediate: true },
   )
 
+  watch(selectedTemplateId, async (nextId, prevId) => {
+    if (restoring.value || !nextId || nextId === prevId) return
+    flushBilling(prevId)
+    const generation = ++restoreGeneration
+    const stillCurrent = () => !disposed && generation === restoreGeneration
+    const accountScope = billingScope.value
+    const ownerOrigin = billingOwner.value.origin
+    const ownerUserId = billingOwner.value.userId
+    if (accountScope) writeSavedActiveTemplate(accountScope, nextId)
+    const fallbackStep: BillingWorkflowStep = currentStep.value === 3 ? 2 : currentStep.value
+    restoring.value = true
+    draftRevision = 0
+    lastFlushedRevision = 0
+    recoveryNotice.value = ''
+    applyTemplateDefaults(nextId, fallbackStep)
+    if (!accountScope) {
+      restoring.value = false
+      return
+    }
+    let state = await service.loadDraft(templateDraftScope(ownerOrigin, ownerUserId, nextId)).catch(() => {
+      if (stillCurrent()) recoveryNotice.value = '请款草稿暂时无法读取。'
+      return null
+    })
+    if (!stillCurrent()) return
+    if (!state) {
+      const legacy = await readLegacyDraftIfNeeded(accountScope)
+      if (!stillCurrent()) return
+      if (legacy?.template === nextId) state = legacy
+    }
+    if (state?.version === 1 && state.template === nextId) {
+      await applyRestoredDraft(state, stillCurrent)
+      if (!stillCurrent()) return
+    }
+    draftRevision = 0
+    lastFlushedRevision = 0
+    restoring.value = false
+  }, { flush: 'sync' })
+
   function onBillingVisibility(): void {
     if (document.visibilityState === 'hidden') flushBilling()
     else checkRatesWhileVisible()
   }
+  function onBillingPageHide(): void {
+    flushBilling()
+  }
   document.addEventListener('visibilitychange', onBillingVisibility)
   window.addEventListener('focus', checkRatesWhileVisible)
-  window.addEventListener('pagehide', flushBilling)
+  window.addEventListener('pagehide', onBillingPageHide)
   onBeforeUnmount(() => {
     flushBilling()
     cancelPendingPersist()
     disposed = true
     document.removeEventListener('visibilitychange', onBillingVisibility)
     window.removeEventListener('focus', checkRatesWhileVisible)
-    window.removeEventListener('pagehide', flushBilling)
+    window.removeEventListener('pagehide', onBillingPageHide)
   })
 
   return {
@@ -814,6 +924,8 @@ export function useBillingWorkflow(options: {
     confirmedScope,
     billingScope,
     billingOwner,
+    billingFileSurface,
+    billingTenantKey,
     restoring,
     ready,
     selectedTemplateId,

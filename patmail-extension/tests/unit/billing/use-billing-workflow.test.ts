@@ -380,7 +380,7 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
     try {
       await vi.waitFor(() => expect(api.ready.value).toBe(true))
       api.selectedTemplateId.value = 'midea-pct'
-      await nextTick()
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
       api.onFeeSelectionChange([
         feeRow({ feeId: 'cny-1', caseVolume: 'PA01PCT', businessType: 'PCT国际阶段', currency: 'CNY', customerName: '美的小家电事业部' }),
         feeRow({ feeId: 'cny-2', caseVolume: 'PA02PCT', businessType: 'PCT国际阶段', currency: 'CNY', customerName: '美的新能源事业部' }),
@@ -687,6 +687,224 @@ describe('useBillingWorkflow doExportExcel preconditions', () => {
     } finally {
       app.unmount()
       root.remove()
+    }
+  })
+
+  it('isolates WAL drafts per billing template across switches and reloads', async () => {
+    const store = new Map<string, string>()
+    const memoryStorage: Storage = {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: key => store.get(key) ?? null,
+      key: index => [...store.keys()][index] ?? null,
+      removeItem: key => {
+        store.delete(key)
+      },
+      setItem: (key, value) => {
+        store.set(key, value)
+      },
+    }
+    vi.stubGlobal('localStorage', memoryStorage)
+    const wal = new Map<string, BillingDeskSnapshot>()
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      recovery: {
+        load: scope => Promise.resolve(wal.get(scope) ?? null),
+        save: (scope, snapshot) => {
+          wal.set(scope, structuredClone(snapshot))
+          return Promise.resolve()
+        },
+      },
+    })
+
+    const mountInstance = () => {
+      let api!: ReturnType<typeof useBillingWorkflow>
+      const snapshotRev = ref(0)
+      let currentFees: string[] = []
+      const root = document.createElement('div')
+      const app = createApp({
+        setup() {
+          api = useBillingWorkflow({ service })
+          api.feeQueryRef.value = {
+            selectionPending: false,
+            selectionIncomplete: false,
+            get snapshotRevision() {
+              return snapshotRev.value
+            },
+            getKnownRows: () => [],
+            replaceBillingSelection: () => {},
+            billingSnapshot: () => ({ selectedIds: [...currentFees] }),
+            restoreBillingSnapshot: raw => {
+              const obj = raw as { selectedIds?: string[] } | undefined
+              currentFees = [...(obj?.selectedIds ?? [])]
+            },
+          }
+          return () => h('div')
+        },
+      })
+      app.mount(root)
+      return {
+        api,
+        app,
+        root,
+        setFees(ids: string[]) {
+          currentFees = ids
+          snapshotRev.value += 1
+        },
+        getFees() {
+          return currentFees
+        },
+      }
+    }
+
+    const first = mountInstance()
+    try {
+      await vi.waitFor(() => expect(first.api.ready.value).toBe(true))
+      expect(first.api.selectedTemplateId.value).toBe('general-foreign')
+      first.api.headerValues.value.title = '歌尔11月请款'
+      first.api.customVolumeInput.value = 'PA-GOER-1'
+      first.api.addCustomVolume()
+      await first.api.setStep(2)
+      first.setFees(['goer-fee-1'])
+      await nextTick()
+
+      // Switch to 美的 PCT: should flush 歌尔 draft to its own scope and load clean 美的 PCT
+      first.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(first.api.ready.value).toBe(true))
+      const goerScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111', 'general-foreign'])
+      const pctScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111', 'midea-pct'])
+      expect(wal.get(goerScope)?.headers.title).toBe('歌尔11月请款')
+      expect(wal.get(goerScope)?.extra).toEqual(['PA-GOER-1'])
+      expect(wal.get(goerScope)?.fees).toEqual({ selectedIds: ['goer-fee-1'] })
+      expect(first.api.activeVolumes.value).toEqual([])
+      expect(first.api.headerValues.value.title).not.toBe('歌尔11月请款')
+
+      first.api.headerValues.value.title = '美的PCT 11月'
+      first.api.customVolumeInput.value = 'PA-PCT-2'
+      first.api.addCustomVolume()
+      await first.api.setStep(2)
+      first.setFees(['pct-fee-2'])
+      await nextTick()
+
+      // Switch back to 歌尔: 美的 PCT flushed to pctScope, 歌尔 restored from goerScope
+      first.api.selectedTemplateId.value = 'general-foreign'
+      await vi.waitFor(() => expect(first.api.ready.value).toBe(true))
+      expect(wal.get(pctScope)?.headers.title).toBe('美的PCT 11月')
+      expect(wal.get(pctScope)?.extra).toEqual(['PA-PCT-2'])
+      expect(first.api.headerValues.value.title).toBe('歌尔11月请款')
+      expect(first.api.activeVolumes.value).toEqual(['PA-GOER-1'])
+      expect(first.api.currentStep.value).toBe(2)
+      expect(first.getFees()).toEqual(['goer-fee-1'])
+    } finally {
+      first.app.unmount()
+      first.root.remove()
+    }
+
+    // Re-mount (simulates reload): restores active template (general-foreign) and switching opens midea-pct draft
+    const second = mountInstance()
+    try {
+      await vi.waitFor(() => expect(second.api.ready.value).toBe(true))
+      expect(second.api.selectedTemplateId.value).toBe('general-foreign')
+      expect(second.api.headerValues.value.title).toBe('歌尔11月请款')
+      expect(second.api.activeVolumes.value).toEqual(['PA-GOER-1'])
+
+      second.api.selectedTemplateId.value = 'midea-pct'
+      await vi.waitFor(() => expect(second.api.ready.value).toBe(true))
+      expect(second.api.headerValues.value.title).toBe('美的PCT 11月')
+      expect(second.api.activeVolumes.value).toEqual(['PA-PCT-2'])
+      expect(second.api.currentStep.value).toBe(2)
+      expect(second.getFees()).toEqual(['pct-fee-2'])
+    } finally {
+      second.app.unmount()
+      second.root.remove()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('falls back to legacy single-scope WAL draft when no template-scoped draft exists', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size
+      },
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: (index: number) => [...store.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+    } satisfies Storage)
+    const legacyScope = JSON.stringify([LARGE_CUSTOMER_ORIGIN, '11111111-1111-4111-8111-111111111111'])
+    const wal = new Map<string, BillingDeskSnapshot>([
+      [
+        legacyScope,
+        {
+          version: 1,
+          template: 'midea-foreign',
+          step: 2,
+          headers: { title: '旧版美的涉外草稿' },
+          options: { reviewFee: 0, bankFee: 0 },
+          extra: ['PA-LEGACY-1'],
+          excluded: [],
+          volumeInput: '',
+          bills: {},
+          syncKey: 'midea-foreign\u0001PA-LEGACY-1',
+          rates: {},
+          clearedRates: {},
+          rateDate: '',
+        },
+      ],
+    ])
+    const service = new BillingApplicationService({
+      templates: { loadTemplate: () => Promise.resolve(new Uint8Array()) },
+      spreadsheet: {
+        fill: () => Promise.resolve({ bytes: new Uint8Array(), fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      exchangeRates: {
+        fetchRates: () => Promise.resolve({ date: '2026-11-24', sourceUrl: 'https://www.pbc.gov.cn', perCny: { USD: 7.1 } }),
+      },
+      downloads: {
+        download: () => Promise.resolve({ status: 'download_started' as const, fileName: 'out.xlsx', blockCount: 1, warnings: [] }),
+      },
+      recovery: {
+        load: scope => Promise.resolve(wal.get(scope) ?? null),
+        save: () => Promise.resolve(),
+      },
+    })
+
+    let api!: ReturnType<typeof useBillingWorkflow>
+    const root = document.createElement('div')
+    const app = createApp({
+      setup() {
+        api = useBillingWorkflow({ service })
+        return () => h('div')
+      },
+    })
+    app.mount(root)
+    try {
+      await vi.waitFor(() => expect(api.ready.value).toBe(true))
+      expect(api.selectedTemplateId.value).toBe('midea-foreign')
+      expect(api.headerValues.value.title).toBe('旧版美的涉外草稿')
+      expect(api.activeVolumes.value).toEqual(['PA-LEGACY-1'])
+      expect(api.currentStep.value).toBe(2)
+    } finally {
+      app.unmount()
+      root.remove()
+      vi.unstubAllGlobals()
     }
   })
 })

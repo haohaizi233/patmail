@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import FileSearchPanel from '../../floating/FileSearchPanel.vue'
@@ -27,6 +27,8 @@ const {
   confirmedScope,
   billingScope,
   billingOwner,
+  billingFileSurface,
+  billingTenantKey,
   restoring,
   ready,
   selectedTemplateId,
@@ -100,12 +102,33 @@ const {
 } = useBillingWorkflow({ isActive: () => props.isActive })
 
 const VOLUME_PREVIEW_LIMIT = 40
-const showAllVolumes = ref(false)
+const VOLUME_EXPAND_STEP = 100
+const volumeDisplayLimit = ref(VOLUME_PREVIEW_LIMIT)
 const visibleVolumes = computed(() =>
-  showAllVolumes.value || activeVolumes.value.length <= VOLUME_PREVIEW_LIMIT
+  activeVolumes.value.length <= volumeDisplayLimit.value
     ? activeVolumes.value
-    : activeVolumes.value.slice(0, VOLUME_PREVIEW_LIMIT),
+    : activeVolumes.value.slice(0, volumeDisplayLimit.value),
 )
+const remainingVolumeCount = computed(() =>
+  Math.max(0, activeVolumes.value.length - visibleVolumes.value.length),
+)
+watch(
+  () => activeVolumes.value.length,
+  len => {
+    if (len <= VOLUME_PREVIEW_LIMIT && volumeDisplayLimit.value !== VOLUME_PREVIEW_LIMIT) {
+      volumeDisplayLimit.value = VOLUME_PREVIEW_LIMIT
+    }
+  },
+)
+function expandMoreVolumes(): void {
+  volumeDisplayLimit.value = Math.min(
+    activeVolumes.value.length,
+    volumeDisplayLimit.value + VOLUME_EXPAND_STEP,
+  )
+}
+function collapseVolumes(): void {
+  volumeDisplayLimit.value = VOLUME_PREVIEW_LIMIT
+}
 
 const volumeDetailMap = computed(() => {
   const cache = new Map<string, string>()
@@ -370,10 +393,29 @@ function batchItemStatusLabel(status: string): string {
       </div>
     </nav>
 
-    <div v-if="currentStep === 1 && filePanelRef?.hasRecoveredQuery" class="step-notice-alert recovered-bill-notice">
-      <span role="status">已恢复账单查询，刷新验证后可继续。</span>
-      <button type="button" class="solid" :disabled="!confirmedScope || !filePanelRef.canRefresh"
-        @click="stepNotice = ''; filePanelRef?.refresh(false)">刷新验证账单</button>
+    <div
+      v-if="currentStep === 1 && filePanelRef?.hasRecoveredQuery"
+      class="step-notice-alert recovered-bill-notice"
+      :class="{ 'is-busy': Boolean(filePanelRef.refreshing) }"
+    >
+      <span role="status">
+        {{
+          filePanelRef.refreshing
+            ? '正在刷新验证已恢复的账单查询，请稍候…'
+            : filePanelRef.searchError
+              ? `刷新验证失败：${filePanelRef.searchError}`
+              : '已恢复账单查询，刷新验证后可继续。'
+        }}
+      </span>
+      <button
+        type="button"
+        class="solid"
+        :disabled="!confirmedScope || !filePanelRef.canRefresh"
+        :aria-busy="Boolean(filePanelRef.refreshing)"
+        @click="stepNotice = ''; filePanelRef?.refresh(false)"
+      >
+        {{ filePanelRef.refreshing ? '正在刷新验证…' : '刷新验证账单' }}
+      </button>
     </div>
     <p v-else-if="stepNotice && !noticeInResults" class="step-notice-alert" role="alert">
       {{ stepNotice }}
@@ -388,7 +430,12 @@ function batchItemStatusLabel(status: string): string {
     <p v-else-if="billingScope && !confirmedScope" class="step-notice-alert" role="status">请款进度已保留，恢复同一 EASY 账号连接后可继续。</p>
 
     <!-- ============================================================== 步骤 1 -->
-    <section v-show="currentStep === 1" class="step-section step-1-section">
+    <section
+      class="step-section step-1-section"
+      :class="{ 'is-hidden-pane': currentStep !== 1 }"
+      :inert="currentStep !== 1"
+      :aria-hidden="currentStep !== 1 ? 'true' : undefined"
+    >
       <div class="workflow-guide-banner card">
         <div class="guide-header">
           <strong>第一步：查询并抓取账单（提取我方文号）</strong>
@@ -435,12 +482,20 @@ function batchItemStatusLabel(status: string): string {
             恢复已排除 ({{ excludedVolumes.length }})
           </button>
           <button
-            v-if="activeVolumes.length > VOLUME_PREVIEW_LIMIT"
+            v-if="volumeDisplayLimit > VOLUME_PREVIEW_LIMIT && activeVolumes.length > VOLUME_PREVIEW_LIMIT"
             type="button"
             class="text-button"
-            @click="showAllVolumes = !showAllVolumes"
+            @click="collapseVolumes"
           >
-            {{ showAllVolumes ? '收起文号清单' : `展开全部 ${activeVolumes.length} 个文号` }}
+            收起至前 {{ VOLUME_PREVIEW_LIMIT }} 个
+          </button>
+          <button
+            v-if="remainingVolumeCount > 0"
+            type="button"
+            class="text-button"
+            @click="expandMoreVolumes"
+          >
+            再展开 {{ Math.min(VOLUME_EXPAND_STEP, remainingVolumeCount) }} 个（共 {{ activeVolumes.length }} 个）
           </button>
         </div>
         <div class="volume-tags-flow">
@@ -461,12 +516,12 @@ function batchItemStatusLabel(status: string): string {
             >×</button>
           </span>
           <button
-            v-if="!showAllVolumes && activeVolumes.length > VOLUME_PREVIEW_LIMIT"
+            v-if="remainingVolumeCount > 0"
             type="button"
             class="volume-expand-chip"
-            @click="showAllVolumes = true"
+            @click="expandMoreVolumes"
           >
-            还有 {{ activeVolumes.length - VOLUME_PREVIEW_LIMIT }} 个文号，点击展开全部
+            还有 {{ remainingVolumeCount }} 个文号，点击展开 {{ Math.min(VOLUME_EXPAND_STEP, remainingVolumeCount) }} 个
           </button>
         </div>
         <div class="add-custom-volume-row">
@@ -482,13 +537,13 @@ function batchItemStatusLabel(status: string): string {
 
       <!-- 嵌入文件管理查询面板 -->
       <FileSearchPanel
-        :key="billingScope"
+        :key="billingTenantKey"
         ref="filePanelRef"
         v-model:selected="fileSelection"
         :page-origin="billingOwner.origin"
         :workspace-user-id="billingOwner.userId"
         :show-session="false"
-        recovery-surface="billing-files"
+        :recovery-surface="billingFileSurface"
         :auto-select-bills="true"
         :seed="fileSeed"
         :seed-token="fileSeedToken"
@@ -504,7 +559,12 @@ function batchItemStatusLabel(status: string): string {
     </section>
 
     <!-- ============================================================== 步骤 2 -->
-    <section v-show="currentStep === 2" class="step-section step-2-section">
+    <section
+      class="step-section step-2-section"
+      :class="{ 'is-hidden-pane': currentStep !== 2 }"
+      :inert="currentStep !== 2"
+      :aria-hidden="currentStep !== 2 ? 'true' : undefined"
+    >
       <div class="workflow-guide-banner card">
         <div class="guide-header">
           <strong>第二步：检索{{ currentTemplate.queryPreset.feeClassLabel }}并人工勾选</strong>
@@ -532,7 +592,7 @@ function batchItemStatusLabel(status: string): string {
 
       <!-- 嵌入费用查询组件 -->
       <FeeSearchQuery
-        :key="billingScope"
+        :key="billingTenantKey"
         ref="feeQueryRef"
         :user-id="billingOwner.userId"
         :can-search="ready"
@@ -583,7 +643,13 @@ function batchItemStatusLabel(status: string): string {
     </section>
 
     <!-- ============================================================== 步骤 3 -->
-    <section v-show="currentStep === 3" ref="step3SectionRef" class="step-section step-3-section">
+    <section
+      ref="step3SectionRef"
+      class="step-section step-3-section"
+      :class="{ 'is-hidden-pane': currentStep !== 3 }"
+      :inert="currentStep !== 3"
+      :aria-hidden="currentStep !== 3 ? 'true' : undefined"
+    >
       <details v-if="pctExportExceptions.length" class="reconcile-warn" open>
         <summary>有 {{ pctExportExceptions.length }} 笔未请款费用待处理</summary>
         <ul>
@@ -799,6 +865,7 @@ function batchItemStatusLabel(status: string): string {
 
 <style scoped>
 .billing-workflow-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -965,6 +1032,17 @@ function batchItemStatusLabel(status: string): string {
   gap: 10px;
 }
 
+.recovered-bill-notice.is-busy {
+  background: #fff8fb;
+  border-left-color: var(--brand, #ff5d98);
+  color: #9b3060;
+}
+
+.recovered-bill-notice .solid:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .workflow-guide-banner {
   padding: 16px 20px;
   border-left: 4px solid var(--brand, #ff5d98);
@@ -1013,6 +1091,7 @@ function batchItemStatusLabel(status: string): string {
 }
 
 .extracted-volumes-card {
+  contain: layout style;
   padding: 14px 18px;
   margin-bottom: 14px;
   background: #fdfdfd;

@@ -165,6 +165,18 @@ try {
   assert.ok((await app.locator('.flow-steps-bar .step-title').first().innerText()).includes('文件管理（账单抓取）'))
   report.pass('billing template picker lists three presets with general-foreign default')
 
+  // 步骤 1 查询表：清空条件后仍可一键「恢复默认预填」
+  const step1FiltersBar = app.locator('.step-1-section .active-filters-bar')
+  await step1FiltersBar.waitFor({ timeout: 10_000 })
+  assert.ok((await step1FiltersBar.locator('.filter-chip').count()) >= 1)
+  await step1FiltersBar.getByRole('button', { name: '清空条件', exact: true }).click()
+  assert.equal(await step1FiltersBar.locator('.filter-chip').count(), 0)
+  await step1FiltersBar.getByRole('button', { name: '恢复默认预填', exact: true }).click()
+  assert.equal(await step1FiltersBar.locator('.filter-chip').count(), 2)
+  assert.match(await step1FiltersBar.innerText(), /案件流向：(从内到外|IO)/)
+  assert.match(await step1FiltersBar.innerText(), /文件描述：付款INVOICE/)
+  report.pass('step 1 file query form supports one-click default prefill restore')
+
   // 切到美的 PCT：步骤 1 变可选、预填切到官费 + 我方代理费
   await app.locator('.template-preset-bar').getByText('美的 PCT 费用清单', { exact: true }).click()
   await app.getByRole('button', { name: /跳过文件管理，直接查 PCT 费用/ }).waitFor({ timeout: 15_000 })
@@ -196,6 +208,11 @@ try {
   assert.equal(await feeResultNext.isDisabled(), true)
   await report.screenshot(app, 'billing-step-gate.png')
   report.pass('export step is gated behind fee selection with an explicit notice')
+
+  // 步骤 2 查询表：重置后可一键「恢复默认预填」
+  await app.locator('.step-2-section').getByRole('button', { name: '重置', exact: true }).click()
+  await app.locator('.step-2-section').getByRole('button', { name: '恢复默认预填', exact: true }).click()
+  report.pass('step 2 fee query form supports one-click default prefill restore')
 
   await app.locator('.step-2-section').getByRole('button', { name: '查询', exact: true }).click()
   await app.getByRole('button', { name: /进入请款单导出.*已选 2 笔/ }).waitFor()
@@ -432,11 +449,11 @@ try {
   report.pass('billing keeps step three and restores draft after tab switch, navigation and reload')
 
   const saved = await app.evaluate(async origin => {
-    const owner = [origin, '11111111-1111-1111-1111-111111111111', 'billing-files']
+    const owner = [origin, '11111111-1111-1111-1111-111111111111', 'billing-files:general-foreign']
     const scope = JSON.stringify(owner)
     const send = request => chrome.runtime.sendMessage({ type: 'PATMAIL_RECOVERY_RPC', request })
     const previous = await send({ op: 'get', slot: 'file-query', scope })
-    return send({ op: 'put', slot: 'file-query', scope, expectedRevision: previous.value.revision, payload: {
+    return send({ op: 'put', slot: 'file-query', scope, expectedRevision: previous.value?.revision ?? 0, payload: {
       version: 1, owner, query: { caseVolume: 'BILL-RECOVERY', pageIndex: 1, pageSize: 100 }, result: null,
       selected: {}, form: null, downloadSelection: null, stripAppNoDot: true, pageSize: 100,
       templateName: '', readPages: [], activeTask: null,
@@ -449,7 +466,7 @@ try {
   await recoveredRefresh.waitFor()
   assert.equal(recoveredBillQueries, 0, 'restoring the saved query must not dispatch automatically')
   await recoveredRefresh.click()
-  await recoveredRefresh.waitFor({ state: 'hidden' })
+  await app.locator('.recovered-bill-notice').waitFor({ state: 'hidden' })
   assert.equal(recoveredBillQueries, 1)
   report.pass('WAL-restored bill query can be verified from the top of step one')
 
