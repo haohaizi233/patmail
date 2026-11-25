@@ -1,7 +1,7 @@
 import { mailTypePath, matchMailTypePath, type MailTypePathNode } from './mail-type-path'
 import type { ProcedureMailTypeMapping } from '../mail/types'
 import type { TreeOption } from '../query/option-tree'
-import { isProcedureMapping, PROCEDURE_MAIL_MAPPINGS, validProcedureMappings } from './procedure-mapping'
+import { isProcedureMapping, matchProcedureLeaf, PROCEDURE_MAIL_MAPPINGS, validProcedureMappings } from './procedure-mapping'
 
 export function procedureConditionLabel(condition: ProcedureMailTypeMapping['condition']): string {
   return condition === 'none' ? '无' : condition === 'customer' ? '有客户文号' : '无客户文号，使用我方文号'
@@ -43,8 +43,7 @@ export function importProcedureMappings(
     if (PROCEDURE_MAIL_MAPPINGS.some(item => item.procedure === procedure)) { skipped++; continue }
     const condition = !label || label === '无' ? 'none' : label === '有客户文号' ? 'customer' : label === '无客户文号，使用我方文号' ? 'our' : null
     if (!condition) return fail('文号条件应为「无」「有客户文号」或「无客户文号，使用我方文号」。')
-    const matches = procedures.filter(item => item.value && item.label === procedure && !procedures.some(child => child.parent === item.value))
-    if (matches.length !== 1) return fail('处理事项没有唯一对应原站的具体事项，请核对全名或重新读取。')
+    if (!matchProcedureLeaf(procedures, procedure)) return fail('处理事项没有唯一对应原站的具体事项，请核对全名或重新读取。')
     const leafName = name.split('/').at(-1)?.trim() ?? ''
     const picked = matchMailTypePath(mailTypes, leafName, name.includes('/') ? name : undefined)
     if (!picked) return fail('发文类型没有唯一同名叶子节点，请核对完整名称或重新读取。')

@@ -32,6 +32,37 @@ function mapping(text: string, mailTypeId: string): DescriptionMailTypeMapping {
 }
 
 describe('文件管理工作流规划', () => {
+  it.each([
+    { rules: [mapping('发明专利证书(签章)(400001CA)', typeId)], type: typeId, blocked: '' },
+    { rules: [mapping('发明专利证书(签章)(400001CA)', typeId), mapping('发明专利证书(签章)', typeId)], type: typeId, blocked: '' },
+    { rules: [mapping('发明专利证书(签章)(400001CA)', otherType), mapping('发明专利证书(签章)', typeId)], type: '', blocked: '这个文件描述对上了多种发文类型，没有创建。' },
+    { rules: [mapping('发明专利证书(400001)', typeId)], type: '', blocked: '发文映射里没有这个文件描述。' }
+  ])('按证书描述的编号兼容关系匹配并拦截冲突 %#', ({ rules, type, blocked }) => {
+    const plan = planFileManageLetters({
+      customerName: '甲', mailStyle: 'single_file',
+      files: [{ fileId, fileName: '甲.pdf', fileDescription: '发明专利证书(签章)', customerName: '甲' }],
+      mappings: rules, subject, hasSender: true, hasReviewer: true, hasSignature: true
+    })
+    expect(plan.letters[0]).toMatchObject({ mailTypeId: type, blocked })
+    const letter = plan.letters[0]
+    const fallback = !blocked && rules.length === 1 ? '发明专利证书(签章)(400001CA)' : undefined
+    expect(letter?.descriptionFallback).toBe(fallback)
+    expect(letter?.descriptionConflict).toBe(blocked.includes('多种发文类型') ? blocked : undefined)
+  })
+
+  it.each([
+    ['驳回决定(200305)', [mapping('驳回决定(200305)', typeId), mapping('驳回决定(210407)', otherType)], typeId],
+    ['驳回决定', [mapping('驳回决定(200305)', typeId)], '']
+  ] as const)('保留精确编号，描述树有多候选时不猜测 %s', (fileDescription, mappings, expected) => {
+    const plan = planFileManageLetters({
+      customerName: '甲', mailStyle: 'single_file',
+      files: [{ fileId, fileName: '甲.pdf', fileDescription, customerName: '甲' }],
+      mappings: [...mappings], subject, hasSender: true, hasReviewer: true, hasSignature: true
+    })
+    expect(plan.letters[0]?.mailTypeId).toBe(expected)
+    if (!expected) expect(plan.letters[0]?.descriptionConflict).toContain('缺少文书编号')
+  })
+
   it('旧客户类型覆盖不能绕过固定映射缺失检查', () => {
     const input = {
       customerName: '甲', mailStyle: 'single_file' as const,

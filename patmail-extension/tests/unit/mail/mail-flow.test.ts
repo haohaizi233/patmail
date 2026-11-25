@@ -47,9 +47,9 @@ describe('PCT 提醒文号', () => {
       customerTypeName: '另一套系统才有的类型'
     })).customerVolume?.name).toBe('提醒申请PCT（贵方案号）-深圳市')
     expect(matchPctMailTypes([
-      { id: '71d067a3-d1a3-4d4b-87f9-38ea9d96bf70', name: '另一套系统才有的类型' },
+      { id: '11111111-1111-4111-8111-111111111111', name: '另一套系统才有的类型' },
       ...mailTypes
-    ], resolvePctRuntime({ customerTypeName: '另一套系统才有的类型' })).customerVolume?.id).toBe('71d067a3-d1a3-4d4b-87f9-38ea9d96bf70')
+    ], resolvePctRuntime({ customerTypeName: '另一套系统才有的类型' })).customerVolume?.id).toBe('11111111-1111-4111-8111-111111111111')
   })
 
   it('树还没读到时不写死名称，名字只是包含那几个词时也不对', () => {

@@ -3,6 +3,12 @@ import { exportProcedureMappings, importProcedureMappings } from '../../../src/c
 const custom = [{ id: 'old', procedure: '事项甲', condition: 'none' as const, mailTypeName: '类型甲' }]
 const types = [{ id: 'type', name: '类型甲', parentId: '' }]
 const procedures = [{ value: 'proc', label: '事项甲' }]
+it('处理事项编号重复或节点不可选时拒绝导入', () => {
+  const rows = [['处理事项', '发文类型'], ['事项甲', '类型甲']]
+  expect(importProcedureMappings([], rows, types, [...procedures, { value: 'proc', label: '别的事项' }], () => 'new').ok).toBe(false)
+  expect(importProcedureMappings([], rows, types, [{ ...procedures[0], selectable: false }], () => 'new').ok).toBe(false)
+})
+
 it('导出包含内置与自定义，往返不重复导入内置项', () => {
   const rows = exportProcedureMappings(custom)
   expect(rows).toHaveLength(8)

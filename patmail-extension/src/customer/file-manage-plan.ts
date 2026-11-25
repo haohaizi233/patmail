@@ -1,4 +1,5 @@
 import { isQueryGuid } from '../query/query-validator'
+import { resolveDescriptionText } from '../mail/rules/description-mapping'
 import { buildSubject } from '../mail/rules/subject-builder'
 import type { DescriptionMailTypeMapping, MailGroup, SubjectRule } from '../mail/types'
 import type { FileMailStyle } from './types'
@@ -24,6 +25,8 @@ export interface FileManageLetterPlan {
   mailTypeId: string
   mailTypeName: string
   subject: string
+  descriptionFallback?: string
+  descriptionConflict?: string
   /** 非空时这一封不创建、不提交。 */
   blocked: string
 }
@@ -59,14 +62,12 @@ export function senderAddress(sender: { name?: string; email?: string; label?: s
   return { name, email }
 }
 
-function matchDescription(description: string, mappings: DescriptionMailTypeMapping[]): { mailTypeId: string; mailTypeName: string } | 'missing' | 'conflict' {
-  const text = description.trim()
-  const hits = mappings.filter(item => item.enabled && isQueryGuid(item.mailTypeId) && (item.fileDescriptionText ?? '').trim() === text)
-  const types = [...new Set(hits.map(item => item.mailTypeId))]
-  if (types.length > 1) return 'conflict'
-  const hit = hits[0]
+function matchDescription(description: string, mappings: DescriptionMailTypeMapping[]): { mailTypeId: string; mailTypeName: string; fallbackLabel?: string } | 'missing' | 'conflict' | 'ambiguous' {
+  const { mapping: hit, conflict, ambiguousDescription, fallbackLabel } = resolveDescriptionText(description, mappings)
+  if (ambiguousDescription) return 'ambiguous'
+  if (conflict) return 'conflict'
   if (!hit) return 'missing'
-  return { mailTypeId: hit.mailTypeId, mailTypeName: hit.mailTypeName.trim() || '已映射的发文类型' }
+  return { mailTypeId: hit.mailTypeId, mailTypeName: hit.mailTypeName.trim() || '已映射的发文类型', fallbackLabel }
 }
 
 function groupOf(key: string, description: string, files: FileManageFile[], mode: FileMailStyle): MailGroup {
@@ -107,7 +108,7 @@ function subjectOf(rule: SubjectRule | null, group: MailGroup, customerName: str
   return { text: built.text.trim().slice(0, 500), blocked: '' }
 }
 
-/** 同一客户下，按发文方式把文件收成一封封。发文类型只认文件描述的原文一对一映射。 */
+/** 同一客户下，按发文方式把文件收成一封封。发文类型由文件描述映射决定。 */
 export function planFileManageLetters(input: {
   customerName: string
   mailStyle: FileMailStyle
@@ -148,10 +149,14 @@ export function planFileManageLetters(input: {
     const matched = description ? matchDescription(description, input.mappings) : 'missing'
     const mailTypeId = typeof matched === 'object' ? matched.mailTypeId : ''
     const mailTypeName = typeof matched === 'object' ? matched.mailTypeName : ''
+    const descriptionFallback = typeof matched === 'object' ? matched.fallbackLabel : undefined
+    const descriptionConflict = matched === 'ambiguous'
+      ? '这个文件描述缺少文书编号，在原站文件描述树里有多个候选，没有创建。'
+      : matched === 'conflict' ? '这个文件描述对上了多种发文类型，没有创建。' : undefined
     const subject = subjectOf(input.subject, groupOf(key, description, files, input.mailStyle), input.customerName, mailTypeName, input.now)
     const blocked = fileBlock
       || (!description ? '文件描述是空的，没有对上发文类型。' : '')
-      || (matched === 'conflict' ? '这个文件描述对上了多种发文类型，没有创建。' : '')
+      || descriptionConflict
       || (matched === 'missing' ? '发文映射里没有这个文件描述。' : '')
       || (!input.hasSender ? '还没有默认发件人。到发文映射里设一个。' : '')
       || (!input.hasReviewer ? '还没有默认审核人。到发文映射里设一个。' : '')
@@ -164,6 +169,8 @@ export function planFileManageLetters(input: {
       mailTypeId,
       mailTypeName,
       subject: subject.text,
+      ...(descriptionFallback ? { descriptionFallback } : {}),
+      ...(descriptionConflict ? { descriptionConflict } : {}),
       blocked
     })
   }

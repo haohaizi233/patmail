@@ -4,6 +4,7 @@ import { isForbiddenFieldName, fieldLabel } from '../query/field-registry'
 import { PAGE_OPTIONS } from '../query/form-layout'
 import { PCT_CUSTOMER_VOLUME_TYPE_NAME, PCT_OUR_VOLUME_TYPE_NAME, resolvePctRuntime, type PctRuntimeConfig } from '../workflow/pct-config'
 import type { CustomerQueryProfile, FileMailStyle, LimitMailStyle, QuerySurfaceId, WorkflowId } from './types'
+import { mailTypePath, matchMailTypePath, type MailTypePathNode } from './mail-type-path'
 
 /** 查询入口。以后新增入口只加这一项，客户页按这份清单渲染。 */
 export const QUERY_SURFACES: { id: QuerySurfaceId; label: string; hash: string }[] = [
@@ -283,24 +284,17 @@ export function pctVolumeSlot(input: { customerVolume?: string; ourVolume?: stri
   return null
 }
 
-function pickedType(nodes: Array<{ id: string; name: string }>, id: string): PctMailTypeNode | null {
+function pickedType(nodes: MailTypePathNode[], id: string): PctMailTypeNode | null {
   const text = id.trim()
   if (!text) return null
-  const found = nodes.find(node => node.id === text && node.name.trim() && !nodes.some(child => (child as { parentId?: string }).parentId === node.id))
-  return found ? { id: found.id, name: found.name } : null
+  const found = nodes.find(node => node.id === text && node.name.trim())
+  return found && !nodes.some(child => child.parentId?.toLowerCase() === text.toLowerCase()) && mailTypePath(nodes, text) ? { id: found.id, name: found.name } : null
 }
 
 /** 下拉里名称与完整全名一致才算对上。只包含其中几个词的不算。同名多于一项时不猜。 */
-export function matchMailTypeByName(nodes: Array<{ id: string; name: string }>, name: string): PctMailTypeNode | null {
-  const parents = new Set(nodes.map(node => (node as { parentId?: string }).parentId).filter(Boolean))
-  return byExactName(nodes.filter(node => !parents.has(node.id)), name)
-}
-
-function byExactName(nodes: Array<{ id: string; name: string }>, name: string): PctMailTypeNode | null {
-  const text = name.trim()
-  if (!text) return null
-  const found = nodes.filter(node => node.id.trim() && node.name.trim() === text)
-  return found.length === 1 ? { id: found[0].id, name: found[0].name.trim() } : null
+export function matchMailTypeByName(nodes: MailTypePathNode[], name: string): PctMailTypeNode | null {
+  const found = name.trim() ? matchMailTypePath(nodes, name) : null
+  return found ? { id: found.id, name: found.name.trim() } : null
 }
 
 /** 先用工作流里点名的名称。这棵树没有那一项时，退回固定全名。只接受完整名称完全一致的叶子节点。 */

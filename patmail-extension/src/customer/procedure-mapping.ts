@@ -1,4 +1,5 @@
 import type { ProcedureMailTypeMapping } from '../mail/types'
+import type { TreeOption } from '../query/option-tree'
 import { PCT_CUSTOMER_VOLUME_TYPE_NAME, PCT_OUR_VOLUME_TYPE_NAME } from '../workflow/pct-config'
 import { DESIGN_CUSTOMER_TYPE, DESIGN_OUR_TYPE, NATIONAL_CUSTOMER_TYPE, NATIONAL_OUR_TYPE, NATIONAL_PROC_LABEL } from './pct-sheet'
 
@@ -25,4 +26,12 @@ export function validProcedureMappings(rows: ProcedureMailTypeMapping[]): boolea
     ids.add(row.id); keys.add(key)
     return true
   })
+}
+
+export function matchProcedureLeaf(nodes: TreeOption[], label: string): TreeOption | null {
+  const matches = nodes.filter(node => node.value && node.selectable !== false && node.label.trim() === label.trim() &&
+    !nodes.some(child => child.parent === node.value))
+  const picked = matches.length === 1 ? matches[0] : undefined
+  if (!picked || nodes.filter(node => node.value === picked.value).length !== 1) return null
+  return picked
 }
