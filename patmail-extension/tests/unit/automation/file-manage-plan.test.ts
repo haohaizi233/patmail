@@ -10,6 +10,7 @@ import type { MailDraftPreview } from '../../../src/mail/types'
 const fileId = '71d067a3-d1a3-4d4b-87f9-38ea9d96bf70'
 const typeId = '82e178b4-e2b4-4e5c-98fa-49fb0ea7cf81'
 const otherType = '93f289c5-f3c5-4f6d-a90b-50ac1fb8d092'
+const testDescriptionNodes = [{ value: '11111111-1111-4111-8111-111111111111', label: '专利证书' }]
 
 const subject: SubjectRule = {
   template: '{客户名称}-{文件描述}-{发文类型}',
@@ -32,11 +33,79 @@ function mapping(text: string, mailTypeId: string): DescriptionMailTypeMapping {
 }
 
 describe('文件管理工作流规划', () => {
+  it('同名叶子按查询返回的文书编号和文件分支分开匹配和合并', () => {
+    const description = '按照条约第19条修改的权利要求书'
+    const label = description + '(150127)'
+    const submitted = 'D97348DE-F8DC-4B99-9B6E-0B4AA406FC13'
+    const internal = 'E9B68288-1B01-4139-92A3-D875F2FFE6DA'
+    const file = { fileId, fileName: '甲.pdf', fileDescription: description, fileDescriptionCode: '150127', customerName: '甲' }
+    const plan = planFileManageLetters({
+      customerName: '甲', mailStyle: 'merge_by_customer_description',
+      files: [
+        { ...file, fileType: '递交官方' },
+        { ...file, fileId: otherType, fileType: '本所文件' },
+        { ...file, fileId: typeId }
+      ],
+      mappings: [
+        { ...mapping(label, typeId), fileDescriptionId: submitted },
+        { ...mapping(label, otherType), fileDescriptionId: internal }
+      ],
+      subject, hasSender: true, hasReviewer: true, hasSignature: true
+    })
+    expect(plan.letters).toHaveLength(3)
+    expect(plan.letters.find(letter => letter.files[0]?.fileId === fileId)?.mailTypeId).toBe(typeId)
+    expect(plan.letters.find(letter => letter.files[0]?.fileId === otherType)?.mailTypeId).toBe(otherType)
+    expect(plan.letters.find(letter => letter.files[0]?.fileId === typeId)?.descriptionConflict).toContain('多个叶子候选')
+  })
+
+  it('只给当前文件采用所选叶子映射，已失效的选择仍拦截', () => {
+    const label = '电子提交收据'
+    const leafIds = ['25b78593-aa1a-4b4d-b0d1-67897b6e4e42', '4e5b8e90-49c1-4fd7-a6ed-d3142d07be07']
+    const base = { fileId, fileName: '收据.pdf', fileDescription: label, fileType: '官方来文', applicationType: '发明', customerName: '甲' }
+    const input = {
+      customerName: '甲', mailStyle: 'merge_by_customer_description' as const,
+      files: [base, { ...base, fileId: otherType, applicationType: '实用新型' }],
+      mappings: leafIds.map((fileDescriptionId, index) => ({ ...mapping(label, index ? otherType : typeId), fileDescriptionId })),
+      subject, hasSender: true, hasReviewer: true, hasSignature: true
+    }
+    const pending = planFileManageLetters(input)
+    expect(pending.letters[0]?.mappingChoices?.map(choice => choice.descriptionId)).toEqual(leafIds)
+    const choice = pending.letters[0]?.mappingChoices?.[1]
+    const selected = planFileManageLetters({ ...input, mappingSelections: { [fileId]: choice?.key ?? '' } })
+    expect(selected.letters[0]).toMatchObject({ applicationType: '发明', mailTypeId: otherType, selectedMappingKey: choice?.key, blocked: '' })
+    expect(selected.letters[1]).toMatchObject({ applicationType: '实用新型', mailTypeId: '' })
+    const stale = planFileManageLetters({ ...input, mappings: input.mappings.slice(0, 1), mappingSelections: { [fileId]: choice?.key ?? '' } })
+    expect(stale.letters[0]?.descriptionConflict).toContain('多个叶子候选')
+  })
+
+  it('已配置叶子 ID 时优先采用该规则，旧文本只在未配置该叶子时兼容', () => {
+    const plan = planFileManageLetters({
+      customerName: '甲', mailStyle: 'single_file', descriptionNodes: testDescriptionNodes,
+      files: [{ fileId, fileName: '甲.pdf', fileDescription: '专利证书', customerName: '甲' }],
+      mappings: [
+        mapping('专利证书', otherType),
+        { ...mapping('专利证书', typeId), fileDescriptionId: testDescriptionNodes[0].value }
+      ],
+      subject, hasSender: true, hasReviewer: true, hasSignature: true
+    })
+    expect(plan.letters[0]?.mailTypeId).toBe(typeId)
+  })
+  it('同一分支的同名节点在树里没有可区分的编号时仍提示歧义', () => {
+    const label = '电子提交收据'
+    const plan = planFileManageLetters({
+      customerName: '甲', mailStyle: 'single_file',
+      files: [{ fileId, fileName: '收据.pdf', fileDescription: label, fileDescriptionCode: '123456', fileType: '官方来文', customerName: '甲' }],
+      mappings: [{ ...mapping(label, typeId), fileDescriptionId: '25b78593-aa1a-4b4d-b0d1-67897b6e4e42' }],
+      subject, hasSender: true, hasReviewer: true, hasSignature: true
+    })
+    expect(plan.letters[0]?.descriptionConflict).toContain('多个叶子候选')
+    expect(plan.letters[0]?.mailTypeId).toBe('')
+  })
   it.each([
     { rules: [mapping('发明专利证书(签章)(400001CA)', typeId)], type: typeId, blocked: '' },
     { rules: [mapping('发明专利证书(签章)(400001CA)', typeId), mapping('发明专利证书(签章)', typeId)], type: typeId, blocked: '' },
     { rules: [mapping('发明专利证书(签章)(400001CA)', otherType), mapping('发明专利证书(签章)', typeId)], type: '', blocked: '这个文件描述对上了多种发文类型，没有创建。' },
-    { rules: [mapping('发明专利证书(400001)', typeId)], type: '', blocked: '发文映射里没有这个文件描述。' }
+    { rules: [mapping('发明专利证书(400001)', typeId)], type: '', blocked: '发文映射里没有这个文件描述的可用叶子规则。' }
   ])('按证书描述的编号兼容关系匹配并拦截冲突 %#', ({ rules, type, blocked }) => {
     const plan = planFileManageLetters({
       customerName: '甲', mailStyle: 'single_file',
@@ -45,7 +114,7 @@ describe('文件管理工作流规划', () => {
     })
     expect(plan.letters[0]).toMatchObject({ mailTypeId: type, blocked })
     const letter = plan.letters[0]
-    const fallback = !blocked && rules.length === 1 ? '发明专利证书(签章)(400001CA)' : undefined
+    const fallback = !blocked ? '发明专利证书(签章)(400001CA)' : undefined
     expect(letter?.descriptionFallback).toBe(fallback)
     expect(letter?.descriptionConflict).toBe(blocked.includes('多种发文类型') ? blocked : undefined)
   })
@@ -60,7 +129,7 @@ describe('文件管理工作流规划', () => {
       mappings: [...mappings], subject, hasSender: true, hasReviewer: true, hasSignature: true
     })
     expect(plan.letters[0]?.mailTypeId).toBe(expected)
-    if (!expected) expect(plan.letters[0]?.descriptionConflict).toContain('缺少文书编号')
+    if (!expected) expect(plan.letters[0]?.descriptionConflict).toContain('多个叶子候选')
   })
 
   it('旧客户类型覆盖不能绕过固定映射缺失检查', () => {
@@ -85,6 +154,7 @@ describe('文件管理工作流规划', () => {
         { fileId: otherType, fileName: '乙.pdf', fileDescription: '专利证书', customerName: '甲' }
       ],
       mappings: [mapping('专利证书', typeId)],
+      descriptionNodes: testDescriptionNodes,
       subject,
       hasSender: true,
       hasReviewer: true,
@@ -118,6 +188,7 @@ describe('文件管理工作流规划', () => {
         { fileId: 'a2e178b4-e2b4-4e5c-98fa-49fb0ea7cf81', fileName: '乙.pdf', fileDescription: '专利证书', customerName: '鹏城 实验室' }
       ],
       mappings: [mapping('专利证书', typeId)],
+      descriptionNodes: testDescriptionNodes,
       subject,
       hasSender: true,
       hasReviewer: true,
@@ -140,6 +211,7 @@ describe('文件管理工作流规划', () => {
       mailStyle: 'merge_by_customer_description',
       files: [{ fileId, fileName: '甲.pdf', fileDescription: '专利证书', customerName: '甲' }],
       mappings: [mapping('专利证书', typeId), mapping('专利证书', otherType)],
+      descriptionNodes: testDescriptionNodes,
       subject,
       hasSender: true,
       hasReviewer: true,
@@ -154,6 +226,7 @@ describe('文件管理工作流规划', () => {
       mailStyle: 'merge_by_customer_description',
       files: [{ fileId, fileName: '甲.pdf', fileDescription: '专利证书', customerName: '乙' }],
       mappings: [mapping('专利证书', typeId)],
+      descriptionNodes: testDescriptionNodes,
       subject,
       hasSender: true,
       hasReviewer: true,
@@ -174,6 +247,7 @@ describe('文件管理工作流规划', () => {
       mailStyle: 'merge_by_customer_description',
       files: [{ fileId, fileName: '甲.pdf', fileDescription: '专利证书', customerName: '甲' }],
       mappings: [mapping('专利证书', typeId)],
+      descriptionNodes: testDescriptionNodes,
       subject,
       hasSender: true,
       hasReviewer: true,

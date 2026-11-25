@@ -1,5 +1,7 @@
 import { isQueryGuid } from '../query/query-validator'
-import { resolveDescriptionText } from '../mail/rules/description-mapping'
+import { createFileDescriptionLeafResolver } from '../mail/rules/file-description-leaf'
+import { pageSelectOptions } from '../query/form-page'
+import type { TreeOption } from '../query/option-tree'
 import { buildSubject } from '../mail/rules/subject-builder'
 import type { DescriptionMailTypeMapping, MailGroup, SubjectRule } from '../mail/types'
 import type { FileMailStyle } from './types'
@@ -10,6 +12,9 @@ export interface FileManageFile {
   fileId: string
   fileName: string
   fileDescription: string
+  fileDescriptionCode?: string
+  fileType?: string
+  applicationType?: string
   customerName: string
   caseVolume?: string
   customerVolume?: string
@@ -22,13 +27,24 @@ export interface FileManageLetterPlan {
   key: string
   files: FileManageFile[]
   description: string
+  applicationType: string
   mailTypeId: string
   mailTypeName: string
   subject: string
   descriptionFallback?: string
   descriptionConflict?: string
+  mappingChoices?: FileManageMappingChoice[]
+  selectedMappingKey?: string
   /** 非空时这一封不创建、不提交。 */
   blocked: string
+}
+
+export interface FileManageMappingChoice {
+  key: string
+  descriptionId: string
+  descriptionPath: string
+  mailTypeId: string
+  mailTypeName: string
 }
 
 const BAD_ADDRESS = /[();；]/
@@ -62,20 +78,12 @@ export function senderAddress(sender: { name?: string; email?: string; label?: s
   return { name, email }
 }
 
-function matchDescription(description: string, mappings: DescriptionMailTypeMapping[]): { mailTypeId: string; mailTypeName: string; fallbackLabel?: string } | 'missing' | 'conflict' | 'ambiguous' {
-  const { mapping: hit, conflict, ambiguousDescription, fallbackLabel } = resolveDescriptionText(description, mappings)
-  if (ambiguousDescription) return 'ambiguous'
-  if (conflict) return 'conflict'
-  if (!hit) return 'missing'
-  return { mailTypeId: hit.mailTypeId, mailTypeName: hit.mailTypeName.trim() || '已映射的发文类型', fallbackLabel }
-}
-
-function groupOf(key: string, description: string, files: FileManageFile[], mode: FileMailStyle): MailGroup {
+function groupOf(key: string, description: string, files: FileManageFile[], mode: FileMailStyle, leafId?: string): MailGroup {
   return {
     id: key,
     customerProfileId: '',
     customerIdentity: '',
-    descriptionIdentity: description ? `text:${description}` : '',
+    descriptionIdentity: leafId ? `id:${leafId}` : '',
     descriptionLabel: description,
     sendMode: mode,
     policyVersion: 0,
@@ -114,6 +122,8 @@ export function planFileManageLetters(input: {
   mailStyle: FileMailStyle
   files: FileManageFile[]
   mappings: DescriptionMailTypeMapping[]
+  descriptionNodes?: TreeOption[]
+  mappingSelections?: Record<string, string>
   subject: SubjectRule | null
   hasSender: boolean
   hasReviewer: boolean
@@ -132,32 +142,74 @@ export function planFileManageLetters(input: {
     kept.push(file)
   }
   if (others) notes.push(`有 ${others} 个文件不是这位客户，没有放进来。`)
-  const buckets = new Map<string, FileManageFile[]>()
+  const resolveLeaf = createFileDescriptionLeafResolver(input.descriptionNodes ?? pageSelectOptions('filetype') ?? [])
+  const rulesByLeaf = new Map<string, DescriptionMailTypeMapping[]>()
+  for (const rule of input.mappings) {
+    if (!rule.enabled || !isQueryGuid(rule.mailTypeId)) continue
+    const id = rule.fileDescriptionId?.trim().toLowerCase() ||
+      resolveLeaf({ fileDescription: rule.fileDescriptionText }).leaf?.id
+    if (!id) continue
+    const rules = rulesByLeaf.get(id) ?? []
+    rules.push(rule)
+    rulesByLeaf.set(id, rules)
+  }
+  type Leaf = NonNullable<ReturnType<typeof resolveLeaf>['leaf']>
+  function choicesFor(leaf: Leaf): FileManageMappingChoice[] {
+    const candidates = rulesByLeaf.get(leaf.id) ?? []
+    const explicit = candidates.filter(rule => rule.fileDescriptionId?.trim())
+    const choices = new Map<string, FileManageMappingChoice>()
+    for (const rule of explicit.length ? explicit : candidates) {
+      const key = `${leaf.id}/${rule.mailTypeId.toLowerCase()}`
+      if (!choices.has(key)) choices.set(key, {
+        key, descriptionId: leaf.id, descriptionPath: leaf.path,
+        mailTypeId: rule.mailTypeId, mailTypeName: rule.mailTypeName.trim() || '已映射的发文类型'
+      })
+    }
+    return [...choices.values()]
+  }
+  const buckets = new Map<string, {
+    files: FileManageFile[]
+    leaf: Leaf | null
+    matched?: FileManageMappingChoice
+    descriptionConflict?: string
+    mappingChoices?: FileManageMappingChoice[]
+    selectedMappingKey?: string
+  }>()
   for (const file of kept) {
-    const description = file.fileDescription.trim()
-    const key = input.mailStyle === 'single_file' || !description
+    const resolved = resolveLeaf(file)
+    const choices = resolved.candidates.flatMap(choicesFor)
+    const ambiguous = resolved.ambiguous || choices.length > 1
+    const chosen = ambiguous ? choices.find(choice => choice.key === input.mappingSelections?.[file.fileId.toLowerCase()]) : undefined
+    const leaf = chosen ? resolved.candidates.find(item => item.id === chosen.descriptionId) ?? null : resolved.leaf
+    const matched = ambiguous ? chosen : choices[0]
+    const descriptionConflict = !ambiguous || chosen ? undefined : resolved.ambiguous
+      ? '这个文件描述在原站树里有多个叶子候选，文书编号或所属分支不足以区分。'
+      : '这个文件描述对上了多种发文类型，没有创建。'
+    const key = input.mailStyle === 'single_file' || !leaf || ambiguous
       ? `single:${file.fileId || file.fileName}`
-      : `merge:${description}`
-    const list = buckets.get(key) ?? []
-    list.push(file)
-    buckets.set(key, list)
+      : `merge:${leaf.id}`
+    const bucket = buckets.get(key) ?? {
+      files: [], leaf, matched, descriptionConflict,
+      mappingChoices: ambiguous && choices.length ? choices : undefined,
+      selectedMappingKey: chosen?.key
+    }
+    bucket.files.push(file)
+    buckets.set(key, bucket)
   }
   const letters: FileManageLetterPlan[] = []
-  for (const [key, files] of buckets) {
+  for (const [key, { files, leaf, matched, descriptionConflict, mappingChoices, selectedMappingKey }] of buckets) {
     const description = files[0]?.fileDescription.trim() ?? ''
+    const applicationType = [...new Set(files.map(file => file.applicationType?.trim() || '—'))].join('、')
     const fileBlock = files.map(blockFile).find(Boolean) ?? ''
-    const matched = description ? matchDescription(description, input.mappings) : 'missing'
-    const mailTypeId = typeof matched === 'object' ? matched.mailTypeId : ''
-    const mailTypeName = typeof matched === 'object' ? matched.mailTypeName : ''
-    const descriptionFallback = typeof matched === 'object' ? matched.fallbackLabel : undefined
-    const descriptionConflict = matched === 'ambiguous'
-      ? '这个文件描述缺少文书编号，在原站文件描述树里有多个候选，没有创建。'
-      : matched === 'conflict' ? '这个文件描述对上了多种发文类型，没有创建。' : undefined
-    const subject = subjectOf(input.subject, groupOf(key, description, files, input.mailStyle), input.customerName, mailTypeName, input.now)
+    const mailTypeId = matched?.mailTypeId ?? ''
+    const mailTypeName = matched?.mailTypeName ?? ''
+    const descriptionFallback = matched && leaf && !selectedMappingKey && files.some(file => !file.fileDescriptionCode && file.fileDescription.trim() !== leaf.label)
+      ? leaf.label : undefined
+    const subject = subjectOf(input.subject, groupOf(key, description || leaf?.label || '', files, input.mailStyle, leaf?.id), input.customerName, mailTypeName, input.now)
     const blocked = fileBlock
-      || (!description ? '文件描述是空的，没有对上发文类型。' : '')
       || descriptionConflict
-      || (matched === 'missing' ? '发文映射里没有这个文件描述。' : '')
+      || (!description && !leaf ? '文件描述是空的，没有对上发文类型。' : '')
+      || (!matched ? '发文映射里没有这个文件描述的可用叶子规则。' : '')
       || (!input.hasSender ? '还没有默认发件人。到发文映射里设一个。' : '')
       || (!input.hasReviewer ? '还没有默认审核人。到发文映射里设一个。' : '')
       || (!input.hasSignature ? '还没有默认签名。到发文映射里设一个。' : '')
@@ -166,11 +218,14 @@ export function planFileManageLetters(input: {
       key,
       files,
       description,
+      applicationType,
       mailTypeId,
       mailTypeName,
       subject: subject.text,
       ...(descriptionFallback ? { descriptionFallback } : {}),
       ...(descriptionConflict ? { descriptionConflict } : {}),
+      ...(mappingChoices ? { mappingChoices } : {}),
+      ...(selectedMappingKey ? { selectedMappingKey } : {}),
       blocked
     })
   }
