@@ -1,5 +1,6 @@
 import { isQueryGuid } from '../../query/query-validator'
 import type { DescriptionMailTypeMapping } from '../types'
+import { descriptionMappingsOverlap } from './description-mapping'
 
 export interface ImportMailType {
   id: string
@@ -79,21 +80,19 @@ function pathOf(node: ImportMailType, byId: Map<string, ImportMailType>): string
     seen.add(current.id)
     names.unshift(clean(current.name))
     const nextParent: string = current.parentId?.trim() ?? ''
-    current = nextParent ? byId.get(nextParent) : undefined
+    current = nextParent ? byId.get(nextParent.toLowerCase()) : undefined
+    if (nextParent && !current) return ''
   }
-  return names.join('/')
+  return current ? '' : names.join('/')
 }
 
 function compact(value: string): string {
   return clean(value).toLowerCase().replace(/\s+/g, '').replace(/[／\\]/g, '/')
 }
 
-function pickByName(matches: Array<{ node: ImportMailType }>, nodes: ImportMailType[]): TypeMatch | null {
+function pickByName(matches: Array<{ node: ImportMailType }>): TypeMatch | null {
   if (matches.length === 1) return { kind: 'ok', id: matches[0].node.id, name: matches[0].node.name }
   if (matches.length < 2) return null
-  const parents = new Set(nodes.map(node => node.parentId?.trim()).filter((id): id is string => Boolean(id)))
-  const leaves = matches.filter(item => !parents.has(item.node.id))
-  if (leaves.length === 1) return { kind: 'ok', id: leaves[0].node.id, name: leaves[0].node.name }
   return { kind: 'ambiguous' }
 }
 
@@ -107,16 +106,16 @@ function matchLabel(label: string, nodes: ImportMailType[], byId: Map<string, Im
   const ranked = nodes.map(node => ({ node, path: compact(pathOf(node, byId)), name: compact(node.name) }))
   const byName = ranked.filter(item => item.name === wanted)
   if (!wanted.includes('/')) {
-    const named = pickByName(byName, nodes)
+    const named = pickByName(byName)
     if (named) return named
   }
   const byPath = ranked.filter(item => item.path === wanted)
   if (byPath.length === 1) return { kind: 'ok', id: byPath[0].node.id, name: byPath[0].node.name }
   if (byPath.length > 1) return { kind: 'ambiguous' }
-  return pickByName(byName, nodes) ?? { kind: 'missing' }
+  return { kind: 'missing' }
 }
 
-function locate(table: string[][], nodes: ImportMailType[]): ColumnMap | { message: string } {
+function locate(table: string[][], nodes: ImportMailType[], byId: Map<string, ImportMailType>): ColumnMap | { message: string } {
   let sawDescription = false
   let sawType = false
   const limit = Math.min(table.length, 12)
@@ -137,7 +136,7 @@ function locate(table: string[][], nodes: ImportMailType[]): ColumnMap | { messa
   }
   if (sawDescription && !sawType) return { message: '认出了文件描述，还缺「发文类型」这一列。' }
   if (sawType && !sawDescription) return { message: '认出了发文类型，还缺「文件描述」这一列。' }
-  const inferred = inferColumns(table, nodes)
+  const inferred = inferColumns(table, nodes, byId)
   if (inferred) {
     return { header: -1, description: inferred.description, mailType: inferred.mailType, descriptionId: -1, mailTypeId: -1 }
   }
@@ -145,9 +144,8 @@ function locate(table: string[][], nodes: ImportMailType[]): ColumnMap | { messa
   return { message: '没有认出文件描述和发文类型。表头写成「文件描述」「发文类型」，或把描述放第一列、类型放第二列。' }
 }
 
-function inferColumns(table: string[][], nodes: ImportMailType[]): { description: number; mailType: number } | null {
+function inferColumns(table: string[][], nodes: ImportMailType[], byId: Map<string, ImportMailType>): { description: number; mailType: number } | null {
   if (!nodes.length || !table.length) return null
-  const byId = new Map(nodes.map(node => [node.id, node]))
   const width = Math.min(12, table.reduce((max, row) => Math.max(max, row.length), 0))
   let typeBest: { index: number; hits: number } | null = null
   for (let column = 0; column < width; column += 1) {
@@ -221,12 +219,12 @@ export function mappingExportRows(
   mailTypes: ImportMailType[]
 ): string[][] {
   const nodes = mailTypes.filter(node => node.id && clean(node.name))
-  const byId = new Map(nodes.map(node => [node.id, node]))
+  const byId = new Map(nodes.map(node => [node.id.toLowerCase(), node]))
   const rows = [['文件描述', '发文类型']]
   for (const item of mappings) {
     const description = clean(item.fileDescriptionText ?? '') || clean(item.fileDescriptionId ?? '')
-    const node = byId.get(item.mailTypeId)
-    const typeName = node ? pathOf(node, byId) : clean(item.mailTypeName)
+    const node = byId.get(item.mailTypeId.toLowerCase())
+    const typeName = (node && pathOf(node, byId)) || clean(item.mailTypeName)
     if (!description && !typeName) continue
     rows.push([description, typeName])
   }
@@ -240,10 +238,18 @@ export function mergeImportedMappings(
   mailTypes: ImportMailType[],
   options: MergeImportedMappingsOptions
 ): MergeImportedMappingsResult {
-  const nodes = mailTypes.filter(node => isQueryGuid(node.id) && clean(node.name))
-  const located = locate(table, nodes)
+  const parents = new Set(mailTypes.map(node => node.parentId?.trim().toLowerCase()).filter(Boolean))
+  const byId = new Map<string, ImportMailType>()
+  const duplicates = new Set<string>()
+  for (const node of mailTypes) {
+    const key = node.id.toLowerCase()
+    if (byId.has(key)) duplicates.add(key)
+    byId.set(key, node)
+  }
+  for (const id of duplicates) byId.delete(id)
+  const nodes = [...byId.values()].filter(node => isQueryGuid(node.id) && clean(node.name) && !parents.has(node.id.toLowerCase()) && pathOf(node, byId))
+  const located = locate(table, nodes, byId)
   if ('message' in located) return { ok: false, message: located.message }
-  const byId = new Map(nodes.map(node => [node.id, node]))
   const data = table.slice(located.header + 1, located.header + 1 + 2000)
   if (!data.length) return { ok: false, message: '表格里没有数据行。' }
   const chosen = new Map<string, string>()
@@ -271,6 +277,10 @@ export function mergeImportedMappings(
     if (!fileDescriptionId && !fileDescriptionText) continue
     const label = fileDescriptionText || fileDescriptionId || ''
     const byGuid = isQueryGuid(idCell) ? nodes.find(node => node.id.toLowerCase() === idCell.toLowerCase()) : undefined
+    if (idCell && !byGuid) {
+      stats.missing.push(idCell)
+      continue
+    }
     const byName = nameCell ? matchLabel(nameCell, nodes, byId) : null
     if (byGuid && byName?.kind === 'ok' && byGuid.id.toLowerCase() !== byName.id.toLowerCase()) {
       stats.mismatch.push(label)
@@ -289,10 +299,26 @@ export function mergeImportedMappings(
     }
     const key = importKey({ fileDescriptionId, fileDescriptionText })
     if (!key) continue
+    const next: DescriptionMailTypeMapping = {
+      id: '',
+      ...(fileDescriptionId ? { fileDescriptionId } : {}),
+      ...(fileDescriptionText ? { fileDescriptionText } : {}),
+      mailTypeId: resolved.id,
+      mailTypeName: resolved.name,
+      enabled: true,
+      version: 1,
+      updatedAt: options.now
+    }
+    const conflicts = (item: DescriptionMailTypeMapping) => item.enabled &&
+      item.mailTypeId.toLowerCase() !== resolved.id.toLowerCase() && descriptionMappingsOverlap(item, next)
     const previous = chosen.get(key)
     if (previous) {
       if (previous === resolved.id.toLowerCase()) stats.duplicate += 1
       else stats.fileConflict.push(label)
+      continue
+    }
+    if (pending.some(conflicts)) {
+      stats.fileConflict.push(label)
       continue
     }
     const same = mappings.filter(item => importKey(item) === key)
@@ -301,22 +327,13 @@ export function mergeImportedMappings(
       stats.existing += 1
       continue
     }
-    if (same.some(item => item.enabled)) {
+    if (mappings.some(conflicts)) {
       chosen.set(key, resolved.id.toLowerCase())
       stats.existingConflict.push(label)
       continue
     }
     chosen.set(key, resolved.id.toLowerCase())
-    pending.push({
-      id: options.createId(),
-      ...(fileDescriptionId ? { fileDescriptionId } : {}),
-      ...(fileDescriptionText ? { fileDescriptionText } : {}),
-      mailTypeId: resolved.id,
-      mailTypeName: resolved.name,
-      enabled: true,
-      version: 1,
-      updatedAt: options.now
-    })
+    pending.push({ ...next, id: options.createId() })
   }
   stats.added = pending.length
   if (!stats.added && !stats.existing && !stats.duplicate && !stats.fileConflict.length && !stats.existingConflict.length && !stats.missing.length && !stats.ambiguous.length && !stats.mismatch.length) {

@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { nationalTypeName } from '../../../src/customer/pct-sheet'
 import { matchMailTypeByName } from '../../../src/customer/mail-flow'
+import { matchMailTypePath } from '../../../src/customer/mail-type-path'
 import { pctRowsFromWorkbook } from '../../../src/customer/pct-workbook'
 import { PROCEDURE_MAIL_MAPPINGS } from '../../../src/customer/procedure-mapping'
 
@@ -32,6 +33,12 @@ it('唯一同名叶子可以匹配，同名叶子重复时不猜选', () => {
   const tree = [{ id: 'p', name: '分类', parentId: '' }, { id: 'c', name: '目标', parentId: 'p' }]
   expect(matchMailTypeByName(tree, '目标')).toEqual({ id: 'c', name: '目标' })
   expect(matchMailTypeByName([...tree, { id: 'd', name: '目标', parentId: 'p' }], '目标')).toBeNull()
+})
+
+it('同一发文类型 ID 指向两条分支时不采用其中一个路径', () => {
+  const tree = [{ id: 'a', name: '甲' }, { id: 'b', name: '乙' },
+    { id: 'leaf', name: '旧目标', parentId: 'a' }, { id: 'leaf', name: '目标', parentId: 'b' }]
+  expect(matchMailTypePath(tree, '目标', '乙/目标')).toBeNull()
 })
 
 it('DIY 映射持久化并按工作表名称和文号条件选择全名', async () => {

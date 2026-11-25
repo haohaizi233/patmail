@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readXlsxRows, xlsxBytes } from '../../../src/customer/xlsx-table'
 import { mappingExportRows, mergeImportedMappings } from '../../../src/mail/rules/description-import'
+import { upsertMapping } from '../../../src/mail/rules/description-mapping'
 import type { DescriptionMailTypeMapping } from '../../../src/mail/types'
 
 const certificate = 'cccccccc-1111-4111-8111-111111111111'
@@ -38,6 +39,33 @@ function merge(rows: string[][], mappings: DescriptionMailTypeMapping[] = [], ma
 }
 
 describe('文件描述映射导入', () => {
+  it('名称、树路径和内部编号都不能把分类节点当发文类型', () => {
+    const result = merge([
+      ['文件描述', '发文类型'],
+      ['文件甲', '通知书'],
+      ['文件乙', parent]
+    ])
+    expect(result.ok && result.added).toBe(0)
+  })
+
+  it('手动保存和导入都拦住带编号及不带编号的冲突映射', () => {
+    const existing = [saved('发明专利证书(签章)(400001CA)')]
+    expect(upsertMapping(existing, saved('发明专利证书(签章)', notice)).ok).toBe(false)
+    const result = merge([
+      ['文件描述', '发文类型'],
+      ['发明专利证书(签章)', '办理登记手续通知书']
+    ], existing)
+    expect(result.ok && result.added).toBe(0)
+    expect(result.ok && result.notice).toContain('已经对应另一个发文类型')
+  })
+
+  it('保留同名但明确指定了不同文书编号的映射', () => {
+    const existing = [saved('驳回决定(200305)')]
+    expect(upsertMapping(existing, saved('驳回决定(210407)', notice)).ok).toBe(true)
+    const result = merge([['文件描述', '发文类型'], ['驳回决定(210407)', '办理登记手续通知书']], existing)
+    expect(result.ok && result.added).toBe(1)
+  })
+
   it('认表头别名、路径和树里的名称，并跳过对不上的行', () => {
     const result = merge([
       ['对照表'],
