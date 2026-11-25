@@ -1,3 +1,6 @@
+/** 列的分配策略：lock 尽量维持内容宽，grow 吸收多余空间或优先承担压缩。 */
+export type ColumnFitMode = 'lock' | 'grow' | undefined
+
 /** 一列在分配前的宽度。content 含单元格左右内边距。 */
 export type ColumnFit = {
   /** 空内容或短内容时的下限。表头宽度通常就是这个下限。 */
@@ -8,6 +11,55 @@ export type ColumnFit = {
   lock?: boolean
   /** 每列都能放下文字之后，多出来的宽度分到这里。 */
   grow?: boolean
+}
+
+/**
+ * 为未显式指定策略的列自动推导 lock/grow：
+ * 短列保持 fit（尽量不截断），超出均分的长列标记为 grow 优先吸收多余空间与压缩。
+ */
+export function autoColumnModes(
+  specs: readonly Pick<ColumnFit, 'min' | 'content'>[],
+  container: number,
+  explicit?: readonly ColumnFitMode[],
+): ColumnFit[] {
+  if (!specs.length) return []
+  const mapped: ColumnFit[] = specs.map((spec, index) => {
+    const mode = explicit?.[index]
+    return {
+      min: spec.min,
+      content: spec.content,
+      lock: mode === 'lock',
+      grow: mode === 'grow',
+    }
+  })
+
+  if (mapped.some(col => col.grow)) return mapped
+
+  if (mapped.length === 1) {
+    if (!mapped[0].lock) mapped[0].grow = true
+    return mapped
+  }
+
+  const fairShare = container > 0 ? Math.floor(container / specs.length) : 0
+  let anyGrow = false
+  for (const col of mapped) {
+    if (!col.lock && col.content > fairShare) {
+      col.grow = true
+      anyGrow = true
+    }
+  }
+  if (!anyGrow) {
+    let bestIndex = -1
+    let maxContent = -1
+    mapped.forEach((col, index) => {
+      if (!col.lock && col.content >= maxContent) {
+        maxContent = col.content
+        bestIndex = index
+      }
+    })
+    if (bestIndex >= 0) mapped[bestIndex].grow = true
+  }
+  return mapped
 }
 
 /**
