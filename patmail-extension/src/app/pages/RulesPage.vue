@@ -2,8 +2,8 @@
 import { importProcedureMappings } from '../../customer/procedure-mapping-import'
 
 import { CURRENT_ENVIRONMENT } from '../../api/config'
-import { validProcedureMappings } from '../../customer/procedure-mapping'
-import { matchMailTypePath } from '../../customer/mail-type-path'
+import { matchProcedureLeaf, validProcedureMappings } from '../../customer/procedure-mapping'
+import { mailTypePath, matchMailTypePath } from '../../customer/mail-type-path'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import { computed, inject, ref, watch } from 'vue'
@@ -196,6 +196,11 @@ async function saveMapping(input: { description: string; mailTypeId: string; mai
     message.value = '请填写文件描述，并从发文类型里选择。'
     return
   }
+  const path = mailTypePath(mailTypes.value, input.mailTypeId)
+  if (!path || matchMailTypePath(mailTypes.value, input.mailTypeName, path)?.id !== input.mailTypeId) {
+    message.value = '请选择完整树路径唯一的发文类型叶子节点。'
+    return
+  }
   const result = upsertMapping(draft.value.mappings, {
     id: crypto.randomUUID(),
     fileDescriptionText: input.description,
@@ -211,8 +216,7 @@ async function saveMapping(input: { description: string; mailTypeId: string; mai
 
 async function saveProcedureMapping(input: Omit<ProcedureMailTypeMapping, 'id'>): Promise<void> {
   if (!draft.value) return
-  const matches = procedures.value.filter(item => item.label === input.procedure && item.value && !procedures.value.some(child => child.parent === item.value))
-  if (matches.length !== 1) { message.value = '请选择原站名称唯一的具体处理事项。'; return }
+  if (!matchProcedureLeaf(procedures.value, input.procedure)) { message.value = '请选择原站名称唯一的具体处理事项。'; return }
   if (!matchMailTypePath(mailTypes.value, input.mailTypeName, input.mailTypePath)) { message.value = '请选择唯一同名的发文类型叶子节点。'; return }
   const next = [...(draft.value.procedureMappings ?? []), { ...input, id: crypto.randomUUID() }]
   if (!validProcedureMappings(next)) { message.value = '该事项为内置项或相同文号条件已有映射，不能重复添加。'; return }

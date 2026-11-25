@@ -67,14 +67,21 @@ try {
       })
     if (call === 'GetSearchFiles')
       return reply(route, {
-        TableRowsCount: '1',
+        TableRowsCount: '2',
         TableRows: [
           {
             file_id: file,
             file_name: '通知书.pdf',
-            file_desc: '专利证书',
+            file_desc: '发明专利证书(签章)',
             customer_name: '客户甲',
             case_volume: 'PA-E2E',
+          },
+          {
+            file_id: guid(50),
+            file_name: '驳回决定.pdf',
+            file_desc: '驳回决定',
+            customer_name: '客户甲',
+            case_volume: 'PA-E2E-2',
           },
         ],
       })
@@ -228,7 +235,16 @@ try {
         mappings: [
           {
             id: 'map',
-            fileDescriptionText: '专利证书',
+            fileDescriptionText: '发明专利证书(签章)(400001CA)',
+            mailTypeId: type,
+            mailTypeName: '固定证书类型',
+            enabled: true,
+            version: 1,
+            updatedAt: '2026-11-11',
+          },
+          {
+            id: 'rejection-map',
+            fileDescriptionText: '驳回决定(200305)',
             mailTypeId: type,
             mailTypeName: '固定证书类型',
             enabled: true,
@@ -287,6 +303,12 @@ try {
   await choose(app.getByRole('combobox', { name: '客户', exact: true }), '客户甲')
   await app.getByRole('button', { name: '按绑定条件查询', exact: true }).click()
   await app.getByText('可以创建', { exact: true }).waitFor()
+  await app.getByText('编号兼容匹配：发明专利证书(签章)(400001CA)', { exact: true }).waitFor()
+  await app.getByRole('alert').filter({ hasText: '1 封的文件描述映射存在歧义' }).waitFor()
+  const ambiguousRow = app.locator('tr').filter({ hasText: '驳回决定.pdf' })
+  assert.equal(await ambiguousRow.getByRole('checkbox').isDisabled(), true)
+  await ambiguousRow.getByText(/缺少文书编号/).waitFor()
+  checks.push('unique fallback is noted and ambiguous fallback has an alert and cannot be selected')
   await app.getByLabel('勾选可以创建的', { exact: true }).check()
   await app.getByRole('button', { name: /^创建并提交/ }).click()
   await app.waitForFunction(

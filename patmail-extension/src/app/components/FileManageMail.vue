@@ -76,6 +76,7 @@ const signatureChoice = computed(() => {
   return defaultSignatureChoice(choices, props.rules?.defaultSignatureId ?? null, reservedSignatureId.value || null)
 })
 const readyLetters = computed(() => letters.value.filter(item => !item.blocked && item.mailTypeId && item.subject))
+const descriptionConflictCount = computed(() => letters.value.filter(item => item.descriptionConflict).length)
 const pickedLetters = computed(() => readyLetters.value.filter(item => picked.value.includes(item.key)))
 const allReadyPicked = computed(() => readyLetters.value.length > 0 && readyLetters.value.every(item => picked.value.includes(item.key)))
 const styleLabel = computed(() => customer.value ? customerMailStyleLabel(customer.value) : '')
@@ -113,6 +114,7 @@ function applyFileDesk(payload: unknown): void {
   outcomes.value = desk.outcomes && typeof desk.outcomes === 'object' ? desk.outcomes as Record<string, string> : {}
   foundFiles.value = Array.isArray(desk.foundFiles) ? desk.foundFiles as FileManageFile[] : []
   picked.value = Array.isArray(desk.picked) ? desk.picked.filter((item): item is string => typeof item === 'string') : []
+  if (foundFiles.value.length && props.rules) rebuild(foundFiles.value)
   if (!notice.value && (letters.value.length || foundFiles.value.length)) notice.value = '登录中断前的发文已经从本机恢复账本找回。'
 }
 
@@ -262,10 +264,11 @@ function rebuild(files: FileManageFile[]): void {
     hasReviewer: Boolean(reviewer.value),
     hasSignature: Boolean(signatureToken())
   })
+  const previousTypes = new Map(letters.value.map(item => [item.key, item.mailTypeId]))
   letters.value = planned.letters
   notes.value = planned.notes
-  const ready = new Set(planned.letters.filter(item => !item.blocked && item.mailTypeId && item.subject).map(item => item.key))
-  picked.value = picked.value.filter(key => ready.has(key))
+  const ready = new Map(planned.letters.filter(item => !item.blocked && item.mailTypeId && item.subject).map(item => [item.key, item.mailTypeId]))
+  picked.value = picked.value.filter(key => ready.has(key) && previousTypes.get(key) === ready.get(key))
 }
 
 async function search(): Promise<void> {
@@ -400,6 +403,11 @@ async function rememberRun(
 
 async function submit(): Promise<void> {
   if (!bridge || sending.value) return
+  if (!props.rules || !customer.value || !foundFiles.value.length) {
+    notice.value = '请重新按绑定条件查询，确认发文映射后再提交。'
+    return
+  }
+  rebuild(foundFiles.value)
   const queued = pickedLetters.value.flatMap(letter => {
     const item = itemOf(letter)
     return item ? [item] : []
@@ -476,7 +484,9 @@ watch(customerId, (next, previous) => {
   notice.value = ''
 }, { flush: 'sync' })
 
-watch(() => customer.value?.fileMailConfig, () => { if (foundFiles.value.length) rebuild(foundFiles.value) }, { deep: true })
+watch([() => customer.value?.fileMailConfig, () => props.rules?.revision], () => {
+  if (!sending.value && foundFiles.value.length) rebuild(foundFiles.value)
+}, { deep: true })
 
 watch([signatureChoice, pickedSender, reviewer], () => {
   if (foundFiles.value.length) rebuild(foundFiles.value)
@@ -522,6 +532,9 @@ function fileNames(letter: FileManageLetterPlan): string {
       </template>
       <p v-if="notice" class="hint">{{ notice }}</p>
       <p v-for="note in notes" :key="note" class="hint">{{ note }}</p>
+      <p v-if="descriptionConflictCount" role="alert" class="description-match-alert">
+        {{ descriptionConflictCount }} 封的文件描述映射存在歧义，已停止创建。请核对下方对应行。
+      </p>
       <p v-if="letters.length" class="hint">勾选要发的。停住的不能勾。</p>
       <table v-if="letters.length" class="grid file-manage-grid">
         <colgroup>
@@ -544,12 +557,18 @@ function fileNames(letter: FileManageLetterPlan): string {
           <tr v-for="letter in letters" :key="letter.key" :class="{ 'is-selected': picked.includes(letter.key) }">
             <td class="pick"><input type="checkbox" :aria-label="letterLabel(letter)" :checked="picked.includes(letter.key)" :disabled="sending || Boolean(letter.blocked) || !letter.mailTypeId || !letter.subject" @change="toggleLetter(letter.key)" /></td>
             <td class="files"><span class="clip wrap" v-hint.clip="fileNames(letter)">{{ fileNames(letter) }}</span></td>
-            <td class="desc"><span class="clip wrap" v-hint.clip="letter.description || '没有描述'">{{ letter.description || '没有描述' }}</span></td>
+            <td class="desc">
+              <span class="clip wrap" v-hint.clip="letter.description || '没有描述'">{{ letter.description || '没有描述' }}</span>
+              <small v-if="letter.descriptionFallback" class="hint description-match-note">编号兼容匹配：{{ letter.descriptionFallback }}</small>
+            </td>
             <td class="type"><span class="clip wrap" v-hint.clip="letter.mailTypeName || '没对上'">{{ letter.mailTypeName || '没对上' }}</span></td>
             <td class="to"><span class="clip wrap" v-hint.clip="customer?.fileMailConfig?.to || '案件联系人'">案件联系人{{ customer?.fileMailConfig?.to ? '＋客户追加' : '' }}</span></td>
             <td class="cc"><span class="clip wrap" v-hint.clip="customer?.fileMailConfig?.cc ? '按客户抄送配置' : '发件人，商务'">{{ customer?.fileMailConfig?.cc ? '按客户配置' : '发件人，商务' }}</span></td>
             <td class="title"><span class="clip one" v-hint.clip="letter.subject || '还没有标题'">{{ letter.subject || '还没有标题' }}</span></td>
-            <td class="state"><span class="clip wrap" v-hint.clip="statusOf(letter)">{{ statusOf(letter) }}</span></td>
+            <td class="state">
+              <span v-if="letter.descriptionConflict" class="description-match-conflict">{{ letter.descriptionConflict }}</span>
+              <span v-if="statusOf(letter) !== letter.descriptionConflict" class="clip wrap" v-hint.clip="statusOf(letter)">{{ statusOf(letter) }}</span>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -557,3 +576,25 @@ function fileNames(letter: FileManageLetterPlan): string {
     </template>
   </div>
 </template>
+
+<style scoped>
+.description-match-note {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.description-match-alert,
+.description-match-conflict {
+  color: #99224c;
+  font-weight: 600;
+}
+.description-match-alert {
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #efb3c8;
+  border-radius: 0.5rem;
+  background: #fff1f6;
+}
+.description-match-conflict {
+  display: block;
+  white-space: normal;
+}
+</style>

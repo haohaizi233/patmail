@@ -66,7 +66,12 @@ function onFile(event: Event): void {
 
 function submit(): void {
   localNotice.value = ''
-  if (!descriptionId.value || !description.value || props.descriptions.some(item => item.parent === descriptionId.value) || props.descriptions.find(item => item.value === descriptionId.value)?.selectable === false) { localNotice.value = '请从原站文件描述下拉框选择。'; return }
+  const descriptions = props.descriptions.filter(item => item.value === descriptionId.value)
+  if (!descriptionId.value || !description.value || descriptions.length !== 1 || descriptions[0].selectable === false ||
+      props.descriptions.some(item => item.parent === descriptionId.value)) {
+    localNotice.value = '请从原站文件描述下拉框选择唯一的具体描述。'
+    return
+  }
   const picked = byId.value.get(mailTypeId.value)
   emit('save', {
     description: description.value.trim(),
@@ -124,7 +129,7 @@ watch(() => props.mappings, (rows) => {
           <td><TreeOptionSelect v-model="descriptionId" class="description-picker" :options="descriptions" :multiple="false" leaves-only :status="descriptionLoading ? 'loading' : descriptions.length ? 'ready' : 'empty'" empty-text="未读取到文件描述，请重新读取。" @retry="emit('reloadDescriptions')" /></td>
           <td>
             <div class="type-cell">
-              <MailTypeTreeSelect v-model="mailTypeId" :options="treeOptions" :disabled="mailTypes.length === 0" />
+              <MailTypeTreeSelect v-model="mailTypeId" :options="treeOptions" :disabled="mailTypes.length === 0" leaves-only />
               <button type="button" class="solid" @click="submit">添加</button>
             </div>
           </td>
