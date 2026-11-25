@@ -42,5 +42,5 @@ it('文件描述从查询表同款树选择后新增，原输入框已替换', a
   ;([...document.querySelectorAll<HTMLButtonElement>('.theme-tree-pick')].find(node => node.textContent === '发文类型')!).click()
   await nextTick()
   ;(host.querySelector('.mapping-add .solid') as HTMLButtonElement).click()
-  expect(save).toHaveBeenCalledWith({ description: '原站文件描述', mailTypeId: 'type', mailTypeName: '发文类型' })
+  expect(save).toHaveBeenCalledWith({ descriptionId: 'desc', description: '原站文件描述', mailTypeId: 'type', mailTypeName: '发文类型' })
 })

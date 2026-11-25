@@ -19,7 +19,7 @@ const props = defineProps<{
   importing?: boolean
 }>()
 const emit = defineEmits<{
-  save: [mapping: { description: string; mailTypeId: string; mailTypeName: string }]
+  save: [mapping: { descriptionId: string; description: string; mailTypeId: string; mailTypeName: string }]
   remove: [id: string]
   reload: []
   reloadDescriptions: []
@@ -28,7 +28,7 @@ const emit = defineEmits<{
 const descriptionId = ref('')
 const description = computed(() => props.descriptions.find(item => item.value === descriptionId.value)?.label ?? '')
 const localNotice = ref('')
-const { query, page, pages, visible, total } = useMappingRows(computed(() => props.mappings), row => `${row.fileDescriptionText ?? ''} ${typePath(row.mailTypeId, row.mailTypeName)}`)
+const { query, page, pages, visible, total } = useMappingRows(computed(() => props.mappings), row => `${descriptionPath(row)} ${row.fileDescriptionId ?? ''} ${typePath(row.mailTypeId, row.mailTypeName)}`)
 const mailTypeId = ref('')
 
 const treeOptions = computed(() => props.mailTypes.map(item => ({
@@ -37,6 +37,33 @@ const treeOptions = computed(() => props.mailTypes.map(item => ({
   ...(item.parentId ? { parent: item.parentId } : {})
 })))
 const byId = computed(() => new Map(props.mailTypes.map(item => [item.id, item])))
+const descriptionById = computed(() => new Map(props.descriptions.map(item => [item.value.toLowerCase(), item])))
+const descriptionOptions = computed(() => {
+  const counts = new Map<string, number>()
+  const keyOf = (item: TreeOption) => JSON.stringify([item.parent?.toLowerCase(), item.label.trim()])
+  for (const item of props.descriptions) {
+    const key = keyOf(item)
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return props.descriptions.map(item => (counts.get(keyOf(item)) ?? 0) > 1
+    ? { ...item, label: `${item.label} · ${item.value}` }
+    : item)
+})
+const descriptionOptionById = computed(() => new Map(descriptionOptions.value.map(item => [item.value.toLowerCase(), item])))
+
+function descriptionPath(item: DescriptionMailTypeMapping): string {
+  const fallback = item.fileDescriptionText || item.fileDescriptionId || ''
+  let node = descriptionById.value.get(item.fileDescriptionId?.toLowerCase() ?? '')
+  if (!node) return fallback
+  const names: string[] = []
+  const seen = new Set<string>()
+  while (node && !seen.has(node.value)) {
+    seen.add(node.value)
+    names.unshift(descriptionOptionById.value.get(node.value.toLowerCase())?.label ?? node.label)
+    node = descriptionById.value.get(node.parent?.toLowerCase() ?? '')
+  }
+  return names.join(' / ')
+}
 
 function typePath(id: string, fallback: string): string {
   const names: string[] = []
@@ -74,6 +101,7 @@ function submit(): void {
   }
   const picked = byId.value.get(mailTypeId.value)
   emit('save', {
+    descriptionId: descriptionId.value,
     description: description.value.trim(),
     mailTypeId: picked?.id ?? '',
     mailTypeName: picked?.name ?? ''
@@ -83,7 +111,7 @@ function submit(): void {
 watch(() => props.mappings, (rows) => {
   const text = description.value.trim()
   if (!text || !mailTypeId.value) return
-  if (rows.some(item => (item.fileDescriptionText ?? '').trim() === text && item.mailTypeId === mailTypeId.value)) {
+  if (rows.some(item => item.fileDescriptionId?.toLowerCase() === descriptionId.value.toLowerCase() && item.mailTypeId === mailTypeId.value)) {
     descriptionId.value = ''
     mailTypeId.value = ''
   }
@@ -104,7 +132,7 @@ watch(() => props.mappings, (rows) => {
         <button type="button" class="text-button" @click="emit('reload')">重新读取发文类型</button>
       </div>
     </div>
-    <p class="hint">发文类型由文件描述或发文内容决定。一行对应一种，文件描述从原站热加载的树中选择，发文类型在树里点选。也可以导入 Excel：认「文件描述」和「发文类型」两列，相同的不会重复写入，已经有的不会改。导出的表就是这个格式，发文类型写成从根到叶子的路径。</p>
+    <p class="hint">从原站的树中选择文件描述叶子和发文类型。导入 Excel 时，填写「文件描述」和「发文类型」，同名文件描述还需要「文件描述ID」。导出会保留已有的叶子 ID。</p>
     <p v-if="descriptionNotice || localNotice" class="hint">{{ descriptionNotice || localNotice }}</p>
     <input v-model="query" class="mapping-search" type="search" placeholder="搜索全部文件描述、发文类型" aria-label="搜索文件描述映射" />
     <p v-if="notice" class="hint">{{ notice }}</p>
@@ -114,7 +142,7 @@ watch(() => props.mappings, (rows) => {
       </thead>
       <tbody>
         <tr v-for="item in visible" :key="item.id">
-          <td>{{ item.fileDescriptionText || item.fileDescriptionId }}</td>
+          <td>{{ descriptionPath(item) }}</td>
           <td>
             <div class="type-cell">
               <span>{{ typePath(item.mailTypeId, item.mailTypeName) }}</span>
@@ -126,7 +154,7 @@ watch(() => props.mappings, (rows) => {
           <td colspan="2" class="mapping-empty">{{ query ? '没有匹配的映射。' : '还没有映射。在下面这一行添加第一对。' }}</td>
         </tr>
         <tr class="mapping-add">
-          <td><TreeOptionSelect v-model="descriptionId" class="description-picker" :options="descriptions" :multiple="false" leaves-only :status="descriptionLoading ? 'loading' : descriptions.length ? 'ready' : 'empty'" empty-text="未读取到文件描述，请重新读取。" @retry="emit('reloadDescriptions')" /></td>
+          <td><TreeOptionSelect v-model="descriptionId" class="description-picker" :options="descriptionOptions" :multiple="false" leaves-only :status="descriptionLoading ? 'loading' : descriptions.length ? 'ready' : 'empty'" empty-text="未读取到文件描述，请重新读取。" @retry="emit('reloadDescriptions')" /></td>
           <td>
             <div class="type-cell">
               <MailTypeTreeSelect v-model="mailTypeId" :options="treeOptions" :disabled="mailTypes.length === 0" leaves-only />

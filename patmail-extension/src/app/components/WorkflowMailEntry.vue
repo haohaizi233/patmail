@@ -1572,7 +1572,7 @@ function definitionHint(item: WorkflowDefinition | null): string {
     </div>
     <p v-if="definitionHint(definition)" class="hint">{{ definitionHint(definition) }}</p>
 
-    <FileManageMail v-if="workflowId === FILE_MANAGE_ID" :customers="customers" :rules="rules" :senders="senders" />
+    <FileManageMail v-if="workflowId === FILE_MANAGE_ID" :customers="customers" :rules="rules" :senders="senders" :mail-types="mailTypes" />
     <FilingExportPanel v-else-if="workflowId === FILING_EXPORT_ID" :bridge="bridge" :user-id="operatorId" />
     <template v-else-if="runnable">
       <div class="form-grid">

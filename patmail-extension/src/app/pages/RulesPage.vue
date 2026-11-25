@@ -190,9 +190,9 @@ function addresses(value: string): string[] {
   return value.split(/[\s,;]+/).map(item => item.trim()).filter(Boolean)
 }
 
-async function saveMapping(input: { description: string; mailTypeId: string; mailTypeName: string }): Promise<void> {
+async function saveMapping(input: { descriptionId: string; description: string; mailTypeId: string; mailTypeName: string }): Promise<void> {
   if (!draft.value) return
-  if (!input.description.trim() || !isQueryGuid(input.mailTypeId) || !input.mailTypeName.trim()) {
+  if (!isQueryGuid(input.descriptionId) || !input.description.trim() || !isQueryGuid(input.mailTypeId) || !input.mailTypeName.trim()) {
     message.value = '请填写文件描述，并从发文类型里选择。'
     return
   }
@@ -203,6 +203,7 @@ async function saveMapping(input: { description: string; mailTypeId: string; mai
   }
   const result = upsertMapping(draft.value.mappings, {
     id: crypto.randomUUID(),
+    fileDescriptionId: input.descriptionId,
     fileDescriptionText: input.description,
     mailTypeId: input.mailTypeId,
     mailTypeName: input.mailTypeName,
@@ -261,12 +262,17 @@ async function importMappingFile(file: File): Promise<void> {
     message.value = '发文类型还没读到。先重新读取发文类型，再导入。'
     return
   }
+  if (!descriptions.value.length) {
+    message.value = '文件描述树还没读到。先重新读取文件描述，再导入。'
+    return
+  }
   importingMappings.value = true
   try {
     const table = await readXlsxRows(await file.arrayBuffer())
     const merged = mergeImportedMappings(draft.value.mappings, table, mailTypes.value, {
       now: new Date().toISOString(),
-      createId: () => crypto.randomUUID()
+      createId: () => crypto.randomUUID(),
+      descriptionNodes: descriptions.value
     })
     if (!merged.ok) {
       message.value = merged.message

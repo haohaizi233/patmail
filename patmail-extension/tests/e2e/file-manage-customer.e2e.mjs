@@ -67,12 +67,13 @@ try {
       })
     if (call === 'GetSearchFiles')
       return reply(route, {
-        TableRowsCount: '2',
+        TableRowsCount: '5',
         TableRows: [
           {
             file_id: file,
             file_name: '通知书.pdf',
             file_desc: '发明专利证书(签章)',
+            apply_type: '发明',
             customer_name: '客户甲',
             case_volume: 'PA-E2E',
           },
@@ -82,6 +83,24 @@ try {
             file_desc: '驳回决定',
             customer_name: '客户甲',
             case_volume: 'PA-E2E-2',
+          },
+          ...['递交官方', '本所文件'].map((fileType, index) => ({
+            file_id: guid(51 + index),
+            file_name: `${fileType}权利要求书.pdf`,
+            file_desc: '按照条约第19条修改的权利要求书',
+            file_desc_code: '150127',
+            file_type: fileType,
+            customer_name: '客户甲',
+            case_volume: 'PA-E2E-3',
+          })),
+          {
+            file_id: guid(53),
+            file_name: '未标分支权利要求书.pdf',
+            file_desc: '按照条约第19条修改的权利要求书',
+            file_desc_code: '150127',
+            apply_type: '实用新型',
+            customer_name: '客户甲',
+            case_volume: 'PA-E2E-4',
           },
         ],
       })
@@ -251,6 +270,19 @@ try {
             version: 1,
             updatedAt: '2026-11-11',
           },
+          ...[
+            ['D97348DE-F8DC-4B99-9B6E-0B4AA406FC13', guid(60), '递交官方发文类型'],
+            ['E9B68288-1B01-4139-92A3-D875F2FFE6DA', guid(61), '本所文件发文类型']
+          ].map(([fileDescriptionId, mailTypeId, mailTypeName]) => ({
+            id: fileDescriptionId,
+            fileDescriptionId,
+            fileDescriptionText: '按照条约第19条修改的权利要求书(150127)',
+            mailTypeId,
+            mailTypeName,
+            enabled: true,
+            version: 1,
+            updatedAt: '2026-11-11',
+          })),
         ],
         recipients: [],
         signatures: [],
@@ -302,14 +334,34 @@ try {
   await choose(app.getByRole('combobox', { name: '工作流', exact: true }), '文件管理')
   await choose(app.getByRole('combobox', { name: '客户', exact: true }), '客户甲')
   await app.getByRole('button', { name: '按绑定条件查询', exact: true }).click()
-  await app.getByText('可以创建', { exact: true }).waitFor()
+  const certificateRow = app.locator('tr').filter({ hasText: '通知书.pdf' })
+  await certificateRow.getByText('可以创建', { exact: true }).waitFor()
+  assert.ok(calls.some(item => item.call === 'GetSearchFiles' && item.params.colsel.split(';').includes('apply_type')))
+  await app.getByRole('columnheader', { name: '申请类型', exact: true }).waitFor()
+  await certificateRow.getByText('发明', { exact: true }).waitFor()
   await app.getByText('编号兼容匹配：发明专利证书(签章)(400001CA)', { exact: true }).waitFor()
-  await app.getByRole('alert').filter({ hasText: '1 封的文件描述映射存在歧义' }).waitFor()
+  await app.getByRole('alert').filter({ hasText: '2 封的文件描述映射存在歧义' }).waitFor()
   const ambiguousRow = app.locator('tr').filter({ hasText: '驳回决定.pdf' })
   assert.equal(await ambiguousRow.getByRole('checkbox').isDisabled(), true)
-  await ambiguousRow.getByText(/缺少文书编号/).waitFor()
+  await ambiguousRow.getByText(/多个叶子候选/).waitFor()
   checks.push('unique fallback is noted and ambiguous fallback has an alert and cannot be selected')
-  await app.getByLabel('勾选可以创建的', { exact: true }).check()
+  await app.locator('tr').filter({ hasText: '递交官方权利要求书.pdf' }).getByText('递交官方发文类型', { exact: true }).waitFor()
+  await app.locator('tr').filter({ hasText: '本所文件权利要求书.pdf' }).getByText('本所文件发文类型', { exact: true }).waitFor()
+  checks.push('identical file labels map to different leaf IDs and mail types using the source branch')
+  const manualRow = app.locator('tr').filter({ hasText: '未标分支权利要求书.pdf' })
+  await manualRow.getByText('实用新型', { exact: true }).waitFor()
+  assert.equal(await manualRow.getByRole('checkbox').isDisabled(), true)
+  await manualRow.getByRole('combobox', { name: '选择具体映射：未标分支权利要求书.pdf' }).click()
+  assert.equal(await app.getByRole('listbox').getByRole('option').count(), 2)
+  await app.getByRole('option', { name: /本所文件.*本所文件发文类型/ }).click()
+  await manualRow.getByText('可以创建', { exact: true }).waitFor()
+  assert.equal(await manualRow.getByRole('checkbox').isEnabled(), true)
+  await manualRow.getByRole('checkbox').check()
+  await manualRow.getByRole('button', { name: '撤销选择' }).click()
+  assert.equal(await manualRow.getByRole('checkbox').isDisabled(), true)
+  assert.equal(await manualRow.getByRole('checkbox').isChecked(), false)
+  checks.push('application type is visible and an ambiguous row can select and undo its mapping in the popup')
+  await certificateRow.getByRole('checkbox').check()
   await app.getByRole('button', { name: /^创建并提交/ }).click()
   await app.waitForFunction(
     () => document.body.textContent.includes('已提交 1 封') || document.body.textContent.includes('已提交给默认审核人'),

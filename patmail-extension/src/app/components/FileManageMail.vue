@@ -4,10 +4,12 @@ import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { sameOptionValue } from '../../shell/components/theme-select'
 import EmptyGuide from './EmptyGuide.vue'
 import { assessQueryScope } from '../../api/file-search-params'
+import { CURRENT_ENVIRONMENT } from '../../api/config'
 import { coerceFileSearchQuery } from '../../api/message-guards'
 import type { PatentFile } from '../../api/file-search-types'
 import type { MailSender } from '../../customer/mailset'
 import { customerMailStyleLabel, summarizeBoundQuery } from '../../customer/mail-flow'
+import { mailTypePath, type MailTypePathNode } from '../../customer/mail-type-path'
 import { downloadNameText, type FileDownloadSelection } from '../../mail/download-name'
 import { type FileManageFile, type FileManageLetterPlan } from '../../customer/file-manage-plan'
 import { fileManageRunStatus } from '../../customer/file-manage-runs'
@@ -20,6 +22,7 @@ import { defaultSignatureChoice, signatureChoices } from '../../mail/signature-c
 import { fetchMailboxSignature } from '../../mail/signature-load'
 import type { MailRuleBundle } from '../../mail/types'
 import { isQueryGuid } from '../../query/query-validator'
+import type { TreeOption } from '../../query/option-tree'
 import { flushRecovery, holdRecovery, peekRecovery, recallRecovery, scheduleRecovery, systemScope } from '../../recovery/wal-ledger'
 import { sceneOwnerChanged, scopeFromConnection } from '../../shared/connection'
 import { MessageType, type MessageBridge } from '../../shared/message'
@@ -31,6 +34,7 @@ const props = defineProps<{
   customers: CustomerQueryProfile[]
   rules: MailRuleBundle | null
   senders: MailSender[]
+  mailTypes?: MailTypePathNode[]
 }>()
 
 const bridge = inject<MessageBridge>('bridge')
@@ -46,7 +50,9 @@ const outcomes = ref<Record<string, string>>({})
 const siteSignatures = ref<MailSignatureItem[]>([])
 const reservedSignatureId = ref('')
 const foundFiles = ref<FileManageFile[]>([])
+const descriptionNodes = ref<TreeOption[]>()
 const picked = ref<string[]>([])
+const mappingSelections = ref<Record<string, string>>({})
 
 const bound = computed(() => props.customers.filter(item => item.enabled !== false && item.workflowId === 'file-manage' && (item.querySurface ?? 'file') === 'file'))
 const options = computed(() => bound.value.map(item => ({
@@ -134,6 +140,8 @@ function pokeFile(): void {
 
 watch(() => connection.value.easyOrigin, (next, previous) => {
   if (next === previous) return
+  mappingSelections.value = {}
+  descriptionNodes.value = undefined
   if (!previous) {
     fileScope = systemScope(next, 'file')
     if (letters.value.length || foundFiles.value.length) return
@@ -179,6 +187,8 @@ watch(() => connection.value.operatorId, (next, previous) => {
     if (isQueryGuid(next) && !sceneOwner) sceneOwner = next.toLowerCase()
     return
   }
+  mappingSelections.value = {}
+  descriptionNodes.value = undefined
   parkingFile = true
   const payload = readFileDesk()
   const origin = connection.value.easyOrigin
@@ -226,6 +236,9 @@ function asFile(file: PatentFile): FileManageFile {
     fileId: file.fileId,
     fileName: file.fileName,
     fileDescription: file.fileDescription?.trim() ?? '',
+    ...(file.fileDescriptionCode ? { fileDescriptionCode: file.fileDescriptionCode } : {}),
+    ...(file.fileType ? { fileType: file.fileType } : {}),
+    ...(file.applicationType ? { applicationType: file.applicationType } : {}),
     customerName: file.customerName?.trim() ?? '',
     ...(file.caseVolume ? { caseVolume: file.caseVolume } : {}),
     ...(file.customerVolume ? { customerVolume: file.customerVolume } : {}),
@@ -259,6 +272,8 @@ function rebuild(files: FileManageFile[]): void {
     mailStyle: profile.fileMailStyle === 'single_file' ? 'single_file' : 'merge_by_customer_description',
     files,
     mappings: props.rules?.mappings ?? [],
+    descriptionNodes: descriptionNodes.value,
+    mappingSelections: mappingSelections.value,
     subject: props.rules?.subject ?? null,
     hasSender: Boolean(pickedSender.value),
     hasReviewer: Boolean(reviewer.value),
@@ -307,13 +322,19 @@ async function search(): Promise<void> {
   notes.value = []
   foundFiles.value = []
   picked.value = []
+  mappingSelections.value = {}
   try {
+    descriptionNodes.value = undefined
+    const tree = bridge.request({
+      type: MessageType.LoadDictionary,
+      payload: { kind: 'fileType', force: false, caseTypeId: CURRENT_ENVIRONMENT.caseTypeId }
+    }).catch(() => null)
     const files: FileManageFile[] = []
     let total = 0
     for (let page = 1; page <= 3; page += 1) {
       const response = await bridge.request({
         type: MessageType.SearchFiles,
-        payload: { query: { ...query, pageIndex: page, pageSize: 100 } }
+        payload: { query: { ...query, pageIndex: page, pageSize: 100, includeApplicationType: true } }
       })
       if (!stillCurrent()) return
       if (response.type !== MessageType.SearchFilesResult) {
@@ -331,6 +352,13 @@ async function search(): Promise<void> {
     if (!files.length) {
       notice.value = '按绑定条件没有查到文件。'
       return
+    }
+    const dictionary = await tree
+    if (!stillCurrent()) return
+    if (dictionary?.type === MessageType.DictionaryResult && dictionary.payload.ok && dictionary.payload.data.kind === 'fileType' && dictionary.payload.data.nodes.length) {
+      descriptionNodes.value = dictionary.payload.data.nodes.map(node => ({
+        value: node.id, label: node.name, parent: node.parentId, selectable: node.selectable
+      }))
     }
     const named = await renameForMail(files, profile.fileDownloadName)
     if (!stillCurrent()) return
@@ -476,6 +504,7 @@ watch(() => connection.value.sessionStatus, (status) => {
 
 watch(customerId, (next, previous) => {
   if (next === previous) return
+  mappingSelections.value = {}
   letters.value = []
   foundFiles.value = []
   picked.value = []
@@ -507,6 +536,25 @@ function statusOf(letter: FileManageLetterPlan): string {
 function fileNames(letter: FileManageLetterPlan): string {
   return letter.files.map(file => file.fileName).join('、')
 }
+
+function mappingOptions(letter: FileManageLetterPlan): Array<{ value: string; label: string }> {
+  const choices = letter.mappingChoices ?? []
+  return choices.map(choice => {
+    const sameSourcePath = choices.some(other => other.descriptionPath === choice.descriptionPath && other.descriptionId !== choice.descriptionId)
+    const leaf = sameSourcePath ? `${choice.descriptionPath} · ${choice.descriptionId}` : choice.descriptionPath
+    const type = mailTypePath(props.mailTypes ?? [], choice.mailTypeId).split('/').join(' / ') || choice.mailTypeName
+    return { value: choice.key, label: `${leaf} → ${type}` }
+  })
+}
+
+function chooseMapping(letter: FileManageLetterPlan, key: string): void {
+  const fileId = letter.files[0]?.fileId.toLowerCase()
+  if (searching.value || sending.value || !fileId || (key && !letter.mappingChoices?.some(choice => choice.key === key))) return
+  if (key) mappingSelections.value[fileId] = key
+  else delete mappingSelections.value[fileId]
+  picked.value = picked.value.filter(item => item !== letter.key)
+  rebuild(foundFiles.value)
+}
 </script>
 
 <template>
@@ -533,7 +581,7 @@ function fileNames(letter: FileManageLetterPlan): string {
       <p v-if="notice" class="hint">{{ notice }}</p>
       <p v-for="note in notes" :key="note" class="hint">{{ note }}</p>
       <p v-if="descriptionConflictCount" role="alert" class="description-match-alert">
-        {{ descriptionConflictCount }} 封的文件描述映射存在歧义，已停止创建。请核对下方对应行。
+        {{ descriptionConflictCount }} 封的文件描述映射存在歧义。确认具体映射后才可勾选。
       </p>
       <p v-if="letters.length" class="hint">勾选要发的。停住的不能勾。</p>
       <table v-if="letters.length" class="grid file-manage-grid">
@@ -541,6 +589,7 @@ function fileNames(letter: FileManageLetterPlan): string {
           <col class="pick" />
           <col class="files" />
           <col class="desc" />
+          <col class="application-type" />
           <col class="type" />
           <col class="to" />
           <col class="cc" />
@@ -550,7 +599,7 @@ function fileNames(letter: FileManageLetterPlan): string {
         <thead>
           <tr>
             <th class="pick"><input type="checkbox" aria-label="勾选可以创建的" :checked="allReadyPicked" :disabled="sending || readyLetters.length === 0" @change="toggleReady(($event.target as HTMLInputElement).checked)" /></th>
-            <th>文件</th><th>文件描述</th><th>发文类型</th><th>收件人</th><th>抄送</th><th>标题</th><th>状态</th>
+            <th>文件</th><th>文件描述</th><th>申请类型</th><th>发文类型</th><th>收件人</th><th>抄送</th><th>标题</th><th>状态</th>
           </tr>
         </thead>
         <tbody>
@@ -561,12 +610,27 @@ function fileNames(letter: FileManageLetterPlan): string {
               <span class="clip wrap" v-hint.clip="letter.description || '没有描述'">{{ letter.description || '没有描述' }}</span>
               <small v-if="letter.descriptionFallback" class="hint description-match-note">编号兼容匹配：{{ letter.descriptionFallback }}</small>
             </td>
-            <td class="type"><span class="clip wrap" v-hint.clip="letter.mailTypeName || '没对上'">{{ letter.mailTypeName || '没对上' }}</span></td>
+            <td class="application-type"><span class="clip wrap" v-hint.clip="letter.applicationType || '—'">{{ letter.applicationType || '—' }}</span></td>
+            <td class="type">
+              <span v-if="letter.mailTypeName || !letter.mappingChoices?.length" class="clip wrap" v-hint.clip="letter.mailTypeName || '没对上'">{{ letter.mailTypeName || '没对上' }}</span>
+              <div v-if="letter.mappingChoices?.length" class="mapping-choice">
+                <ThemeSelect
+                  :model-value="letter.selectedMappingKey || ''"
+                  :options="mappingOptions(letter)"
+                  :aria-label="`选择具体映射：${fileNames(letter)}`"
+                  placeholder="选择具体映射"
+                  :disabled="searching || sending"
+                  @update:model-value="chooseMapping(letter, $event)"
+                />
+                <button v-if="letter.selectedMappingKey" type="button" class="text-button" :disabled="searching || sending" @click="chooseMapping(letter, '')">撤销选择</button>
+              </div>
+            </td>
             <td class="to"><span class="clip wrap" v-hint.clip="customer?.fileMailConfig?.to || '案件联系人'">案件联系人{{ customer?.fileMailConfig?.to ? '＋客户追加' : '' }}</span></td>
             <td class="cc"><span class="clip wrap" v-hint.clip="customer?.fileMailConfig?.cc ? '按客户抄送配置' : '发件人，商务'">{{ customer?.fileMailConfig?.cc ? '按客户配置' : '发件人，商务' }}</span></td>
             <td class="title"><span class="clip one" v-hint.clip="letter.subject || '还没有标题'">{{ letter.subject || '还没有标题' }}</span></td>
             <td class="state">
               <span v-if="letter.descriptionConflict" class="description-match-conflict">{{ letter.descriptionConflict }}</span>
+              <small v-if="letter.descriptionConflict && !letter.mappingChoices?.length" class="hint">候选叶子尚未配置发文映射。</small>
               <span v-if="statusOf(letter) !== letter.descriptionConflict" class="clip wrap" v-hint.clip="statusOf(letter)">{{ statusOf(letter) }}</span>
             </td>
           </tr>
@@ -581,6 +645,14 @@ function fileNames(letter: FileManageLetterPlan): string {
 .description-match-note {
   display: block;
   overflow-wrap: anywhere;
+}
+.mapping-choice {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.mapping-choice .text-button {
+  justify-self: start;
 }
 .description-match-alert,
 .description-match-conflict {
