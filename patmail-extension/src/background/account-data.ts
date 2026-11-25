@@ -169,6 +169,7 @@ export async function saveRuleAccount(area: LocalArea, origin: string, operatorI
     draft.ownerId = operatorId
     draft.policies = bundle.policies
     draft.mappings = bundle.mappings
+    if (bundle.procedureMappings !== undefined) draft.procedureMappings = bundle.procedureMappings
     draft.recipients = bundle.recipients
     draft.signatures = bundle.signatures
     draft.subject = bundle.subject

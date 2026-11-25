@@ -123,6 +123,26 @@ describe('Phase 3.1 连接、规则与任务来源', () => {
     expect(stored.bundle.defaultReviewer).toEqual({ userId: userA, name: '吴晨晨' })
   })
 
+  it('persists procedure mappings and their deletion through the account save', async () => {
+    const area = memoryArea()
+    const repo = new MailRuleRepository(userA, origin, area)
+    const procedureMappings = [{ id: 'custom', procedure: '新提醒', condition: 'our' as const, mailTypeName: '新提醒（我方案号）' }]
+    const first = await saveRuleAccount(area, origin, userA, { ...rules(), procedureMappings }, null)
+    expect((await repo.load()).bundle.procedureMappings).toEqual(procedureMappings)
+    await saveRuleAccount(area, origin, userA, { ...first, procedureMappings: [] }, null)
+    expect((await repo.load()).bundle.procedureMappings).toEqual([])
+  })
+
+  it('rejects conflicting numbered aliases even when a rule bundle bypasses the editor', async () => {
+    const area = memoryArea()
+    const bundle = rules()
+    const initial = { id: 'certificate', fileDescriptionText: '发明专利证书(签章)(400001CA)', mailTypeId: '33333333-3333-4333-8333-333333333333', mailTypeName: '专利电子证书', enabled: true, version: 1, updatedAt: '2026-11-25T00:00:00Z' }
+    const current = await saveRuleAccount(area, origin, userA, { ...bundle, mappings: [initial] }, null)
+    const conflicting = { ...initial, id: 'conflict', fileDescriptionText: '发明专利证书(签章)', mailTypeId: userA }
+    await expect(saveRuleAccount(area, origin, userA, { ...current, mappings: [initial, conflicting] }, null)).rejects.toThrow('同一文件描述')
+    expect((await new MailRuleRepository(userA, origin, area).load()).bundle.mappings).toEqual([initial])
+  })
+
   it('saves a task only when the message origin is the EASY origin', async () => {
     const runtime = host(Array.from({ length: 8 }, () => session(userA)))
     const bound = await handleWorkspaceMessage({ type: MessageType.Workspace, payload: { action: 'bind', tabId: 3 } }, runtime)

@@ -2,6 +2,7 @@ import { isProcedureMapping, validProcedureMappings } from '../customer/procedur
 import { plainClone } from '../automation/snapshot'
 import type { BodyRule, CustomerMailPolicy, CustomerRecipientTemplate, DefaultReviewer, DefaultSender, DescriptionMailTypeMapping, MailRuleBundle, OperatorSignature, SubjectRule } from './types'
 import { isQueryGuid } from '../query/query-validator'
+import { descriptionMappingsOverlap } from './rules/description-mapping'
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -39,6 +40,8 @@ function isMapping(value: unknown): value is DescriptionMailTypeMapping {
   if (!value || typeof value !== 'object') return false
   const item = value as DescriptionMailTypeMapping
   return typeof item.id === 'string' && isQueryGuid(item.mailTypeId) && typeof item.mailTypeName === 'string' &&
+    (item.fileDescriptionId == null || typeof item.fileDescriptionId === 'string') &&
+    (item.fileDescriptionText == null || typeof item.fileDescriptionText === 'string') &&
     typeof item.enabled === 'boolean' && typeof item.version === 'number'
 }
 function isRecipient(value: unknown): value is CustomerRecipientTemplate {
@@ -175,6 +178,17 @@ export class MailRuleRepository {
       draft.ownerId = this.ownerId || 'session'
       const checked = readMailRules(draft, draft.ownerId)
       if (!checked.writable) throw new Error(checked.warning ?? '发文配置未通过校验，未保存。')
+      const previousMappings = new Map(loaded.bundle.mappings.map(row => [row.id, row]))
+      for (const row of checked.bundle.mappings) {
+        if (!row.enabled) continue
+        const previous = previousMappings.get(row.id)
+        if (previous?.enabled && previous.fileDescriptionId === row.fileDescriptionId &&
+          previous.fileDescriptionText === row.fileDescriptionText && previous.mailTypeId.toLowerCase() === row.mailTypeId.toLowerCase()) continue
+        if (checked.bundle.mappings.some(other => other.enabled &&
+          other.mailTypeId.toLowerCase() !== row.mailTypeId.toLowerCase() && descriptionMappingsOverlap(row, other))) {
+          throw new Error('同一文件描述已经对应另一个发文类型。请先调整冲突映射。')
+        }
+      }
       if (this.key && this.writeKey) await this.writeKey({ [this.key]: checked.bundle })
       else this.memory = checked.bundle
       return checked.bundle
@@ -194,6 +208,7 @@ export class MailRuleRepository {
     return this.update(bundle => {
       bundle.policies = read.bundle.policies
       bundle.mappings = read.bundle.mappings
+      if (read.bundle.procedureMappings !== undefined) bundle.procedureMappings = read.bundle.procedureMappings
       bundle.recipients = read.bundle.recipients
       bundle.signatures = read.bundle.signatures
       bundle.subject = read.bundle.subject
