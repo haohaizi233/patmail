@@ -22,7 +22,7 @@ export type EasyOperation =
   | 'noticeApplyType' | 'noticeAgency' | 'noticeDirectionType' | 'noticeCountry'
   | 'noticeCpcAccount' | 'noticeCpcTzsDate' | 'noticeNolaiutoCount'
   | 'noticeCheckUserStatus' | 'noticeCpcTzsUser' | 'noticeReplayTzsStatus'
-  | 'noticeDetail' | 'noticeDetailFee' | 'noticeDetailHebo' | 'noticeDetailDuibi'
+  | 'noticeDetail' | 'noticeDetailFee' | 'noticeDetailHebo' | 'noticeDetailDuibi' | 'noticeDetailFileTypes'
   | 'noticeCaseChargeDept' | 'noticeCaseType' | 'noticeSearchCase' | 'noticeAppNoFiles'
   | 'noticeCheckImport' | 'noticeUploadProcess'
   | 'noticeSearch' | 'noticeImportList' | 'noticeUnProcessTzsList' | 'noticeCertList' | 'noticeReplayTzsList'
@@ -50,6 +50,7 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   basicData: { path: '/AjaxServers/CaseInfo.ashx', call: 'IPGetBasicData' },
   flowDirection: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetFlowdirection' },
   fileTypeTree: { path: '/AjaxServers/Common.ashx', call: 'LoadFileTypeByCaseType' },
+  noticeDetailFileTypes: { path: '/AjaxServers/Common.ashx', call: 'LoadFileTypeByTypeID' },
   fieldColumn: { path: '/AjaxServers/PatentAction.ashx', call: 'GetFieldColumn' },
   listColumn: { path: '/AjaxServers/Common.ashx', call: 'LoadListColumn' },
   mailType: { path: '/AjaxServers/Common.ashx', call: 'LoadMailType' },

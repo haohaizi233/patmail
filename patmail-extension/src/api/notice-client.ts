@@ -1,7 +1,13 @@
-import { buildNoticeExportPayload, buildNoticeSearchPayload } from './notice-params'
+import {
+  OFFICIAL_NOTICE_FILE_TYPE_ID,
+  PATENT_CASE_TYPE_ID,
+  buildNoticeExportPayload,
+  buildNoticeSearchPayload
+} from './notice-params'
 import {
   isCpcAuthRequired,
   isSessionExpiredPayload,
+  normalizeNoticeDetailFileTypes,
   normalizeNoticeInitData,
   normalizeNoticeSearchResponse,
   normalizeUploadProcessDetailList,
@@ -15,6 +21,7 @@ import type {
   NoticeExcelUploadRequest,
   NoticeExcelUploadResult,
   NoticeExportRequest,
+  NoticeFileTypeNode,
   NoticeInitData,
   NoticeSearchRequest,
   NoticeSearchResult
@@ -49,6 +56,7 @@ function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
 
 export class NoticeClient {
   private readonly sleepFn: (ms: number) => Promise<void>
+  private detailFileTypesCache: NoticeFileTypeNode[] | null = null
 
   constructor(private readonly deps: NoticeClientDeps) {
     this.sleepFn = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
@@ -397,12 +405,29 @@ export class NoticeClient {
         new URLSearchParams({ Call: 'GetNoticeduibi', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
       )
 
+      if (this.detailFileTypesCache === null) {
+        const fileTypesRes = await this.deps.transport.post(
+          'noticeDetailFileTypes',
+          new URLSearchParams({
+            Call: 'LoadFileTypeByTypeID',
+            case_type_id: PATENT_CASE_TYPE_ID,
+            type_ids: OFFICIAL_NOTICE_FILE_TYPE_ID,
+            log_pagename: 'Notice.aspx'
+          })
+        )
+        if (fileTypesRes.ok) {
+          const nodes = normalizeNoticeDetailFileTypes(fileTypesRes.data)
+          if (nodes.length > 0) this.detailFileTypesCache = nodes
+        }
+      }
+
       return {
         ok: true,
         data: {
           ok: true,
           message: '已读取来文详情。',
           detail,
+          ...(this.detailFileTypesCache ? { detailFileTypes: this.detailFileTypesCache } : {}),
           detailFees: feeRes.ok ? rowsOf(feeRes.data) : [],
           detailHebo: heboRes.ok ? rowsOf(heboRes.data) : [],
           detailDuibi: duibiRes.ok ? rowsOf(duibiRes.data) : []

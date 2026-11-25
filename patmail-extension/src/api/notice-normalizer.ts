@@ -323,3 +323,68 @@ export function normalizeUploadProcessDetailList(raw: unknown): {
   const total = intCount(rec.TableRowsCount ?? rec.total ?? firstTotal, rows.length)
   return { rows, total }
 }
+
+/** 详情弹窗「来文名称」树（LoadFileTypeByTypeID -> Types），保留服务端原始顺序且仅叶子可选。 */
+export function normalizeNoticeDetailFileTypes(payload: unknown): NoticeFileTypeNode[] {
+  const rawRows = arrayOf(payload, 'Types')
+  if (rawRows.length === 0) return []
+
+  const seen = new Set<string>()
+  const uniqueRows: Array<{ id: string; pid: string; name: string; treeType: string }> = []
+  for (const row of rawRows) {
+    const id = str(row.id)
+    const name = str(row.name)
+    if (!id || !name) continue
+    const upper = id.toUpperCase()
+    if (seen.has(upper)) continue
+    seen.add(upper)
+    uniqueRows.push({
+      id,
+      pid: str(row.pid || row.pId),
+      name,
+      treeType: str(row.TreeType)
+    })
+  }
+
+  const priorityNames = ['本所文件', '递交官方', '客户来文'] as const
+  const prioritized: typeof uniqueRows = []
+  const picked = new Set<string>()
+  for (const targetName of priorityNames) {
+    const match = uniqueRows.find(item => item.pid === '0' && item.name === targetName)
+    if (match) {
+      prioritized.push(match)
+      picked.add(match.id)
+    }
+  }
+  const orderedRows = [...prioritized, ...uniqueRows.filter(item => !picked.has(item.id))]
+
+  const idByUpper = new Map<string, string>()
+  for (const item of orderedRows) {
+    idByUpper.set(item.id.toUpperCase(), item.id)
+  }
+
+  const resolved = orderedRows.map(item => {
+    const rawPid = item.pid
+    const parentId =
+      !rawPid || rawPid === '0'
+        ? ''
+        : (idByUpper.get(rawPid.toUpperCase()) ?? '')
+    return {
+      ...item,
+      parentId: parentId === item.id ? '' : parentId
+    }
+  })
+
+  const parentIds = new Set<string>()
+  for (const item of resolved) {
+    if (item.parentId) parentIds.add(item.parentId)
+  }
+
+  return resolved.map(item => ({
+    id: item.id,
+    name: item.name,
+    parentId: item.parentId,
+    ...(item.treeType ? { treeType: item.treeType } : {}),
+    ...(parentIds.has(item.id) ? { selectable: false } : {})
+  }))
+}

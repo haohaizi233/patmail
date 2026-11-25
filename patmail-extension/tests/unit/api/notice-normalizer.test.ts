@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isCpcAuthRequired,
+  normalizeNoticeDetailFileTypes,
   normalizeNoticeInitData,
   normalizeNoticeSearchResponse,
   normalizeUploadProcessDetailList,
@@ -203,5 +204,41 @@ describe('notice-normalizer', () => {
       { id: 'dept-1', name: '专利流程部', parentId: '0', selectable: false, treeType: 'Dept' },
       { id: 'usr-1', name: '陈秋晓', parentId: 'dept-1', treeType: 'User' }
     ])
+  })
+
+  it('normalizes LoadFileTypeByTypeID Types preserving order, case-insensitive pid links, and parent non-selectable', () => {
+    const nodes = normalizeNoticeDetailFileTypes({
+      Types: [
+        { id: '81802CDE-D39D-4658-B45E-74631B0715C1', pid: '0', name: '官方来文' },
+        { id: '8c44762d-44d5-4473-b4fc-b818373d6763', pid: '81802cde-d39d-4658-b45e-74631b0715c1', name: '国际检索单位书面意见(PCT/ISA/237)' },
+        { id: 'A09080AE-EC39-4048-B882-D6D3A73B1CE9', pid: '81802CDE-D39D-4658-B45E-74631B0715C1', name: '发明专利申请公布通知书(签章)(210305CA)' },
+        { id: '84F88F96-5BEB-491E-B8E9-8142704E1524', pid: '', name: '拒绝恢复优先权请求和/或提交声明或其他证据的通知(PCT/RO/158)' },
+        { id: 'BS-1', pid: '0', name: '本所文件' },
+        { id: 'BS-LEAF', pid: 'bs-1', name: '通知书副本' }
+      ]
+    })
+
+    // notice.js 将 pid=='0' 且为「本所文件」置于首位，其余严格保留服务端返回顺序（无外层“专利”包裹）
+    expect(nodes.map(n => n.name)).toEqual([
+      '本所文件',
+      '官方来文',
+      '国际检索单位书面意见(PCT/ISA/237)',
+      '发明专利申请公布通知书(签章)(210305CA)',
+      '拒绝恢复优先权请求和/或提交声明或其他证据的通知(PCT/RO/158)',
+      '通知书副本'
+    ])
+    expect(nodes[1]).toEqual({
+      id: '81802CDE-D39D-4658-B45E-74631B0715C1',
+      name: '官方来文',
+      parentId: '',
+      selectable: false
+    })
+    expect(nodes[2]).toEqual({
+      id: '8c44762d-44d5-4473-b4fc-b818373d6763',
+      name: '国际检索单位书面意见(PCT/ISA/237)',
+      parentId: '81802CDE-D39D-4658-B45E-74631B0715C1'
+    })
+    expect(nodes[4]?.parentId).toBe('')
+    expect(nodes[5]?.parentId).toBe('BS-1')
   })
 })

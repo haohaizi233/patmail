@@ -136,6 +136,16 @@ describe('NoticeClient concurrency and slow count separation', () => {
             return { ok: true as const, data: { TableRows: [{ law: 'A22.3' }] } }
           case 'noticeDetailDuibi':
             return { ok: true as const, data: { TableRows: [{ country: 'CN', file_no: 'CN111111A' }] } }
+          case 'noticeDetailFileTypes':
+            return {
+              ok: true as const,
+              data: {
+                Types: [
+                  { id: '81802CDE-D39D-4658-B45E-74631B0715C1', pid: '0', name: '官方来文' },
+                  { id: '8c44762d-44d5-4473-b4fc-b818373d6763', pid: '81802cde-d39d-4658-b45e-74631b0715c1', name: '国际检索单位书面意见(PCT/ISA/237)' }
+                ]
+              }
+            }
           case 'noticeSearchCase':
             return { ok: true as const, data: { CaseList: [{ id: 'c1', name: 'PO2601' }] } }
           case 'noticeCaseChargeDept':
@@ -161,9 +171,19 @@ describe('NoticeClient concurrency and slow count separation', () => {
     expect(detailRes.ok).toBe(true)
     if (detailRes.ok) {
       expect(detailRes.data.detail).toEqual({ oa_id: 'oa-1', process_status: '0' })
+      expect(detailRes.data.detailFileTypes).toEqual([
+        { id: '81802CDE-D39D-4658-B45E-74631B0715C1', name: '官方来文', parentId: '', selectable: false },
+        { id: '8c44762d-44d5-4473-b4fc-b818373d6763', name: '国际检索单位书面意见(PCT/ISA/237)', parentId: '81802CDE-D39D-4658-B45E-74631B0715C1' }
+      ])
       expect(detailRes.data.detailFees).toEqual([{ fee_name: '实审费', fee_amount: 2500 }])
       expect(detailRes.data.detailHebo).toEqual([{ law: 'A22.3' }])
       expect(detailRes.data.detailDuibi).toEqual([{ country: 'CN', file_no: 'CN111111A' }])
+    }
+
+    const detailRes2 = await client.executeNoticeAction({ action: 'getNoticeDetail', oaId: 'oa-2' })
+    expect(detailRes2.ok).toBe(true)
+    if (detailRes2.ok) {
+      expect(detailRes2.data.detailFileTypes).toHaveLength(2)
     }
 
     const searchRes = await client.executeNoticeAction({ action: 'searchNoticeCases', keyword: 'PO26' })
@@ -186,6 +206,11 @@ describe('NoticeClient concurrency and slow count separation', () => {
     }
 
     expect(ops.map(x => x.op)).toEqual([
+      'noticeDetail',
+      'noticeDetailFee',
+      'noticeDetailHebo',
+      'noticeDetailDuibi',
+      'noticeDetailFileTypes',
       'noticeDetail',
       'noticeDetailFee',
       'noticeDetailHebo',

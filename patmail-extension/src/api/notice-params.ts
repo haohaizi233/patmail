@@ -17,6 +17,7 @@ import type {
 } from './notice-types'
 
 export const PATENT_CASE_TYPE_ID = '31D1A147-2931-43B5-94AE-B72B1525BA8A'
+export const OFFICIAL_NOTICE_FILE_TYPE_ID = '81802CDE-D39D-4658-B45E-74631B0715C1'
 
 export interface NoticeTabSpec {
   id: NoticeTabId
@@ -110,45 +111,54 @@ export interface NoticeTableColumn {
 
 export const NOTICE_IMPORT_COMPLETED_COLUMNS: readonly NoticeTableColumn[] = [
   { key: 'sn', label: '序号', width: '56px' },
-  { key: 'oa_name', label: '来文名称', clickable: true },
+  { key: 'oa_name', label: '来文名称', width: '160px', clickable: true },
   { key: 'oa_code', label: '来文编号', width: '96px' },
   { key: 'FaWenRQ', label: '官方发文日', width: '108px' },
   { key: 'assayer', label: '分析人', width: '80px' },
-  { key: 'customer_name', label: '客户名称' },
+  { key: 'customer_name', label: '客户名称', width: '160px' },
   { key: 'ShenQingH', label: '申请号', width: '140px' },
   { key: 'case_volume', label: '我方文号', width: '130px' },
-  { key: 'FaMingMC', label: '案件名称' },
+  { key: 'FaMingMC', label: '案件名称', width: '200px' },
   { key: 'customer_status', label: '客户状态', width: '96px' }
 ] as const
 
+const NOTICE_IMPORT_FIELD_ALIASES: Record<string, readonly string[]> = {
+  case_name: ['case_name', 'FaMingMC'],
+  applicant_name: ['applicant_name', 'applicant_name_cn', 'first_applicant_name'],
+  case_status: ['case_status', 'case_status_zh_cn'],
+  customer_name: ['customer_name']
+}
+
+function isBlankNoticeCell(value: unknown): boolean {
+  return value === null || value === undefined || (typeof value === 'string' && value.trim() === '')
+}
+
+/** 导入来文列表按别名顺序回退取值，兼容 EASY 不同接口字段名。 */
+export function noticeCellRaw(tab: string, row: Record<string, unknown>, key: string): unknown {
+  if (tab !== 'import') return row[key]
+  const aliases = NOTICE_IMPORT_FIELD_ALIASES[key]
+  if (!aliases) return row[key]
+  for (const alias of aliases) {
+    if (!isBlankNoticeCell(row[alias])) return row[alias]
+  }
+  return row[key]
+}
+
 export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColumn[]> = {
   import: [
-    { key: 'sn', label: '序号', width: '56px' },
-    { key: 'oa_name', label: '来文名称', clickable: true },
-    { key: 'file_desc_code', label: '来文编号', width: '96px' },
-    { key: 'FaWenRQ', label: '官方发文日', width: '108px' },
-    { key: 'customer_name', label: '客户名称' },
-    { key: 'assayer', label: '分析人', width: '80px' },
-    { key: 'ShenQingH', label: '申请号', width: '140px' },
-    { key: 'issue_no', label: '公告号', width: '120px' },
-    { key: 'issue_date', label: '公告日', width: '105px' },
-    { key: 'certificate_no', label: '证书号', width: '120px' },
-    { key: 'case_volume', label: '我方文号', width: '130px' },
-    { key: 'case_name', label: '案件名称' },
-    { key: 'case_status', label: '案件状态', width: '96px' },
-    { key: 'applicant_name', label: '申请人' },
-    { key: 'customer_status', label: '客户状态', width: '96px' },
-    { key: 'contract_no', label: '合同编号', width: '110px' },
-    { key: 'pic', label: '处理人', width: '80px' },
-    { key: 'sales_help', label: '业务助理', width: '80px' },
-    { key: 'introducer', label: '外部案源人', width: '90px' },
-    { key: 'sales_user', label: '业务人员', width: '80px' },
-    { key: 'app_date', label: '申请日', width: '105px' },
-    { key: 'is_speed_checkd', label: '是否优先审查', width: '100px' },
-    { key: 'hearing_the_case', label: '是否预审案件', width: '100px' },
-    { key: 'remark', label: '案件备注' },
-    { key: 'apply_tags', label: '专利标签', width: '100px' },
-    { key: 'oa_error_msg', label: '异常/备注' }
+    { key: 'oa_name', label: '来文名称', width: '120px', clickable: true },
+    { key: 'file_desc_code', label: '来文编号', width: '86px' },
+    { key: 'FaWenRQ', label: '官方发文日', width: '82px' },
+    { key: 'customer_name', label: '客户名称', width: '108px' },
+    { key: 'assayer', label: '分析人', width: '56px' },
+    { key: 'ShenQingH', label: '申请号', width: '130px' },
+    { key: 'case_volume', label: '我方文号', width: '106px' },
+    { key: 'case_name', label: '案件名称', width: '144px' },
+    { key: 'case_status', label: '案件状态', width: '62px' },
+    { key: 'applicant_name', label: '申请人', width: '138px' },
+    { key: 'pic', label: '处理人', width: '56px' },
+    { key: 'sales_user', label: '业务人员', width: '62px' },
+    { key: 'remark', label: '案件备注', width: '96px' }
   ],
   download: [
     { key: 'sn', label: '序号', width: '56px' },

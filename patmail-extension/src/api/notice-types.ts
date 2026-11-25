@@ -297,6 +297,7 @@ export interface NoticeActionResult {
   needCpcLogin?: boolean
   loginAccountId?: string
   detail?: Record<string, unknown>
+  detailFileTypes?: NoticeFileTypeNode[]
   detailFees?: Record<string, unknown>[]
   detailHebo?: Record<string, unknown>[]
   detailDuibi?: Record<string, unknown>[]
