@@ -1,6 +1,8 @@
 import { isQueryGuid } from '../../query/query-validator'
 import type { DescriptionMailTypeMapping } from '../types'
 import { descriptionMappingsOverlap } from './description-mapping'
+import { createFileDescriptionLeafResolver } from './file-description-leaf'
+import type { TreeOption } from '../../query/option-tree'
 
 export interface ImportMailType {
   id: string
@@ -11,6 +13,7 @@ export interface ImportMailType {
 export interface MergeImportedMappingsOptions {
   now: string
   createId: () => string
+  descriptionNodes?: TreeOption[]
 }
 
 type Role = 'description' | 'mailType' | 'descriptionId' | 'mailTypeId'
@@ -201,6 +204,7 @@ function noticeOf(stats: {
   missing: string[]
   ambiguous: string[]
   mismatch: string[]
+  unresolvedDescription: string[]
 }): string {
   const parts = [`新增 ${stats.added} 条。`]
   if (stats.existing) parts.push(`已有 ${stats.existing} 条，没有重复写入。`)
@@ -210,6 +214,7 @@ function noticeOf(stats: {
   if (stats.missing.length) parts.push(`这些发文类型没有对上：${quoted(stats.missing)}。`)
   if (stats.ambiguous.length) parts.push(`这些发文类型对上了多项，没有选用：${quoted(stats.ambiguous)}。`)
   if (stats.mismatch.length) parts.push(`这些行的发文类型名称和编号不一致，没有写入：${quoted(stats.mismatch)}。`)
+  if (stats.unresolvedDescription.length) parts.push(`这些文件描述没有对应唯一叶子，请核对文件描述 ID：${quoted(stats.unresolvedDescription)}。`)
   return parts.join('')
 }
 
@@ -220,13 +225,14 @@ export function mappingExportRows(
 ): string[][] {
   const nodes = mailTypes.filter(node => node.id && clean(node.name))
   const byId = new Map(nodes.map(node => [node.id.toLowerCase(), node]))
-  const rows = [['文件描述', '发文类型']]
+  const withLeafIds = mappings.some(item => item.fileDescriptionId?.trim())
+  const rows = [['文件描述', '发文类型', ...(withLeafIds ? ['文件描述ID'] : [])]]
   for (const item of mappings) {
     const description = clean(item.fileDescriptionText ?? '') || clean(item.fileDescriptionId ?? '')
     const node = byId.get(item.mailTypeId.toLowerCase())
     const typeName = (node && pathOf(node, byId)) || clean(item.mailTypeName)
     if (!description && !typeName) continue
-    rows.push([description, typeName])
+    rows.push([description, typeName, ...(withLeafIds ? [clean(item.fileDescriptionId ?? '')] : [])])
   }
   return rows
 }
@@ -252,6 +258,7 @@ export function mergeImportedMappings(
   if ('message' in located) return { ok: false, message: located.message }
   const data = table.slice(located.header + 1, located.header + 1 + 2000)
   if (!data.length) return { ok: false, message: '表格里没有数据行。' }
+  const resolveLeaf = options.descriptionNodes ? createFileDescriptionLeafResolver(options.descriptionNodes) : undefined
   const chosen = new Map<string, string>()
   const pending: DescriptionMailTypeMapping[] = []
   const stats = {
@@ -262,18 +269,28 @@ export function mergeImportedMappings(
     existingConflict: [] as string[],
     missing: [] as string[],
     ambiguous: [] as string[],
-    mismatch: [] as string[]
+    mismatch: [] as string[],
+    unresolvedDescription: [] as string[]
   }
   for (const row of data) {
     const text = located.description < 0 ? '' : cell(row, located.description)
     const descriptionId = cell(row, located.descriptionId)
-    const fileDescriptionId = isQueryGuid(descriptionId) ? descriptionId : undefined
+    let fileDescriptionId = isQueryGuid(descriptionId) ? descriptionId : undefined
     const nameCell = cell(row, located.mailType)
     const idCell = cell(row, located.mailTypeId)
     const descriptionIsHeader = Boolean(text && roleOf(text)?.role === 'description' && !fileDescriptionId)
     const typeIsHeader = Boolean(nameCell && roleOf(nameCell)?.role === 'mailType' && !idCell)
     if (descriptionIsHeader && typeIsHeader) continue
-    const fileDescriptionText = text
+    let fileDescriptionText = text
+    if (resolveLeaf && (text || descriptionId)) {
+      const leaf = resolveLeaf({ fileDescription: text, fileDescriptionId: descriptionId }).leaf
+      if (!leaf) {
+        stats.unresolvedDescription.push(text || descriptionId)
+        continue
+      }
+      fileDescriptionId = leaf.id
+      fileDescriptionText = leaf.label
+    }
     if (!fileDescriptionId && !fileDescriptionText) continue
     const label = fileDescriptionText || fileDescriptionId || ''
     const byGuid = isQueryGuid(idCell) ? nodes.find(node => node.id.toLowerCase() === idCell.toLowerCase()) : undefined
@@ -336,7 +353,7 @@ export function mergeImportedMappings(
     pending.push({ ...next, id: options.createId() })
   }
   stats.added = pending.length
-  if (!stats.added && !stats.existing && !stats.duplicate && !stats.fileConflict.length && !stats.existingConflict.length && !stats.missing.length && !stats.ambiguous.length && !stats.mismatch.length) {
+  if (!stats.added && !stats.existing && !stats.duplicate && !stats.fileConflict.length && !stats.existingConflict.length && !stats.missing.length && !stats.ambiguous.length && !stats.mismatch.length && !stats.unresolvedDescription.length) {
     return { ok: false, message: '表格里没有可导入的映射。' }
   }
   return {

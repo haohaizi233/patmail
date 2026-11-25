@@ -39,6 +39,20 @@ function merge(rows: string[][], mappings: DescriptionMailTypeMapping[] = [], ma
 }
 
 describe('文件描述映射导入', () => {
+  it('允许两个完整标签相同的叶子分别绑定不同发文类型，并导出不同的叶子编号', () => {
+    const label = '同名文件'
+    const first = saved(label, certificate, { fileDescriptionId: descriptionId })
+    const second = saved(label, notice, { id: 'other-leaf', fileDescriptionId: other })
+    expect(upsertMapping([first], second).ok).toBe(true)
+    expect(upsertMapping([saved(label, certificate)], second).ok).toBe(true)
+    const table = mappingExportRows([first, second], types)
+    expect(table.map(row => row[2])).toEqual(['文件描述ID', descriptionId, other])
+    const descriptionNodes = [descriptionId, other].map(value => ({ value, label }))
+    const exact = mergeImportedMappings([], table, types, { now: '', createId: () => crypto.randomUUID(), descriptionNodes })
+    expect(exact.ok && exact.added).toBe(2)
+    const ambiguous = mergeImportedMappings([], table.map(row => row.slice(0, 2)), types, { now: '', createId: () => crypto.randomUUID(), descriptionNodes })
+    expect(ambiguous.ok && ambiguous.added).toBe(0)
+  })
   it('名称、树路径和内部编号都不能把分类节点当发文类型', () => {
     const result = merge([
       ['文件描述', '发文类型'],

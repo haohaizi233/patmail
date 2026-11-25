@@ -1,15 +1,12 @@
 import { isQueryGuid } from '../../query/query-validator'
 import { pageSelectOptions } from '../../query/form-page'
 import type { DescriptionMailTypeMapping, MailGroup } from '../types'
-
-/** EASY 的文件描述树会在标签末尾附上六位文书编号及可选字母后缀。 */
-export function fileDescriptionBase(value?: string): string {
-  return (value ?? '').trim().replace(/\s*(?:\(\d{6}[A-Z]{0,4}\)|（\d{6}[A-Z]{0,4}）)$/i, '')
-}
+import { fileDescriptionBase } from './file-description-leaf'
 
 export function descriptionMappingsOverlap(left: DescriptionMailTypeMapping, right: DescriptionMailTypeMapping): boolean {
   const key = mappingKey(left)
   if (key && key === mappingKey(right)) return true
+  if (left.fileDescriptionId?.trim() || right.fileDescriptionId?.trim()) return false
   const text = left.fileDescriptionText?.trim()
   const other = right.fileDescriptionText?.trim()
   if (!text || !other) return false
