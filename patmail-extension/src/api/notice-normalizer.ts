@@ -82,6 +82,7 @@ export interface NoticeInitRawParts {
   branches?: unknown
   countries?: unknown
   fileTypes?: unknown
+  detailFileTypes?: unknown
   users?: unknown
   cpcAccounts?: unknown
   cpcTzsDate?: unknown
@@ -164,6 +165,8 @@ export function normalizeNoticeInitData(parts: NoticeInitRawParts): NoticeInitDa
     ...(node.treeType ? { treeType: node.treeType } : {})
   }))
 
+  const detailFileTypes = normalizeNoticeDetailFileTypes(parts.detailFileTypes)
+
   const usersSeen = new Set<string>()
   const users: NoticeFileTypeNode[] = []
   for (const row of arrayOf(parts.users, 'TreeUser')) {
@@ -221,6 +224,7 @@ export function normalizeNoticeInitData(parts: NoticeInitRawParts): NoticeInitDa
     branches,
     countries,
     fileTypes,
+    ...(detailFileTypes.length > 0 ? { detailFileTypes } : {}),
     users,
     cpcAccounts,
     defaultTzsStartDate,

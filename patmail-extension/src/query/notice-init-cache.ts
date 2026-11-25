@@ -127,6 +127,9 @@ function cloneSnapshot(snapshot: NoticeInitCacheSnapshot): NoticeInitCacheSnapsh
       branches: snapshot.initData.branches.map(item => ({ ...item })),
       countries: snapshot.initData.countries.map(item => ({ ...item })),
       fileTypes: snapshot.initData.fileTypes.map(item => ({ ...item })),
+      ...(snapshot.initData.detailFileTypes?.length
+        ? { detailFileTypes: snapshot.initData.detailFileTypes.map(item => ({ ...item })) }
+        : {}),
       users: snapshot.initData.users.map(item => ({ ...item })),
       cpcAccounts: snapshot.initData.cpcAccounts.map(item => ({ ...item })),
       defaultTzsStartDate: snapshot.initData.defaultTzsStartDate,
@@ -147,6 +150,7 @@ function sanitizeSnapshot(raw: unknown): NoticeInitCacheSnapshot | null {
   if (!isRecord(raw) || !isRecord(raw.initData)) return null
   const initRaw = raw.initData
   const date = cleanString(initRaw.defaultTzsStartDate, 40) || DEFAULT_TZS_START_DATE
+  const detailFileTypes = cleanFileTypes(initRaw.detailFileTypes)
   const snapshot: NoticeInitCacheSnapshot = {
     initData: {
       applyTypes: cleanOptions(initRaw.applyTypes),
@@ -156,6 +160,7 @@ function sanitizeSnapshot(raw: unknown): NoticeInitCacheSnapshot | null {
       branches: cleanOptions(initRaw.branches),
       countries: cleanOptions(initRaw.countries),
       fileTypes: cleanFileTypes(initRaw.fileTypes),
+      ...(detailFileTypes.length > 0 ? { detailFileTypes } : {}),
       users: cleanFileTypes(initRaw.users),
       cpcAccounts: cleanOptions(initRaw.cpcAccounts),
       defaultTzsStartDate: date,
@@ -212,6 +217,7 @@ export function mergeNoticeInitData(
       ? incomingDate
       : prevDate || DEFAULT_TZS_START_DATE
 
+  const mergedDetailFileTypes = pickList(incoming.detailFileTypes ?? [], previous.detailFileTypes ?? [])
   const merged: NoticeInitData = {
     applyTypes: pickList(incoming.applyTypes, previous.applyTypes),
     agencies: pickList(incoming.agencies, previous.agencies),
@@ -220,6 +226,7 @@ export function mergeNoticeInitData(
     branches: pickList(incoming.branches, previous.branches),
     countries: pickList(incoming.countries, previous.countries),
     fileTypes: pickList(incoming.fileTypes, previous.fileTypes),
+    ...(mergedDetailFileTypes.length > 0 ? { detailFileTypes: mergedDetailFileTypes } : {}),
     users: pickList(incoming.users, previous.users),
     cpcAccounts: pickList(incoming.cpcAccounts, previous.cpcAccounts),
     defaultTzsStartDate,

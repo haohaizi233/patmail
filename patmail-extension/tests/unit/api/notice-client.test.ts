@@ -44,6 +44,16 @@ describe('NoticeClient concurrency and slow count separation', () => {
             return { ok: true as const, data: { country: [] } }
           case 'fileTypeTree':
             return { ok: true as const, data: { FileType: [] } }
+          case 'noticeDetailFileTypes':
+            return {
+              ok: true as const,
+              data: {
+                Types: [
+                  { id: '81802CDE-D39D-4658-B45E-74631B0715C1', pid: '0', name: '官方来文' },
+                  { id: '8c44762d-44d5-4473-b4fc-b818373d6763', pid: '81802cde-d39d-4658-b45e-74631b0715c1', name: '国际检索单位书面意见(PCT/ISA/237)' }
+                ]
+              }
+            }
           case 'treeUser':
             return {
               ok: true as const,
@@ -77,6 +87,10 @@ describe('NoticeClient concurrency and slow count separation', () => {
     expect(res.data.applyTypes).toHaveLength(1)
     expect(res.data.agencies).toHaveLength(1)
     expect(res.data.directions).toHaveLength(1)
+    expect(res.data.detailFileTypes).toEqual([
+      { id: '81802CDE-D39D-4658-B45E-74631B0715C1', name: '官方来文', parentId: '', selectable: false },
+      { id: '8c44762d-44d5-4473-b4fc-b818373d6763', name: '国际检索单位书面意见(PCT/ISA/237)', parentId: '81802CDE-D39D-4658-B45E-74631B0715C1' }
+    ])
     expect(res.data.users).toEqual([
       { id: 'd1', name: '专利部', parentId: '0', selectable: false, treeType: 'Dept' },
       { id: 'u1', name: '陈秋晓', parentId: 'd1', treeType: 'User' }

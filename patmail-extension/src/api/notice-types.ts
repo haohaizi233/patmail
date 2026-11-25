@@ -33,6 +33,7 @@ export interface NoticeInitData {
   branches: NoticeOptionItem[]
   countries: NoticeOptionItem[]
   fileTypes: NoticeFileTypeNode[]
+  detailFileTypes?: NoticeFileTypeNode[]
   users: NoticeFileTypeNode[]
   cpcAccounts: NoticeOptionItem[]
   defaultTzsStartDate: string

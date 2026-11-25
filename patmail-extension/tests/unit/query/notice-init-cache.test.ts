@@ -51,6 +51,10 @@ describe('notice-init-cache', () => {
     const init = makeInit({
       applyTypes: [{ value: 'a1', label: '发明专利' }],
       agencies: [{ value: 'ag1', label: '某某所 (44001)' }],
+      detailFileTypes: [
+        { id: '81802CDE-D39D-4658-B45E-74631B0715C1', name: '官方来文', parentId: '', selectable: false },
+        { id: '8c44762d-44d5-4473-b4fc-b818373d6763', name: '国际检索单位书面意见(PCT/ISA/237)', parentId: '81802CDE-D39D-4658-B45E-74631B0715C1' }
+      ],
       users: [{ id: 'u1', name: '张三', parentId: '0', treeType: 'User' }],
       defaultTzsStartDate: '2026-10-01',
       handCount: 42,
@@ -69,6 +73,10 @@ describe('notice-init-cache', () => {
     resetNoticeInitCacheForTests()
     const restored = await readNoticeInitCache('user-1')
     expect(restored?.initData.applyTypes).toEqual([{ value: 'a1', label: '发明专利' }])
+    expect(restored?.initData.detailFileTypes).toEqual([
+      { id: '81802CDE-D39D-4658-B45E-74631B0715C1', name: '官方来文', parentId: '', selectable: false },
+      { id: '8c44762d-44d5-4473-b4fc-b818373d6763', name: '国际检索单位书面意见(PCT/ISA/237)', parentId: '81802CDE-D39D-4658-B45E-74631B0715C1' }
+    ])
     expect(restored?.initData.users).toEqual([{ id: 'u1', name: '张三', parentId: '0', treeType: 'User' }])
     expect(restored?.initData.defaultTzsStartDate).toBe('2026-10-01')
     expect(restored?.initData.handCount).toBe(42)
@@ -81,6 +89,7 @@ describe('notice-init-cache', () => {
       applyTypes: [{ value: 'a1', label: '发明专利' }],
       agencies: [{ value: 'ag1', label: '旧代理所' }],
       countries: [{ value: 'CN', label: '中国' }],
+      detailFileTypes: [{ id: 'ft-root', name: '官方来文', parentId: '', selectable: false }],
       users: [{ id: 'u1', name: '张三', parentId: '0', treeType: 'User' }],
       defaultTzsStartDate: '2026-09-01',
       handCount: 18,
@@ -101,6 +110,7 @@ describe('notice-init-cache', () => {
     const silentMerged = mergeNoticeInitData(cached, incoming, { preserveCounts: true, silent: true })
     expect(silentMerged.applyTypes).toEqual([{ value: 'a1', label: '发明专利' }])
     expect(silentMerged.agencies).toEqual([{ value: 'ag2', label: '新代理所' }])
+    expect(silentMerged.detailFileTypes).toEqual([{ id: 'ft-root', name: '官方来文', parentId: '', selectable: false }])
     expect(silentMerged.users).toEqual([{ id: 'u1', name: '张三', parentId: '0', treeType: 'User' }])
     expect(silentMerged.defaultTzsStartDate).toBe('2026-09-01')
     expect(silentMerged.handCount).toBe(18)

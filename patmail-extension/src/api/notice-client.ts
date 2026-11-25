@@ -167,14 +167,20 @@ export class NoticeClient {
       fetchPart('CPC账号', 'noticeCpcAccount', { Call: 'GetCpcNoticeAccount' })
     ])
 
-    const [agencies, fileTypes, cpcTzsDate] = await Promise.all([
+    const [agencies, fileTypes, detailFileTypes, cpcTzsDate] = await Promise.all([
       fetchPart('代理机构', 'noticeAgency', { Call: 'GetAgency', log_pagename: 'NoticeInfo.aspx' }),
       fetchPart('来文类型', 'fileTypeTree', {
         Call: 'LoadFileTypeByCaseType',
         official: '1',
-        case_type: '31D1A147-2931-43B5-94AE-B72B1525BA8A',
+        case_type: PATENT_CASE_TYPE_ID,
         file_type: '',
         log_pagename: 'NoticeInfo.aspx'
+      }),
+      fetchPart('来文名称树', 'noticeDetailFileTypes', {
+        Call: 'LoadFileTypeByTypeID',
+        case_type_id: PATENT_CASE_TYPE_ID,
+        type_ids: OFFICIAL_NOTICE_FILE_TYPE_ID,
+        log_pagename: 'Notice.aspx'
       }),
       fetchPart('默认发文日', 'noticeCpcTzsDate', { Call: 'GetCPCTzsDate' })
     ])
@@ -190,25 +196,31 @@ export class NoticeClient {
       })
     ])
 
+    const normalized = normalizeNoticeInitData({
+      applyTypes,
+      agencies,
+      directions,
+      applyTags,
+      branches: baseInfoParts.branchesData,
+      countries,
+      fileTypes,
+      detailFileTypes,
+      users,
+      cpcAccounts,
+      cpcTzsDate,
+      noticeGfConfig: baseInfoParts.noticeGfConfig,
+      closeCaseConfig: baseInfoParts.closeCaseConfig,
+      closeCaseImportConfig: baseInfoParts.closeCaseImportConfig,
+      sgReduceConfig: baseInfoParts.sgReduceConfig,
+      warnings
+    })
+    if (normalized.detailFileTypes?.length) {
+      this.detailFileTypesCache = normalized.detailFileTypes
+    }
+
     return {
       ok: true,
-      data: normalizeNoticeInitData({
-        applyTypes,
-        agencies,
-        directions,
-        applyTags,
-        branches: baseInfoParts.branchesData,
-        countries,
-        fileTypes,
-        users,
-        cpcAccounts,
-        cpcTzsDate,
-        noticeGfConfig: baseInfoParts.noticeGfConfig,
-        closeCaseConfig: baseInfoParts.closeCaseConfig,
-        closeCaseImportConfig: baseInfoParts.closeCaseImportConfig,
-        sgReduceConfig: baseInfoParts.sgReduceConfig,
-        warnings
-      })
+      data: normalized
     }
   }
 
@@ -392,33 +404,35 @@ export class NoticeClient {
       const rowsOf = (payload: unknown): Record<string, unknown>[] =>
         isRecord(payload) && Array.isArray(payload.TableRows) ? payload.TableRows.filter(isRecord) : []
 
-      const feeRes = await this.deps.transport.post(
-        'noticeDetailFee',
-        new URLSearchParams({ Call: 'GetNoticefee', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
-      )
-      const heboRes = await this.deps.transport.post(
-        'noticeDetailHebo',
-        new URLSearchParams({ Call: 'GetNoticehebo', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
-      )
-      const duibiRes = await this.deps.transport.post(
-        'noticeDetailDuibi',
-        new URLSearchParams({ Call: 'GetNoticeduibi', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
-      )
+      const [feeRes, heboRes, duibiRes, fileTypesRes] = await Promise.all([
+        this.deps.transport.post(
+          'noticeDetailFee',
+          new URLSearchParams({ Call: 'GetNoticefee', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
+        ),
+        this.deps.transport.post(
+          'noticeDetailHebo',
+          new URLSearchParams({ Call: 'GetNoticehebo', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
+        ),
+        this.deps.transport.post(
+          'noticeDetailDuibi',
+          new URLSearchParams({ Call: 'GetNoticeduibi', oa_id: request.oaId, log_pagename: 'Notice.aspx' })
+        ),
+        this.detailFileTypesCache === null
+          ? this.deps.transport.post(
+              'noticeDetailFileTypes',
+              new URLSearchParams({
+                Call: 'LoadFileTypeByTypeID',
+                case_type_id: PATENT_CASE_TYPE_ID,
+                type_ids: OFFICIAL_NOTICE_FILE_TYPE_ID,
+                log_pagename: 'Notice.aspx'
+              })
+            )
+          : Promise.resolve(null)
+      ])
 
-      if (this.detailFileTypesCache === null) {
-        const fileTypesRes = await this.deps.transport.post(
-          'noticeDetailFileTypes',
-          new URLSearchParams({
-            Call: 'LoadFileTypeByTypeID',
-            case_type_id: PATENT_CASE_TYPE_ID,
-            type_ids: OFFICIAL_NOTICE_FILE_TYPE_ID,
-            log_pagename: 'Notice.aspx'
-          })
-        )
-        if (fileTypesRes.ok) {
-          const nodes = normalizeNoticeDetailFileTypes(fileTypesRes.data)
-          if (nodes.length > 0) this.detailFileTypesCache = nodes
-        }
+      if (fileTypesRes && fileTypesRes.ok) {
+        const nodes = normalizeNoticeDetailFileTypes(fileTypesRes.data)
+        if (nodes.length > 0) this.detailFileTypesCache = nodes
       }
 
       return {
