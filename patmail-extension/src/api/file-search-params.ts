@@ -9,6 +9,7 @@ export interface FileSearchQuery {
   fileDescriptionId?: string
   /** 模板合并后的已注册字段。存在时不再使用上面的手工五项。 */
   resolvedFields?: Record<string, string>
+  includeApplicationType?: true
   pageIndex: number
   pageSize: number
 }
@@ -114,6 +115,11 @@ function internalIdError(value: string): string {
   return `文件描述里有 ${offenders.length} 项不是内部 ID（如：${offenders.slice(0, 3).join('、')}）。点开文件描述重新勾选后再查。`
 }
 
+function resultColumns(colsel: string, includeApplicationType?: true): string {
+  if (!includeApplicationType || colsel.split(';').includes('apply_type')) return colsel
+  return `${colsel.endsWith(';') ? colsel : `${colsel};`}apply_type;`
+}
+
 export function buildGetSearchFilesParams(
   query: FileSearchQuery,
   environment: FileSearchEnvironment = CURRENT_ENVIRONMENT,
@@ -147,7 +153,7 @@ export function buildGetSearchFilesParams(
     case_type: environment.caseTypeId,
     IsFirst: 'false',
     is_pat: String(environment.isPatent),
-    colsel: environment.colsel,
+    colsel: resultColumns(environment.colsel, query.includeApplicationType),
     _t: String(now()),
     log_pagename: 'FileSearch.aspx'
   }
@@ -212,7 +218,7 @@ export function hasExplicitFileSearchFilter(fields: Record<string, string>): boo
  */
 export function buildGetSearchFilesFromFields(
   fields: Record<string, string>,
-  page: Pick<FileSearchQuery, 'pageIndex' | 'pageSize'>,
+  page: Pick<FileSearchQuery, 'pageIndex' | 'pageSize' | 'includeApplicationType'>,
   environment: FileSearchEnvironment = CURRENT_ENVIRONMENT,
   now: () => number = Date.now
 ): ApiResult<URLSearchParams> {
@@ -256,7 +262,7 @@ export function buildGetSearchFilesFromFields(
   values.Call = 'GetSearchFiles'
   values.IsFirst = 'false'
   values.is_pat = String(environment.isPatent)
-  values.colsel = environment.colsel
+  values.colsel = resultColumns(environment.colsel, page.includeApplicationType)
   values._t = String(now())
   values.log_pagename = 'FileSearch.aspx'
   const params = new URLSearchParams()

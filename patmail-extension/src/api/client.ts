@@ -282,11 +282,11 @@ export class EasyRuntime {
     const signature = JSON.stringify(query.resolvedFields ? [
       'resolved',
       Object.keys(query.resolvedFields).sort().map(key => [key, query.resolvedFields?.[key] ?? '']),
-      query.pageIndex, query.pageSize
+      query.pageIndex, query.pageSize, query.includeApplicationType === true
     ] : [
       query.caseVolume?.trim() ?? '', query.applicationNo?.trim() ?? '',
       query.customerName?.trim() ?? '', query.fileName?.trim() ?? '',
-      query.fileDescriptionId?.trim() ?? '', query.pageIndex, query.pageSize
+      query.fileDescriptionId?.trim() ?? '', query.pageIndex, query.pageSize, query.includeApplicationType === true
     ])
     if (this.activeSearch?.signature === signature) return this.activeSearch.promise
     const environment = this.listColsel ? { ...CURRENT_ENVIRONMENT, colsel: this.listColsel } : CURRENT_ENVIRONMENT

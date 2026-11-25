@@ -27,7 +27,7 @@ import type { ApiError, ApiResult } from './types'
 
 const QUERY_KEYS = new Set([
   'caseVolume', 'applicationNo', 'customerName', 'fileName', 'fileDescriptionId',
-  'resolvedFields', 'pageIndex', 'pageSize'
+  'resolvedFields', 'pageIndex', 'pageSize', 'includeApplicationType'
 ])
 const ERROR_CODES = new Set([
   'INVALID_ORIGIN', 'INVALID_QUERY', 'NETWORK_ERROR', 'REQUEST_TIMEOUT',
@@ -48,6 +48,7 @@ function isResolvedFields(value: unknown): value is Record<string, string> {
 export function isFileSearchQuery(value: unknown): value is FileSearchQuery {
   if (!isRecord(value) || Object.keys(value).some(key => !QUERY_KEYS.has(key))) return false
   if (value.resolvedFields !== undefined && !isResolvedFields(value.resolvedFields)) return false
+  if (value.includeApplicationType !== undefined && value.includeApplicationType !== true) return false
   return Number.isSafeInteger(value.pageIndex) && Number(value.pageIndex) >= 1 &&
     Number.isSafeInteger(value.pageSize) && Number(value.pageSize) >= 1 &&
     Number(value.pageSize) <= 100 &&
@@ -75,6 +76,7 @@ export function coerceFileSearchQuery(value: unknown): FileSearchQuery | null {
   }
   const query: FileSearchQuery = {
     ...(value.resolvedFields === undefined ? {} : { resolvedFields: resolved }),
+    ...(value.includeApplicationType === true ? { includeApplicationType: true as const } : {}),
     pageIndex: pageNumber(value.pageIndex, 1, 1_000_000),
     pageSize: pageNumber(value.pageSize, 20, 100)
   }

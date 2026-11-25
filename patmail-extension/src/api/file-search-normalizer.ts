@@ -6,6 +6,7 @@ import { apiError, type ApiResult } from './types'
 const OPTIONAL_FIELDS = {
   file_no: 'fileNo',
   file_desc: 'fileDescription',
+  file_desc_code: 'fileDescriptionCode',
   file_status: 'fileStatus',
   file_type: 'fileType',
   case_id: 'caseId',

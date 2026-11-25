@@ -7,6 +7,7 @@ export interface PatentFile {
   fileNo?: string
   fileName: string
   fileDescription?: string
+  fileDescriptionCode?: string
   fileStatus?: string
   fileType?: string
   caseId?: string

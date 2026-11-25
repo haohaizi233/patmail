@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { apiDocsPath } from '../../helpers/project'
 import { describe, expect, it } from 'vitest'
 import { buildGetSearchFilesFromFields, buildGetSearchFilesParams, closedCaseParam, fileSearchValueLimit } from '../../../src/api/file-search-params'
+import { coerceFileSearchQuery } from '../../../src/api/message-guards'
 
 const documentedNames = [...readFileSync(apiDocsPath('04-文件查询.md'), 'utf8')
   .matchAll(/^\d+ ([A-Za-z_][A-Za-z_0-9]*)$/gm)].map(match => match[1])
@@ -112,4 +113,12 @@ describe('GetSearchFiles 参数 Builder', () => {
     expect(fileSearchValueLimit('app_no')).toBe(fileSearchValueLimit('case_volume'))
     expect(fileSearchValueLimit('case_name')).toBeLessThan(fileSearchValueLimit('case_volume'))
   })
+})
+it('工作流请求申请类型列时保留用户列，并在转发时保留标记', () => {
+  const query = coerceFileSearchQuery({ resolvedFields: { case_volume: 'PA-1' }, pageIndex: 1, pageSize: 20, includeApplicationType: true })
+  expect(query?.includeApplicationType).toBe(true)
+  if (!query) return
+  const result = buildGetSearchFilesFromFields(query.resolvedFields ?? {}, query,
+    { fileClass: 'general', caseTypeId: '', isPatent: 0, colsel: ';file_name;' })
+  expect(result.ok && result.data.get('colsel')).toBe(';file_name;apply_type;')
 })
