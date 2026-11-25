@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { downloadXlsxSheets } from '../customer/xlsx-table'
+import type { ColumnFitMode } from '../shell/column-fit'
 
 export interface DialogOptions {
   title: string
@@ -15,6 +16,7 @@ export interface DialogOptions {
 export interface DialogTable {
   headers?: string[]
   rows: string[][]
+  columnModes?: ColumnFitMode[]
 }
 
 const state = reactive({

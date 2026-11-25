@@ -206,6 +206,7 @@ async function handleExportClick(): Promise<void> {
       warn: true,
       table: {
         headers: ['客户名称', '我方文号', '费用名称', '金额', '原因'],
+        columnModes: [undefined, 'lock', undefined, 'lock', 'grow'],
         rows: pctExportExceptions.value.map(({ row, reason }) => [
           row.customerName || '客户待核对',
           row.caseVolume || '-',

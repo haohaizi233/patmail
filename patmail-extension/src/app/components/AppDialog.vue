@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { closeDialog, closeProgress, closeSummary, dialogState, exportSummary, progressDialog, summaryDialog } from '../dialog'
+import { useFitColumns, type FitColumnDefinition } from '../../shell/use-fit-columns'
 
 const state = dialogState()
 const progress = progressDialog
 const dialogRoot = ref<HTMLElement | null>(null)
+const dialogTableHost = ref<HTMLElement | null>(null)
 const progressRoot = ref<HTMLElement | null>(null)
 const summaryRoot = ref<HTMLElement | null>(null)
 const progressLog = ref<HTMLOListElement | null>(null)
@@ -14,6 +16,28 @@ const progressDone = ref<HTMLButtonElement | null>(null)
 const progressPercent = computed(() => Math.min(100, Math.round((progress.done / progress.total) * 100)))
 const latestLine = computed(() => progress.lines.at(-1)?.text ?? '')
 let returnFocus: HTMLElement | null = null
+
+const { colWidths: dialogColWidths, tableStyle: dialogTableStyle } = useFitColumns({
+  host: dialogTableHost,
+  autoMode: true,
+  noHorizontalScroll: true,
+  watchSource: () => [state.open, state.table] as const,
+  columns: (): FitColumnDefinition[] => {
+    const table = state.table
+    if (!state.open || !table?.rows.length) return []
+    const headers = table.headers ?? []
+    const colCount = Math.max(headers.length, ...table.rows.map(row => row.length))
+    const defs: FitColumnDefinition[] = []
+    for (let i = 0; i < colCount; i += 1) {
+      defs.push({
+        title: headers[i] ?? '',
+        values: table.rows.map(row => row[i] ?? ''),
+        mode: table.columnModes?.[i],
+      })
+    }
+    return defs
+  },
+})
 
 function rememberFocus(): void {
   const active = document.activeElement
@@ -110,14 +134,23 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <button type="button" aria-label="关闭" @click="closeDialog(false)">×</button>
       </header>
       <p id="app-dialog-message" class="app-dialog-gap">{{ state.message }}</p>
-      <div v-if="state.table" class="dialog-table">
-        <table>
+      <div v-if="state.table" ref="dialogTableHost" class="dialog-table is-fit">
+        <table :style="dialogTableStyle">
+          <colgroup v-if="dialogColWidths.length">
+            <col v-for="(width, index) in dialogColWidths" :key="index" :style="{ width: width + 'px' }" />
+          </colgroup>
           <thead v-if="state.table.headers?.length">
-            <tr><th v-for="(head, index) in state.table.headers" :key="index" scope="col">{{ head }}</th></tr>
+            <tr>
+              <th v-for="(head, index) in state.table.headers" :key="index" scope="col">
+                <span class="clip" v-hint.clip="head">{{ head }}</span>
+              </th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="(row, index) in state.table.rows" :key="index">
-              <td v-for="(cell, cellIndex) in row" :key="cellIndex">{{ cell }}</td>
+              <td v-for="(cell, cellIndex) in row" :key="cellIndex">
+                <span class="clip" v-hint.clip="cell">{{ cell }}</span>
+              </td>
             </tr>
           </tbody>
         </table>
