@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ApiResult } from '../../api/types'
 import { apiError } from '../../api/types'
 import type { FilingSearchRow } from '../../api/filing-search-types'
@@ -9,8 +9,7 @@ import { collectFilingExport, filingExportSheet } from '../../workflow/filing-ex
 import { FilingRowsLedger, filingRowsBatchKey } from '../../workflow/filing-rows'
 import { downloadXlsxSheets } from '../../customer/xlsx-table'
 import { paintTaskCheckProgress } from '../check-progress'
-import { fitColumnWidths, type ColumnFit } from '../../shell/column-fit'
-import { createTextRuler } from '../../shell/text-width'
+import { useFitColumns, type FitColumnDefinition } from '../../shell/use-fit-columns'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 
@@ -78,53 +77,34 @@ const exportColumnMode = (head: string): 'lock' | 'grow' | undefined => {
   return undefined
 }
 
-const colWidths = ref<number[]>([])
-const tableStyle = computed(() => {
-  const total = colWidths.value.reduce((sum, width) => sum + width, 0)
-  return { width: `${total}px`, minWidth: '100%' }
-})
 const exportTableHost = ref<HTMLElement | null>(null)
-const ruler = createTextRuler()
-let observer: ResizeObserver | undefined
-
-/** 和上表、期限表同一套：按文字量出每列下限和内容宽，交给 column-fit 分配；容器窄就压进去，不出横向滚动条。 */
-function columnSpecs(header: Element | null, body: Element | null): ColumnFit[] {
-  const specs: ColumnFit[] = []
-  const add = (title: string, values: string[], mode?: 'lock' | 'grow'): void => {
-    const min = ruler.width(title, header) + 16
-    let content = min
-    for (const value of values) content = Math.max(content, ruler.width(value, body) + 16)
-    specs.push({ min, content, lock: mode === 'lock', grow: mode === 'grow' })
-  }
-  const lines = pageLines.value
-  add('序号', lines.map((_, index) => String((pageIndex.value - 1) * pageSize.value + index + 1)), 'lock')
-  FILING_EXPORT_HEADERS.forEach((head, cellIndex) => {
-    add(head, lines.map(line => line.cells[cellIndex] ?? ''), exportColumnMode(head))
-  })
-  return specs
-}
-
-function layoutColumns(): void {
-  const root = exportTableHost.value
-  const table = root?.querySelector('table')
-  if (!root || !table) return
-  if (!pageLines.value.length) {
-    colWidths.value = []
-    return
-  }
-  const container = root.clientWidth
-  if (container <= 0) return
-  const header = table.querySelector('thead th') || table
-  const cell = table.querySelector('tbody td') || header
-  colWidths.value = fitColumnWidths(columnSpecs(header, cell), container)
-}
-
 const measureKey = computed(() => {
   const lines = pageLines.value
   return [pageIndex.value, pageSize.value,
     ...lines.map(line => line.cells.join('|'))].join('~')
 })
-watch(measureKey, () => layoutColumns(), { flush: 'post' })
+
+/** 和上表、期限表同一套：按文字量出每列下限和内容宽，交给 useFitColumns 分配；容器窄就压进去，不出横向滚动条。 */
+const { colWidths, tableStyle } = useFitColumns({
+  host: exportTableHost,
+  watchSource: measureKey,
+  columns: (): FitColumnDefinition[] => {
+    const lines = pageLines.value
+    if (!lines.length) return []
+    return [
+      {
+        title: '序号',
+        values: lines.map((_, index) => String((pageIndex.value - 1) * pageSize.value + index + 1)),
+        mode: 'lock',
+      },
+      ...FILING_EXPORT_HEADERS.map((head, cellIndex) => ({
+        title: head,
+        values: lines.map(line => line.cells[cellIndex] ?? ''),
+        mode: exportColumnMode(head),
+      })),
+    ]
+  },
+})
 
 /** 彩虹条同样攒刷：每件都刷一次进度条就是每件一次重绘，几万件直接把界面刷死。 */
 let barPending = false
@@ -261,18 +241,10 @@ function page(delta: number): void {
   pageIndex.value = next
 }
 
-onMounted(() => {
-  layoutColumns()
-  observer = new ResizeObserver(() => layoutColumns())
-  if (exportTableHost.value) observer.observe(exportTableHost.value)
-})
-
 onBeforeUnmount(() => {
   generation += 1
-  observer?.disconnect()
   // 关页前把没落账本的行补上，下次同一批件接着取。
   void ledger.flush()
-  ruler.dispose()
 })
 </script>
 

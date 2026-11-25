@@ -257,7 +257,7 @@ button.home-tool-btn:disabled { opacity: .5; cursor: not-allowed; }
 /* 期限表、工作表、递交表列宽由 column-fit 按文字测量后写到 col 上。这里只负责放不下时省略。 */
 .fit-table.limit-cols,
 .fit-table.sheet-cols,
-.fit-table.filing-cols { overflow-x: auto; }
+.fit-table.filing-cols { overflow-x: hidden; }
 .fit-table.limit-cols table.grid,
 .fit-table.sheet-cols table.grid,
 .fit-table.filing-cols table.grid { table-layout: fixed; }
@@ -526,7 +526,7 @@ button.home-tool-btn:disabled { opacity: .5; cursor: not-allowed; }
 .dialog.warn header button { position: absolute; right: 0; top: -2px; }
 .dialog.warn header h3 { color: #c2452d; text-align: center; font-size: 16px; }
 .dialog.warn .app-dialog-gap { max-height: 320px; overflow: auto; }
-.dialog.with-table { width: min(860px, calc(100vw - 40px)); }
+.dialog.with-table { width: min(960px, calc(100vw - 40px)); }
 .dialog.with-table .app-dialog-gap { max-height: none; overflow: visible; }
 .dialog.summary-dialog { width: min(1280px, calc(100vw - 32px)); }
 .mask.summary-mask { z-index: 130; }
@@ -539,6 +539,11 @@ button.home-tool-btn:disabled { opacity: .5; cursor: not-allowed; }
 .dialog.summary-dialog .dialog-table th:nth-child(2),
 .dialog.summary-dialog .dialog-table td:nth-child(2) { width: 16%; }
 .dialog-table { border: 1px solid #eadff0; border-radius: 10px; margin: 0 0 16px; max-height: min(58vh, 640px); overflow: auto; }
+.dialog-table.is-fit { overflow-x: hidden; overflow-y: auto; }
+.dialog-table.is-fit table { width: 100%; table-layout: fixed; }
+.dialog-table.is-fit th,
+.dialog-table.is-fit td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dialog-table.is-fit .clip { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dialog-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .dialog-table th, .dialog-table td { border-bottom: 1px solid #f4edf7; padding: 6px 14px; text-align: left; white-space: nowrap; }
 .dialog-table th { position: sticky; top: 0; z-index: 1; background: #faf6fc; color: var(--sub); font-weight: 700; }

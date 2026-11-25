@@ -17,8 +17,7 @@ import { hasOptionTree } from '../../query/option-tree'
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 存量豁免：保留解构占位与接口形态
 import { activateOptionFallback, hasSavedChoices, hydrateOptionFallback, optionFallbackEpoch, rememberChoices, rememberDictionaries, rememberFormFields, savedChoices, subscribeOptionFallback } from '../../query/option-fallback'
 import { describeOptionPull } from '../../query/option-pull-notes'
-import { fitColumnWidths, type ColumnFit } from '../../shell/column-fit'
-import { createTextRuler } from '../../shell/text-width'
+import { useFitColumns, type FitColumnDefinition } from '../../shell/use-fit-columns'
 import { isMultiPickerKey } from '../../shared/picker-modes'
 import { scopeFromConnection, type ExpectedAccountScope } from '../../shared/connection'
 import { MessageType, type FileSearchFormField, type MessageBridge } from '../../shared/message'
@@ -770,58 +769,35 @@ async function exportSelected(): Promise<void> {
   if (!(await confirmHuge(rows.length))) return
   emit('export', rows)
 }
-const colWidths = ref<number[]>([])
-const tableStyle = computed(() => {
-  const total = colWidths.value.reduce((sum, width) => sum + width, 0)
-  return { width: `${total}px`, minWidth: '100%' }
-})
-let ruler = createTextRuler()
-let observer: ResizeObserver | undefined
-
-function textWidth(text: string, source: Element | null): number {
-  return ruler.width(text, source)
-}
-
-/** 和期限表同一套：按文字量出每列下限和内容宽，交给 column-fit 分配。 */
-function columnSpecs(header: Element | null, body: Element | null): ColumnFit[] {
-  const rows = result.value?.items ?? []
-  const specs: ColumnFit[] = []
-  const add = (title: string, values: string[], mode?: 'lock' | 'grow'): void => {
-    const min = textWidth(title, header) + 16
-    let content = min
-    for (const value of values) content = Math.max(content, textWidth(value, body) + 16)
-    specs.push({ min, content, lock: mode === 'lock', grow: mode === 'grow' })
-  }
-  // 勾选列固定一格宽，不参与文字测量。
-  specs.push({ min: 36, content: 36, lock: true })
-  add('序号', rows.map((_, index) => String(rowNo(index))), 'lock')
-  for (const column of resultColumns) {
-    add(column.label, rows.map(row => cellText(row, column.key)), column.mode)
-  }
-  return specs
-}
-
-function layoutColumns(): void {
-  const root = resultsTableHost.value
-  const table = root?.querySelector('table')
-  if (!root || !table) return
-  if (!result.value?.items.length) {
-    colWidths.value = []
-    return
-  }
-  const container = root.clientWidth
-  if (container <= 0) return
-  const header = table.querySelector('thead th') || table
-  const cell = table.querySelector('tbody td') || header
-  colWidths.value = fitColumnWidths(columnSpecs(header, cell), container)
-}
-
 const measureKey = computed(() => {
   const rows = result.value?.items ?? []
   return [searchState.value, pageIndex.value, pageSize.value,
     ...rows.map(row => resultColumns.map(column => cellText(row, column.key)).join('|'))].join('~')
 })
-watch(measureKey, () => layoutColumns(), { flush: 'post' })
+
+/** 和期限表同一套：按文字量出每列下限和内容宽，交给 useFitColumns 分配。 */
+const { colWidths, tableStyle } = useFitColumns({
+  host: resultsTableHost,
+  watchSource: measureKey,
+  columns: (): FitColumnDefinition[] => {
+    const rows = result.value?.items ?? []
+    if (!rows.length) return []
+    return [
+      // 勾选列固定一格宽，不参与文字测量。
+      { title: '', values: [], fixedWidth: 36 },
+      {
+        title: '序号',
+        values: rows.map((_, index) => String(rowNo(index))),
+        mode: 'lock',
+      },
+      ...resultColumns.map(column => ({
+        title: column.label,
+        values: rows.map(row => cellText(row, column.key)),
+        mode: column.mode,
+      })),
+    ]
+  },
+})
 
 watch(() => props.userId, () => {
   pickerGeneration += 1
@@ -852,16 +828,11 @@ onMounted(() => {
   void readFilingTimeout().then(value => {
     if (!timeoutDirty) queryTimeoutMs.value = value
   })
-  layoutColumns()
-  observer = new ResizeObserver(() => layoutColumns())
-  if (resultsTableHost.value) observer.observe(resultsTableHost.value)
 })
 
 onBeforeUnmount(() => {
   generation += 1
   stopFallbackWatch()
-  observer?.disconnect()
-  ruler.dispose()
 })
 </script>
 

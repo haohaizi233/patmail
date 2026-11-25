@@ -1,9 +1,9 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import PageHead from '../components/PageHead.vue'
 import { bg } from '../assets'
 import { limitRows as samples } from '../data'
-import { assignColumnWidths } from '../column-fit'
+import { useFitColumns } from '../use-fit-columns'
 import { MAILED_UNFINISHED_REVIEW, SKIP_SEND_REVIEW } from '../../customer/pct-flow-status'
 
 const props = defineProps({
@@ -143,66 +143,6 @@ function flowStatus(row) {
 }
 
 const host = ref(null)
-const colWidths = ref([])
-const tableStyle = computed(() => {
-  const total = colWidths.value.reduce((sum, width) => sum + width, 0)
-  if (!total) return undefined
-  return { width: `${total}px`, minWidth: '100%' }
-})
-let ruler
-let observer
-
-function textWidth(text, source) {
-  if (!ruler || !source) return 0
-  ruler.style.font = getComputedStyle(source).font
-  ruler.textContent = String(text ?? '')
-  return Math.ceil(ruler.offsetWidth) + 2
-}
-
-function columnSpecs(header, body) {
-  const rows = shown.value
-  const specs = []
-  const add = (title, values, mode) => {
-    const min = textWidth(title, header) + 16
-    let content = min
-    for (const value of values) content = Math.max(content, textWidth(value, body) + 16)
-    specs.push({ min, content, lock: mode === 'lock', grow: mode === 'grow' })
-  }
-  if (props.selectable) {
-    const pending = rows.some(row => props.gates[row.procId] === 'pending' || props.flowByProc[row.procId] === '已提交审核')
-    const head = textWidth('全选', header) + 4 + 16 + 10
-    const box = 16 + 10
-    const mark = pending ? textWidth('待审核', body) + 10 : box
-    const content = Math.max(head, mark, box)
-    specs.push({ min: content, content, lock: true, grow: false })
-  }
-  add('我方文号', rows.map(row => row.caseVolume))
-  add('案件名称', rows.map(row => row.caseName), 'grow')
-  add('处理事项', rows.map(row => row.ctrlProc))
-  add('客户', rows.map(row => row.customerName), 'grow')
-  add('申请号', rows.map(row => row.appNo))
-  add('官方期限', rows.map(row => row.legalDueDate), 'lock')
-  add('客户期限', rows.map(row => row.cusDueDate), 'lock')
-  add('内部期限', rows.map(row => row.intDueDate), 'lock')
-  add('流程状态', rows.map(row => flowStatus(row)), 'lock')
-  return specs
-}
-
-function layoutColumns() {
-  const root = host.value
-  const table = root?.querySelector('table')
-  if (!root || !table || !ruler) return
-  if (!shown.value.length) {
-    colWidths.value = []
-    return
-  }
-  const container = root.clientWidth
-  if (container <= 0) return
-  const header = table.querySelector('thead th') || table
-  const cell = table.querySelector('tbody td:not(.limit-empty)') || header
-  colWidths.value = assignColumnWidths(columnSpecs(header, cell), container)
-}
-
 const measureKey = computed(() => {
   const rows = shown.value
   const body = rows.map(row => [
@@ -212,21 +152,35 @@ const measureKey = computed(() => {
   return `${props.selectable ? 1 : 0}\u0002${body}`
 })
 
-watch(measureKey, () => layoutColumns(), { flush: 'post' })
-
-onMounted(() => {
-  ruler = document.createElement('span')
-  ruler.style.cssText = 'position:absolute;left:-9999px;top:0;white-space:nowrap;visibility:hidden;pointer-events:none;'
-  document.body.appendChild(ruler)
-  layoutColumns()
-  observer = new ResizeObserver(() => layoutColumns())
-  if (host.value) observer.observe(host.value)
-})
-
-onBeforeUnmount(() => {
-  observer?.disconnect()
-  ruler?.remove()
-  ruler = null
+const { colWidths, tableStyle } = useFitColumns({
+  host,
+  watchSource: measureKey,
+  cellSelector: 'tbody td:not(.limit-empty)',
+  columns: ({ header, cell, ruler, measure }) => {
+    const rows = shown.value
+    if (!rows.length) return []
+    const specs = []
+    if (props.selectable) {
+      const pending = rows.some(row => props.gates[row.procId] === 'pending' || props.flowByProc[row.procId] === '已提交审核')
+      const head = ruler.width('全选', header) + 4 + 16 + 10
+      const box = 16 + 10
+      const mark = pending ? ruler.width('待审核', cell) + 10 : box
+      const content = Math.max(head, mark, box)
+      specs.push({ min: content, content, lock: true, grow: false })
+    }
+    specs.push(
+      measure('我方文号', rows.map(row => row.caseVolume)),
+      measure('案件名称', rows.map(row => row.caseName), 'grow'),
+      measure('处理事项', rows.map(row => row.ctrlProc)),
+      measure('客户', rows.map(row => row.customerName), 'grow'),
+      measure('申请号', rows.map(row => row.appNo)),
+      measure('官方期限', rows.map(row => row.legalDueDate), 'lock'),
+      measure('客户期限', rows.map(row => row.cusDueDate), 'lock'),
+      measure('内部期限', rows.map(row => row.intDueDate), 'lock'),
+      measure('流程状态', rows.map(row => flowStatus(row)), 'lock'),
+    )
+    return specs
+  }
 })
 
 function statusShade(text) {

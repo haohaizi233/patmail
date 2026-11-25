@@ -23,7 +23,7 @@ import { joinCaseVolumes } from '../../customer/volume-list'
 import type { LimitMonitorRow } from '../../api/limit-monitor-types'
 import { isQueryGuid } from '../../query/query-validator'
 import { flushRecovery, holdRecovery, peekRecovery, recallRecovery, scheduleRecovery, systemScope } from '../../recovery/wal-ledger'
-import { assignColumnWidths } from '../../shell/column-fit'
+import { useFitColumns } from '../../shell/use-fit-columns'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import { sceneOwnerChanged, scopeFromConnection } from '../../shared/connection'
 import { useWorkspace } from '../composables/useWorkspace'
@@ -189,84 +189,38 @@ const {
 })
 
 const sheetHost = ref<HTMLElement | null>(null)
-const sheetColWidths = ref<number[]>([])
-const sheetTableStyle = computed(() => {
-  const total = sheetColWidths.value.reduce((sum, width) => sum + width, 0)
-  if (!total) return undefined
-  return { width: `${total}px`, minWidth: '100%' }
-})
-let sheetRuler: HTMLSpanElement | null = null
-let sheetObserver: ResizeObserver | null = null
-let sheetObserved: HTMLElement | null = null
-
-function sheetTextWidth(text: string, source: Element): number {
-  if (!sheetRuler) return 0
-  sheetRuler.style.font = getComputedStyle(source).font
-  sheetRuler.textContent = text
-  return Math.ceil(sheetRuler.offsetWidth) + 2
-}
-
-function layoutSheet(): void {
-  const root = sheetHost.value
-  if (!root || !sheetRuler) return
-  if (sheetObserved !== root) {
-    if (sheetObserved) sheetObserver?.unobserve(sheetObserved)
-    sheetObserver?.observe(root)
-    sheetObserved = root
-  }
-  const pageRows = rowsOnSheetPage(sheetPageSafe.value)
-  if (!pageRows.length) {
-    sheetColWidths.value = []
-    return
-  }
-  const container = root.clientWidth
-  if (container <= 0) return
-  const table = root.querySelector('table')
-  if (!table) return
-  const header = table.querySelector('thead th') || table
-  const cell = table.querySelector('tbody td') || header
-  const pad = 16
-  const minOf = (title: string) => sheetTextWidth(title, header) + pad
-  const widest = (title: string, values: string[]) => {
-    let content = minOf(title)
-    for (const value of values) content = Math.max(content, sheetTextWidth(value, cell) + pad)
-    return { min: minOf(title), content }
-  }
-  const volume = widest('我方文号', pageRows.map(row => row.ourVolume))
-  const customer = widest('客户', pageRows.map(row => row.customerName || '表格里没有'))
-  const customerVolume = widest('客户文号', pageRows.map(row => row.customerVolume || '无'))
-  const proc = widest('处理事项', pageRows.map(row => row.procLabel))
-  const typeMin = minOf('发文类型')
-  let typeContent = typeMin
-  for (const row of pageRows) {
-    const label = row.mailTypeId ? (row.mailTypeLabel || '') : '选择发文类型'
-    let width = sheetTextWidth(label, row.mailTypeId ? cell : header) + pad
-    if (!row.mailTypeId) width += 22
-    typeContent = Math.max(typeContent, width)
-  }
-  const to = widest('收件人', pageRows.flatMap(row => [shownTo(row), carriedContactNote(row)].filter(Boolean)))
-  const cc = widest('抄送', pageRows.map(row => shownCc(row)))
-  const found = widest('查询结果', pageRows.map(row => sheetStatus(row).found))
-  const review = widest('审核状态', pageRows.map(row => sheetStatus(row).review))
-  sheetColWidths.value = assignColumnWidths([
-    volume,
-    { ...customer, grow: true },
-    customerVolume,
-    proc,
-    { min: typeMin, content: typeContent },
-    { ...to, grow: true },
-    cc,
-    found,
-    { ...review, lock: true }
-  ], container)
-}
-
 const sheetMeasureKey = computed(() => rowsOnSheetPage(sheetPageSafe.value).map(row => [
   row.ourVolume, row.customerName, row.customerVolume, row.procLabel, row.mailTypeId ?? '', row.mailTypeLabel,
   shownTo(row), carriedContactNote(row), shownCc(row), sheetStatus(row).found, sheetStatus(row).review
 ].join('\u0001')).join('\u0002'))
 
-watch(sheetMeasureKey, () => layoutSheet(), { flush: 'post' })
+const { colWidths: sheetColWidths, tableStyle: sheetTableStyle } = useFitColumns({
+  host: sheetHost,
+  watchSource: sheetMeasureKey,
+  columns: ({ header, cell, headerPad, cellPad, ruler, measure }) => {
+    const pageRows = rowsOnSheetPage(sheetPageSafe.value)
+    if (!pageRows.length) return []
+    const typeMin = ruler.width('发文类型', header) + headerPad
+    let typeContent = typeMin
+    for (const row of pageRows) {
+      const label = row.mailTypeId ? (row.mailTypeLabel || '') : '选择发文类型'
+      let width = ruler.width(label, row.mailTypeId ? cell : header) + cellPad
+      if (!row.mailTypeId) width += 22
+      typeContent = Math.max(typeContent, width)
+    }
+    return [
+      measure('我方文号', pageRows.map(row => row.ourVolume)),
+      measure('客户', pageRows.map(row => row.customerName || '表格里没有'), 'grow'),
+      measure('客户文号', pageRows.map(row => row.customerVolume || '无')),
+      measure('处理事项', pageRows.map(row => row.procLabel)),
+      { min: typeMin, content: typeContent },
+      measure('收件人', pageRows.flatMap(row => [shownTo(row), carriedContactNote(row)].filter(Boolean)), 'grow'),
+      measure('抄送', pageRows.map(row => shownCc(row))),
+      measure('查询结果', pageRows.map(row => sheetStatus(row).found)),
+      measure('审核状态', pageRows.map(row => sheetStatus(row).review), 'lock'),
+    ]
+  },
+})
 
 watch(workflowId, () => {
   rows.value = []
@@ -1536,21 +1490,12 @@ onMounted(() => {
       applyCarryMode()
     }
   }).catch(() => { /* 读不到就保持默认 */ })
-  sheetRuler = document.createElement('span')
-  sheetRuler.style.cssText = 'position:absolute;left:-9999px;top:0;white-space:nowrap;visibility:hidden;pointer-events:none;'
-  document.body.appendChild(sheetRuler)
-  sheetObserver = new ResizeObserver(() => layoutSheet())
-  layoutSheet()
 })
 onUnmounted(() => {
   window.removeEventListener('patmail-arbitration-result', onArbitrationResult)
   window.removeEventListener('pagehide', hideDesk)
   void flushRecovery('workflow-desk', deskScope(), readDesk)
-  sheetObserver?.disconnect()
   if (holdTimer) window.clearTimeout(holdTimer)
-  sheetRuler?.remove()
-  sheetRuler = null
-  sheetObserved = null
 })
 
 async function askGaps(retried = false): Promise<void> {
