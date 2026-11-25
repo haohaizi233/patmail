@@ -191,7 +191,7 @@ const appFilesRows = ref<NoticeRow[]>([])
 const detailFileTypes = ref<NoticeFileTypeNode[]>([])
 
 const detailFileTypeTreeOptions = computed<TreeOption[]>(() => {
-  const nodes = detailFileTypes.value.length > 0 ? detailFileTypes.value : (initData.value?.fileTypes ?? [])
+  const nodes = detailFileTypes.value.length > 0 ? detailFileTypes.value : (initData.value?.detailFileTypes ?? [])
   return nodes.map(node => ({
     value: node.id,
     label: node.name,

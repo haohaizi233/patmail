@@ -356,7 +356,7 @@ onBeforeUnmount(() => {
                   <span class="nd-field-label">来文名称</span>
                 </div>
                 <TreeOptionSelect
-                  v-if="editable && fileTypeOptions.length > 0"
+                  v-if="editable && fileTypeOptions.length > 0 && !(loading && !form.oaTypeId)"
                   :model-value="form.oaTypeId"
                   :options="fileTypeOptions"
                   :multiple="false"
@@ -365,8 +365,8 @@ onBeforeUnmount(() => {
                   empty-text="暂无来文类型"
                   @update:model-value="updateField('oaTypeId', $event)"
                 />
-                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.oaTypeName.trim() }" :title="form.oaTypeName.trim() || undefined">
-                  {{ displayVal(form.oaTypeName) }}
+                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.oaTypeName.trim() && !loading }" :title="form.oaTypeName.trim() || undefined">
+                  {{ form.oaTypeName.trim() || (loading ? '正在读取来文类型…' : '—') }}
                 </div>
               </div>
 
