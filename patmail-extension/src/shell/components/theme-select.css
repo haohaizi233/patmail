@@ -39,7 +39,7 @@ label > .theme-select,
    容器不吃事件（pointer-events: none），只有菜单自己接。应用页走 body teleport，不生效。 */
 #theme-select-portal { position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }
 .theme-select-menu {
-  position: fixed; z-index: 70; margin: 0; padding: 6px; overflow-x: hidden; overflow-y: auto; list-style: none;
+  position: fixed; z-index: 1200; margin: 0; padding: 6px; overflow-x: hidden; overflow-y: auto; list-style: none;
   border: 1px solid #eadff0; border-radius: 12px; background: #fff; color: var(--text, #243056);
   box-shadow: 0 12px 32px #ffd0e266; pointer-events: auto;
   font: 13px/1.4 "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
@@ -65,7 +65,7 @@ label > .theme-select,
 .theme-tree-actions { display: flex; gap: 6px; }
 .theme-tree-actions button { flex: 1; min-width: 0; }
 .theme-tree-query:focus-visible, .theme-tree-clear:focus-visible, .theme-tree-all:focus-visible, .theme-tree-confirm:focus-visible, .theme-tree-toggle:focus-visible { outline: 2px solid var(--focus, #9b3060); outline-offset: 1px; }
-.theme-tree-list { overflow-x: hidden; overflow-y: auto; min-height: 0; }
+.theme-tree-list { overflow: auto; min-height: 0; }
 .theme-tree-row { display: flex; align-items: center; gap: 4px; min-height: 28px; }
 .theme-tree-toggle { width: 22px; height: 22px; flex: none; border: 1px solid #eadff0; border-radius: 4px; background: #fff; color: #8d7693; font: 14px/1 inherit; cursor: pointer; }
 .theme-tree-leaf { width: 22px; flex: none; }

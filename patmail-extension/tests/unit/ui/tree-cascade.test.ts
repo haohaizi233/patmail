@@ -52,3 +52,25 @@ it('叶子限定的单选树不能选择分类，展开后可以选择具体项'
   ;(leaf.querySelector('input') as HTMLInputElement).click(); await settle()
   expect(value.value).toBe('a')
 })
+
+it('hideParentRadio 隐藏父节点单选框并点击展开，且打开时自动展开已选项祖先', async () => {
+  const value = ref('a')
+  host = document.createElement('div'); document.body.append(host)
+  app = createApp({ render: () => h(TreeOptionSelect, { options, multiple: false, leavesOnly: true, hideParentRadio: true, modelValue: value.value, 'onUpdate:modelValue': (next: string) => { value.value = next } }) })
+  app.directive('hint', {}); app.mount(host)
+  ;(host.querySelector('.theme-select-trigger') as HTMLButtonElement).click(); await settle()
+
+  const rows = [...document.querySelectorAll<HTMLElement>('.theme-tree-row')]
+  const rootRow = rows.find(row => row.textContent?.includes('根'))!
+  expect(rootRow.querySelector('input[type="radio"]')).toBeNull()
+  expect(rows.some(row => row.textContent?.includes('甲'))).toBe(true)
+
+  const leafB = rows.find(row => row.textContent?.trim() === '乙')!
+  ;(leafB.querySelector('input[type="radio"]') as HTMLInputElement).click(); await settle()
+  expect(value.value).toBe('b')
+
+  ;(host.querySelector('.theme-select-trigger') as HTMLButtonElement).click(); await settle()
+  const pickBtn = document.querySelector<HTMLButtonElement>('.theme-tree-pick')!
+  pickBtn.click(); await settle()
+  expect(document.querySelectorAll('.theme-tree-row').length).toBe(1)
+})

@@ -14,8 +14,9 @@ const props = withDefaults(defineProps<{
   emptyText?: string
   /** 多选（checkbox，带「全选」）或单选（radio，选中即收起）。对应原站 TreeUser 的 SelectType。 */
   leavesOnly?: boolean
+  hideParentRadio?: boolean
   multiple?: boolean
-}>(), { modelValue: '', disabled: false, multiple: true })
+}>(), { modelValue: '', disabled: false, hideParentRadio: false, multiple: true })
 const emit = defineEmits<{ 'update:modelValue': [value: string]; open: []; retry: [] }>()
 
 const root = ref<HTMLElement | null>(null)
@@ -68,20 +69,41 @@ function updatePosition(): void {
     { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
     { width: window.innerWidth, height: window.innerHeight },
     320,
-    treeMenuWidth(props.options)
+    Math.min(treeMenuWidth(props.options), 460)
   )
   menuStyle.value = menuBoxStyle(placed)
+}
+
+function expandSelectedAncestors(): void {
+  if (selected.value.length === 0) return
+  const parentOf = new Map<string, string>()
+  for (const node of tree.value.byId.values()) {
+    for (const childId of node.childIds) parentOf.set(childId, node.value)
+  }
+  const next = { ...manualExpanded.value }
+  for (const id of selected.value) {
+    const seen = new Set<string>([id])
+    let parent = parentOf.get(id)
+    while (parent && !seen.has(parent)) {
+      seen.add(parent)
+      next[parent] = true
+      parent = parentOf.get(parent)
+    }
+  }
+  manualExpanded.value = next
 }
 
 function show(): void {
   if (props.disabled || opened.value || !available.value) return
   portal.value = resolvePortal()
+  expandSelectedAncestors()
   opened.value = true
   emit('open')
   window.dispatchEvent(new CustomEvent('theme-select-open', { detail: owner }))
   void nextTick(() => {
     updatePosition()
     searchBox.value?.focus()
+    menu.value?.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.scrollIntoView?.({ block: 'nearest' })
   })
 }
 
@@ -186,7 +208,7 @@ onBeforeUnmount(() => {
           <button type="button" class="theme-tree-query" @click="search">查询</button>
         </div>
         <div class="theme-tree-list">
-          <TreeOptionNode v-for="id in tree.roots" :key="id" :node-id="id" :by-id="tree.byId" :selected="selected" :expanded="expanded" :visible="found ? found.visible : null" :trail="[]" :multiple="multiple" :leaves-only="leavesOnly" :input-name="radioName" @toggle="toggle" @expand="expand" />
+          <TreeOptionNode v-for="id in tree.roots" :key="id" :node-id="id" :by-id="tree.byId" :selected="selected" :expanded="expanded" :visible="found ? found.visible : null" :trail="[]" :multiple="multiple" :leaves-only="leavesOnly" :hide-parent-radio="hideParentRadio" :input-name="radioName" @toggle="toggle" @expand="expand" />
           <p v-if="tree.roots.length === 0" class="theme-select-empty">没有可选的选项。原站没有返回这个下拉的数据。</p>
           <p v-else-if="found && found.visible.size === 0" class="theme-select-empty">没有匹配的选项。</p>
         </div>
