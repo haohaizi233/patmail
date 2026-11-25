@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import ThemeSelect from '../../../shell/components/ThemeSelect.vue'
-import TreeOptionSelect from '../../../shell/components/TreeOptionSelect.vue'
-import WDatePicker from '../../../shell/components/WDatePicker.vue'
 import {
   hasCachedNoticeOptions,
   mergeNoticeInitData,
@@ -48,6 +46,7 @@ import { MessageType, type MessageBridge } from '../../../shared/message'
 import type { TreeOption } from '../../../query/option-tree'
 import { confirmDialog, infoDialog } from '../../dialog'
 import NoticeActionBar from './NoticeActionBar.vue'
+import NoticeDetailModal, { type NoticeDetailEditableKey } from './NoticeDetailModal.vue'
 import NoticeExportModal from './NoticeExportModal.vue'
 import NoticeFilterForm from './NoticeFilterForm.vue'
 import NoticeResultTable from './NoticeResultTable.vue'
@@ -142,7 +141,6 @@ const displayedRows = computed(() => {
 
 // Detail modal (4 页签可编辑弹窗，对齐 Notice.aspx)
 const detailOpen = ref(false)
-const detailTab = ref<'charge' | 'fee' | 'hebo' | 'duibi'>('charge')
 const detailRow = ref<NoticeRow | null>(null)
 const detailFees = ref<Record<string, unknown>[]>([])
 const detailHebo = ref<Record<string, unknown>[]>([])
@@ -150,6 +148,7 @@ const detailDuibi = ref<Record<string, unknown>[]>([])
 const detailLoading = ref(false)
 const detailSaving = ref(false)
 const detailMessage = ref('')
+const detailMessageTone = ref<'ok' | 'error'>('ok')
 const detailEditable = ref(false)
 const detailForm = reactive({
   oaId: '',
@@ -179,6 +178,7 @@ const detailForm = reactive({
 const caseSearchKeyword = ref('')
 const caseSearchOptions = ref<NoticeOptionItem[]>([])
 const caseSearching = ref(false)
+const caseSearchSearched = ref(false)
 
 // AppNo file list modal (对齐 NoHandFileList.aspx)
 const appFilesOpen = ref(false)
@@ -188,15 +188,25 @@ const appFilesMode = ref<'hand' | 'del'>('hand')
 const appFilesAppNo = ref('')
 const appFilesTargetId = ref('')
 const appFilesRows = ref<NoticeRow[]>([])
+const detailFileTypes = ref<NoticeFileTypeNode[]>([])
 
-const detailFileTypeTreeOptions = computed<TreeOption[]>(() =>
-  (initData.value?.fileTypes ?? []).map(node => ({
+const detailFileTypeTreeOptions = computed<TreeOption[]>(() => {
+  const nodes = detailFileTypes.value.length > 0 ? detailFileTypes.value : (initData.value?.fileTypes ?? [])
+  return nodes.map(node => ({
     value: node.id,
     label: node.name,
     ...(node.parentId ? { parent: node.parentId } : {}),
     ...(node.selectable === false ? { selectable: false } : {})
   }))
-)
+})
+
+function alignDetailOaTypeId(rawId: string): string {
+  const trimmed = rawId.trim()
+  if (!trimmed) return ''
+  const upper = trimmed.toUpperCase()
+  const matched = detailFileTypeTreeOptions.value.find(opt => opt.value.toUpperCase() === upper)
+  return matched ? matched.value : trimmed
+}
 
 // Export modal (IhgAdvExport)
 const exportModalOpen = ref(false)
@@ -1302,7 +1312,7 @@ function resetDetailForm(row: NoticeRow, detail: Record<string, unknown> | null)
   detailForm.picName = txt(src.i_cn_name || src.f_cn_name || src.cn_name || row.pic)
   detailForm.oaCode = txt(src.oa_code || row.oa_code || row.file_desc_code)
   detailForm.oaDate = txt(src.FaWenRQ || row.FaWenRQ)
-  detailForm.oaTypeId = txt(src.oa_type_id)
+  detailForm.oaTypeId = alignDetailOaTypeId(txt(src.oa_type_id))
   detailForm.oaTypeName = txt(src.oa_name || row.oa_name)
   detailForm.oaDesc = txt(src.notice_Content || row.remark)
   detailForm.intDueDate = txt(src.i_int_due_date || src.int_due_date)
@@ -1320,13 +1330,14 @@ function resetDetailForm(row: NoticeRow, detail: Record<string, unknown> | null)
 
 async function inspectRow(row: NoticeRow): Promise<void> {
   detailRow.value = row
-  detailTab.value = 'charge'
   detailFees.value = []
   detailHebo.value = []
   detailDuibi.value = []
   detailMessage.value = ''
+  detailMessageTone.value = 'ok'
   caseSearchKeyword.value = ''
   caseSearchOptions.value = []
+  caseSearchSearched.value = false
   const ps = row.process_status
   detailEditable.value =
     (activeTab.value === 'import' && queries.import.status === '0') &&
@@ -1344,7 +1355,9 @@ async function inspectRow(row: NoticeRow): Promise<void> {
       ctrlProcId: txt(row.ctrl_proc_id)
     })
     if (res) {
+      if (res.detailFileTypes?.length) detailFileTypes.value = res.detailFileTypes
       if (res.detail) resetDetailForm(row, res.detail)
+      else detailForm.oaTypeId = alignDetailOaTypeId(detailForm.oaTypeId)
       detailFees.value = res.detailFees ?? []
       detailHebo.value = res.detailHebo ?? []
       detailDuibi.value = res.detailDuibi ?? []
@@ -1354,6 +1367,10 @@ async function inspectRow(row: NoticeRow): Promise<void> {
   }
 }
 
+function updateDetailField({ key, value }: { key: NoticeDetailEditableKey; value: string }): void {
+  detailForm[key] = value
+}
+
 async function searchDetailCases(): Promise<void> {
   const kw = caseSearchKeyword.value.trim() || detailForm.caseVolume.trim()
   if (!kw) return
@@ -1361,6 +1378,7 @@ async function searchDetailCases(): Promise<void> {
   try {
     const res = await sendAction({ action: 'searchNoticeCases', keyword: kw })
     caseSearchOptions.value = res?.caseOptions ?? []
+    caseSearchSearched.value = true
   } finally {
     caseSearching.value = false
   }
@@ -1369,13 +1387,16 @@ async function searchDetailCases(): Promise<void> {
 async function pickDetailCase(opt: NoticeOptionItem): Promise<void> {
   detailForm.caseId = opt.value
   detailForm.caseVolume = opt.label
+  caseSearchKeyword.value = ''
   caseSearchOptions.value = []
+  caseSearchSearched.value = false
   const meta = await sendAction({ action: 'getCaseMeta', caseId: opt.value })
   if (meta?.chargeDept) detailForm.chargeDept = meta.chargeDept
 }
 
 async function saveDetail(): Promise<void> {
   if (!detailForm.caseId.trim()) {
+    detailMessageTone.value = 'error'
     detailMessage.value = '请先检索并关联我方文号对应的案件。'
     return
   }
@@ -1394,9 +1415,11 @@ async function saveDetail(): Promise<void> {
       certificateNo: detailForm.certificateNo
     })
     if (res?.ok) {
+      detailMessageTone.value = 'ok'
       detailMessage.value = res.message
       await runSearch(activeTab.value, false)
     } else if (res) {
+      detailMessageTone.value = 'error'
       detailMessage.value = res.message
     }
   } finally {
@@ -1555,235 +1578,28 @@ onMounted(() => {
       @open-easy="triggerAction('openEasyTab')"
     />
 
-    <div v-if="detailOpen" class="mask app-dialog" @click.self="detailOpen = false">
-      <div class="dialog with-table notice-detail-dialog">
-        <header>
-          <h3>来文详细信息{{ detailEditable ? '（可编辑关联案件与来文信息）' : '' }}</h3>
-          <button type="button" aria-label="关闭" @click="detailOpen = false">×</button>
-        </header>
-
-        <div class="tabs notice-detail-tabs" role="tablist">
-          <button type="button" :class="{ on: detailTab === 'charge' }" @click="detailTab = 'charge'">处理信息</button>
-          <button type="button" :class="{ on: detailTab === 'fee' }" @click="detailTab = 'fee'">官费信息 ({{ detailFees.length }})</button>
-          <button type="button" :class="{ on: detailTab === 'hebo' }" @click="detailTab = 'hebo'">核驳信息 ({{ detailHebo.length }})</button>
-          <button type="button" :class="{ on: detailTab === 'duibi' }" @click="detailTab = 'duibi'">对比文件 ({{ detailDuibi.length }})</button>
-        </div>
-
-        <p v-if="detailLoading" class="hint">正在读取原站来文详情与关联信息…</p>
-        <p v-if="detailMessage" class="notice-status-inline-ok">{{ detailMessage }}</p>
-
-        <div v-if="detailTab === 'charge'" class="notice-detail-scroll">
-          <div class="notice-form-2col notice-detail-grid">
-            <label class="notice-field">
-              <span class="notice-field-label">处理事项</span>
-              <input :value="detailForm.ctrlProc" type="text" disabled />
-            </label>
-            <div class="notice-field">
-              <span class="notice-field-label">我方文号</span>
-              <div v-if="detailEditable" class="notice-case-picker">
-                <div class="notice-inline-pair">
-                  <input
-                    v-model="caseSearchKeyword"
-                    type="text"
-                    :placeholder="detailForm.caseVolume || '输入我方文号关键词搜索关联'"
-                    @keydown.enter.prevent="searchDetailCases"
-                  />
-                  <button type="button" class="ghost" :disabled="caseSearching" @click="searchDetailCases">
-                    {{ caseSearching ? '检索中…' : '查找案件' }}
-                  </button>
-                </div>
-                <small v-if="detailForm.caseVolume" class="notice-picked-case">当前关联：{{ detailForm.caseVolume }}</small>
-                <div v-if="caseSearchOptions.length > 0" class="notice-case-dropdown">
-                  <button
-                    v-for="opt in caseSearchOptions"
-                    :key="opt.value"
-                    type="button"
-                    class="notice-case-option"
-                    @click="pickDetailCase(opt)"
-                  >
-                    {{ opt.label }}
-                  </button>
-                </div>
-              </div>
-              <input v-else :value="detailForm.caseVolume" type="text" disabled />
-            </div>
-
-            <label class="notice-field">
-              <span class="notice-field-label">承办部门</span>
-              <input :value="detailForm.chargeDept" type="text" disabled />
-            </label>
-            <label class="notice-field">
-              <span class="notice-field-label">处理人</span>
-              <input :value="detailForm.picName" type="text" disabled />
-            </label>
-
-            <label class="notice-field">
-              <span class="notice-field-label">来文编号</span>
-              <input :value="detailForm.oaCode" type="text" disabled />
-            </label>
-            <label class="notice-field">
-              <span class="notice-field-label">官方发文日</span>
-              <WDatePicker v-model="detailForm.oaDate" :disabled="!detailEditable" placeholder="选择发文日" />
-            </label>
-
-            <div class="notice-field">
-              <span class="notice-field-label">来文名称</span>
-              <TreeOptionSelect
-                v-if="detailEditable && detailFileTypeTreeOptions.length > 0"
-                :model-value="detailForm.oaTypeId"
-                :options="detailFileTypeTreeOptions"
-                :multiple="false"
-                empty-text="暂无来文类型"
-                @update:model-value="detailForm.oaTypeId = $event"
-              />
-              <input v-else :value="detailForm.oaTypeName" type="text" disabled />
-            </div>
-            <label class="notice-field">
-              <span class="notice-field-label">来文备注</span>
-              <input :value="detailForm.oaDesc" type="text" disabled />
-            </label>
-
-            <label class="notice-field">
-              <span class="notice-field-label">内部期限</span>
-              <input :value="detailForm.intDueDate" type="text" disabled />
-            </label>
-            <label class="notice-field">
-              <span class="notice-field-label">客户期限</span>
-              <input :value="detailForm.cusDueDate" type="text" disabled />
-            </label>
-
-            <label class="notice-field">
-              <span class="notice-field-label">官方期限</span>
-              <input :value="detailForm.legalDueDate" type="text" disabled />
-            </label>
-            <label class="notice-field">
-              <span class="notice-field-label">审查员</span>
-              <input :value="detailForm.examiner" type="text" disabled />
-            </label>
-
-            <label class="notice-field">
-              <span class="notice-field-label">审查员电话</span>
-              <input :value="detailForm.examinerTel" type="text" disabled />
-            </label>
-            <label class="notice-field">
-              <span class="notice-field-label">审查部门</span>
-              <input :value="detailForm.examinerDept" type="text" disabled />
-            </label>
-
-            <label class="notice-field">
-              <span class="notice-field-label">公告号</span>
-              <input v-model="detailForm.issueNo" type="text" :disabled="!detailEditable" />
-            </label>
-            <label class="notice-field">
-              <span class="notice-field-label">公告日</span>
-              <WDatePicker v-model="detailForm.issueDate" :disabled="!detailEditable" placeholder="选择公告日" />
-            </label>
-
-            <label class="notice-field">
-              <span class="notice-field-label">证书号</span>
-              <input v-model="detailForm.certificateNo" type="text" :disabled="!detailEditable" />
-            </label>
-            <label class="notice-field">
-              <span class="notice-field-label">客户名称</span>
-              <input :value="detailForm.customerName" type="text" disabled />
-            </label>
-          </div>
-        </div>
-
-        <div v-else-if="detailTab === 'fee'" class="dialog-table notice-detail-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>序号</th>
-                <th>费用类型</th>
-                <th>费用子类</th>
-                <th>费用</th>
-                <th>费用期限</th>
-                <th>备注</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="detailFees.length === 0">
-                <td colspan="6">暂无官费信息</td>
-              </tr>
-              <tr v-for="(item, i) in detailFees" :key="txt(item.oa_fee_id) || i">
-                <td>{{ txt(item.sn) || i + 1 }}</td>
-                <td>{{ txt(item.fee_type) }}</td>
-                <td>{{ txt(item.fee_sub_type) }}</td>
-                <td>{{ txt(item.amount) }}</td>
-                <td>{{ txt(item.legal_due_date) }}</td>
-                <td>{{ txt(item.description) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div v-else-if="detailTab === 'hebo'" class="notice-detail-scroll">
-          <div class="dialog-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>权利要求项</th>
-                  <th>引用法条</th>
-                  <th>审查结果</th>
-                  <th>审查类型</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="detailHebo.length === 0">
-                  <td colspan="4">暂无核驳明细</td>
-                </tr>
-                <tr v-for="(item, i) in detailHebo" :key="txt(item.reject_id) || i">
-                  <td>{{ txt(item.reject_claims) }}</td>
-                  <td>{{ txt(item.reject_law) }}</td>
-                  <td>{{ txt(item.reject_file) }}</td>
-                  <td>{{ txt(item.review_type) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <label class="notice-field">
-            <span class="notice-field-label">审查结论</span>
-            <textarea :value="detailForm.remark" rows="3" disabled class="notice-textarea" />
-          </label>
-        </div>
-
-        <div v-else class="dialog-table notice-detail-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>国别</th>
-                <th>对比文件号</th>
-                <th>公开日期</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="detailDuibi.length === 0">
-                <td colspan="3">暂无对比文件</td>
-              </tr>
-              <tr v-for="(item, i) in detailDuibi" :key="txt(item.oa_ids_id) || i">
-                <td>{{ txt(item.country) }}</td>
-                <td>{{ txt(item.file_no) }}</td>
-                <td>{{ txt(item.pub_date) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <footer>
-          <button type="button" class="ghost" @click="detailOpen = false">取消</button>
-          <button
-            v-if="detailEditable && detailTab === 'charge'"
-            type="button"
-            class="solid"
-            :disabled="detailSaving"
-            @click="saveDetail"
-          >
-            {{ detailSaving ? '保存中…' : '保存修改' }}
-          </button>
-        </footer>
-      </div>
-    </div>
+    <NoticeDetailModal
+      v-model:case-search-keyword="caseSearchKeyword"
+      :open="detailOpen"
+      :editable="detailEditable"
+      :loading="detailLoading"
+      :saving="detailSaving"
+      :message="detailMessage"
+      :message-tone="detailMessageTone"
+      :form="detailForm"
+      :fees="detailFees"
+      :hebo="detailHebo"
+      :duibi="detailDuibi"
+      :file-type-options="detailFileTypeTreeOptions"
+      :case-search-options="caseSearchOptions"
+      :case-searching="caseSearching"
+      :case-search-searched="caseSearchSearched"
+      @close="detailOpen = false"
+      @save="saveDetail"
+      @search-case="searchDetailCases"
+      @pick-case="pickDetailCase"
+      @update-field="updateDetailField"
+    />
 
     <div v-if="appFilesOpen" class="mask app-dialog" @click.self="appFilesOpen = false">
       <div class="dialog with-table">

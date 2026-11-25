@@ -6,6 +6,7 @@ import {
   NOTICE_TABLE_COLUMNS,
   formatCertProcessStatus,
   formatDownloadProcessStatus,
+  noticeCellRaw,
   noticeRowKey
 } from '../../../api/notice-params'
 import type { NoticeRow, NoticeTabId } from '../../../api/notice-types'
@@ -50,6 +51,20 @@ const columns = computed(() =>
     ? NOTICE_IMPORT_COMPLETED_COLUMNS
     : NOTICE_TABLE_COLUMNS[props.tab]
 )
+const CHECK_COL_WEIGHT = 28
+const ACTION_COL_WEIGHT = 48
+
+function colWeight(width?: string): number {
+  return Number.parseInt(width ?? '', 10) || 150
+}
+
+const totalColWeight = computed(() =>
+  columns.value.reduce((sum, col) => sum + colWeight(col.width), CHECK_COL_WEIGHT + ACTION_COL_WEIGHT)
+)
+
+function colWidthPercent(weight: number): string {
+  return `${((weight / totalColWeight.value) * 100).toFixed(2)}%`
+}
 const hasClickableAppNo = computed(() => columns.value.some(c => Boolean(c.clickableAppNo)))
 const totalPages = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1, props.pageSize))))
 const selectedSet = computed(() => new Set(props.selectedKeys))
@@ -90,7 +105,7 @@ function toggleOne(row: NoticeRow, checked: boolean): void {
 }
 
 function formatCell(row: NoticeRow, key: string): string {
-  const raw = row[key]
+  const raw = noticeCellRaw(props.tab, row, key)
   if (key === 'is_handle') {
     if (raw === true || raw === 1 || raw === '1') return '已处理'
     if (raw === false || raw === 0 || raw === '0') return '未处理'
@@ -159,7 +174,7 @@ function canInspectRow(row: NoticeRow): boolean {
       <table class="grid">
         <thead>
           <tr>
-            <th class="check">
+            <th class="check" :style="{ width: colWidthPercent(CHECK_COL_WEIGHT) }">
               <input
                 type="checkbox"
                 aria-label="全选本页"
@@ -171,11 +186,11 @@ function canInspectRow(row: NoticeRow): boolean {
             <th
               v-for="col in columns"
               :key="col.key"
-              :style="col.width ? { width: col.width } : undefined"
+              :style="{ width: colWidthPercent(colWeight(col.width)) }"
             >
               {{ col.label }}
             </th>
-            <th style="width: 72px">操作</th>
+            <th :style="{ width: colWidthPercent(ACTION_COL_WEIGHT) }">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -275,3 +290,29 @@ function canInspectRow(row: NoticeRow): boolean {
     </div>
   </section>
 </template>
+
+<style scoped>
+.notice-table-card .fit-table.limit-cols {
+  overflow-x: hidden;
+}
+
+.notice-table-card table.grid {
+  font-size: 12.5px;
+}
+
+.notice-table-card table.grid th,
+.notice-table-card table.grid td {
+  padding: 0 5px;
+}
+
+.notice-table-card table.grid td {
+  height: 40px;
+}
+
+.notice-table-card table.grid th.check,
+.notice-table-card table.grid td.check {
+  padding-left: 4px;
+  padding-right: 2px;
+  text-align: center;
+}
+</style>
