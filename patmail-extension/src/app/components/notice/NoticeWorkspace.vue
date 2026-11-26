@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ThemeSelect from '../../../shell/components/ThemeSelect.vue'
 import {
   hasCachedNoticeOptions,
@@ -43,6 +43,14 @@ import type {
   NoticeUploadProcessRow
 } from '../../../api/notice-types'
 import { MessageType, type MessageBridge } from '../../../shared/message'
+import { isRecord } from '../../../shared/guards'
+import {
+  NOTICE_STATUS_CHANNEL,
+  isNoticeTaskStatusEvent,
+  type NoticeTaskStatusEvent
+} from '../../../shared/notice-status'
+import { newUuid } from '../../../utils/uuid'
+import { useTopProgress, type TopProgress } from '../../composables/useTopProgress'
 import type { TreeOption } from '../../../query/option-tree'
 import { confirmDialog, infoDialog } from '../../dialog'
 import NoticeActionBar from './NoticeActionBar.vue'
@@ -54,9 +62,11 @@ import NoticeResultTable from './NoticeResultTable.vue'
 const props = withDefaults(defineProps<{
   bridge?: MessageBridge
   userId?: string
+  isActive?: boolean
 }>(), {
   bridge: undefined,
-  userId: ''
+  userId: '',
+  isActive: true
 })
 
 const cacheUserKey = computed(() => props.userId.trim() || '__default__')
@@ -78,6 +88,54 @@ const busyAction = ref('')
 const statusMessage = ref('')
 const statusError = ref('')
 const filterFormRef = ref<InstanceType<typeof NoticeFilterForm> | null>(null)
+
+const noticeTaskBar = reactive({
+  visible: false,
+  status: 'idle' as 'idle' | 'run' | 'hold' | 'done' | 'fail',
+  label: '',
+  stage: '',
+  summary: '',
+  detail: '',
+  startedAt: 0,
+  elapsedSec: 0
+})
+let noticeTickTimer: ReturnType<typeof setInterval> | null = null
+let removeNoticeStatusListener: (() => void) | null = null
+
+function stopNoticeTimer(): void {
+  if (noticeTickTimer !== null) {
+    clearInterval(noticeTickTimer)
+    noticeTickTimer = null
+  }
+}
+
+function detachNoticeStatusListener(): void {
+  removeNoticeStatusListener?.()
+  removeNoticeStatusListener = null
+}
+
+function dismissNoticeTaskBar(): void {
+  if (noticeTaskBar.status === 'run') return
+  stopNoticeTimer()
+  noticeTaskBar.visible = false
+}
+
+const noticeTopProgress = computed<TopProgress>(() => ({
+  visible: noticeTaskBar.visible,
+  mode: 'state',
+  done: 0,
+  total: 0,
+  percent: 0,
+  eta: '',
+  status: noticeTaskBar.status,
+  label: noticeTaskBar.label,
+  stage: noticeTaskBar.stage,
+  summary: noticeTaskBar.summary,
+  detail: noticeTaskBar.detail,
+  elapsed: noticeTaskBar.visible ? `已用时 ${noticeTaskBar.elapsedSec}s` : '',
+  onDismiss: dismissNoticeTaskBar
+}))
+useTopProgress(noticeTopProgress, computed(() => props.isActive !== false))
 
 const queries = reactive<{
   import: NoticeImportQuery
@@ -890,11 +948,152 @@ async function triggerAction(action: string): Promise<void> {
       }
       return
     }
+function stageTextForNoticeEvent(ev: NoticeTaskStatusEvent): string {
+  switch (ev.phase) {
+    case 'checking_login':
+      return '核对 CPC 登录'
+    case 'submitting':
+      return '提交原站请求'
+    case 'polling':
+      return ev.pollAttempt && ev.pollAttempt > 0
+        ? `轮询状态 (${ev.pollAttempt}/${ev.maxPolls ?? 20})`
+        : '原站已受理'
+    case 'syncing_rows':
+      return '同步解析明细'
+    case 'done':
+      return '原站处理完成'
+    case 'background':
+      return '后台继续处理'
+    case 'need_login':
+      return '需扫码登录'
+    case 'error':
+      return '执行异常'
+  }
+}
+
+async function runPollingNoticeAction(options: {
+  busyKey: string
+  label: string
+  tab: 'download' | 'cert' | 'replay'
+  request: Extract<NoticeActionRequest, { action: 'fetchTzsList' | 'downloadTzsList' | 'fetchCertList' | 'downloadCertList' }>
+  onAfterSuccess?: (res: NoticeActionResult) => Promise<void>
+}): Promise<void> {
+  const progressId = newUuid()
+  const tracker: { lastEvent: NoticeTaskStatusEvent | null } = { lastEvent: null }
+
+  detachNoticeStatusListener()
+  stopNoticeTimer()
+  statusMessage.value = ''
+  statusError.value = ''
+
+  noticeTaskBar.visible = true
+  noticeTaskBar.status = 'run'
+  noticeTaskBar.label = options.label
+  noticeTaskBar.stage = '准备请求'
+  noticeTaskBar.summary = ''
+  noticeTaskBar.detail = '正在通过已绑定 EASY 标签页发起原站请求…'
+  noticeTaskBar.startedAt = Date.now()
+  noticeTaskBar.elapsedSec = 0
+
+  noticeTickTimer = setInterval(() => {
+    noticeTaskBar.elapsedSec = Math.max(0, Math.floor((Date.now() - noticeTaskBar.startedAt) / 1000))
+  }, 1000)
+
+  const runtime = typeof chrome !== 'undefined' ? chrome.runtime : undefined
+  if (runtime?.onMessage) {
+    const listener = (packet: unknown, sender: chrome.runtime.MessageSender): void => {
+      if (sender.id !== runtime.id || !isRecord(packet)) return
+      if (packet.channel !== NOTICE_STATUS_CHANNEL || packet.id !== progressId) return
+      if (!isNoticeTaskStatusEvent(packet.status)) return
+      const ev = packet.status
+      tracker.lastEvent = ev
+      noticeTaskBar.stage = stageTextForNoticeEvent(ev)
+      noticeTaskBar.summary = ev.call ?? ''
+      noticeTaskBar.detail = ev.serverMessage
+    }
+    runtime.onMessage.addListener(listener)
+    removeNoticeStatusListener = () => runtime.onMessage.removeListener(listener)
+  }
+
+  busyAction.value = options.busyKey
+  try {
+    const res = await sendAction({ ...options.request, progressId })
+    if (!res) {
+      noticeTaskBar.status = 'fail'
+      noticeTaskBar.stage = '请求未完成'
+      noticeTaskBar.summary = tracker.lastEvent?.call ?? ''
+      noticeTaskBar.detail = statusError.value || 'EASY 通道未返回结果。'
+      return
+    }
+    if (res.needCpcLogin) {
+      tableStates[options.tab].needCpcLogin = true
+      tableStates[options.tab].loginMessage = res.message
+      statusError.value = res.message
+      noticeTaskBar.status = 'hold'
+      noticeTaskBar.stage = '需扫码登录'
+      noticeTaskBar.summary = 'CPC 登录态过期'
+      noticeTaskBar.detail = res.message
+      return
+    }
+    if (!res.ok) {
+      statusError.value = res.message
+      noticeTaskBar.status = 'fail'
+      noticeTaskBar.stage = '执行失败'
+      noticeTaskBar.summary = tracker.lastEvent?.call ?? ''
+      noticeTaskBar.detail = res.message
+      return
+    }
+
+    noticeTaskBar.stage = '刷新列表'
+    noticeTaskBar.summary = '同步界面数据'
+    noticeTaskBar.detail = res.message
+    if (options.onAfterSuccess) {
+      await options.onAfterSuccess(res)
+    } else {
+      await runSearch(options.tab, false)
+    }
+
+    const isBackground = tracker.lastEvent?.phase === 'background'
+    noticeTaskBar.status = isBackground ? 'hold' : 'done'
+    noticeTaskBar.stage = isBackground ? '后台处理中' : '已完成'
+
+    if (options.request.action === 'downloadTzsList' && options.tab === 'download') {
+      if (isBackground) {
+        noticeTaskBar.summary = '原站后台仍在解析'
+        noticeTaskBar.detail = res.message
+      } else {
+        noticeTaskBar.summary = '已同步至「导入来文」'
+        noticeTaskBar.detail =
+          queries.download.status === 'unprocess' && tableStates.download.rows.length === 0
+            ? `${res.message} 未解析队列已清空，请到「导入来文」继续导入，或改选「已解析」查询`
+            : `${res.message} 已解析官文已进入「导入来文」待导入列表`
+      }
+    } else if (options.request.action === 'downloadTzsList' && options.tab === 'replay') {
+      noticeTaskBar.summary = isBackground ? '后台解析中' : '二次解析完成'
+      noticeTaskBar.detail = `${res.message}（成功入库记录可在「导入来文」查看）`
+    } else if (options.request.action === 'downloadCertList') {
+      noticeTaskBar.summary = isBackground ? '后台解析中' : '证书解析完成'
+      noticeTaskBar.detail = res.message
+    } else {
+      noticeTaskBar.summary = tracker.lastEvent?.call ?? '同步完成'
+      noticeTaskBar.detail = res.message
+    }
+    statusMessage.value = noticeTaskBar.detail
+  } finally {
+    detachNoticeStatusListener()
+    stopNoticeTimer()
+    noticeTaskBar.elapsedSec = Math.max(0, Math.floor((Date.now() - noticeTaskBar.startedAt) / 1000))
+    busyAction.value = ''
+  }
+}
+
     case 'fetchTzsList': {
-      busyAction.value = 'fetchTzsList'
-      try {
-        const q = queries.download
-        const res = await sendAction({
+      const q = queries.download
+      await runPollingNoticeAction({
+        busyKey: 'fetchTzsList',
+        label: '获取官文列表',
+        tab: 'download',
+        request: {
           action: 'fetchTzsList',
           account: q.account,
           accountLabel: applyAccountLabel(q.account),
@@ -903,22 +1102,8 @@ async function triggerAction(action: string): Promise<void> {
           startTime: q.startTime,
           endTime: q.endTime,
           status: q.status
-        })
-        if (res) {
-          if (res.needCpcLogin) {
-            tableStates.download.needCpcLogin = true
-            tableStates.download.loginMessage = res.message
-            statusError.value = res.message
-          } else if (res.ok) {
-            statusMessage.value = res.message
-            await runSearch('download', false)
-          } else {
-            statusError.value = res.message
-          }
         }
-      } finally {
-        busyAction.value = ''
-      }
+      })
       return
     }
     case 'downloadAllTzs':
@@ -931,10 +1116,12 @@ async function triggerAction(action: string): Promise<void> {
         await infoDialog({ title: '提示', message: '请先勾选要下载解析的通知书文件！' })
         return
       }
-      busyAction.value = action
-      try {
-        const q = queries.download
-        const res = await sendAction({
+      const q = queries.download
+      await runPollingNoticeAction({
+        busyKey: action,
+        label: checkedOnly ? `下载解析 (${fids.length} 条)` : '下载解析全部官文',
+        tab: 'download',
+        request: {
           action: 'downloadTzsList',
           account: q.account,
           accountLabel: applyAccountLabel(q.account),
@@ -944,29 +1131,17 @@ async function triggerAction(action: string): Promise<void> {
           startTime: q.startTime,
           endTime: q.endTime,
           status: q.status
-        })
-        if (res) {
-          if (res.needCpcLogin) {
-            tableStates.download.needCpcLogin = true
-            tableStates.download.loginMessage = res.message
-            statusError.value = res.message
-          } else if (res.ok) {
-            statusMessage.value = res.message
-            await runSearch('download', false)
-          } else {
-            statusError.value = res.message
-          }
         }
-      } finally {
-        busyAction.value = ''
-      }
+      })
       return
     }
     case 'fetchCertList': {
-      busyAction.value = 'fetchCertList'
-      try {
-        const q = queries.cert
-        const res = await sendAction({
+      const q = queries.cert
+      await runPollingNoticeAction({
+        busyKey: 'fetchCertList',
+        label: '获取电子证书列表',
+        tab: 'cert',
+        request: {
           action: 'fetchCertList',
           account: q.account,
           accountLabel: applyAccountLabel(q.account),
@@ -976,22 +1151,8 @@ async function triggerAction(action: string): Promise<void> {
           endTime: q.endTime,
           status: q.status,
           xlh: q.xlh
-        })
-        if (res) {
-          if (res.needCpcLogin) {
-            tableStates.cert.needCpcLogin = true
-            tableStates.cert.loginMessage = res.message
-            statusError.value = res.message
-          } else if (res.ok) {
-            statusMessage.value = res.message
-            await runSearch('cert', false)
-          } else {
-            statusError.value = res.message
-          }
         }
-      } finally {
-        busyAction.value = ''
-      }
+      })
       return
     }
     case 'downloadAllCert':
@@ -1004,30 +1165,18 @@ async function triggerAction(action: string): Promise<void> {
         await infoDialog({ title: '提示', message: '请先勾选要下载的电子证书记录！' })
         return
       }
-      busyAction.value = action
-      try {
-        const q = queries.cert
-        const res = await sendAction({
+      const q = queries.cert
+      await runPollingNoticeAction({
+        busyKey: action,
+        label: checkedOnly ? `解析证书 (${fids.length} 条)` : '下载解析全部证书',
+        tab: 'cert',
+        request: {
           action: 'downloadCertList',
           account: q.account,
           accountLabel: applyAccountLabel(q.account),
           ...(checkedOnly ? { fids, xlh } : {})
-        })
-        if (res) {
-          if (res.needCpcLogin) {
-            tableStates.cert.needCpcLogin = true
-            tableStates.cert.loginMessage = res.message
-            statusError.value = res.message
-          } else if (res.ok) {
-            statusMessage.value = res.message
-            await runSearch('cert', false)
-          } else {
-            statusError.value = res.message
-          }
         }
-      } finally {
-        busyAction.value = ''
-      }
+      })
       return
     }
     case 'replayDownload': {
@@ -1038,10 +1187,12 @@ async function triggerAction(action: string): Promise<void> {
         await infoDialog({ title: '提示', message: '请先勾选要二次下载分析的通知书文件！' })
         return
       }
-      busyAction.value = 'replayDownload'
-      try {
-        const q = queries.replay
-        const res = await sendAction({
+      const q = queries.replay
+      await runPollingNoticeAction({
+        busyKey: 'replayDownload',
+        label: `二次下载分析 (${fids.length} 条)`,
+        tab: 'replay',
+        request: {
           action: 'downloadTzsList',
           account: q.account,
           accountLabel: applyAccountLabel(q.account),
@@ -1050,33 +1201,22 @@ async function triggerAction(action: string): Promise<void> {
           startTime: q.startTime,
           endTime: q.endTime,
           isReplay: true
-        })
-        if (res) {
-          if (res.needCpcLogin) {
-            tableStates.replay.needCpcLogin = true
-            tableStates.replay.loginMessage = res.message
-            statusError.value = res.message
-          } else if (res.ok) {
-            statusMessage.value = res.message
-            if (res.statusRows?.length) {
-              const map = new Map(res.statusRows.map(item => [String(item.fid ?? ''), item]))
-              for (const r of tableStates.replay.rows) {
-                const updated = map.get(String(r.fid ?? ''))
-                if (updated) {
-                  r.status = updated.status
-                  r.remark = updated.remark
-                }
+        },
+        onAfterSuccess: async res => {
+          if (res.statusRows?.length) {
+            const map = new Map(res.statusRows.map(item => [String(item.fid ?? ''), item]))
+            for (const r of tableStates.replay.rows) {
+              const updated = map.get(String(r.fid ?? ''))
+              if (updated) {
+                r.status = updated.status
+                r.remark = updated.remark
               }
-            } else {
-              await runSearch('replay', false)
             }
           } else {
-            statusError.value = res.message
+            await runSearch('replay', false)
           }
         }
-      } finally {
-        busyAction.value = ''
-      }
+      })
     }
   }
 }
@@ -1493,6 +1633,11 @@ watch(() => props.userId, (next, prev) => {
 
 onMounted(() => {
   void bootstrapWorkspace()
+})
+
+onBeforeUnmount(() => {
+  detachNoticeStatusListener()
+  stopNoticeTimer()
 })
 </script>
 

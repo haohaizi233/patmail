@@ -1,7 +1,12 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, shallowReactive, type ComputedRef } from 'vue'
 import { taskCheckProgress } from '../check-progress'
 
-export type TopProgress = Readonly<typeof taskCheckProgress>
+export type TopProgress = Readonly<typeof taskCheckProgress> & {
+  readonly mode?: 'bar' | 'state'
+  readonly stage?: string
+  readonly elapsed?: string
+  readonly onDismiss?: () => void
+}
 const providers = shallowReactive(new Map<symbol, { value: ComputedRef<TopProgress>; enabled: ComputedRef<boolean> }>())
 export const topProgress = computed(() => [...providers.values()].reverse().find(p => p.enabled.value && p.value.value.visible)?.value.value ?? taskCheckProgress)
 

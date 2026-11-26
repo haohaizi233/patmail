@@ -55,8 +55,28 @@ img { max-width: 100%; }
 .check-rainbow-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #ff5d73, #ff9f43, #ffe14a, #3ddc97, #4dabff, #8b6cff, #ff5d73); background-size: 200% 100%; animation: check-rainbow 1.6s linear infinite; }
 .check-rainbow-percent { flex: none; min-width: 3.6em; text-align: right; font-size: 12px; line-height: 1.2; font-weight: 800; color: #7a3e86; font-variant-numeric: tabular-nums; }
 .check-rainbow p { margin: 0; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.2; font-weight: 700; color: #7a3e86; text-align: center; }
+.check-rainbow.is-state-machine { width: min(540px, 46vw); padding: 7px 12px; gap: 4px; border-radius: 14px; border: 1px solid #f4bdd5; background: linear-gradient(180deg, #fffafd 0%, #fff3f8 100%); box-shadow: 0 4px 14px rgba(255, 79, 147, 0.12); justify-items: stretch; }
+.check-rainbow-state-head { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12px; line-height: 1.25; }
+.check-rainbow-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: #ff4f93; }
+.check-rainbow.is-state-machine.is-run .check-rainbow-dot { animation: check-state-pulse 1.2s ease-in-out infinite; }
+.check-rainbow-title { font-size: 12.5px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.check-rainbow-stage { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; background: #ffe4ef; color: #b82964; font-size: 11px; font-weight: 700; white-space: nowrap; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.check-rainbow-elapsed { margin-left: auto; font-size: 11px; font-weight: 600; color: #8d7693; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.check-rainbow-close { flex: none; width: 18px; height: 18px; border: 0; border-radius: 999px; padding: 0; background: rgba(141, 151, 176, 0.14); color: #66758f; font-size: 13px; line-height: 18px; display: inline-flex; align-items: center; justify-content: center; }
+.check-rainbow-close:hover { background: #ffd8e8; color: #b82964; }
+.check-rainbow.is-state-machine p.check-rainbow-msg { text-align: left; font-weight: 500; line-height: 1.3; color: #4d5975; }
+.check-rainbow.is-state-machine.is-done { border-color: #bcebd3; background: linear-gradient(180deg, #f8fefa 0%, #edfaf3 100%); box-shadow: 0 4px 14px rgba(18, 185, 129, 0.12); }
+.check-rainbow.is-state-machine.is-done .check-rainbow-dot { background: #12b981; }
+.check-rainbow.is-state-machine.is-done .check-rainbow-stage { background: #dff7eb; color: #157a45; }
+.check-rainbow.is-state-machine.is-hold { border-color: #f3d49b; background: linear-gradient(180deg, #fffdf7 0%, #fff7e6 100%); box-shadow: 0 4px 14px rgba(245, 158, 11, 0.12); }
+.check-rainbow.is-state-machine.is-hold .check-rainbow-dot { background: #f59e0b; }
+.check-rainbow.is-state-machine.is-hold .check-rainbow-stage { background: #fef0d5; color: #9a6700; }
+.check-rainbow.is-state-machine.is-fail { border-color: #f6bcca; background: linear-gradient(180deg, #fff9fa 0%, #fff0f4 100%); box-shadow: 0 4px 14px rgba(239, 68, 68, 0.12); }
+.check-rainbow.is-state-machine.is-fail .check-rainbow-dot { background: #ef4444; }
+.check-rainbow.is-state-machine.is-fail .check-rainbow-stage { background: #ffe3ea; color: #c4234e; }
+@keyframes check-state-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
 @keyframes check-rainbow { from { background-position: 0 0; } to { background-position: 200% 0; } }
-@media (prefers-reduced-motion: reduce) { .check-rainbow-track > span { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .check-rainbow-track > span, .check-rainbow.is-state-machine.is-run .check-rainbow-dot { animation: none; } }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; position: relative; }
 .top-actions:has(.check-rainbow) { flex: 1; margin-left: 16px; min-width: 0; }
 .profile { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; }

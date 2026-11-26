@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, type Ref } from 'vue'
 import PageHead from '../../shell/components/PageHead.vue'
 import { bg } from '../../shell/assets'
 import NoticeWorkspace from '../components/notice/NoticeWorkspace.vue'
@@ -7,8 +7,10 @@ import type { MessageBridge } from '../../shared/message'
 import { useWorkspace } from '../composables/useWorkspace'
 
 const bridge = inject<MessageBridge>('bridge')
+const activeRoute = inject<Ref<string> | undefined>('activeRoute', undefined)
 const { connection } = useWorkspace()
 const ready = computed(() => connection.value.sessionStatus === 'authenticated')
+const isActive = computed(() => !activeRoute || activeRoute.value === '/notices')
 </script>
 
 <template>
@@ -21,5 +23,5 @@ const ready = computed(() => connection.value.sessionStatus === 'authenticated')
     <h2>来文管理</h2>
     <p class="empty">尚未连接 EASY。来文管理会通过已绑定的原网站标签页读取会话并同步下拉与检索数据。</p>
   </section>
-  <NoticeWorkspace v-else :bridge="bridge" :user-id="connection.operatorId" />
+  <NoticeWorkspace v-else :bridge="bridge" :user-id="connection.operatorId" :is-active="isActive" />
 </template>

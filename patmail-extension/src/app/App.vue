@@ -102,6 +102,7 @@ async function onMode(next: string): Promise<void> {
   }
 }
 provide('bridge', createFullPageBridge())
+provide('activeRoute', route)
 
 function onHash(): void {
   const scroller = workspaceScroller()
