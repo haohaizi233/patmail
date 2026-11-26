@@ -226,6 +226,8 @@ const SLOW_OPERATIONS = new Set<EasyOperation>([
   'noticeDetailFee', 'noticeDetailHebo', 'noticeDetailDuibi', 'noticeCaseChargeDept', 'noticeCaseType', 'noticeSearchCase', 'noticeAppNoFiles',
   'noticeSearch', 'noticeImportList', 'noticeUnProcessTzsList', 'noticeCertList', 'noticeReplayTzsList',
   'noticeHandList', 'noticeHandHisList', 'noticeNolaiutoList', 'noticeHandExcelList',
+  'noticeGetTzsList', 'noticeProcessTzsList', 'noticeGetCpcCertList', 'noticeDownloadAnalyseCert',
+  'noticeGetTzsListStatus', 'noticeProcessTzsListStatus', 'noticeGetCertListStatus', 'noticeGetAnalyseCertStatus',
   'noticeImport', 'noticeImportCloseCase', 'noticeReMatch', 'noticeUpdateCaseName',
   'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf',
   'noticePublishConfig', 'noticeUploadProcessDetail'

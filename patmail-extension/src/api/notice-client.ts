@@ -322,15 +322,39 @@ export class NoticeClient {
     intervalMs = 2000,
     onTick?: (phase: 'polling' | 'done' | 'background' | 'error', attempt: number, totalPolls: number, message: string) => void
   ): Promise<{ result: NoticeActionResult; terminalPhase: 'done' | 'background' | 'error' }> {
+    const MAX_CONSECUTIVE_POLL_FAILURES = 3
+    let consecutiveErrors = 0
     for (let i = 0; i < maxPolls; i += 1) {
       const attempt = i + 1
       await this.sleepFn(intervalMs)
       const res = await this.deps.transport.post(operation, new URLSearchParams({ Call: call }))
       if (!res.ok) {
-        const message = `轮询状态失败：${res.error.message}`
+        if (res.error.code === 'SESSION_EXPIRED') {
+          this.deps.expireSession()
+          const message = 'EASY 登录状态已失效，请在原网站重新登录。'
+          onTick?.('error', attempt, maxPolls, message)
+          return { result: { ok: false, message }, terminalPhase: 'error' }
+        }
+        if (res.error.code === 'REQUEST_ABORTED') {
+          const message = `轮询已取消：${res.error.message}`
+          onTick?.('error', attempt, maxPolls, message)
+          return { result: { ok: false, message }, terminalPhase: 'error' }
+        }
+        consecutiveErrors += 1
+        if (consecutiveErrors < MAX_CONSECUTIVE_POLL_FAILURES && attempt < maxPolls) {
+          onTick?.(
+            'polling',
+            attempt,
+            maxPolls,
+            `状态查询暂未返回（${res.error.message}），正在自动重试 (${consecutiveErrors}/${MAX_CONSECUTIVE_POLL_FAILURES})…`
+          )
+          continue
+        }
+        const message = `轮询状态连续失败：${res.error.message}`
         onTick?.('error', attempt, maxPolls, message)
         return { result: { ok: false, message }, terminalPhase: 'error' }
       }
+      consecutiveErrors = 0
       if (!isRecord(res.data) || !isRecord(res.data.ClientInfo)) {
         onTick?.('done', attempt, maxPolls, doneMessage)
         return { result: { ok: true, message: doneMessage }, terminalPhase: 'done' }

@@ -589,4 +589,79 @@ describe('NoticeClient concurrency and slow count separation', () => {
     }
     expect(events.slice(-2).map(e => e.phase)).toEqual(['syncing_rows', 'done'])
   })
+
+  it('tolerates up to two consecutive transient poll errors before completing with done', async () => {
+    type Deps = ConstructorParameters<typeof NoticeClient>[0]
+    type StatusEvent = Parameters<NonNullable<Parameters<NoticeClient['executeNoticeAction']>[1]>>[0]
+    const events: StatusEvent[] = []
+    let pollCalls = 0
+    const client = new NoticeClient({
+      transport: {
+        post: (_op: string, params: unknown) => {
+          const call = params instanceof URLSearchParams ? params.get('Call') ?? '' : ''
+          if (call === 'GetCpcCertList') {
+            return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '已受理' } } })
+          }
+          if (call === 'GetCertListStatus') {
+            pollCalls += 1
+            if (pollCalls <= 2) {
+              return Promise.resolve({ ok: false, error: { code: 'REQUEST_TIMEOUT', message: '请求超时，请重试。' } })
+            }
+            return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '专利证书列表获取完成。' } } })
+          }
+          return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: 'ok' } } })
+        }
+      } as unknown as Deps['transport'],
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true,
+      sleep: () => Promise.resolve()
+    })
+
+    const res = await client.executeNoticeAction({ action: 'fetchCertList', account: 'acc-1' }, e => events.push(e))
+    expect(pollCalls).toBe(3)
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.data.ok).toBe(true)
+      expect(res.data.message).toBe('专利证书列表获取完成。')
+    }
+    expect(events.some(e => e.phase === 'polling' && e.serverMessage.includes('自动重试 (1/3)'))).toBe(true)
+    expect(events.some(e => e.phase === 'polling' && e.serverMessage.includes('自动重试 (2/3)'))).toBe(true)
+    expect(events.at(-1)?.phase).toBe('done')
+  })
+
+  it('fails polling with phase error after three consecutive transient timeouts', async () => {
+    type Deps = ConstructorParameters<typeof NoticeClient>[0]
+    type StatusEvent = Parameters<NonNullable<Parameters<NoticeClient['executeNoticeAction']>[1]>>[0]
+    const events: StatusEvent[] = []
+    let pollCalls = 0
+    const client = new NoticeClient({
+      transport: {
+        post: (_op: string, params: unknown) => {
+          const call = params instanceof URLSearchParams ? params.get('Call') ?? '' : ''
+          if (call === 'GetCpcCertList') {
+            return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '已受理' } } })
+          }
+          if (call === 'GetCertListStatus') {
+            pollCalls += 1
+            return Promise.resolve({ ok: false, error: { code: 'REQUEST_TIMEOUT', message: '请求超时，请重试。' } })
+          }
+          return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: 'ok' } } })
+        }
+      } as unknown as Deps['transport'],
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true,
+      sleep: () => Promise.resolve()
+    })
+
+    const res = await client.executeNoticeAction({ action: 'fetchCertList', account: 'acc-1' }, e => events.push(e))
+    expect(pollCalls).toBe(3)
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.data.ok).toBe(false)
+      expect(res.data.message).toContain('轮询状态连续失败')
+    }
+    expect(events.at(-1)?.phase).toBe('error')
+  })
 })
