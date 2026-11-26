@@ -181,9 +181,7 @@ export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColum
     { key: 'zhuanliqr', label: '专利权人' },
     { key: 'fawenxlh', label: '发文序列号', width: '150px' },
     { key: 'fawenDate', label: '发文日期', width: '110px' },
-    { key: 'user_name', label: '账号', width: '120px' },
-    { key: 'status', label: '状态', width: '110px' },
-    { key: 'remark', label: '备注' }
+    { key: 'status', label: '状态', width: '110px' }
   ],
   replay: [
     { key: 'sn', label: '序号', width: '56px' },

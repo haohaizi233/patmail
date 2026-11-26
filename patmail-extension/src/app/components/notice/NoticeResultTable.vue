@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import ThemeSelect from '../../../shell/components/ThemeSelect.vue'
 import {
   NOTICE_IMPORT_COMPLETED_COLUMNS,
@@ -10,6 +10,7 @@ import {
   noticeRowKey
 } from '../../../api/notice-params'
 import type { NoticeRow, NoticeTabId } from '../../../api/notice-types'
+import { noticeLoadingHint, noticeLoadingTitle } from './notice-loading'
 
 const props = withDefaults(defineProps<{
   tab: NoticeTabId
@@ -21,11 +22,17 @@ const props = withDefaults(defineProps<{
   selectedKeys: string[]
   flaggedKeys?: string[]
   loading: boolean
+  loadingLabel?: string
+  loadedOnce?: boolean
+  errorMessage?: string
   needCpcLogin?: boolean
   loginMessage?: string
 }>(), {
   importStatus: '0',
   flaggedKeys: () => [],
+  loadingLabel: '',
+  loadedOnce: true,
+  errorMessage: '',
   needCpcLogin: false,
   loginMessage: ''
 })
@@ -37,6 +44,7 @@ const emit = defineEmits<{
   inspect: [row: NoticeRow]
   'inspect-app-no': [row: NoticeRow]
   openEasy: []
+  retry: []
 }>()
 
 const PAGE_SIZE_OPTIONS = [
@@ -46,6 +54,38 @@ const PAGE_SIZE_OPTIONS = [
   { value: 200, label: '200 条/页' }
 ]
 
+const loadingElapsedSec = ref(0)
+let loadingTimer: ReturnType<typeof setInterval> | null = null
+
+function clearLoadingTimer(): void {
+  if (loadingTimer !== null) {
+    clearInterval(loadingTimer)
+    loadingTimer = null
+  }
+}
+
+watch(
+  () => props.loading,
+  isLoading => {
+    clearLoadingTimer()
+    loadingElapsedSec.value = 0
+    if (isLoading) {
+      const startedAt = Date.now()
+      loadingTimer = setInterval(() => {
+        loadingElapsedSec.value = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+      }, 1000)
+    }
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(clearLoadingTimer)
+
+const loadingTitle = computed(() => noticeLoadingTitle(props.tab, props.loadingLabel))
+const loadingHint = computed(() =>
+  noticeLoadingHint(loadingElapsedSec.value, Boolean(props.loadingLabel.trim()))
+)
+
 const columns = computed(() =>
   props.tab === 'import' && props.importStatus === '1'
     ? NOTICE_IMPORT_COMPLETED_COLUMNS
@@ -53,13 +93,14 @@ const columns = computed(() =>
 )
 const CHECK_COL_WEIGHT = 28
 const ACTION_COL_WEIGHT = 48
+const showActionCol = computed(() => props.tab !== 'cert')
 
 function colWeight(width?: string): number {
   return Number.parseInt(width ?? '', 10) || 150
 }
 
 const totalColWeight = computed(() =>
-  columns.value.reduce((sum, col) => sum + colWeight(col.width), CHECK_COL_WEIGHT + ACTION_COL_WEIGHT)
+  columns.value.reduce((sum, col) => sum + colWeight(col.width), CHECK_COL_WEIGHT + (showActionCol.value ? ACTION_COL_WEIGHT : 0))
 )
 
 function colWidthPercent(weight: number): string {
@@ -165,9 +206,17 @@ function canInspectRow(row: NoticeRow): boolean {
 
 <template>
   <section class="card notice-table-card">
+    <div v-if="loading" class="notice-loading-bar" aria-hidden="true" />
     <div v-if="needCpcLogin" class="notice-cpc-banner">
       <p>{{ loginMessage || '当前 CPC 账号需要扫码登录后才能拉取记录。' }}</p>
       <button type="button" class="solid tiny" @click="emit('openEasy')">前往原站扫码登录</button>
+    </div>
+
+    <div v-if="loading && rows.length > 0" class="notice-refresh-banner" role="status" aria-live="polite">
+      <span class="notice-spinner" aria-hidden="true" />
+      <strong>{{ loadingTitle }}</strong>
+      <span class="notice-elapsed-pill">已等待 {{ loadingElapsedSec }}s</span>
+      <span class="notice-loading-sub">{{ loadingHint }}</span>
     </div>
 
     <div class="fit-table limit-cols">
@@ -190,15 +239,54 @@ function canInspectRow(row: NoticeRow): boolean {
             >
               {{ col.label }}
             </th>
-            <th :style="{ width: colWidthPercent(ACTION_COL_WEIGHT) }">操作</th>
+            <th v-if="showActionCol" :style="{ width: colWidthPercent(ACTION_COL_WEIGHT) }">操作</th>
           </tr>
         </thead>
-        <tbody>
-          <tr v-if="loading && rows.length === 0">
-            <td :colspan="columns.length + 2" class="limit-empty">正在查询来文数据…</td>
+        <tbody :class="{ 'is-refreshing': loading && rows.length > 0 }">
+          <template v-if="loading && rows.length === 0">
+            <tr class="notice-loading-row">
+              <td :colspan="columns.length + (showActionCol ? 2 : 1)" class="notice-loading-cell">
+                <div class="notice-loading-panel" role="status" aria-live="polite">
+                  <span class="notice-spinner is-lg" aria-hidden="true" />
+                  <div class="notice-loading-copy">
+                    <div class="notice-loading-head">
+                      <strong>{{ loadingTitle }}</strong>
+                      <span class="notice-elapsed-pill">已等待 {{ loadingElapsedSec }}s</span>
+                    </div>
+                    <p>{{ loadingHint }}</p>
+                  </div>
+                </div>
+              </td>
+            </tr>
+            <tr v-for="n in 4" :key="'skeleton-' + n" class="notice-skeleton-row" aria-hidden="true">
+              <td class="check"><span class="notice-skeleton is-box" /></td>
+              <td v-for="col in columns" :key="col.key">
+                <span class="notice-skeleton" :style="{ width: n % 2 === 0 ? '72%' : '58%' }" />
+              </td>
+              <td v-if="showActionCol"><span class="notice-skeleton is-short" /></td>
+            </tr>
+          </template>
+          <tr v-else-if="rows.length === 0 && errorMessage">
+            <td :colspan="columns.length + (showActionCol ? 2 : 1)" class="limit-empty is-error notice-empty-padded">
+              <span>查询未完成：{{ errorMessage }}（尚未获取到列表数据）</span>
+              <button type="button" class="go notice-empty-btn" @click="emit('retry')">重新查询</button>
+            </td>
+          </tr>
+          <tr v-else-if="rows.length === 0 && needCpcLogin">
+            <td :colspan="columns.length + (showActionCol ? 2 : 1)" class="limit-empty notice-empty-padded">
+              当前 CPC 账号需要扫码登录后才能查询数据
+            </td>
+          </tr>
+          <tr v-else-if="rows.length === 0 && !loadedOnce">
+            <td :colspan="columns.length + (showActionCol ? 2 : 1)" class="limit-empty notice-empty-padded">
+              <span>尚未获取列表数据，请点击「查询」加载</span>
+              <button type="button" class="go notice-empty-btn" @click="emit('retry')">立即查询</button>
+            </td>
           </tr>
           <tr v-else-if="rows.length === 0">
-            <td :colspan="columns.length + 2" class="limit-empty">当前条件下暂无数据</td>
+            <td :colspan="columns.length + (showActionCol ? 2 : 1)" class="limit-empty notice-empty-padded">
+              当前条件下暂无数据
+            </td>
           </tr>
           <tr
             v-for="(row, idx) in rows"
@@ -248,7 +336,7 @@ function canInspectRow(row: NoticeRow): boolean {
                 {{ formatCell(row, col.key) }}
               </span>
             </td>
-            <td>
+            <td v-if="showActionCol">
               <button
                 v-if="canInspectRow(row)"
                 type="button"
@@ -292,8 +380,140 @@ function canInspectRow(row: NoticeRow): boolean {
 </template>
 
 <style scoped>
+.notice-table-card {
+  position: relative;
+}
+
 .notice-table-card .fit-table.limit-cols {
   overflow-x: hidden;
+}
+
+.notice-loading-bar {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 79, 147, 0.15) 0%, #ff4f93 45%, #ff8cb8 65%, rgba(255, 79, 147, 0.15) 100%);
+  background-size: 200% 100%;
+  animation: notice-shimmer 1.3s linear infinite;
+}
+
+.notice-refresh-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid #f7c8db;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #fff5f9 0%, #ffffff 100%);
+  font-size: 12.5px;
+  color: #7c2d50;
+}
+
+.notice-refresh-banner .notice-loading-sub {
+  color: var(--sub);
+}
+
+.notice-table-card table.grid tbody.is-refreshing {
+  opacity: 0.52;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.notice-table-card table.grid td.notice-loading-cell {
+  height: auto;
+  padding: 20px 14px 12px;
+  background: #fffafc;
+}
+
+.notice-loading-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: left;
+}
+
+.notice-loading-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.notice-loading-copy p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--sub);
+}
+
+.notice-loading-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.notice-elapsed-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid #f6c5d8;
+  background: #fff0f6;
+  color: #b42362;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.notice-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid #ffd4e5;
+  border-top-color: var(--pink);
+  border-radius: 50%;
+  animation: notice-spin 0.75s linear infinite;
+}
+
+.notice-spinner.is-lg {
+  width: 22px;
+  height: 22px;
+  border-width: 2.5px;
+}
+
+.notice-skeleton {
+  display: inline-block;
+  height: 12px;
+  width: 68%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #fcebf2 25%, #fff6fa 50%, #fcebf2 75%);
+  background-size: 200% 100%;
+  animation: notice-shimmer 1.4s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+.notice-skeleton.is-box {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+}
+
+.notice-skeleton.is-short {
+  width: 34px;
+}
+
+.notice-table-card table.grid td.notice-empty-padded {
+  height: auto;
+  padding: 28px 16px;
+}
+
+.notice-empty-btn {
+  margin-left: 8px;
 }
 
 .notice-table-card table.grid {
@@ -314,5 +534,32 @@ function canInspectRow(row: NoticeRow): boolean {
   padding-left: 4px;
   padding-right: 2px;
   text-align: center;
+}
+
+.notice-table-card .limit-empty.is-error {
+  color: #b91c1c;
+}
+
+@keyframes notice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes notice-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice-loading-bar,
+  .notice-spinner,
+  .notice-skeleton {
+    animation: none;
+  }
 }
 </style>

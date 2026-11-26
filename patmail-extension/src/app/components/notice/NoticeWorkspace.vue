@@ -162,7 +162,9 @@ interface TabTableState {
   total: number
   selectedKeys: string[]
   loading: boolean
+  loadingLabel: string
   loadedOnce: boolean
+  errorMessage: string
   needCpcLogin?: boolean
   loginMessage?: string
 }
@@ -172,7 +174,9 @@ const createTableState = (): TabTableState => ({
   total: 0,
   selectedKeys: [],
   loading: false,
-  loadedOnce: false
+  loadingLabel: '',
+  loadedOnce: false,
+  errorMessage: ''
 })
 
 const tableStates = reactive<Record<NoticeTabId, TabTableState>>({
@@ -495,11 +499,14 @@ function buildSearchRequest(tab: NoticeTabId): NoticeSearchRequest {
   }
 }
 
-async function runSearch(tab: NoticeTabId = activeTab.value, resetPage = false): Promise<void> {
+async function runSearch(tab: NoticeTabId = activeTab.value, resetPage = false, force = false): Promise<void> {
   if (!props.bridge) return
-  if (resetPage) queries[tab].pageIndex = 1
   const state = tableStates[tab]
+  // 任务执行期间由任务态持有 loading，避免重复查询与其完成后的自动刷新互相覆盖。
+  if (state.loading && !force) return
+  if (resetPage) queries[tab].pageIndex = 1
   state.loading = true
+  state.errorMessage = ''
   state.needCpcLogin = false
   state.loginMessage = ''
   statusError.value = ''
@@ -510,25 +517,30 @@ async function runSearch(tab: NoticeTabId = activeTab.value, resetPage = false):
     })
     if (resp.type === MessageType.Error) {
       statusError.value = resp.payload.message
+      state.errorMessage = resp.payload.message
       return
     }
     if (resp.type !== MessageType.SearchNoticeResult) {
       statusError.value = '来文查询返回了意外响应。'
+      state.errorMessage = statusError.value
       return
     }
     if (!resp.payload.ok) {
       statusError.value = resp.payload.error.message
+      state.errorMessage = resp.payload.error.message
       return
     }
     state.rows = resp.payload.data.rows
     state.total = resp.payload.data.total
     state.loadedOnce = true
+    state.errorMessage = ''
     state.needCpcLogin = resp.payload.data.needCpcLogin
     state.loginMessage = resp.payload.data.loginMessage
     state.selectedKeys = []
     if (tab === 'import') flaggedRowKeys.value = []
   } finally {
-    state.loading = false
+    // 任务态刷新列表时仍由任务持有 loading，任务结束后统一释放。
+    if (!state.loadingLabel.trim()) state.loading = false
   }
 }
 
@@ -985,6 +997,13 @@ async function runPollingNoticeAction(options: {
   stopNoticeTimer()
   statusMessage.value = ''
   statusError.value = ''
+  const tableState = tableStates[options.tab]
+  tableState.errorMessage = ''
+  tableState.needCpcLogin = false
+  tableState.loginMessage = ''
+  // 任务态即表格加载态：任务执行中查询按钮禁用，未加载列表显示进度而不是“请点击查询”。
+  tableState.loading = true
+  tableState.loadingLabel = options.label
 
   noticeTaskBar.visible = true
   noticeTaskBar.status = 'run'
@@ -1023,6 +1042,9 @@ async function runPollingNoticeAction(options: {
       noticeTaskBar.stage = '请求未完成'
       noticeTaskBar.summary = tracker.lastEvent?.call ?? ''
       noticeTaskBar.detail = statusError.value || 'EASY 通道未返回结果。'
+      if (tableStates[options.tab].rows.length === 0) {
+        tableStates[options.tab].errorMessage = noticeTaskBar.detail
+      }
       return
     }
     if (res.needCpcLogin) {
@@ -1041,6 +1063,9 @@ async function runPollingNoticeAction(options: {
       noticeTaskBar.stage = '执行失败'
       noticeTaskBar.summary = tracker.lastEvent?.call ?? ''
       noticeTaskBar.detail = res.message
+      if (tableStates[options.tab].rows.length === 0) {
+        tableStates[options.tab].errorMessage = res.message
+      }
       return
     }
 
@@ -1050,7 +1075,7 @@ async function runPollingNoticeAction(options: {
     if (options.onAfterSuccess) {
       await options.onAfterSuccess(res)
     } else {
-      await runSearch(options.tab, false)
+      await runSearch(options.tab, false, true)
     }
 
     const isBackground = tracker.lastEvent?.phase === 'background'
@@ -1084,6 +1109,8 @@ async function runPollingNoticeAction(options: {
     stopNoticeTimer()
     noticeTaskBar.elapsedSec = Math.max(0, Math.floor((Date.now() - noticeTaskBar.startedAt) / 1000))
     busyAction.value = ''
+    tableState.loading = false
+    tableState.loadingLabel = ''
   }
 }
 
@@ -1213,7 +1240,7 @@ async function runPollingNoticeAction(options: {
               }
             }
           } else {
-            await runSearch('replay', false)
+            await runSearch('replay', false, true)
           }
         }
       })
@@ -1713,6 +1740,9 @@ onBeforeUnmount(() => {
       :selected-keys="currentState.selectedKeys"
       :flagged-keys="flaggedRowKeys"
       :loading="currentState.loading"
+      :loading-label="currentState.loadingLabel"
+      :loaded-once="currentState.loadedOnce"
+      :error-message="currentState.errorMessage"
       :need-cpc-login="currentState.needCpcLogin"
       :login-message="currentState.loginMessage"
       @update:selected-keys="currentState.selectedKeys = $event"
@@ -1721,6 +1751,7 @@ onBeforeUnmount(() => {
       @inspect="inspectRow"
       @inspect-app-no="openAppNoFiles"
       @open-easy="triggerAction('openEasyTab')"
+      @retry="runSearch(activeTab, false)"
     />
 
     <NoticeDetailModal
