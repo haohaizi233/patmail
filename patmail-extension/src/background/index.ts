@@ -9,7 +9,7 @@ import { handleAuthorityMessage } from './authority'
 import { deliverAgentAnswer, handleAgentChat } from './agent'
 import { scopeExtensionPageMessage } from './scope'
 import { EasyConnectionController, sameConnectionSnapshot, tabOrigin, type ConnectionSnapshot } from '../shared/connection'
-import { handleWorkspaceMessage, openWorkspaceTab, recheckBoundSession, resumeEasySession, type WorkspaceHost } from './workspace'
+import { handleWorkspaceMessage, hasActiveForwards, openWorkspaceTab, recheckBoundSession, resumeEasySession, type WorkspaceHost } from './workspace'
 import { isRecord } from '../shared/guards'
 import { browserDownloadName } from '../shared/download-file-name'
 import { prepareForwardedSearch } from '../api/message-guards'
@@ -333,8 +333,11 @@ if (chrome.alarms) {
     if (alarm.name !== 'patmail-keepalive') return
     beat()
     void keepHagueSessionAlive()
-    if (connection.context.sessionStatus === 'authenticated') void recheckBoundSession(host).finally(() => persistConnection())
-    else void warmEasySession()
+    if (connection.context.sessionStatus === 'authenticated') {
+      if (!hasActiveForwards(host)) void recheckBoundSession(host).finally(() => persistConnection())
+    } else {
+      void warmEasySession()
+    }
   })
   const created = chrome.alarms.create('patmail-keepalive', { periodInMinutes: 0.5 })
   void Promise.resolve(created).catch(() => {

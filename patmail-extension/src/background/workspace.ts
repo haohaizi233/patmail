@@ -238,6 +238,40 @@ async function recheckTasks(host: WorkspaceHost, frozen: AccountContextSnapshot)
   if (!account.rules || !sameAccountContext(host.connection.context, frozen)) return
   await refreshStaleTasks(host.tasks, frozen.easyOrigin, frozen.operatorId, account.rules, account.customers, account.templates)
 }
+const activeForwards = new WeakMap<WorkspaceHost, number>()
+
+export function hasActiveForwards(host: WorkspaceHost): boolean {
+  return (activeForwards.get(host) ?? 0) > 0
+}
+
+const READ_ONLY_FORWARD_TYPES = new Set<string>([
+  MessageType.SearchNotice,
+  MessageType.LoadNoticeInit,
+  MessageType.SearchFiles,
+  MessageType.SearchLimitMonitor,
+  MessageType.SearchFiling,
+  MessageType.SearchFee,
+  MessageType.LoadDictionary,
+  MessageType.ReadHagueCase,
+  MessageType.ReadCaseBusFlow,
+])
+
+function canRecoverTransientSessionDip(
+  host: WorkspaceHost,
+  frozen: AccountContextSnapshot,
+  messageType: string,
+): boolean {
+  const ctx = host.connection.context
+  return (
+    READ_ONLY_FORWARD_TYPES.has(messageType) &&
+    ctx.easyTabId === frozen.easyTabId &&
+    ctx.easyOrigin === frozen.easyOrigin &&
+    ctx.connectionVersion === frozen.connectionVersion &&
+    !ctx.operatorId &&
+    !ctx.accountOffer
+  )
+}
+
 export async function recheckBoundSession(host: WorkspaceHost): Promise<'same' | 'changed' | 'invalid'> {
   if (host.connection.context.easyTabId == null) return 'invalid'
   const version = host.connection.context.connectionVersion
@@ -558,28 +592,39 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     const frozen = freezeAccount(host.connection.context)
     const version = host.connection.context.connectionVersion
     try {
-      const response = outbound.type === MessageType.SubmitLimitMail && initialMailAccount
-        ? await (host.limitMailWriteGuard ?? guardLimitMail)(
-          JSON.stringify(['phase3-write', initialMailAccount.easyOrigin, initialMailAccount.operatorId.toLowerCase()]),
-          outbound.payload.items,
-          () => sameAccountContext(host.connection.context, initialMailAccount),
-          () => isWriteSwitchOpen(),
-          items => host.sendToTab(target.tabId, {
-            type: MessageType.SubmitLimitMail,
-            payload: { userId: initialMailAccount.operatorId, items },
-          }),
-          async (procId, caseId) => {
-            const reply = await host.sendToTab(target.tabId, {
-              type: MessageType.ReadCaseBusFlow,
-              payload: { procId, caseId, requireProc: true },
-            })
-            return isMessage(reply) && reply.type === MessageType.CaseBusFlowResult && reply.payload.ok &&
-              (reply.payload.data.gate === 'open' || reply.payload.data.gate === 'done')
-          },
-        )
-        : await host.sendToTab(target.tabId, stripSearchContinuation(outbound))
+      let response: unknown
+      activeForwards.set(host, (activeForwards.get(host) ?? 0) + 1)
+      try {
+        response = outbound.type === MessageType.SubmitLimitMail && initialMailAccount
+          ? await (host.limitMailWriteGuard ?? guardLimitMail)(
+            JSON.stringify(['phase3-write', initialMailAccount.easyOrigin, initialMailAccount.operatorId.toLowerCase()]),
+            outbound.payload.items,
+            () => sameAccountContext(host.connection.context, initialMailAccount),
+            () => isWriteSwitchOpen(),
+            items => host.sendToTab(target.tabId, {
+              type: MessageType.SubmitLimitMail,
+              payload: { userId: initialMailAccount.operatorId, items },
+            }),
+            async (procId, caseId) => {
+              const reply = await host.sendToTab(target.tabId, {
+                type: MessageType.ReadCaseBusFlow,
+                payload: { procId, caseId, requireProc: true },
+              })
+              return isMessage(reply) && reply.type === MessageType.CaseBusFlowResult && reply.payload.ok &&
+                (reply.payload.data.gate === 'open' || reply.payload.data.gate === 'done')
+            },
+          )
+          : await host.sendToTab(target.tabId, stripSearchContinuation(outbound))
+      } finally {
+        activeForwards.set(host, Math.max(0, (activeForwards.get(host) ?? 0) - 1))
+      }
       if (frozen && !sameAccountContext(host.connection.context, frozen)) {
-        return workspaceResult({ ok: false, message: '账号已经变化，这次查询结果已丢弃。', connection: host.connection.context })
+        if (canRecoverTransientSessionDip(host, frozen, action.message.type)) {
+          await readBoundSession(host)
+        }
+        if (!sameAccountContext(host.connection.context, frozen)) {
+          return workspaceResult({ ok: false, message: '账号已经变化，这次查询结果已丢弃。', connection: host.connection.context })
+        }
       }
       if (!frozen && host.connection.context.connectionVersion !== version) {
         return workspaceResult({ ok: false, message: '连接已经变化，这次结果已丢弃。', connection: host.connection.context })
@@ -875,6 +920,10 @@ async function readBoundSession(host: WorkspaceHost, attempt = 0, adoptForeign =
       if (response.payload.error.code === 'REQUEST_ABORTED') return
       // 瞬时失败（超时、网络、网关）不是掉登录：已连接就保持现状，只把这次检测当成没读到。明确的登录失效才改状态。
       if (response.payload.error.code !== 'SESSION_EXPIRED' && host.connection.context.sessionStatus === 'authenticated') return
+      if (response.payload.error.code === 'SESSION_EXPIRED' && host.connection.context.sessionStatus === 'authenticated' && attempt === 0) {
+        await retry()
+        return
+      }
       host.connection.applySession({
         ok: false,
         status: response.payload.error.code === 'SESSION_EXPIRED' ? 'expired' : 'error',
@@ -884,6 +933,14 @@ async function readBoundSession(host: WorkspaceHost, attempt = 0, adoptForeign =
       return
     }
     const data = response.payload.data
+    if (
+      host.connection.context.sessionStatus === 'authenticated' &&
+      attempt === 0 &&
+      (data.status === 'expired' || data.status === 'unauthenticated')
+    ) {
+      await retry()
+      return
+    }
     if (!adoptForeign && data.status === 'authenticated' && data.userId && holdForeignLogin(host, tabId, data.userId, data.displayName ?? '')) return
     host.connection.applySession({
       ok: true,
