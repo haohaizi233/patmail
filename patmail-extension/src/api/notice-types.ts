@@ -242,6 +242,7 @@ export type NoticeActionRequest =
       startTime?: string
       endTime?: string
       status?: string
+      progressId?: string
     }
   | {
       action: 'downloadTzsList'
@@ -255,6 +256,7 @@ export type NoticeActionRequest =
       endTime?: string
       status?: string
       isReplay?: boolean
+      progressId?: string
     }
   | {
       action: 'fetchCertList'
@@ -266,6 +268,7 @@ export type NoticeActionRequest =
       endTime?: string
       status?: string
       xlh?: string
+      progressId?: string
     }
   | {
       action: 'downloadCertList'
@@ -273,6 +276,7 @@ export type NoticeActionRequest =
       accountLabel?: string
       fids?: string[]
       xlh?: string[]
+      progressId?: string
     }
   | { action: 'getUploadProcessList'; pageIndex?: number; pageSize?: number }
   | {

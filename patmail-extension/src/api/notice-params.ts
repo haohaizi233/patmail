@@ -169,9 +169,7 @@ export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColum
     { key: 'ShenQingH', label: '申请号', width: '140px', clickableAppNo: true },
     { key: 'case_name', label: '案件名称' },
     { key: 'user_name', label: '账号', width: '120px' },
-    { key: 'status', label: '下载状态', width: '110px' },
-    { key: 'download_time', label: '下载时间', width: '140px' },
-    { key: 'remark', label: '备注' }
+    { key: 'status', label: '下载状态', width: '110px' }
   ],
   cert: [
     { key: 'sn', label: '序号', width: '56px' },

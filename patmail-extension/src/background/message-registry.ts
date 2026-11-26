@@ -6,6 +6,7 @@ import { HAGUE_SESSION_CHANNEL } from '../hague/session-contract'
 import type { EasyConnectionContext } from '../shared/connection'
 import { DOCUMENT_EXPORT_CHANNEL } from '../shared/document-export'
 import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL } from '../shared/download-progress'
+import { NOTICE_STATUS_CHANNEL } from '../shared/notice-status'
 import { EASY_PAGE_WORLD_CHANNEL } from '../shared/easy-page-world'
 import { isRecord } from '../shared/guards'
 import { MessageType, type AppMessage, type BackgroundResponse } from '../shared/message'
@@ -21,6 +22,7 @@ const IGNORED_CHANNELS = new Set<string>([
   RESULT_CHANNEL,
   DOWNLOAD_PROGRESS_CHANNEL,
   DOWNLOAD_RESULT_CHANNEL,
+  NOTICE_STATUS_CHANNEL,
 ])
 
 const AUTHORITY_WRITES = new Set<string>([

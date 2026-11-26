@@ -46,6 +46,12 @@ describe('notice table columns & field aliases', () => {
     }
   })
 
+  it('download 列不包含下载时间与备注', () => {
+    const keys = NOTICE_TABLE_COLUMNS.download.map(col => col.key)
+    expect(keys).not.toContain('download_time')
+    expect(keys).not.toContain('remark')
+  })
+
   it('import 与 completed 每列均配置显式 width，避免 fixed 布局被压成 0px', () => {
     for (const col of NOTICE_TABLE_COLUMNS.import) {
       expect(col.width).toBeTruthy()
