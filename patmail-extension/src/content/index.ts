@@ -10,6 +10,7 @@ import { runWithDownloadRecovery } from '../api/download-failure'
 import { injectPanel } from './injector'
 import { startArchiveDownload } from './save-file'
 import { DOWNLOAD_PROGRESS_CHANNEL, DOWNLOAD_RESULT_CHANNEL, type FileDownloadProgress } from '../shared/download-progress'
+import { NOTICE_STATUS_CHANNEL, type NoticeTaskStatusEvent } from '../shared/notice-status'
 import { readPageInfo, scanPage } from './scanner'
 import { EasyRuntime } from '../api/client'
 import { scanFileSearchForm } from '../query/scan-file-search-form.mjs'
@@ -335,9 +336,22 @@ const bridge: MessageBridge = {
             payload: { ok: true, data: { ok: opened.ok, message: opened.message } }
           }
         }
+        const progressId =
+          'progressId' in message.payload && typeof message.payload.progressId === 'string'
+            ? message.payload.progressId
+            : ''
+        const onStatus = progressId
+          ? (status: NoticeTaskStatusEvent): void => {
+              try {
+                chrome.runtime.sendMessage({ channel: NOTICE_STATUS_CHANNEL, id: progressId, status }, () => {
+                  void chrome.runtime.lastError
+                })
+              } catch { /* 工作台已离开或扩展已重载，不中断原站请求 */ }
+            }
+          : undefined
         return {
           type: MessageType.NoticeActionResult,
-          payload: await easyRuntime.executeNoticeAction(message.payload)
+          payload: await easyRuntime.executeNoticeAction(message.payload, onStatus)
         }
       }
       case MessageType.ExportNotice:
