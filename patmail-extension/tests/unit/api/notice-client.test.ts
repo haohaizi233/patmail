@@ -369,4 +369,224 @@ describe('NoticeClient concurrency and slow count separation', () => {
     expect(replayBlocked.ok).toBe(false)
     expect(ops).toEqual(['noticeCheckUserStatus', 'noticeCheckUserStatus'])
   })
+
+  it('emits full status-machine lifecycle for downloadTzsList polling', async () => {
+    const events: Parameters<NonNullable<Parameters<NoticeClient['executeNoticeAction']>[1]>>[0][] = []
+    let statusCalls = 0
+    type Deps = ConstructorParameters<typeof NoticeClient>[0]
+
+    const client = new NoticeClient({
+      transport: {
+        post: (_op: string, params: unknown) => {
+          const call = params instanceof URLSearchParams ? params.get('Call') ?? '' : ''
+          if (call === 'ProcessTzsList') {
+            return Promise.resolve({
+              ok: true,
+              data: { ClientInfo: { Result: true, Message: '任务已提交，等待后台处理。' } }
+            })
+          }
+          if (call === 'ProcessTzsListStatus') {
+            statusCalls += 1
+            if (statusCalls <= 2) {
+              return Promise.resolve({
+                ok: true,
+                data: { ClientInfo: { Result: false, Message: '通知书处理中,请稍等!' } }
+              })
+            }
+            return Promise.resolve({
+              ok: true,
+              data: { ClientInfo: { Result: true, Message: '通知书分析下载完成。' } }
+            })
+          }
+          return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: 'ok' } } })
+        }
+      } as unknown as Deps['transport'],
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true,
+      sleep: () => Promise.resolve()
+    })
+
+    const res = await client.executeNoticeAction(
+      {
+        action: 'downloadTzsList',
+        account: 'acc-1',
+        fids: ['fid-1'],
+        xlh: ['xlh-1']
+      },
+      event => {
+        events.push(event)
+      }
+    )
+
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.data.ok).toBe(true)
+      expect(res.data.message).toBe('通知书分析下载完成。')
+    }
+    expect(statusCalls).toBe(3)
+    expect(events.map(e => e.phase)).toEqual([
+      'checking_login',
+      'submitting',
+      'polling',
+      'polling',
+      'polling',
+      'done'
+    ])
+    expect(events[2]).toMatchObject({
+      action: 'downloadTzsList',
+      phase: 'polling',
+      pollAttempt: 0,
+      maxPolls: 25,
+      serverMessage: '任务已提交，等待后台处理。'
+    })
+  })
+
+  it('emits need_login, polling error, and background phases on failure or timeout', async () => {
+    type Deps = ConstructorParameters<typeof NoticeClient>[0]
+    type StatusEvent = Parameters<NonNullable<Parameters<NoticeClient['executeNoticeAction']>[1]>>[0]
+
+    // 1. CPC 401 -> need_login
+    const needLoginEvents: StatusEvent[] = []
+    const needLoginClient = new NoticeClient({
+      transport: {
+        post: (_op: string, params: unknown) => {
+          const call = params instanceof URLSearchParams ? params.get('Call') ?? '' : ''
+          if (call === 'CheckUserStatus') {
+            return Promise.resolve({
+              ok: true,
+              data: { ClientInfo: { Result: true, Message: 'ok' } }
+            })
+          }
+          return Promise.resolve({
+            ok: true,
+            data: { ClientInfo: { Result: false, Message: '401' } }
+          })
+        }
+      } as unknown as Deps['transport'],
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true,
+      sleep: () => Promise.resolve()
+    })
+    const needLoginRes = await needLoginClient.executeNoticeAction(
+      { action: 'downloadTzsList', account: 'acc-1', accountLabel: '深圳_分部' },
+      event => needLoginEvents.push(event)
+    )
+    expect(needLoginRes.ok).toBe(true)
+    if (needLoginRes.ok) {
+      expect(needLoginRes.data.ok).toBe(false)
+      expect(needLoginRes.data.needCpcLogin).toBe(true)
+    }
+    expect(needLoginEvents.map(e => e.phase)).toEqual(['checking_login', 'submitting', 'need_login'])
+
+    // 2. Polling returns Result: false with failure message -> error
+    const pollErrEvents: StatusEvent[] = []
+    const pollErrClient = new NoticeClient({
+      transport: {
+        post: (_op: string, params: unknown) => {
+          const call = params instanceof URLSearchParams ? params.get('Call') ?? '' : ''
+          if (call === 'ProcessTzsList') {
+            return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '已启动' } } })
+          }
+          return Promise.resolve({
+            ok: true,
+            data: { ClientInfo: { Result: false, Message: '解析失败：连接 CPC 超时' } }
+          })
+        }
+      } as unknown as Deps['transport'],
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true,
+      sleep: () => Promise.resolve()
+    })
+    const pollErrRes = await pollErrClient.executeNoticeAction(
+      { action: 'downloadTzsList', account: 'acc-1' },
+      event => pollErrEvents.push(event)
+    )
+    expect(pollErrRes.ok).toBe(true)
+    if (pollErrRes.ok) {
+      expect(pollErrRes.data.ok).toBe(false)
+      expect(pollErrRes.data.message).toBe('解析失败：连接 CPC 超时')
+    }
+    expect(pollErrEvents.at(-1)?.phase).toBe('error')
+
+    // 3. Background timeout after 25 polls -> ok: true with background status
+    const bgEvents: StatusEvent[] = []
+    let bgPollCount = 0
+    const bgClient = new NoticeClient({
+      transport: {
+        post: (_op: string, params: unknown) => {
+          const call = params instanceof URLSearchParams ? params.get('Call') ?? '' : ''
+          if (call === 'ProcessTzsList') {
+            return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '已开始处理' } } })
+          }
+          if (call === 'ProcessTzsListStatus') {
+            bgPollCount += 1
+            return Promise.resolve({
+              ok: true,
+              data: { ClientInfo: { Result: false, Message: '通知书处理中,请稍等!' } }
+            })
+          }
+          return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: 'ok' } } })
+        }
+      } as unknown as Deps['transport'],
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true,
+      sleep: () => Promise.resolve()
+    })
+    const bgRes = await bgClient.executeNoticeAction(
+      { action: 'downloadTzsList', account: 'acc-1' },
+      event => bgEvents.push(event)
+    )
+    expect(bgPollCount).toBe(25)
+    expect(bgRes.ok).toBe(true)
+    if (bgRes.ok) {
+      expect(bgRes.data.ok).toBe(true)
+      expect(bgRes.data.message).toContain('后台')
+    }
+    expect(bgEvents.at(-1)?.phase).toBe('background')
+  })
+
+  it('emits syncing_rows before terminal done for replayDownload (isReplay with fids)', async () => {
+    type Deps = ConstructorParameters<typeof NoticeClient>[0]
+    type StatusEvent = Parameters<NonNullable<Parameters<NoticeClient['executeNoticeAction']>[1]>>[0]
+    const events: StatusEvent[] = []
+    const client = new NoticeClient({
+      transport: {
+        post: (_op: string, params: unknown) => {
+          const call = params instanceof URLSearchParams ? params.get('Call') ?? '' : ''
+          if (call === 'ProcessTzsList') {
+            return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '二次下载已提交' } } })
+          }
+          if (call === 'ProcessTzsListStatus') {
+            return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '通知书分析下载完成。' } } })
+          }
+          return Promise.resolve({ ok: true, data: { ClientInfo: { Result: true, Message: '状态已更新' } } })
+        }
+      } as unknown as Deps['transport'],
+      confirmAccountRead: () => Promise.resolve(true),
+      expireSession: () => undefined,
+      isWriteOpen: () => true,
+      sleep: () => Promise.resolve()
+    })
+
+    const res = await client.executeNoticeAction(
+      {
+        action: 'downloadTzsList',
+        account: 'acc-1',
+        fids: ['fid-1', 'fid-2'],
+        xlh: ['xlh-1', 'xlh-2'],
+        isReplay: true
+      },
+      event => events.push(event)
+    )
+
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.data.ok).toBe(true)
+    }
+    expect(events.slice(-2).map(e => e.phase)).toEqual(['syncing_rows', 'done'])
+  })
 })

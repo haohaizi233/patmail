@@ -38,6 +38,7 @@ import type {
   NoticeSearchRequest,
   NoticeSearchResult
 } from './notice-types'
+import type { NoticeTaskStatusEvent } from '../shared/notice-status'
 import { normalizeFeeSearch } from './fee-search-normalizer'
 import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeTypeItem } from './fee-search-types'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
@@ -1458,8 +1459,11 @@ export class EasyRuntime {
     return this.notice.searchNotices(request, timeoutMs, signal)
   }
 
-  async executeNoticeAction(request: NoticeActionRequest): Promise<ApiResult<NoticeActionResult>> {
-    return this.notice.executeNoticeAction(request)
+  async executeNoticeAction(
+    request: NoticeActionRequest,
+    onStatus?: (event: NoticeTaskStatusEvent) => void
+  ): Promise<ApiResult<NoticeActionResult>> {
+    return this.notice.executeNoticeAction(request, onStatus)
   }
 
   async exportNoticeExcel(request: NoticeExportRequest): Promise<

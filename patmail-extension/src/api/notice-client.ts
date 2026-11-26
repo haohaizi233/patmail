@@ -28,6 +28,7 @@ import type {
 } from './notice-types'
 import { apiError, type ApiResult } from './types'
 import { newUuid } from '../utils/uuid'
+import type { NoticeTaskAction, NoticeTaskStatusEvent } from '../shared/notice-status'
 
 export interface NoticeClientDeps {
   transport: EasyTransport
@@ -318,40 +319,150 @@ export class NoticeClient {
     busyMessage: string,
     doneMessage: string,
     maxPolls = 20,
-    intervalMs = 2000
-  ): Promise<NoticeActionResult> {
+    intervalMs = 2000,
+    onTick?: (phase: 'polling' | 'done' | 'background' | 'error', attempt: number, totalPolls: number, message: string) => void
+  ): Promise<{ result: NoticeActionResult; terminalPhase: 'done' | 'background' | 'error' }> {
     for (let i = 0; i < maxPolls; i += 1) {
+      const attempt = i + 1
       await this.sleepFn(intervalMs)
       const res = await this.deps.transport.post(operation, new URLSearchParams({ Call: call }))
       if (!res.ok) {
-        return { ok: false, message: `轮询状态失败：${res.error.message}` }
+        const message = `轮询状态失败：${res.error.message}`
+        onTick?.('error', attempt, maxPolls, message)
+        return { result: { ok: false, message }, terminalPhase: 'error' }
       }
       if (!isRecord(res.data) || !isRecord(res.data.ClientInfo)) {
-        return { ok: true, message: doneMessage }
+        onTick?.('done', attempt, maxPolls, doneMessage)
+        return { result: { ok: true, message: doneMessage }, terminalPhase: 'done' }
       }
       const info = res.data.ClientInfo
       if (info.IsLogin === false) {
         this.deps.expireSession()
-        return { ok: false, message: 'EASY 登录状态已失效，请在原网站重新登录。' }
+        const message = 'EASY 登录状态已失效，请在原网站重新登录。'
+        onTick?.('error', attempt, maxPolls, message)
+        return { result: { ok: false, message }, terminalPhase: 'error' }
       }
       const resultFlag = info.Result === true
       const msg = str(info.Message)
       if (resultFlag) {
-        return { ok: true, message: msg || doneMessage }
+        const finalMsg = msg || doneMessage
+        onTick?.('done', attempt, maxPolls, finalMsg)
+        return { result: { ok: true, message: finalMsg }, terminalPhase: 'done' }
       }
       if (msg && msg !== busyMessage && !/请稍等|处理中|下载中|解析中/.test(msg)) {
-        return { ok: false, message: msg }
+        onTick?.('error', attempt, maxPolls, msg)
+        return { result: { ok: false, message: msg }, terminalPhase: 'error' }
       }
+      onTick?.('polling', attempt, maxPolls, msg || busyMessage)
     }
+    const bgMsg = `${doneMessage}（原站仍在后台继续处理，请稍后点「查询」刷新最新状态）`
+    onTick?.('background', maxPolls, maxPolls, bgMsg)
     return {
-      ok: true,
-      message: `${doneMessage}（原站仍在后台继续处理，请稍后点「查询」刷新最新状态）`
+      result: { ok: true, message: bgMsg },
+      terminalPhase: 'background'
     }
   }
 
-  async executeNoticeAction(request: NoticeActionRequest): Promise<ApiResult<NoticeActionResult>> {
+  private async runCpcPollingTask(input: {
+    action: NoticeTaskAction
+    account: string
+    accountLabel?: string
+    submitOp: EasyOperation
+    submitCall: string
+    submitParams: URLSearchParams
+    submitOkFallback: string
+    submitFailFallback: string
+    pollOp: EasyOperation
+    pollCall: string
+    busyMessage: string
+    doneMessage: string
+    maxPolls?: number
+    intervalMs?: number
+    deferTerminalEmit?: boolean
+    emitStatus: (patch: Omit<NoticeTaskStatusEvent, 'action' | 'elapsedMs'>) => void
+  }): Promise<ApiResult<{ result: NoticeActionResult; terminalPhase: 'done' | 'background' | 'error' }>> {
+    input.emitStatus({ phase: 'checking_login', call: 'CheckUserStatus', serverMessage: '正在核对 CPC 登录态…' })
+    const loginBlock = await this.ensureCpcLoginReady(input.account, input.accountLabel)
+    if (loginBlock) {
+      input.emitStatus({
+        phase: loginBlock.needCpcLogin ? 'need_login' : 'error',
+        call: 'CheckUserStatus',
+        serverMessage: loginBlock.message
+      })
+      return { ok: true, data: { result: loginBlock, terminalPhase: 'error' } }
+    }
+
+    input.emitStatus({ phase: 'submitting', call: input.submitCall, serverMessage: `正在向原站提交 ${input.submitCall} 请求…` })
+    const res = await this.deps.transport.post(input.submitOp, input.submitParams)
+    if (!res.ok) {
+      input.emitStatus({ phase: 'error', call: input.submitCall, serverMessage: res.error.message })
+      return res
+    }
+    const started = this.extractClientMessage(res.data, input.submitOkFallback, input.submitFailFallback)
+    if (!started.ok) {
+      input.emitStatus({
+        phase: started.cpcLogin ? 'need_login' : 'error',
+        call: input.submitCall,
+        serverMessage: started.message
+      })
+      return {
+        ok: true,
+        data: { result: { ok: false, needCpcLogin: started.cpcLogin, message: started.message }, terminalPhase: 'error' }
+      }
+    }
+
+    const maxPolls = input.maxPolls ?? 20
+    const intervalMs = input.intervalMs ?? 2000
+    input.emitStatus({
+      phase: 'polling',
+      call: input.submitCall,
+      pollAttempt: 0,
+      maxPolls,
+      serverMessage: started.message
+    })
+    const polled = await this.pollStatus(
+      input.pollOp,
+      input.pollCall,
+      input.busyMessage,
+      input.doneMessage,
+      maxPolls,
+      intervalMs,
+      (phase, attempt, totalPolls, message) => {
+        if (input.deferTerminalEmit && (phase === 'done' || phase === 'background')) return
+        input.emitStatus({
+          phase,
+          call: input.pollCall,
+          pollAttempt: attempt,
+          maxPolls: totalPolls,
+          serverMessage: message
+        })
+      }
+    )
+    return { ok: true, data: polled }
+  }
+
+  async executeNoticeAction(
+    request: NoticeActionRequest,
+    onStatus?: (event: NoticeTaskStatusEvent) => void
+  ): Promise<ApiResult<NoticeActionResult>> {
+    const startedAt = Date.now()
+    const isTaskAction =
+      request.action === 'fetchTzsList' ||
+      request.action === 'downloadTzsList' ||
+      request.action === 'fetchCertList' ||
+      request.action === 'downloadCertList'
+    const emitTaskStatus = (action: NoticeTaskAction, patch: Omit<NoticeTaskStatusEvent, 'action' | 'elapsedMs'>): void => {
+      onStatus?.({
+        ...patch,
+        action,
+        elapsedMs: Math.max(0, Date.now() - startedAt)
+      })
+    }
+
     if (!(await this.ensureSession())) {
-      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      const message = '请先在 EASY 原网站登录并检测登录状态。'
+      if (isTaskAction) emitTaskStatus(request.action, { phase: 'error', serverMessage: message })
+      return apiError('SESSION_EXPIRED', message)
     }
 
     if (request.action === 'refreshCounts') {
@@ -618,7 +729,12 @@ export class NoticeClient {
 
     // 以下均为写操作，统一受写开关门禁保护
     const blocked = this.checkWritePermission()
-    if (blocked) return blocked
+    if (blocked) {
+      if (isTaskAction && !blocked.ok) {
+        emitTaskStatus(request.action, { phase: 'error', serverMessage: blocked.error.message })
+      }
+      return blocked
+    }
 
     const joinIds = (ids: string[]) => ids.map(s => s.trim()).filter(Boolean).join(';')
 
@@ -787,11 +903,13 @@ export class NoticeClient {
         return { ok: true, data: { ok: msgInfo.ok, message: msgInfo.message } }
       }
       case 'fetchTzsList': {
-        const loginBlock = await this.ensureCpcLoginReady(request.account, request.accountLabel)
-        if (loginBlock) return { ok: true, data: loginBlock }
-        const res = await this.deps.transport.post(
-          'noticeGetTzsList',
-          new URLSearchParams({
+        const taskRes = await this.runCpcPollingTask({
+          action: 'fetchTzsList',
+          account: request.account,
+          accountLabel: request.accountLabel,
+          submitOp: 'noticeGetTzsList',
+          submitCall: 'GetTzsList',
+          submitParams: new URLSearchParams({
             Call: 'GetTzsList',
             account: request.account.trim(),
             casename: (request.casename ?? '').trim(),
@@ -799,17 +917,19 @@ export class NoticeClient {
             startTime: (request.startTime ?? '').trim(),
             endTime: (request.endTime ?? '').trim(),
             status: request.status ?? ''
-          })
-        )
-        if (!res.ok) return res
-        const started = this.extractClientMessage(res.data, '已触发获取官文列表。', '获取官文列表失败。')
-        if (!started.ok) return { ok: true, data: { ok: false, needCpcLogin: started.cpcLogin, message: started.message } }
-        const polled = await this.pollStatus('noticeGetTzsListStatus', 'GetTzsListStatus', '通知书下载中,请稍等!', '通知书列表下载完成。')
-        return { ok: true, data: polled }
+          }),
+          submitOkFallback: '已触发获取官文列表。',
+          submitFailFallback: '获取官文列表失败。',
+          pollOp: 'noticeGetTzsListStatus',
+          pollCall: 'GetTzsListStatus',
+          busyMessage: '通知书下载中,请稍等!',
+          doneMessage: '通知书列表下载完成。',
+          emitStatus: patch => emitTaskStatus('fetchTzsList', patch)
+        })
+        if (!taskRes.ok) return taskRes
+        return { ok: true, data: taskRes.data.result }
       }
       case 'downloadTzsList': {
-        const loginBlock = await this.ensureCpcLoginReady(request.account, request.accountLabel)
-        if (loginBlock) return { ok: true, data: loginBlock }
         const p = new URLSearchParams({
           Call: 'ProcessTzsList',
           account: request.account.trim(),
@@ -824,28 +944,56 @@ export class NoticeClient {
           p.set('appno', (request.appno ?? '').trim())
           p.set('status', request.status ?? '')
         }
-        const res = await this.deps.transport.post('noticeProcessTzsList', p)
-        if (!res.ok) return res
-        const started = this.extractClientMessage(res.data, '已开始解析通知书。', '触发解析下载失败。')
-        if (!started.ok) return { ok: true, data: { ok: false, needCpcLogin: started.cpcLogin, message: started.message } }
-        const polled = await this.pollStatus('noticeProcessTzsListStatus', 'ProcessTzsListStatus', '通知书处理中,请稍等!', '通知书分析下载完成。', 25, 2500)
-        if (request.isReplay && request.fids?.length) {
+        const needReplaySync = Boolean(request.isReplay && request.fids?.length)
+        const taskRes = await this.runCpcPollingTask({
+          action: 'downloadTzsList',
+          account: request.account,
+          accountLabel: request.accountLabel,
+          submitOp: 'noticeProcessTzsList',
+          submitCall: 'ProcessTzsList',
+          submitParams: p,
+          submitOkFallback: '已开始解析通知书。',
+          submitFailFallback: '触发解析下载失败。',
+          pollOp: 'noticeProcessTzsListStatus',
+          pollCall: 'ProcessTzsListStatus',
+          busyMessage: '通知书处理中,请稍等!',
+          doneMessage: '通知书分析下载完成。',
+          maxPolls: 25,
+          intervalMs: 2500,
+          deferTerminalEmit: needReplaySync,
+          emitStatus: patch => emitTaskStatus('downloadTzsList', patch)
+        })
+        if (!taskRes.ok) return taskRes
+        const polled = taskRes.data.result
+        if (needReplaySync && polled.ok) {
+          emitTaskStatus('downloadTzsList', {
+            phase: 'syncing_rows',
+            call: 'GetReaplyTzsStatus',
+            serverMessage: '正在同步二次下载解析状态明细…'
+          })
           const replayStatus = await this.deps.transport.post(
             'noticeReplayTzsStatus',
-            new URLSearchParams({ Call: 'GetReaplyTzsStatus', fids: joinIds(request.fids) })
+            new URLSearchParams({ Call: 'GetReaplyTzsStatus', fids: joinIds(request.fids ?? []) })
           )
           if (replayStatus.ok && isRecord(replayStatus.data) && Array.isArray(replayStatus.data.rows)) {
             polled.statusRows = replayStatus.data.rows.filter(isRecord)
           }
+          emitTaskStatus('downloadTzsList', {
+            phase: taskRes.data.terminalPhase === 'background' ? 'background' : 'done',
+            call: 'GetReaplyTzsStatus',
+            serverMessage: polled.message
+          })
         }
         return { ok: true, data: polled }
       }
       case 'fetchCertList': {
-        const loginBlock = await this.ensureCpcLoginReady(request.account, request.accountLabel)
-        if (loginBlock) return { ok: true, data: loginBlock }
-        const res = await this.deps.transport.post(
-          'noticeGetCpcCertList',
-          new URLSearchParams({
+        const taskRes = await this.runCpcPollingTask({
+          action: 'fetchCertList',
+          account: request.account,
+          accountLabel: request.accountLabel,
+          submitOp: 'noticeGetCpcCertList',
+          submitCall: 'GetCpcCertList',
+          submitParams: new URLSearchParams({
             Call: 'GetCpcCertList',
             account: request.account.trim(),
             casename: (request.casename ?? '').trim(),
@@ -854,17 +1002,19 @@ export class NoticeClient {
             endTime: (request.endTime ?? '').trim(),
             status: request.status ?? '',
             xlh: (request.xlh ?? '').trim()
-          })
-        )
-        if (!res.ok) return res
-        const started = this.extractClientMessage(res.data, '已触发获取证书列表。', '获取证书列表失败。')
-        if (!started.ok) return { ok: true, data: { ok: false, needCpcLogin: started.cpcLogin, message: started.message } }
-        const polled = await this.pollStatus('noticeGetCertListStatus', 'GetCertListStatus', '专利证书列表获取中,请稍等!', '专利证书列表获取完成。')
-        return { ok: true, data: polled }
+          }),
+          submitOkFallback: '已触发获取证书列表。',
+          submitFailFallback: '获取证书列表失败。',
+          pollOp: 'noticeGetCertListStatus',
+          pollCall: 'GetCertListStatus',
+          busyMessage: '专利证书列表获取中,请稍等!',
+          doneMessage: '专利证书列表获取完成。',
+          emitStatus: patch => emitTaskStatus('fetchCertList', patch)
+        })
+        if (!taskRes.ok) return taskRes
+        return { ok: true, data: taskRes.data.result }
       }
       case 'downloadCertList': {
-        const loginBlock = await this.ensureCpcLoginReady(request.account, request.accountLabel)
-        if (loginBlock) return { ok: true, data: loginBlock }
         const p = new URLSearchParams({
           Call: 'DownloadAndAnalyseCert',
           account: request.account.trim()
@@ -873,12 +1023,25 @@ export class NoticeClient {
           p.set('fids', joinIds(request.fids))
           p.set('xlh', joinIds(request.xlh ?? []))
         }
-        const res = await this.deps.transport.post('noticeDownloadAnalyseCert', p)
-        if (!res.ok) return res
-        const started = this.extractClientMessage(res.data, '开始下载解析专利电子证书。', '下载解析专利电子证书失败。')
-        if (!started.ok) return { ok: true, data: { ok: false, needCpcLogin: started.cpcLogin, message: started.message } }
-        const polled = await this.pollStatus('noticeGetAnalyseCertStatus', 'GetAnalyseCertStatus', '专利证书解析中,请稍等!', '专利电子证书分析完成。', 25, 2500)
-        return { ok: true, data: polled }
+        const taskRes = await this.runCpcPollingTask({
+          action: 'downloadCertList',
+          account: request.account,
+          accountLabel: request.accountLabel,
+          submitOp: 'noticeDownloadAnalyseCert',
+          submitCall: 'DownloadAndAnalyseCert',
+          submitParams: p,
+          submitOkFallback: '开始下载解析专利电子证书。',
+          submitFailFallback: '下载解析专利电子证书失败。',
+          pollOp: 'noticeGetAnalyseCertStatus',
+          pollCall: 'GetAnalyseCertStatus',
+          busyMessage: '专利证书解析中,请稍等!',
+          doneMessage: '专利电子证书分析完成。',
+          maxPolls: 25,
+          intervalMs: 2500,
+          emitStatus: patch => emitTaskStatus('downloadCertList', patch)
+        })
+        if (!taskRes.ok) return taskRes
+        return { ok: true, data: taskRes.data.result }
       }
       case 'uploadCpcZip': {
         const files = request.files?.length
