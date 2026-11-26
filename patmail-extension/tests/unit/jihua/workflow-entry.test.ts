@@ -1,6 +1,7 @@
 import { createApp, nextTick, type App } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AppRoot from '../../../src/app/App.vue'
+import { resetWorkflowViewMemoryForTest } from '../../../src/app/composables/useWorkflowViewMemory'
 
 const uploadRuntime = vi.hoisted(() => ({ mounts: 0 }))
 
@@ -136,13 +137,17 @@ function clickButton(label: string, root: ParentNode = host!): void {
   button?.click()
 }
 
-beforeEach(() => { uploadRuntime.mounts = 0 })
+beforeEach(() => {
+  uploadRuntime.mounts = 0
+  resetWorkflowViewMemoryForTest()
+})
 afterEach(() => {
   app?.unmount()
   app = undefined
   host?.remove()
   host = undefined
   window.location.hash = ''
+  resetWorkflowViewMemoryForTest()
 })
 
 describe('季华实验室上传入口', () => {
@@ -187,6 +192,7 @@ describe('季华实验室上传入口', () => {
       .find(button => button.textContent?.includes('季华实验室-文件导入'))
     reopened?.click()
     await settle()
+    expect(host?.querySelector('.workflow-jihua [role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe('开始使用')
     clickButton('开始使用', host!.querySelector('[role="tablist"]')!)
     await settle()
     clickButton('首页')

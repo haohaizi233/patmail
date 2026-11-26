@@ -9,7 +9,6 @@ import JihuaUploadPage from './JihuaUploadPage.vue'
 import HaguePage from './HaguePage.vue'
 import BillingWorkflowPage from './BillingWorkflowPage.vue'
 import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
-import DocsMarkdown from '../components/DocsMarkdown.vue'
 import WorkflowMailEntry from '../components/WorkflowMailEntry.vue'
 import hagueGuide from '../../../docs/workflows/海牙新申请.md?raw'
 import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
@@ -66,7 +65,8 @@ import { useQuerySurfaces } from '../composables/useQuerySurfaces'
 import { confirmDialog } from '../dialog'
 import { createRecoveryClient } from '../../recovery/client'
 import { systemScope } from '../../recovery/wal-ledger'
-import { sanitizeWorkflowDeskState, type WorkflowFlowView } from './workflow-desk-state'
+import { useWorkflowViewMemory } from '../composables/useWorkflowViewMemory'
+import { resolveWorkflowView, sanitizeWorkflowDeskState, type WorkflowViewTab } from './workflow-desk-state'
 
 type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague' | 'billing'
 
@@ -77,12 +77,28 @@ const FLOW_GUIDES: Record<string, string> = {
   [FILING_EXPORT_ID]: filingExportGuide,
 }
 
+const TOOL_DEFAULT_VIEWS: Record<'hague' | 'jihua' | 'billing', 'guide' | 'use'> = {
+  hague: 'use',
+  jihua: 'guide',
+  billing: 'use',
+}
+
+const {
+  rememberedViews,
+  rememberedSteps,
+  rememberView,
+  rememberStep,
+  forgetWorkflow,
+  resolveView,
+  resolveStep,
+  mergeFromDesk,
+} = useWorkflowViewMemory()
+
 const screen = ref<Screen>('sea')
-const hagueView = ref<'guide' | 'use'>('use')
-const jihuaView = ref<'guide' | 'use'>('use')
-const billingView = ref<'guide' | 'use'>('use')
-const flowView = ref<WorkflowFlowView>('steps')
-const flowGuideSeen = ref(false)
+const hagueView = ref<WorkflowViewTab>('use')
+const jihuaView = ref<WorkflowViewTab>('guide')
+const billingView = ref<WorkflowViewTab>('use')
+const flowView = ref<WorkflowViewTab>('steps')
 const billingMounted = ref(false)
 watch(screen, next => { if (next === 'billing') billingMounted.value = true }, { immediate: true })
 const mainScreenHidden = computed(() => screen.value === 'jihua' || screen.value === 'hague' || screen.value === 'billing')
@@ -140,7 +156,12 @@ function canUseFlow(flow: WorkflowDefinition | null | undefined): boolean {
   return Boolean(flow && (isRunnableWorkflow(flow) || flow.id === FILE_MANAGE_ID || flow.id === FILING_EXPORT_ID))
 }
 
-const flowGuideSource = computed(() => flowGuideFor(draft.value).replace(/^# [^\r\n]+\r?\n/, ''))
+function availableFlowViews(flow: WorkflowDefinition | null | undefined): WorkflowViewTab[] {
+  const views: WorkflowViewTab[] = ['steps']
+  if (flowGuideFor(flow)) views.push('guide')
+  if (canUseFlow(flow)) views.push('use')
+  return views
+}
 
 const WORD_PARAMS = new Set(['type_keyword', 'customer_keyword', 'our_keyword', 'city_keyword', 'other_city_keyword'])
 const LISTED_CHOICES = new Set(['sender_mailset', 'surface_label'])
@@ -156,7 +177,20 @@ function validDraft(value: unknown): value is WorkflowDefinition {
 }
 
 function deskState() {
-  return { screen: screen.value, hagueView: hagueView.value, jihuaView: jihuaView.value, billingView: billingView.value, flowView: flowView.value, draft: draft.value, selectedId: selectedId.value, dirty: dirty.value, picked: picked.value, newName: newName.value }
+  return {
+    screen: screen.value,
+    hagueView: hagueView.value === 'guide' ? 'guide' as const : 'use' as const,
+    jihuaView: jihuaView.value === 'guide' ? 'guide' as const : 'use' as const,
+    billingView: billingView.value === 'guide' ? 'guide' as const : 'use' as const,
+    flowView: flowView.value,
+    workflowViews: { ...rememberedViews.value },
+    selectedSteps: { ...rememberedSteps.value },
+    draft: draft.value,
+    selectedId: selectedId.value,
+    dirty: dirty.value,
+    picked: picked.value,
+    newName: newName.value,
+  }
 }
 
 function flushDeskState(): void {
@@ -174,11 +208,17 @@ onBeforeUnmount(() => {
   flushDeskState()
 })
 
-watch([screen, hagueView, jihuaView, billingView, flowView, draft, selectedId, dirty, picked, newName], () => {
+watch([screen, hagueView, jihuaView, billingView, flowView, rememberedViews, rememberedSteps, draft, selectedId, dirty, picked, newName], () => {
   if (!hydrated) return
   clearTimeout(persistTimer)
   persistTimer = setTimeout(flushDeskState, 120)
 }, { deep: true })
+
+watch(selectedId, next => {
+  if (screen.value === 'flow' && draft.value?.id && next) {
+    rememberStep(draft.value.id, next)
+  }
+})
 
 const ID_CHOICES = new Set(['customer_type_id', 'our_type_id', 'sender_mailset'])
 
@@ -197,14 +237,21 @@ onMounted(async () => {
   catalog.value = await loadWorkflowCatalog()
   const restored = sanitizeWorkflowDeskState<WorkflowDefinition>(await recovery.get('workflow-desk', recoveryScope).catch(() => null), validDraft)
   if (restored) {
+    mergeFromDesk(restored)
     screen.value = restored.screen
     hagueView.value = restored.hagueView
     jihuaView.value = restored.jihuaView
     billingView.value = restored.billingView
     replaceDraft(restored.draft, restored.dirty)
-    const desiredView = restored.flowView ?? 'steps'
-    flowView.value = (desiredView === 'guide' && !flowGuideFor(restored.draft)) || (desiredView === 'use' && !canUseFlow(restored.draft)) ? 'steps' : desiredView
-    if (screen.value === 'flow' && flowView.value === 'guide') flowGuideSeen.value = true
+    flowView.value = restored.draft
+      ? resolveWorkflowView({
+          workflowId: restored.draft.id,
+          requested: restored.flowView,
+          remembered: rememberedViews.value,
+          available: availableFlowViews(restored.draft),
+          fallback: 'steps'
+        })
+      : 'steps'
     selectedId.value = restored.selectedId
     picked.value = restored.picked
     newName.value = restored.newName
@@ -214,7 +261,6 @@ onMounted(async () => {
 
 watch([screen, flowView, workspaceReady], ([nextScreen, nextView, ready]) => {
   if (nextScreen === 'flow') {
-    if (nextView === 'guide') flowGuideSeen.value = true
     void loadChoices(false)
     if (nextView === 'use' && ready) void loadUseAssets()
   }
@@ -283,16 +329,34 @@ function spellStyleNames(flow: WorkflowDefinition): boolean {
   return changed
 }
 
-function openFlow(flow: WorkflowDefinition, view: WorkflowFlowView = 'steps'): void {
+function openFlow(flow: WorkflowDefinition, view?: WorkflowViewTab): void {
   const next = cloneWorkflow(flow)
   const changed = isSystemWorkflow(next) ? false : spellStyleNames(next)
   replaceDraft(next, changed)
-  selectedId.value = next.steps[0]?.id ?? ''
+  const target = resolveView(next.id, {
+    requested: view,
+    available: availableFlowViews(next),
+    fallback: 'steps'
+  })
+  selectedId.value = resolveStep(next.id, next.steps.map(step => step.id))
   notice.value = ''
-  const target = (view === 'guide' && !flowGuideFor(next)) || (view === 'use' && !canUseFlow(next)) ? 'steps' : view
   flowView.value = target
-  if (target === 'guide') flowGuideSeen.value = true
+  rememberView(next.id, target)
+  if (selectedId.value) rememberStep(next.id, selectedId.value)
   screen.value = 'flow'
+}
+
+function openToolWorkspace(target: 'hague' | 'jihua' | 'billing', view?: 'guide' | 'use'): void {
+  const nextView = resolveView(target, {
+    requested: view,
+    available: ['guide', 'use'],
+    fallback: TOOL_DEFAULT_VIEWS[target]
+  })
+  if (target === 'hague') hagueView.value = nextView
+  else if (target === 'jihua') jihuaView.value = nextView
+  else billingView.value = nextView
+  rememberView(target, nextView)
+  screen.value = target
 }
 
 async function backToSea(): Promise<void> {
@@ -394,6 +458,7 @@ async function removeFlow(flow: WorkflowDefinition): Promise<void> {
     workflows: catalog.value.workflows.filter(item => item.id !== flow.id)
   })
   catalog.value = saved
+  forgetWorkflow(flow.id)
 }
 
 async function removeStep(id: string): Promise<void> {
@@ -582,21 +647,8 @@ function chooseProc(param: WorkflowParam, id: string): void {
     :inert="mainScreenHidden"
     :aria-hidden="mainScreenHidden ? 'true' : undefined"
   >
-    <header v-if="screen === 'flow' && draft" class="page-head flow-head">
-      <Bunny />
-      <div class="flow-head-fields">
-        <button type="button" class="workflow-back-btn" @click="backToSea">回到工作流</button>
-        <label>名字
-          <input v-model="draft.label" type="text" maxlength="40" :disabled="locked" />
-        </label>
-        <label>这句话怎么介绍
-          <input v-model="draft.summary" type="text" maxlength="400" :disabled="locked" />
-        </label>
-      </div>
-      <img class="page-art" :src="bg('专注每一次发文，让知识更有力量.png')" alt="" />
-    </header>
     <PageHead
-      v-else
+      v-if="screen !== 'flow' || !draft"
       title="工作流"
       :desc="screen === 'ocean' ? '从知识海洋里挑几件会做的事，串成一条你自己的。' : '先挑一条，点开再看每一步。'"
       :art="bg('专注每一次发文，让知识更有力量.png')"
@@ -618,36 +670,36 @@ function chooseProc(param: WorkflowParam, id: string): void {
         </div>
       </article>
       <article class="sea-card">
-        <button type="button" class="sea-open" @click="hagueView = 'use'; screen = 'hague'">
+        <button type="button" class="sea-open" @click="openToolWorkspace('hague')">
           <b>海牙新申请</b><small>批量核对材料与信息，默认 6 路填写草稿并导出 Summary。</small><span class="sea-badge">批量草稿</span><em>材料核对 · 6 路并发 · Summary 导出</em>
         </button>
         <div class="sea-actions">
-          <button type="button" class="sea-remove" @click="hagueView = 'guide'; screen = 'hague'">流程说明</button>
-          <button type="button" class="sea-remove" @click="hagueView = 'use'; screen = 'hague'">开始使用</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('hague', 'guide')">流程说明</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('hague', 'use')">开始使用</button>
         </div>
       </article>
       <article class="sea-card jihua-upload-card">
-        <button type="button" class="sea-open" @click="jihuaView = 'guide'; screen = 'jihua'">
+        <button type="button" class="sea-open" @click="openToolWorkspace('jihua')">
           <b>季华实验室-文件导入</b>
           <small>按申请号整理文件，使用已登录的季华平台会话核对并上传。</small>
           <span class="sea-badge">工作流工具</span>
           <em>流程说明 · 六路上传 · 逐行结果</em>
         </button>
         <div class="sea-actions">
-          <button type="button" class="sea-remove" @click="jihuaView = 'guide'; screen = 'jihua'">流程说明</button>
-          <button type="button" class="sea-remove" @click="jihuaView = 'use'; screen = 'jihua'">开始使用</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('jihua', 'guide')">流程说明</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('jihua', 'use')">开始使用</button>
         </div>
       </article>
       <article class="sea-card billing-workflow-card">
-        <button type="button" class="sea-open" @click="billingView = 'use'; screen = 'billing'">
+        <button type="button" class="sea-open" @click="openToolWorkspace('billing')">
           <b>请款</b>
           <small>文件管理自动抓取海外账单并提取我方文号，无缝联动费用查询，保留 Excel 原式导出。</small>
           <span class="sea-badge">工作流</span>
           <em>账单抓取 · 费用联动 · 人行汇率 · 公式导出</em>
         </button>
         <div class="sea-actions">
-          <button type="button" class="sea-remove" @click="billingView = 'guide'; screen = 'billing'">使用说明</button>
-          <button type="button" class="sea-remove" @click="billingView = 'use'; screen = 'billing'">开始请款</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('billing', 'guide')">使用说明</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('billing', 'use')">开始请款</button>
         </div>
       </article>
       <button type="button" class="sea-card sea-add" @click="openOcean">
@@ -682,13 +734,36 @@ function chooseProc(param: WorkflowParam, id: string): void {
       <p v-if="oceanNotice" class="hint">{{ oceanNotice }}</p>
     </section>
 
-    <template v-else-if="screen === 'flow' && draft">
-    <div v-if="flowGuideSource || canUseFlow(draft)" class="tabs workflow-view-tabs flow-view-tabs" role="tablist" :aria-label="`${draft.label}视图`">
-      <button type="button" role="tab" :class="{ on: flowView === 'steps' }" :aria-selected="flowView === 'steps'" @click="flowView = 'steps'">步骤流程</button>
-      <button v-if="flowGuideSource" type="button" role="tab" :class="{ on: flowView === 'guide' }" :aria-selected="flowView === 'guide'" @click="flowView = 'guide'">流程说明</button>
-      <button v-if="canUseFlow(draft)" type="button" role="tab" :class="{ on: flowView === 'use' }" :aria-selected="flowView === 'use'" @click="flowView = 'use'">开始使用</button>
-    </div>
-    <div v-show="flowView === 'steps'">
+    <WorkflowWorkspace
+      v-else-if="screen === 'flow' && draft"
+      :workflow-id="draft.id"
+      :active="screen === 'flow'"
+      v-model:view="flowView"
+      :title="draft.label"
+      :guide="flowGuideFor(draft)"
+      :show-steps="true"
+      :show-guide="Boolean(flowGuideFor(draft))"
+      :show-use="canUseFlow(draft)"
+      :lazy-use="true"
+      tabs-class="flow-view-tabs"
+      @back="backToSea"
+    >
+      <template #header>
+        <header class="page-head flow-head">
+          <Bunny />
+          <div class="flow-head-fields">
+            <button type="button" class="workflow-back-btn" @click="backToSea">回到工作流</button>
+            <label>名字
+              <input v-model="draft.label" type="text" maxlength="40" :disabled="locked" />
+            </label>
+            <label>这句话怎么介绍
+              <input v-model="draft.summary" type="text" maxlength="400" :disabled="locked" />
+            </label>
+          </div>
+          <img class="page-art" :src="bg('专注每一次发文，让知识更有力量.png')" alt="" />
+        </header>
+      </template>
+      <template #steps>
     <section class="card flow-preview">
       <div class="section-heading">
         <strong>全局预览</strong>
@@ -813,12 +888,9 @@ function chooseProc(param: WorkflowParam, id: string): void {
         <p v-if="notice" class="hint">{{ notice }}</p>
       </section>
     </div>
-    </div>
-    <section v-if="flowGuideSource" v-show="flowView === 'guide'" class="card workflow-guide flow-guide" role="tabpanel">
-      <DocsMarkdown v-if="flowGuideSeen" :source="flowGuideSource" />
-    </section>
-    <section v-if="canUseFlow(draft) && flowView === 'use'" class="workflow-use" role="tabpanel">
+      </template>
       <WorkflowMailEntry
+        :key="draft.id"
         :locked-workflow-id="draft.id"
         :customers="workspaceCustomers"
         :rules="rules"
@@ -829,11 +901,12 @@ function chooseProc(param: WorkflowParam, id: string): void {
         :signature-text="signatureText"
         :catalog="catalog"
       />
-    </section>
-    </template>
+    </WorkflowWorkspace>
   </div>
   <div v-if="screen === 'hague'" class="workflow-hague">
     <WorkflowWorkspace
+      workflow-id="hague"
+      :active="screen === 'hague'"
       v-model:view="hagueView" title="海牙新申请"
       description="选择总文件夹核对材料与信息，默认 6 路填写草稿并导出 Summary。"
       :guide="hagueGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
@@ -848,6 +921,8 @@ function chooseProc(param: WorkflowParam, id: string): void {
     :aria-hidden="screen !== 'jihua' ? 'true' : undefined"
   >
     <WorkflowWorkspace
+      workflow-id="jihua"
+      :active="screen === 'jihua'"
       v-model:view="jihuaView" title="季华实验室-文件导入"
       description="先看流程与材料规则，或直接使用工作台整理并上传文件。"
       :guide="jihuaGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
@@ -863,6 +938,8 @@ function chooseProc(param: WorkflowParam, id: string): void {
     :aria-hidden="screen !== 'billing' ? 'true' : undefined"
   >
     <WorkflowWorkspace
+      workflow-id="billing"
+      :active="screen === 'billing'"
       v-model:view="billingView" title="请款"
       description="先选请款模板智能预填查询条件：涉外自动抓账单查第三方费用，PCT 查官费与我方代理费，保留 Excel 原式导出。"
       :guide="billingGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
