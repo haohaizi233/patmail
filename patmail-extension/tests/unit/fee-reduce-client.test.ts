@@ -397,4 +397,97 @@ describe('FeeReduceClient', () => {
       [overlong, 'error']
     ])
   })
+
+  it('falls back to fuzzy case_volume lookup for annotated, dashed, or mixed-paren suffixes and reports ambiguity', async () => {
+    const icRequests: Array<{ fuzzy: string | null; pageSize: string | null; element: string }> = []
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = new URLSearchParams(bodyText(init))
+      const call = body.get('Call')
+      if (call === 'ICSearchList') {
+        const fuzzy = body.get('is_fuzzy_query_case_volume')
+        const pageSize = body.get('pageSize')
+        const element = body.get('Element') ?? ''
+        icRequests.push({ fuzzy, pageSize, element })
+        if (fuzzy === 'false') {
+          return jsonResponse({ TableRows: [] })
+        }
+        if (element.includes('PA21326497CN')) {
+          return jsonResponse({
+            TableRows: [
+              {
+                case_id: CASE_ID_1,
+                case_volume: 'PA21326497CN（缴费期限前一个工作日缴办登费）',
+                case_name: '坐浴盆',
+                app_no: '202230031894.6'
+              }
+            ]
+          })
+        }
+        if (element.includes('PA21122994CN')) {
+          return jsonResponse({
+            TableRows: [
+              {
+                case_id: CASE_ID_2,
+                case_volume: 'PA21122994CN-放弃复审',
+                case_name: '关联案',
+                app_no: '202110000001.1'
+              }
+            ]
+          })
+        }
+        if (element.includes('PA21326498CN')) {
+          return jsonResponse({
+            TableRows: [
+              {
+                case_id: CASE_ID_3,
+                case_volume: 'PA21326498CN(备注）',
+                case_name: '混用括号案',
+                app_no: '202110000002.2'
+              }
+            ]
+          })
+        }
+        if (element.includes('PA21326499CN')) {
+          return jsonResponse({
+            TableRows: [
+              { case_id: CASE_ID_1, case_volume: 'PA21326499CN（备注1）', case_name: '重名1', app_no: '1' },
+              { case_id: CASE_ID_2, case_volume: 'PA21326499CN-分案', case_name: '重名2', app_no: '2' }
+            ]
+          })
+        }
+        return jsonResponse({ TableRows: [] })
+      }
+      if (call === 'GetProcList') {
+        const cid = body.get('case_id')
+        if (cid === CASE_ID_1) {
+          return jsonResponse({ TableRows: [{ proc_id: PROC_ID_1, ctrl_proc: '开卷', proc_status: '完成' }] })
+        }
+        if (cid === CASE_ID_2) {
+          return jsonResponse({ TableRows: [{ proc_id: PROC_ID_2, ctrl_proc: '请求费用减缓', proc_status: '撰写中' }] })
+        }
+        if (cid === CASE_ID_3) {
+          return jsonResponse({ TableRows: [{ proc_id: PROC_ID_3, ctrl_proc: '请求费用减缓', proc_status: '完成' }] })
+        }
+      }
+      return jsonResponse({})
+    })
+
+    const transport = new EasyTransport('http://183.36.43.66:88', { fetcher: fetcher as unknown as typeof fetch })
+    const client = new FeeReduceClient(transport)
+    const res = await client.inspectCases(['PA21326497CN', 'PA21122994CN', 'PA21326498CN', 'PA21326499CN'])
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+
+    expect(icRequests[0]?.fuzzy).toBe('false')
+    expect(icRequests[0]?.pageSize).toBe('50')
+    expect(icRequests.slice(1).every(req => req.fuzzy === 'true' && req.pageSize === '50')).toBe(true)
+
+    expect(res.data.items.map(i => [i.caseVolume, i.state])).toEqual([
+      ['PA21326497CN（缴费期限前一个工作日缴办登费）', 'missing_proc'],
+      ['PA21122994CN-放弃复审', 'ready'],
+      ['PA21326498CN(备注）', 'completed'],
+      ['PA21326499CN', 'error']
+    ])
+    expect(res.data.items[3]?.reason).toContain('多个带备注/后缀的文号')
+  })
 })

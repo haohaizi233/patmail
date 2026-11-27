@@ -21,6 +21,7 @@ const DEFAULT_LEVEL_ONE_ID = 'B3E65076-97D7-4423-A6BF-EA8B54AC4174'
 const DEFAULT_LEVEL_TWO_ID = '98C0C9E2-FB7D-445D-BCA2-72191F9A035B'
 const ZERO_GUID = '00000000-0000-0000-0000-000000000000'
 const IC_BATCH_SIZE = 8
+const IC_SEARCH_PAGE_SIZE = 50
 const DEFAULT_INSPECT_CONCURRENCY = 6
 const CONVERT_POLL_INTERVAL_MS = 2000
 const CONVERT_POLL_TIMEOUT_MS = 60_000
@@ -31,8 +32,47 @@ export interface FeeReduceClientOptions {
   sleep?: (ms: number) => Promise<void>
 }
 
+type DetailedIcCaseHit = IcCaseHit & { caseName: string; appNo: string }
+
 function volumeKey(value: string): string {
   return value.replace(/\s/g, '').toUpperCase()
+}
+
+function isCaseVolumeVariant(query: string, candidate: string): boolean {
+  const a = volumeKey(query)
+  const b = volumeKey(candidate)
+  if (!a || !b || a === b) return false
+  const long = a.length >= b.length ? a : b
+  const short = a.length >= b.length ? b : a
+  if (!long.startsWith(short)) return false
+  const extra = long.slice(short.length)
+  if (extra.startsWith('-') && extra.length > 1) return true
+  return (
+    extra.length > 2 &&
+    (extra.startsWith('（') || extra.startsWith('(')) &&
+    (extra.endsWith('）') || extra.endsWith(')'))
+  )
+}
+
+function stripTrailingNote(value: string): string {
+  return value.replace(/[^\S\r\n]*[（(]([^()（）\r\n]*)[）)]$/, (match, note: string) =>
+    /[\p{Script=Han}\s]/u.test(note.trim()) ? '' : match
+  ).trim()
+}
+
+function extractCaseHits(body: unknown): DetailedIcCaseHit[] {
+  const hits = icCasesFromBody(body)
+  const rows = isRecord(body) && Array.isArray(body.TableRows) ? body.TableRows : []
+  return hits.map(hit => {
+    const raw = rows.find(
+      r => isRecord(r) && str(r.case_id).toLowerCase() === hit.caseId.toLowerCase()
+    ) as Record<string, unknown> | undefined
+    return {
+      ...hit,
+      caseName: raw ? str(raw.case_name) : '',
+      appNo: raw ? str(raw.app_no) : ''
+    }
+  })
 }
 
 function scalarText(value: unknown): string {
@@ -109,12 +149,12 @@ export class FeeReduceClient {
       batches.push(queryable.slice(i, i + IC_BATCH_SIZE))
     }
 
-    const hitMap = new Map<string, IcCaseHit & { caseName: string; appNo: string }>()
+    const hitMap = new Map<string, DetailedIcCaseHit>()
     let fatalError: ApiResult<never> | null = null
 
     await runConcurrent(batches, concurrency, async batch => {
       if (fatalError) return
-      const params = buildIcSearchParams(batch.join(';'), Date.now, 'case_volume')
+      const params = buildIcSearchParams(batch.join(';'), Date.now, 'case_volume', IC_SEARCH_PAGE_SIZE, false)
       if (!params.ok) {
         fatalError = params
         return
@@ -124,21 +164,81 @@ export class FeeReduceClient {
         fatalError = res
         return
       }
-      const hits = icCasesFromBody(res.data)
-      const rows = isRecord(res.data) && Array.isArray(res.data.TableRows) ? res.data.TableRows : []
-      for (const hit of hits) {
-        const raw = rows.find(
-          r => isRecord(r) && str(r.case_id).toLowerCase() === hit.caseId.toLowerCase()
-        ) as Record<string, unknown> | undefined
-        hitMap.set(volumeKey(hit.caseVolume), {
-          ...hit,
-          caseName: raw ? str(raw.case_name) : '',
-          appNo: raw ? str(raw.app_no) : ''
-        })
+      for (const hit of extractCaseHits(res.data)) {
+        hitMap.set(volumeKey(hit.caseVolume), hit)
       }
     })
 
     if (fatalError) return fatalError
+
+    const missReasonMap = new Map<string, { state: 'not_found' | 'error'; reason: string }>()
+    const missed: string[] = []
+    const missedSeen = new Set<string>()
+    for (const volume of queryable) {
+      const key = volumeKey(volume)
+      if (hitMap.has(key) || missedSeen.has(key)) continue
+      missedSeen.add(key)
+      missed.push(volume)
+    }
+
+    if (missed.length) {
+      await runConcurrent(missed, concurrency, async volume => {
+        if (fatalError) return
+        const key = volumeKey(volume)
+        const queryFuzzy = async (target: string): Promise<DetailedIcCaseHit[] | null> => {
+          const params = buildIcSearchParams(target, Date.now, 'case_volume', IC_SEARCH_PAGE_SIZE, true)
+          if (!params.ok) {
+            missReasonMap.set(key, { state: 'error', reason: params.error.message })
+            return null
+          }
+          const res = await this.transport.post('icSearch', params.data)
+          if (!res.ok) {
+            if (res.error.code === 'SESSION_EXPIRED') {
+              fatalError = res
+            } else {
+              missReasonMap.set(key, { state: 'error', reason: res.error.message || '模糊检索案件失败。' })
+            }
+            return null
+          }
+          return extractCaseHits(res.data)
+        }
+
+        let hits = await queryFuzzy(volume)
+        if (!hits) return
+        if (!hits.length) {
+          const base = stripTrailingNote(volume)
+          if (base && base !== volume) {
+            const retried = await queryFuzzy(base)
+            if (!retried) return
+            hits = retried
+          }
+        }
+
+        const exact = hits.find(h => volumeKey(h.caseVolume) === key)
+        if (exact) {
+          hitMap.set(key, exact)
+          return
+        }
+        if (hits.length >= IC_SEARCH_PAGE_SIZE) {
+          missReasonMap.set(key, {
+            state: 'not_found',
+            reason: '模糊检索命中过多（≥50条），请在 EASY 核对精确我方文号。'
+          })
+          return
+        }
+        const variants = hits.filter(h => isCaseVolumeVariant(volume, h.caseVolume))
+        if (variants.length === 1) {
+          hitMap.set(key, variants[0])
+        } else if (variants.length > 1) {
+          missReasonMap.set(key, {
+            state: 'error',
+            reason: `模糊匹配到多个带备注/后缀的文号（${variants.map(v => v.caseVolume).join('、')}），请在 EASY 核对精确文号。`
+          })
+        }
+      })
+
+      if (fatalError) return fatalError
+    }
 
     const items: FeeReduceCaseInspectItem[] = new Array<FeeReduceCaseInspectItem>(cleaned.length)
     let sessionError: ApiResult<never> | null = null
@@ -161,6 +261,7 @@ export class FeeReduceClient {
       }
       const hit = hitMap.get(volumeKey(volume))
       if (!hit) {
+        const missInfo = missReasonMap.get(volumeKey(volume))
         items[idx] = {
           caseVolume: volume,
           caseId: '',
@@ -169,8 +270,8 @@ export class FeeReduceClient {
           procId: '',
           procName: '',
           procStatus: '',
-          state: 'not_found',
-          reason: '案件查询未找到该我方文号。'
+          state: missInfo?.state ?? 'not_found',
+          reason: missInfo?.reason ?? '案件查询未找到该我方文号。'
         }
         return
       }
@@ -700,7 +801,7 @@ export class FeeReduceClient {
     }
 
     let resolved = await queryFlowAndNodes(objId || ZERO_GUID)
-    if (!resolved.ok && !objId) {
+    if (!resolved.ok && !objId && !resolved.error.ok && resolved.error.error.code === 'SESSION_EXPIRED') {
       return resolved.error
     }
 
