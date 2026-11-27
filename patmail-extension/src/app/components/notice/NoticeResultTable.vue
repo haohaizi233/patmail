@@ -322,7 +322,7 @@ function canInspectRow(row: NoticeRow): boolean {
                 v-else-if="col.clickableAppNo && formatCell(row, col.key)"
                 type="button"
                 class="go clip"
-                v-hint="'查看案件已有官文列表'"
+                v-hint="`${formatCell(row, col.key)}（点击查看案件已有官文列表）`"
                 @click="emit('inspect-app-no', row)"
               >
                 {{ formatCell(row, col.key) }}

@@ -247,23 +247,23 @@ onBeforeUnmount(() => {
             <div class="nd-kv-grid">
               <div class="nd-kv nd-kv-span2">
                 <span class="nd-kv-label">客户名称</span>
-                <span class="nd-kv-value" :class="{ 'is-empty': !form.customerName.trim() }" :title="form.customerName.trim() || undefined">{{ displayVal(form.customerName) }}</span>
+                <span class="nd-kv-value" :class="{ 'is-empty': !form.customerName.trim() }" v-hint.clip="form.customerName.trim()">{{ displayVal(form.customerName) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">来文编号</span>
-                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.oaCode.trim() }" :title="form.oaCode.trim() || undefined">{{ displayVal(form.oaCode) }}</span>
+                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.oaCode.trim() }" v-hint.clip="form.oaCode.trim()">{{ displayVal(form.oaCode) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">处理事项</span>
-                <span class="nd-kv-value" :class="{ 'is-empty': !form.ctrlProc.trim() }" :title="form.ctrlProc.trim() || undefined">{{ displayVal(form.ctrlProc) }}</span>
+                <span class="nd-kv-value" :class="{ 'is-empty': !form.ctrlProc.trim() }" v-hint.clip="form.ctrlProc.trim()">{{ displayVal(form.ctrlProc) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">承办部门</span>
-                <span class="nd-kv-value" :class="{ 'is-empty': !form.chargeDept.trim() }" :title="form.chargeDept.trim() || undefined">{{ displayVal(form.chargeDept) }}</span>
+                <span class="nd-kv-value" :class="{ 'is-empty': !form.chargeDept.trim() }" v-hint.clip="form.chargeDept.trim()">{{ displayVal(form.chargeDept) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">处理人</span>
-                <span class="nd-kv-value" :class="{ 'is-empty': !form.picName.trim() }" :title="form.picName.trim() || undefined">{{ displayVal(form.picName) }}</span>
+                <span class="nd-kv-value" :class="{ 'is-empty': !form.picName.trim() }" v-hint.clip="form.picName.trim()">{{ displayVal(form.picName) }}</span>
               </div>
               <div class="nd-kv nd-kv-full">
                 <span class="nd-kv-label">来文备注</span>
@@ -284,7 +284,7 @@ onBeforeUnmount(() => {
               <div class="nd-field">
                 <div class="nd-field-head">
                   <span class="nd-field-label">我方文号</span>
-                  <span v-if="form.caseVolume.trim()" class="nd-picked-pill" :title="`当前关联：${form.caseVolume}`">
+                  <span v-if="form.caseVolume.trim()" class="nd-picked-pill" v-hint.clip="`当前关联：${form.caseVolume}`">
                     已关联：{{ form.caseVolume }}
                   </span>
                   <span v-else class="nd-unpicked-pill">未关联案件</span>
@@ -331,7 +331,7 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
                 </div>
-                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.caseVolume.trim() }" :title="form.caseVolume.trim() || undefined">
+                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.caseVolume.trim() }" v-hint.clip="form.caseVolume.trim()">
                   {{ displayVal(form.caseVolume) }}
                 </div>
               </div>
@@ -346,7 +346,7 @@ onBeforeUnmount(() => {
                   placeholder="选择发文日"
                   @update:model-value="updateField('oaDate', $event)"
                 />
-                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.oaDate.trim() }" :title="form.oaDate.trim() || undefined">
+                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.oaDate.trim() }" v-hint.clip="form.oaDate.trim()">
                   {{ displayVal(form.oaDate) }}
                 </div>
               </div>
@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
                   empty-text="暂无来文类型"
                   @update:model-value="updateField('oaTypeId', $event)"
                 />
-                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.oaTypeName.trim() && !loading }" :title="form.oaTypeName.trim() || undefined">
+                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.oaTypeName.trim() && !loading }" v-hint.clip="form.oaTypeName.trim()">
                   {{ form.oaTypeName.trim() || (loading ? '正在读取来文类型…' : '—') }}
                 </div>
               </div>
@@ -382,7 +382,7 @@ onBeforeUnmount(() => {
                   placeholder="如有授权/公告信息可填写"
                   @input="updateField('issueNo', ($event.target as HTMLInputElement).value)"
                 />
-                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.issueNo.trim() }" :title="form.issueNo.trim() || undefined">
+                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.issueNo.trim() }" v-hint.clip="form.issueNo.trim()">
                   {{ displayVal(form.issueNo) }}
                 </div>
               </div>
@@ -397,7 +397,7 @@ onBeforeUnmount(() => {
                   placeholder="选择公告日"
                   @update:model-value="updateField('issueDate', $event)"
                 />
-                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.issueDate.trim() }" :title="form.issueDate.trim() || undefined">
+                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.issueDate.trim() }" v-hint.clip="form.issueDate.trim()">
                   {{ displayVal(form.issueDate) }}
                 </div>
               </div>
@@ -414,7 +414,7 @@ onBeforeUnmount(() => {
                   placeholder="如有证书号信息可填写"
                   @input="updateField('certificateNo', ($event.target as HTMLInputElement).value)"
                 />
-                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.certificateNo.trim() }" :title="form.certificateNo.trim() || undefined">
+                <div v-else class="nd-readonly-box" :class="{ 'is-empty': !form.certificateNo.trim() }" v-hint.clip="form.certificateNo.trim()">
                   {{ displayVal(form.certificateNo) }}
                 </div>
               </div>
@@ -430,27 +430,27 @@ onBeforeUnmount(() => {
             <div class="nd-kv-grid">
               <div class="nd-kv">
                 <span class="nd-kv-label">内部期限</span>
-                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.intDueDate.trim() }" :title="form.intDueDate.trim() || undefined">{{ displayVal(form.intDueDate) }}</span>
+                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.intDueDate.trim() }" v-hint.clip="form.intDueDate.trim()">{{ displayVal(form.intDueDate) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">客户期限</span>
-                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.cusDueDate.trim() }" :title="form.cusDueDate.trim() || undefined">{{ displayVal(form.cusDueDate) }}</span>
+                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.cusDueDate.trim() }" v-hint.clip="form.cusDueDate.trim()">{{ displayVal(form.cusDueDate) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">官方期限</span>
-                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.legalDueDate.trim() }" :title="form.legalDueDate.trim() || undefined">{{ displayVal(form.legalDueDate) }}</span>
+                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.legalDueDate.trim() }" v-hint.clip="form.legalDueDate.trim()">{{ displayVal(form.legalDueDate) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">审查员</span>
-                <span class="nd-kv-value" :class="{ 'is-empty': !form.examiner.trim() }" :title="form.examiner.trim() || undefined">{{ displayVal(form.examiner) }}</span>
+                <span class="nd-kv-value" :class="{ 'is-empty': !form.examiner.trim() }" v-hint.clip="form.examiner.trim()">{{ displayVal(form.examiner) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">审查员电话</span>
-                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.examinerTel.trim() }" :title="form.examinerTel.trim() || undefined">{{ displayVal(form.examinerTel) }}</span>
+                <span class="nd-kv-value nd-mono" :class="{ 'is-empty': !form.examinerTel.trim() }" v-hint.clip="form.examinerTel.trim()">{{ displayVal(form.examinerTel) }}</span>
               </div>
               <div class="nd-kv">
                 <span class="nd-kv-label">审查部门</span>
-                <span class="nd-kv-value" :class="{ 'is-empty': !form.examinerDept.trim() }" :title="form.examinerDept.trim() || undefined">{{ displayVal(form.examinerDept) }}</span>
+                <span class="nd-kv-value" :class="{ 'is-empty': !form.examinerDept.trim() }" v-hint.clip="form.examinerDept.trim()">{{ displayVal(form.examinerDept) }}</span>
               </div>
             </div>
           </section>
@@ -928,8 +928,8 @@ onBeforeUnmount(() => {
 }
 
 .nd-readonly-box {
-  display: flex;
-  align-items: center;
+  display: block;
+  line-height: 34px;
   border: 1px solid #efe7f3;
   background: #faf7fb;
   color: #4d5975;

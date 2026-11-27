@@ -809,7 +809,7 @@ defineExpose({ clearPickedExcel })
         <label class="sheet-pick">
           <input ref="excelInput" type="file" accept=".xls,.xlsx" @change="onPickExcel" />
           <span class="sheet-pick-face" :class="{ picked: Boolean(pickedExcelFile) }">
-            <span>{{ pickedExcelFile ? pickedExcelFile.name : '选择电子申请清单 Excel（.xls / .xlsx）' }}</span>
+            <span class="clip" v-hint.clip="pickedExcelFile ? pickedExcelFile.name : ''">{{ pickedExcelFile ? pickedExcelFile.name : '选择电子申请清单 Excel（.xls / .xlsx）' }}</span>
           </span>
         </label>
         <button
