@@ -19,7 +19,10 @@ import type {
   NoticeReplayQuery
 } from '../../api/notice-types'
 import { downloadXlsxSheets } from '../../customer/xlsx-table'
+import { isQueryGuid } from '../../query/query-validator'
+import { createRecoveryClient } from '../../recovery/client'
 import type { TreeOption } from '../../query/option-tree'
+import { isRecord } from '../../shared/guards'
 import { MessageType, type DualSystemStatusSnapshot, type MessageBridge } from '../../shared/message'
 import type { CustomerMode } from '../../settings/customer-mode'
 import { confirmDialog, infoDialog } from '../dialog'
@@ -98,6 +101,67 @@ const importQuery = reactive<Omit<NoticeImportQuery, 'pageIndex' | 'pageSize'>>(
   ...defaultImport,
   status: '0'
 })
+
+const recovery = createRecoveryClient()
+type CloseRules = { closeCaseRule: string; closeCaseImportNotice: string }
+type PctBatch = {
+  id: string
+  accounts: UnifiedCpcAccount[]
+  replay: typeof replayQuery
+  download: typeof downloadQuery
+  importNotice: typeof importQuery
+  smeImportNotice: typeof importQuery
+  largeRules: CloseRules
+  smeRules: CloseRules
+  exportDispatched: boolean
+  finished?: boolean
+  progress?: { step1Status: PctNoticeStepStatus; step1Detail: string; large: SystemPipelineProgress; sme: SystemPipelineProgress }
+}
+const savedBatch = ref<PctBatch | null>(null)
+const canResumeBatch = computed(() => Boolean(savedBatch.value && !savedBatch.value.finished))
+const starting = ref(false)
+let disposed = false
+
+function batchScope(snap: DualSystemStatusSnapshot): string {
+  return JSON.stringify(['pct-notice-batch', snap.large.origin, snap.large.operatorId.toLowerCase(),
+    snap.sme.origin, snap.sme.operatorId.toLowerCase()])
+}
+
+function matchesQuery<T extends object>(value: unknown, shape: T): value is T {
+  return isRecord(value) && Object.keys(value).length === Object.keys(shape).length &&
+    Object.entries(shape).every(([key, expected]) => typeof value[key] === typeof expected)
+}
+
+function closeRules(data: NoticeInitData | null): CloseRules {
+  return { closeCaseRule: data?.closeCaseRule ?? '1', closeCaseImportNotice: data?.closeCaseImportNotice ?? '0' }
+}
+
+async function readSavedBatch(snap: DualSystemStatusSnapshot): Promise<PctBatch | null> {
+  const value = await recovery.get('workflow-desk', batchScope(snap))
+  if (!value || (isRecord(value) && value.forgotten === true)) return null
+  if (!isRecord(value) || typeof value.id !== 'string' || !isQueryGuid(value.id) ||
+      typeof value.exportDispatched !== 'boolean' || !Array.isArray(value.accounts) || !value.accounts.length ||
+      !value.accounts.every((account: unknown): account is UnifiedCpcAccount => isRecord(account) &&
+        typeof account.key === 'string' && typeof account.label === 'string' &&
+        (account.largeId === undefined || typeof account.largeId === 'string') &&
+        (account.smeId === undefined || typeof account.smeId === 'string') &&
+        Boolean(account.largeId || account.smeId)) ||
+      !matchesQuery(value.replay, replayQuery) || !matchesQuery(value.download, downloadQuery) ||
+      !matchesQuery(value.importNotice, importQuery) || value.importNotice.status !== '0' ||
+      !matchesQuery(value.smeImportNotice, importQuery) || value.smeImportNotice.status !== '0' ||
+      !matchesQuery(value.largeRules, closeRules(null)) || !matchesQuery(value.smeRules, closeRules(null))) {
+    throw new Error('PCT 批次恢复记录无效，请核对上一次执行。')
+  }
+  const progress = isRecord(value.progress) ? value.progress : undefined
+  return { id: value.id, exportDispatched: value.exportDispatched, accounts: value.accounts,
+    finished: value.finished === true,
+    replay: value.replay, download: value.download, importNotice: value.importNotice,
+    smeImportNotice: value.smeImportNotice, largeRules: value.largeRules, smeRules: value.smeRules,
+    progress: progress && typeof progress.step1Status === 'string' && typeof progress.step1Detail === 'string' &&
+      matchesQuery(progress.large, createInitialSystemPipelineProgress('large')) && progress.large.mode === 'large' && Array.isArray(progress.large.logs) &&
+      matchesQuery(progress.sme, createInitialSystemPipelineProgress('sme')) && progress.sme.mode === 'sme' && Array.isArray(progress.sme.logs)
+      ? progress as PctBatch['progress'] : undefined }
+}
 
 function loadSavedParams(): void {
   try {
@@ -264,12 +328,29 @@ async function loadDualInit(force = false): Promise<void> {
 }
 
 async function silentCheckDualSystems(): Promise<DualSystemStatusSnapshot | null> {
+  if (checkingSystems.value || running.value || disposed) return null
   checkingSystems.value = true
   try {
     const snap = await checkDualEasySystems()
+    if (disposed) return null
+    const previous = dualStatus.value
+    if (previous && snap && batchScope(previous) !== batchScope(snap)) {
+      largeInit.value = null
+      smeInit.value = null
+    }
     dualStatus.value = snap
     if (snap?.allReady) {
       void loadDualInit(false)
+      if (!running.value) {
+        savedBatch.value = await readSavedBatch(snap).catch((error: unknown) => {
+          runError.value = error instanceof Error ? error.message : 'PCT 批次账本不可用。'
+          return null
+        })
+        restoreBatchProgress(savedBatch.value)
+      }
+    } else if (previous && snap && batchScope(previous) !== batchScope(snap)) {
+      savedBatch.value = null
+      restoreBatchProgress(null)
     }
     return snap
   } finally {
@@ -305,8 +386,52 @@ const step1Logs = ref<string[]>([])
 const largeProgress = ref<SystemPipelineProgress>(createInitialSystemPipelineProgress('large'))
 const smeProgress = ref<SystemPipelineProgress>(createInitialSystemPipelineProgress('sme'))
 let activeController: AbortController | null = null
+let activeRunId: string | null = null
+
+function restoreBatchProgress(batch: PctBatch | null): void {
+  const progress = batch?.progress
+  step1Result.value = null
+  step1Logs.value = []
+  if (!progress) {
+    step1Status.value = 'idle'
+    step1Detail.value = batch ? '上次批次已保存；阶段进度不可用，续办前将核验写入回执。' : '等待执行'
+    largeProgress.value = createInitialSystemPipelineProgress('large')
+    smeProgress.value = createInitialSystemPipelineProgress('sme')
+    return
+  }
+  step1Status.value = progress.step1Status === 'running' ? 'paused' : progress.step1Status
+  step1Detail.value = progress.step1Status === 'running' ? `页面刷新时中断：${progress.step1Detail}` : progress.step1Detail
+  const restoreSystem = (saved: SystemPipelineProgress): SystemPipelineProgress => ({
+    ...saved,
+    step4Status: saved.step4Status === 'running' ? 'paused' : saved.step4Status,
+    step5Status: saved.step5Status === 'running' ? 'paused' : saved.step5Status,
+    step6Status: saved.step6Status === 'running' ? 'paused' : saved.step6Status,
+    step4Detail: saved.step4Status === 'running' ? `页面刷新时中断：${saved.step4Detail}` : saved.step4Detail,
+    step5Detail: saved.step5Status === 'running' ? `页面刷新时中断：${saved.step5Detail}` : saved.step5Detail,
+    step6Detail: saved.step6Status === 'running' ? `页面刷新时中断：${saved.step6Detail}` : saved.step6Detail
+  })
+  largeProgress.value = restoreSystem(progress.large)
+  smeProgress.value = restoreSystem(progress.sme)
+}
+
+function snapshotProgress(): NonNullable<PctBatch['progress']> {
+  return { step1Status: step1Status.value, step1Detail: step1Detail.value,
+    large: { ...largeProgress.value, logs: [] }, sme: { ...smeProgress.value, logs: [] } }
+}
+
+function persistProgress(runId: string, scope: string, batch: PctBatch): void {
+  if (activeRunId !== runId) return
+  const next = { ...batch, progress: snapshotProgress() }
+  if (JSON.stringify(savedBatch.value?.progress) === JSON.stringify(next.progress)) return
+  savedBatch.value = next
+  void recovery.put('workflow-desk', scope, next).catch(() => {
+    if (activeRunId === runId) runError.value = '阶段进度未能写入恢复账本，刷新后将显示最后一次已保存的进度。'
+  })
+}
 
 onBeforeUnmount(() => {
+  disposed = true
+  activeRunId = null
   activeController?.abort()
 })
 
@@ -335,6 +460,8 @@ function statusBadgeLabel(status: PctNoticeStepStatus): string {
       return '已完成'
     case 'error':
       return '失败'
+    case 'paused':
+      return '已暂停'
     case 'skipped':
       return '已跳过'
     default:
@@ -343,13 +470,23 @@ function statusBadgeLabel(status: PctNoticeStepStatus): string {
 }
 
 async function executeStep1Only(): Promise<void> {
-  if (running.value) return
+  if (running.value || starting.value || checkingSystems.value || disposed) return
+  starting.value = true
+  try {
+    await runStep1Only()
+  } finally {
+    starting.value = false
+  }
+}
+
+async function runStep1Only(): Promise<void> {
   const snap = await silentCheckDualSystems()
   if (!snap?.allReady) {
     await infoDialog({ title: '预准备未通过', message: '请先确保大客户与中小客户系统均在线后再执行。' })
     return
   }
   await loadDualInit(false)
+  if (disposed) return
   if (selectedAccounts.value.length === 0) {
     await infoDialog({ title: '提示', message: '请至少勾选一个收文账号。' })
     return
@@ -372,6 +509,7 @@ async function executeStep1Only(): Promise<void> {
       },
       signal: activeController.signal
     })
+    if (disposed) return
     step1Result.value = res
     step1Status.value = 'done'
     step1Detail.value = `大客户未导入 ${res.large.unimportedRows} 条 · 中小客户未导入 ${res.sme.unimportedRows} 条 · 并集 ${res.mergedRows.length} 条`
@@ -387,7 +525,16 @@ async function executeStep1Only(): Promise<void> {
 }
 
 async function executeFullWorkflow(): Promise<void> {
-  if (running.value) return
+  if (running.value || starting.value || checkingSystems.value || disposed) return
+  starting.value = true
+  try {
+    await runFullWorkflow()
+  } finally {
+    starting.value = false
+  }
+}
+
+async function runFullWorkflow(): Promise<void> {
   const snap = await silentCheckDualSystems()
   if (!snap?.allReady) {
     await infoDialog({ title: '预准备未通过', message: '请先确保大客户与中小客户系统均在线后再执行。' })
@@ -398,20 +545,43 @@ async function executeFullWorkflow(): Promise<void> {
     return
   }
   await loadDualInit(false)
-  if (selectedAccounts.value.length === 0) {
-    await infoDialog({ title: '提示', message: '请至少勾选一个收文账号。' })
+  if (disposed) return
+  let batch: PctBatch
+  const scope = batchScope(snap)
+  let resuming = false
+  try {
+    const stored = await readSavedBatch(snap)
+    const previous = stored?.finished ? null : stored
+    if (!previous && selectedAccounts.value.length === 0) {
+      await infoDialog({ title: '提示', message: '请至少勾选一个收文账号。' })
+      return
+    }
+    resuming = previous !== null
+    if (!previous && (!largeInit.value || !smeInit.value)) {
+      throw new Error('两套系统的字典或导入规则未加载，请刷新预准备后再执行。')
+    }
+    batch = previous ?? {
+      id: crypto.randomUUID(), accounts: selectedAccounts.value.map(account => ({ ...account })),
+      replay: { ...replayQuery }, download: { ...downloadQuery },
+      importNotice: { ...importQuery, status: '0' },
+      smeImportNotice: adaptImportQueryForSystem(importQuery, largeInit.value, smeInit.value),
+      largeRules: closeRules(largeInit.value), smeRules: closeRules(smeInit.value), exportDispatched: false
+    }
+  } catch (error) {
+    runError.value = error instanceof Error ? error.message : 'PCT 批次账本不可用。'
     return
   }
-
   const confirmed = await confirmDialog({
-    title: '确认执行「pct官文下载上传」全流程？',
-    message: `已勾选 ${selectedAccounts.value.length} 个收文账号，将执行：\n1. 双系统并行导出未导入核对清单并取并集\n2. 双系统并行清理来文下载中 PCT/ 开头官文\n3. 来文二次下载全量分析（含已导入与未导入）\n4. 导入来文两轮全选导入系统`,
-    confirmLabel: '开始执行',
+    title: resuming ? '确认续办上次 PCT 批次？' : '确认执行「pct官文下载上传」全流程？',
+    message: resuming ? `将使用上次确认的条件和 ${batch.accounts.length} 个收文账号续办。已确认的目标会跳过，回执未确认的写操作会停止派发。`
+      : `已勾选 ${batch.accounts.length} 个收文账号，将执行：\n1. 双系统并行导出未导入核对清单并取并集\n2. 双系统并行清理来文下载中 PCT/ 开头官文\n3. 来文二次下载全量分析（含已导入与未导入）\n4. 导入来文两轮全选导入系统`,
+    confirmLabel: resuming ? '续办' : '开始执行',
     cancelLabel: '取消'
   })
-  if (!confirmed) return
+  if (!confirmed || disposed || running.value) return
 
   activeController = new AbortController()
+  activeRunId = batch.id
   running.value = true
   runError.value = ''
   step1Status.value = 'running'
@@ -419,57 +589,87 @@ async function executeFullWorkflow(): Promise<void> {
   step1Logs.value = []
   largeProgress.value = createInitialSystemPipelineProgress('large')
   smeProgress.value = createInitialSystemPipelineProgress('sme')
+  batch = { ...batch, progress: snapshotProgress() }
 
+  let checkpointOpened = false
   try {
-    const res = await runStep1ExportUnimportedUnion({
-      largeBridge,
-      smeBridge,
-      accounts: selectedAccounts.value,
-      replayQuery: { ...replayQuery },
-      onLog: (mode, msg) => {
-        step1Logs.value.push(`[${mode === 'large' ? '大客户' : '中小客户'}] ${msg}`)
-      },
-      signal: activeController.signal
-    })
-    step1Result.value = res
-    step1Status.value = 'done'
-    step1Detail.value = `大客户未导入 ${res.large.unimportedRows} 条 · 中小客户未导入 ${res.sme.unimportedRows} 条 · 并集 ${res.mergedRows.length} 条`
-    downloadUnionExcel()
+    await recovery.put('workflow-desk', scope, batch)
+    checkpointOpened = true
+    if (activeRunId !== batch.id) return
+    savedBatch.value = batch
+    if (!batch.exportDispatched) {
+      const res = await runStep1ExportUnimportedUnion({
+        largeBridge,
+        smeBridge,
+        accounts: batch.accounts,
+        replayQuery: batch.replay,
+        onLog: (mode, msg) => {
+          if (activeRunId !== batch.id) return
+          step1Logs.value.push(`[${mode === 'large' ? '大客户' : '中小客户'}] ${msg}`)
+        },
+        signal: activeController.signal
+      })
+      if (activeRunId !== batch.id) return
+      step1Result.value = res
+      step1Status.value = 'done'
+      step1Detail.value = `大客户未导入 ${res.large.unimportedRows} 条 · 中小客户未导入 ${res.sme.unimportedRows} 条 · 并集 ${res.mergedRows.length} 条`
+      batch = { ...batch, exportDispatched: true, progress: snapshotProgress() }
+      await recovery.put('workflow-desk', scope, batch)
+      if (activeRunId !== batch.id) return
+      savedBatch.value = batch
+      downloadUnionExcel()
+    } else {
+      step1Status.value = 'skipped'
+      step1Detail.value = '上次批次已启动清单下载，可单独重新导出。'
+      persistProgress(batch.id, scope, batch)
+    }
 
-    const smeImportQuery = adaptImportQueryForSystem({ ...importQuery, status: '0' }, largeInit.value, smeInit.value)
-    await Promise.all([
+    const results = await Promise.allSettled([
       runSystemParallelPipeline({
         mode: 'large',
         bridge: largeBridge,
-        accounts: selectedAccounts.value,
-        replayQuery: { ...replayQuery },
-        downloadQuery: { ...downloadQuery },
-        importQuery: { ...importQuery, status: '0' },
-        initData: largeInit.value,
-        onProgress: next => { largeProgress.value = next },
+        accounts: batch.accounts,
+        replayQuery: batch.replay,
+        downloadQuery: batch.download,
+        importQuery: batch.importNotice,
+        initData: batch.largeRules,
+        walOwner: { runId: batch.id, origin: snap.large.origin, operatorId: snap.large.operatorId },
+        onProgress: next => { if (activeRunId === batch.id) { largeProgress.value = next; persistProgress(batch.id, scope, batch) } },
         signal: activeController.signal
       }),
       runSystemParallelPipeline({
         mode: 'sme',
         bridge: smeBridge,
-        accounts: selectedAccounts.value,
-        replayQuery: { ...replayQuery },
-        downloadQuery: { ...downloadQuery },
-        importQuery: smeImportQuery,
-        initData: smeInit.value,
-        onProgress: next => { smeProgress.value = next },
+        accounts: batch.accounts,
+        replayQuery: batch.replay,
+        downloadQuery: batch.download,
+        importQuery: batch.smeImportNotice,
+        initData: batch.smeRules,
+        walOwner: { runId: batch.id, origin: snap.sme.origin, operatorId: snap.sme.operatorId },
+        onProgress: next => { if (activeRunId === batch.id) { smeProgress.value = next; persistProgress(batch.id, scope, batch) } },
         signal: activeController.signal
       })
     ])
+    if (activeRunId !== batch.id) return
+    const failed = results.find(result => result.status === 'rejected')
+    if (failed) throw failed.reason instanceof Error ? failed.reason : new Error('PCT 批次未全部完成。')
+    const complete = { ...batch, finished: true, progress: snapshotProgress() }
+    await recovery.put('workflow-desk', scope, complete)
+    if (activeRunId === batch.id) savedBatch.value = complete
   } catch (error) {
+    if (activeRunId !== batch.id) return
     if (step1Status.value === 'running') {
       step1Status.value = 'error'
       step1Detail.value = error instanceof Error ? error.message : '第一步执行失败'
     }
     runError.value = error instanceof Error ? error.message : '工作流执行失败。'
+    if (checkpointOpened) persistProgress(batch.id, scope, batch)
   } finally {
-    running.value = false
-    activeController = null
+    if (activeRunId === batch.id) {
+      running.value = false
+      activeController = null
+      activeRunId = null
+    }
   }
 }
 
@@ -487,7 +687,7 @@ function abortExecution(): void {
           <h3>预准备检查（后台静默检测）</h3>
           <p class="hint">工作流要求大客户与中小客户系统同时在线；执行全流程需开启写开关。</p>
         </div>
-        <button type="button" class="ghost" :disabled="checkingSystems || running" @click="silentCheckDualSystems">
+        <button type="button" class="ghost" :disabled="checkingSystems || running || starting" @click="silentCheckDualSystems">
           {{ checkingSystems ? '正在检测…' : '重新检测' }}
         </button>
       </div>
@@ -777,11 +977,11 @@ function abortExecution(): void {
     <!-- 执行控制 -->
     <section class="card action-bar">
       <div class="action-buttons">
-        <button type="button" class="ghost" :disabled="running || !precheckOk || selectedAccounts.length === 0" @click="executeStep1Only">
+        <button type="button" class="ghost" :disabled="starting || checkingSystems || running || !precheckOk || selectedAccounts.length === 0" @click="executeStep1Only">
           仅导出未导入并集清单（第一步）
         </button>
-        <button type="button" class="solid" :disabled="running || !precheckOk || !writeOpen || selectedAccounts.length === 0" @click="executeFullWorkflow">
-          {{ running ? '正在执行…' : '开始执行全流程（1 → 4 → 5 → 6）' }}
+        <button type="button" class="solid" :disabled="starting || checkingSystems || running || !precheckOk || !writeOpen || (!canResumeBatch && selectedAccounts.length === 0)" @click="executeFullWorkflow">
+          {{ running ? '正在执行…' : canResumeBatch ? '续办上次全流程' : '开始执行全流程（1 → 4 → 5 → 6）' }}
         </button>
         <button v-if="running" type="button" class="ghost warn-btn" @click="abortExecution">中止执行</button>
       </div>
@@ -892,6 +1092,7 @@ function abortExecution(): void {
 .step-badge.running { background: #dbeafe; color: #1d4ed8; }
 .step-badge.done { background: #dcfce7; color: #15803d; }
 .step-badge.error { background: #fee2e2; color: #b91c1c; }
+.step-badge.paused { background: #fef3c7; color: #92400e; }
 .log-box { margin-top: 10px; max-height: 180px; overflow-y: auto; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 8px 10px; font-size: 12px; font-family: ui-monospace, monospace; }
 .log-line { line-height: 1.5; }
 .preview-table-wrap { margin-top: 12px; max-height: 320px; overflow: auto; }

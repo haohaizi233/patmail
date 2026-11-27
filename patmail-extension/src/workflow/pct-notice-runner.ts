@@ -1,3 +1,4 @@
+import type { PctNoticeRunOwner, PctNoticeWriteTag } from '../shared/pct-notice-run'
 import type {
   NoticeActionRequest,
   NoticeActionResult,
@@ -35,7 +36,7 @@ export interface PctNoticeWorkflowParams {
   importQuery: Omit<NoticeImportQuery, 'pageIndex' | 'pageSize'>
 }
 
-export type PctNoticeStepStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped'
+export type PctNoticeStepStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped' | 'paused'
 
 export interface Step1SystemSummary {
   exportedRows: number
@@ -245,9 +246,9 @@ async function searchAllPages(
   return allRows
 }
 
-async function sendNoticeAction(bridge: MessageBridge, req: NoticeActionRequest, signal?: AbortSignal): Promise<NoticeActionResult> {
+async function sendNoticeAction(bridge: MessageBridge, req: NoticeActionRequest, signal?: AbortSignal, pctRun?: PctNoticeWriteTag): Promise<NoticeActionResult> {
   throwIfAborted(signal)
-  const resp = await bridge.request({ type: MessageType.NoticeAction, payload: req }, signal)
+  const resp = await bridge.request({ type: MessageType.NoticeAction, payload: req, ...(pctRun ? { pctRun } : {}) }, signal)
   if (resp.type === MessageType.Error) {
     throw new Error(resp.payload.message)
   }
@@ -402,9 +403,10 @@ export async function runSystemParallelPipeline(options: {
   replayQuery: Omit<NoticeReplayQuery, 'account' | 'pageIndex' | 'pageSize'>
   downloadQuery: Omit<NoticeDownloadQuery, 'account' | 'pageIndex' | 'pageSize'>
   importQuery: Omit<NoticeImportQuery, 'pageIndex' | 'pageSize'>
-  initData: NoticeInitData | null
+  initData: Pick<NoticeInitData, 'closeCaseRule' | 'closeCaseImportNotice'> | null
   onProgress: (progress: SystemPipelineProgress) => void
   signal?: AbortSignal
+  walOwner?: PctNoticeRunOwner
 }): Promise<SystemPipelineProgress> {
   const state = createInitialSystemPipelineProgress(options.mode)
   const emit = (logMsg?: string): void => {
@@ -413,6 +415,8 @@ export async function runSystemParallelPipeline(options: {
   }
 
   const sysAccounts = accountsForMode(options.accounts, options.mode)
+  const sendWrite = (request: NoticeActionRequest, importRound?: 1 | 2) =>
+    sendNoticeAction(options.bridge, request, options.signal, options.walOwner && { ...options.walOwner, importRound })
 
   // 步骤 4：在「来文下载」中删除所有「PCT/」开头的官文
   state.step4Status = 'running'
@@ -454,7 +458,7 @@ export async function runSystemParallelPipeline(options: {
       emit('来文下载未发现 PCT/ 开头官文。')
     } else {
       for (const batch of chunkArray(fidsList, ACTION_BATCH_SIZE)) {
-        const res = await sendNoticeAction(options.bridge, { action: 'deleteDownloadOa', fids: batch }, options.signal)
+        const res = await sendWrite({ action: 'deleteDownloadOa', fids: batch })
         if (!res.ok) throw new Error(res.message || '删除 PCT/ 官文失败。')
         state.deletedPctCount += batch.length
         state.step4Detail = `已删除 ${state.deletedPctCount}/${fidsList.length} 条 PCT/ 官文`
@@ -504,8 +508,7 @@ export async function runSystemParallelPipeline(options: {
         continue
       }
       for (const batch of chunkArray(items, ACTION_BATCH_SIZE)) {
-        const res = await sendNoticeAction(
-          options.bridge,
+        const res = await sendWrite(
           {
             action: 'downloadTzsList',
             account: acc.id,
@@ -515,8 +518,7 @@ export async function runSystemParallelPipeline(options: {
             startTime: options.replayQuery.startTime,
             endTime: options.replayQuery.endTime,
             isReplay: true
-          },
-          options.signal
+          }
         )
         if (!res.ok) throw new Error(res.message || '二次下载分析失败。')
         state.analyzedReplayCount += batch.length
@@ -542,7 +544,7 @@ export async function runSystemParallelPipeline(options: {
     const closeImport = options.initData?.closeCaseImportNotice ?? '0'
     const shouldSplitClosed = (closeRule === '1' && closeImport === '1') || closeRule !== '1'
 
-    const executeImportRound = async (round: 1 | 2): Promise<number> => {
+    const executeImportRound = async (round: 1 | 2): Promise<void> => {
       throwIfAborted(options.signal)
       const rows = await searchAllPages(
         options.bridge,
@@ -565,7 +567,12 @@ export async function runSystemParallelPipeline(options: {
         emit(`第 ${round} 轮查询共 ${rows.length} 条待导入记录。`)
       }
 
-      let importedThisRound = 0
+      const recordImported = (count: number): void => {
+        const field = round === 1 ? 'importRound1Count' : 'importRound2Count'
+        state[field] += count
+        state.step6Detail = `第 ${round} 轮已导入 ${state[field]} 条`
+        emit()
+      }
       const importNormal = async (targetRows: readonly NoticeRow[]): Promise<void> => {
         const oaIds = targetRows.map(r => fieldText(r.oa_id).trim()).filter(Boolean)
         for (const batch of chunkArray(oaIds, ACTION_BATCH_SIZE)) {
@@ -573,22 +580,21 @@ export async function runSystemParallelPipeline(options: {
           if (check.checkWarnings?.length) {
             emit(`第 ${round} 轮导入前提示：${check.checkWarnings.join('；')}`)
           }
-          const res = await sendNoticeAction(
-            options.bridge,
+          const res = await sendWrite(
             { action: 'importNotice', oaIds: batch, mailSales: 'N', checkName: false },
-            options.signal
+            round
           )
           if (!res.ok) throw new Error(res.message || `第 ${round} 轮导入系统失败。`)
-          importedThisRound += batch.length
+          recordImported(batch.length)
         }
       }
 
       if (shouldSplitClosed && closedCaseRows.length > 0) {
         const closedIds = closedCaseRows.map(r => fieldText(r.oa_id).trim()).filter(Boolean)
         for (const batch of chunkArray(closedIds, ACTION_BATCH_SIZE)) {
-          const res = await sendNoticeAction(options.bridge, { action: 'importCloseCase', oaIds: batch }, options.signal)
+          const res = await sendWrite({ action: 'importCloseCase', oaIds: batch }, round)
           if (!res.ok) throw new Error(res.message || `第 ${round} 轮结案案件导入失败。`)
-          importedThisRound += batch.length
+          recordImported(batch.length)
         }
         if (normalRows.length > 0) {
           await importNormal(normalRows)
@@ -597,14 +603,13 @@ export async function runSystemParallelPipeline(options: {
         await importNormal([...closedCaseRows, ...normalRows])
       }
 
-      return importedThisRound
     }
 
-    state.importRound1Count = await executeImportRound(1)
+    await executeImportRound(1)
     state.step6Detail = `第 1 轮已导入 ${state.importRound1Count} 条，准备第 2 轮…`
     emit(`第 1 轮导入完成：${state.importRound1Count} 条。`)
 
-    state.importRound2Count = await executeImportRound(2)
+    await executeImportRound(2)
     state.step6Status = 'done'
     state.step6Detail = `第 1 轮 ${state.importRound1Count} 条 · 第 2 轮 ${state.importRound2Count} 条`
     emit(`第 2 轮导入完成：${state.importRound2Count} 条。`)

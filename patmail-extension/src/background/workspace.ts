@@ -24,6 +24,7 @@ import { isWriteSwitchOpen } from '../settings/write-switch'
 import { createLimitMailWriteGuard } from './limit-mail-write-guard'
 import { dispatchRecoveryRequest } from './recovery'
 import { runWorkflowWrite, workflowWriteStep } from './workflow-write'
+import { pctNoticeWal } from './pct-notice-write'
 import { withFeeReduceCheckpoint } from './fee-reduce-checkpoint'
 
 const mailJournal = createRecoveryClient(dispatchRecoveryRequest)
@@ -414,16 +415,30 @@ async function forwardToTargetMode(host: WorkspaceHost, targetMode: CustomerMode
       const send = () => host.sendToTab(target.tabId, stripSearchContinuation(message))
       const write = workflowWriteStep(message, true, workflowId)
       if (write) {
+        if (workflowId === 'pct-notice' && write.workflow === 'pct-notice' &&
+            message.type === MessageType.NoticeAction && !message.pctRun) {
+          throw new Error('PCT 写操作缺少可恢复的批次标识，请刷新工作台后再试。')
+        }
         const account = dualTabCache.get(host)?.[targetMode]
         if (!account || account.tabId !== target.tabId || !isConfirmedOperator(account.operatorId)) {
           throw new Error('当前登录人还没确认，工作流没有发送。')
         }
-        response = await runWorkflowWrite(write, { easyOrigin: account.origin, operatorId: account.operatorId }, async () => {
+        const sameAccount = async () => {
           const observation = await observeTab(host, target.tabId)
           return observation?.status === 'authenticated' && observation.ok &&
             sameOperatorId(observation.userId ?? '', account.operatorId) &&
             tabOrigin((await host.getTab(target.tabId)).url) === account.origin
-        }, send)
+        }
+        if (message.type === MessageType.NoticeAction && message.pctRun) {
+          const tag = message.pctRun
+          if (tag.origin !== account.origin || !sameOperatorId(tag.operatorId, account.operatorId)) {
+            throw new Error('PCT 批次对应的 EASY 账号已变化，写操作没有发送。')
+          }
+          response = await pctNoticeWal.runAction(message.payload, tag, sameAccount,
+            payload => host.sendToTab(target.tabId, { type: MessageType.NoticeAction, payload }))
+        } else {
+          response = await runWorkflowWrite(write, { easyOrigin: account.origin, operatorId: account.operatorId }, sameAccount, send)
+        }
       } else {
         response = await send()
       }

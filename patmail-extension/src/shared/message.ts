@@ -1,5 +1,6 @@
 import { isFileMailConfig, type FileMailConfig } from '../customer/file-mail-config'
 import type { PageInfo, PageSnapshot } from './types'
+import type { PctNoticeWriteTag } from './pct-notice-run'
 import { isPageInfo, isPageSnapshot, isRecord } from './guards'
 import { isEasyOrigin } from '../api/config'
 import { isCustomerMode, type CustomerMode } from '../settings/customer-mode'
@@ -268,7 +269,7 @@ export type ContentRequest =
   | Response<'LOAD_PATENT_CTRL_PROC', { countryIds: string; procType?: string }>
   | Request<'LOAD_NOTICE_INIT'>
   | Response<'SEARCH_NOTICE', NoticeSearchRequest>
-  | Response<'NOTICE_ACTION', NoticeActionRequest>
+  | (Response<'NOTICE_ACTION', NoticeActionRequest> & { pctRun?: PctNoticeWriteTag })
   | Response<'EXPORT_NOTICE', NoticeExportRequest>
   | Response<'UPLOAD_NOTICE_EXCEL', NoticeExcelUploadRequest>
   | Response<'INSPECT_FEE_REDUCE_CASES', { caseVolumes: string[]; expectedScope?: ExpectedAccountScope }>
@@ -1090,7 +1091,12 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.SearchNotice:
       return isNoticeSearchRequest(value.payload)
     case MessageType.NoticeAction:
-      return isNoticeActionRequest(value.payload)
+      return isNoticeActionRequest(value.payload) && (value.pctRun === undefined || (
+        isRecord(value.pctRun) && typeof value.pctRun.runId === 'string' && isQueryGuid(value.pctRun.runId) &&
+        typeof value.pctRun.origin === 'string' && isEasyOrigin(value.pctRun.origin) &&
+        typeof value.pctRun.operatorId === 'string' && isQueryGuid(value.pctRun.operatorId) &&
+        (value.pctRun.importRound === undefined || value.pctRun.importRound === 1 || value.pctRun.importRound === 2)
+      ))
     case MessageType.ExportNotice:
       return isNoticeExportRequest(value.payload)
     case MessageType.UploadNoticeExcel:

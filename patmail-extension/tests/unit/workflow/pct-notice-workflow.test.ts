@@ -255,6 +255,10 @@ describe('pct-notice-runner', () => {
           }
           if (message.type === MessageType.NoticeAction) {
             calls.push(`${mode}:action:${message.payload.action}`)
+            if (mode === 'large' && message.payload.action !== 'importCheck') {
+              expect(message.pctRun?.runId).toBe('11111111-1111-4111-8111-111111111111')
+              if (message.payload.action === 'importNotice') expect(message.pctRun?.importRound).toBe(importSearchCount)
+            }
             return {
               type: MessageType.NoticeActionResult,
               payload: { ok: true, data: { ok: true, message: 'ok' } }
@@ -298,6 +302,10 @@ describe('pct-notice-runner', () => {
         downloadQuery: { ...createDefaultNoticeDownloadQuery(), status: 'unprocess' },
         importQuery: createDefaultNoticeImportQuery(),
         initData: null,
+        walOwner: {
+          runId: '11111111-1111-4111-8111-111111111111', origin: 'http://183.36.43.66:88',
+          operatorId: '22222222-2222-4222-8222-222222222222'
+        },
         onProgress: () => undefined
       }),
       runSystemParallelPipeline({
