@@ -1,0 +1,110 @@
+/* PatMail · Knowledge Ocean 局部主题变量（仅作用于工作流海洋场景与技能编排场景） */
+.workflow-ocean,
+.ocean-builder,
+.shell:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="sea"]),
+.shell:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="ocean"]) {
+  --ocean-pink: #ff5b9d;
+  --ocean-pink-deep: #d63376;
+  --ocean-pink-light: #ffd9ea;
+  --ocean-lilac: #b8a3ed;
+  --ocean-blue: #a9c7fa;
+  --ocean-peach: #ffd7c4;
+
+  --ocean-text: #2d1b3d;
+  --ocean-text-secondary: #564666;
+  --ocean-text-muted: #6f5f80;
+
+  --ocean-glass-top: rgba(255, 255, 255, 0.80);
+  --ocean-glass-bottom: rgba(248, 229, 252, 0.56);
+  --ocean-glass-fallback-top: rgba(255, 255, 255, 0.94);
+  --ocean-glass-fallback-bottom: rgba(252, 238, 253, 0.90);
+  --ocean-glass-border: rgba(255, 255, 255, 0.88);
+  --ocean-glass-border-hover: rgba(255, 255, 255, 0.98);
+
+  --ocean-card-radius: 22px;
+  --ocean-grid-gap: 20px;
+
+  --ocean-shadow:
+    0 14px 32px rgba(108, 69, 152, 0.14),
+    0 4px 10px rgba(193, 114, 164, 0.08);
+  --ocean-shadow-hover:
+    0 20px 42px rgba(108, 69, 152, 0.20),
+    0 6px 16px rgba(255, 91, 157, 0.14);
+
+  --ocean-duration-fast: 160ms;
+  --ocean-duration-normal: 240ms;
+  --ocean-ease: cubic-bezier(0.2, 0.75, 0.25, 1);
+
+  --ocean-px: 0px;
+  --ocean-py: 0px;
+}
+
+.ocean-tone-rose {
+  --card-accent: #d93678;
+  --card-glow: rgba(255, 128, 179, 0.24);
+  --card-badge-bg: rgba(255, 232, 242, 0.88);
+  --card-badge-text: #c22866;
+}
+
+.ocean-tone-lilac {
+  --card-accent: #6c4ec9;
+  --card-glow: rgba(184, 163, 237, 0.26);
+  --card-badge-bg: rgba(241, 234, 255, 0.88);
+  --card-badge-text: #5a3db8;
+}
+
+.ocean-tone-peach {
+  --card-accent: #c85d28;
+  --card-glow: rgba(255, 198, 165, 0.26);
+  --card-badge-bg: rgba(255, 240, 230, 0.88);
+  --card-badge-text: #b44b19;
+}
+
+.ocean-tone-glacier {
+  --card-accent: #2768b3;
+  --card-glow: rgba(154, 206, 255, 0.26);
+  --card-badge-bg: rgba(232, 244, 255, 0.88);
+  --card-badge-text: #1c589e;
+}
+
+.ocean-tone-starlight {
+  --card-accent: #7a42c4;
+  --card-glow: rgba(196, 165, 255, 0.26);
+  --card-badge-bg: rgba(244, 235, 255, 0.88);
+  --card-badge-text: #6530ad;
+}
+
+.ocean-tone-lavender {
+  --card-accent: #7e44b8;
+  --card-glow: rgba(206, 175, 255, 0.25);
+  --card-badge-bg: rgba(246, 236, 255, 0.88);
+  --card-badge-text: #6a33a3;
+}
+
+.ocean-tone-champagne {
+  --card-accent: #a66912;
+  --card-glow: rgba(255, 214, 138, 0.28);
+  --card-badge-bg: rgba(255, 245, 222, 0.90);
+  --card-badge-text: #8f5708;
+}
+
+.ocean-tone-sky {
+  --card-accent: #1d73ad;
+  --card-glow: rgba(145, 214, 255, 0.26);
+  --card-badge-bg: rgba(230, 247, 255, 0.88);
+  --card-badge-text: #145e91;
+}
+
+.ocean-tone-sakura {
+  --card-accent: #cc3374;
+  --card-glow: rgba(255, 163, 204, 0.26);
+  --card-badge-bg: rgba(255, 235, 244, 0.88);
+  --card-badge-text: #b32561;
+}
+
+.ocean-tone-prism {
+  --card-accent: #8546bd;
+  --card-glow: rgba(214, 174, 255, 0.26);
+  --card-badge-bg: rgba(244, 234, 255, 0.88);
+  --card-badge-text: #6d34a3;
+}
