@@ -8,11 +8,15 @@ import { bg } from '../../shell/assets'
 import JihuaUploadPage from './JihuaUploadPage.vue'
 import HaguePage from './HaguePage.vue'
 import BillingWorkflowPage from './BillingWorkflowPage.vue'
+import PctNoticeWorkflowPage from './PctNoticeWorkflowPage.vue'
+import FeeReduceWorkflowPage from './FeeReduceWorkflowPage.vue'
 import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
 import WorkflowMailEntry from '../components/WorkflowMailEntry.vue'
 import hagueGuide from '../../../docs/workflows/海牙新申请.md?raw'
 import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
 import billingGuide from '../../../docs/workflows/请款.md?raw'
+import pctNoticeGuide from '../../../docs/workflows/pct官文下载上传.md?raw'
+import feeReduceGuide from '../../../docs/workflows/请求费用减缓.md?raw'
 import pctGuide from '../../../docs/workflows/PCT提醒.md?raw'
 import pengchengGuide from '../../../docs/workflows/PCT鹏城专案.md?raw'
 import fileManageGuide from '../../../docs/workflows/文件管理.md?raw'
@@ -68,7 +72,7 @@ import { systemScope } from '../../recovery/wal-ledger'
 import { useWorkflowViewMemory } from '../composables/useWorkflowViewMemory'
 import { resolveWorkflowView, sanitizeWorkflowDeskState, type WorkflowViewTab } from './workflow-desk-state'
 
-type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague' | 'billing'
+type Screen = 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague' | 'billing' | 'pctNotice' | 'feeReduce'
 
 const FLOW_GUIDES: Record<string, string> = {
   'pct-reminder': pctGuide,
@@ -77,10 +81,12 @@ const FLOW_GUIDES: Record<string, string> = {
   [FILING_EXPORT_ID]: filingExportGuide,
 }
 
-const TOOL_DEFAULT_VIEWS: Record<'hague' | 'jihua' | 'billing', 'guide' | 'use'> = {
+const TOOL_DEFAULT_VIEWS: Record<'hague' | 'jihua' | 'billing' | 'pctNotice' | 'feeReduce', 'guide' | 'use'> = {
   hague: 'use',
   jihua: 'guide',
   billing: 'use',
+  pctNotice: 'use',
+  feeReduce: 'use',
 }
 
 const {
@@ -98,10 +104,18 @@ const screen = ref<Screen>('sea')
 const hagueView = ref<WorkflowViewTab>('use')
 const jihuaView = ref<WorkflowViewTab>('guide')
 const billingView = ref<WorkflowViewTab>('use')
+const pctNoticeView = ref<WorkflowViewTab>('use')
+const feeReduceView = ref<WorkflowViewTab>('use')
 const flowView = ref<WorkflowViewTab>('steps')
 const billingMounted = ref(false)
-watch(screen, next => { if (next === 'billing') billingMounted.value = true }, { immediate: true })
-const mainScreenHidden = computed(() => screen.value === 'jihua' || screen.value === 'hague' || screen.value === 'billing')
+const pctNoticeMounted = ref(false)
+const feeReduceMounted = ref(false)
+watch(screen, next => {
+  if (next === 'billing') billingMounted.value = true
+  if (next === 'pctNotice') pctNoticeMounted.value = true
+  if (next === 'feeReduce') feeReduceMounted.value = true
+}, { immediate: true })
+const mainScreenHidden = computed(() => screen.value === 'jihua' || screen.value === 'hague' || screen.value === 'billing' || screen.value === 'pctNotice' || screen.value === 'feeReduce')
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
 const draft = ref<WorkflowDefinition | null>(null)
 const selectedId = ref('')
@@ -182,6 +196,8 @@ function deskState() {
     hagueView: hagueView.value === 'guide' ? 'guide' as const : 'use' as const,
     jihuaView: jihuaView.value === 'guide' ? 'guide' as const : 'use' as const,
     billingView: billingView.value === 'guide' ? 'guide' as const : 'use' as const,
+    pctNoticeView: pctNoticeView.value === 'guide' ? 'guide' as const : 'use' as const,
+    feeReduceView: feeReduceView.value === 'guide' ? 'guide' as const : 'use' as const,
     flowView: flowView.value,
     workflowViews: { ...rememberedViews.value },
     selectedSteps: { ...rememberedSteps.value },
@@ -208,7 +224,7 @@ onBeforeUnmount(() => {
   flushDeskState()
 })
 
-watch([screen, hagueView, jihuaView, billingView, flowView, rememberedViews, rememberedSteps, draft, selectedId, dirty, picked, newName], () => {
+watch([screen, hagueView, jihuaView, billingView, pctNoticeView, feeReduceView, flowView, rememberedViews, rememberedSteps, draft, selectedId, dirty, picked, newName], () => {
   if (!hydrated) return
   clearTimeout(persistTimer)
   persistTimer = setTimeout(flushDeskState, 120)
@@ -242,6 +258,8 @@ onMounted(async () => {
     hagueView.value = restored.hagueView
     jihuaView.value = restored.jihuaView
     billingView.value = restored.billingView
+    pctNoticeView.value = restored.pctNoticeView ?? 'use'
+    feeReduceView.value = restored.feeReduceView ?? 'use'
     replaceDraft(restored.draft, restored.dirty)
     flowView.value = restored.draft
       ? resolveWorkflowView({
@@ -346,7 +364,7 @@ function openFlow(flow: WorkflowDefinition, view?: WorkflowViewTab): void {
   screen.value = 'flow'
 }
 
-function openToolWorkspace(target: 'hague' | 'jihua' | 'billing', view?: 'guide' | 'use'): void {
+function openToolWorkspace(target: 'hague' | 'jihua' | 'billing' | 'pctNotice' | 'feeReduce', view?: 'guide' | 'use'): void {
   const nextView = resolveView(target, {
     requested: view,
     available: ['guide', 'use'],
@@ -354,7 +372,9 @@ function openToolWorkspace(target: 'hague' | 'jihua' | 'billing', view?: 'guide'
   })
   if (target === 'hague') hagueView.value = nextView
   else if (target === 'jihua') jihuaView.value = nextView
-  else billingView.value = nextView
+  else if (target === 'billing') billingView.value = nextView
+  else if (target === 'pctNotice') pctNoticeView.value = nextView
+  else feeReduceView.value = nextView
   rememberView(target, nextView)
   screen.value = target
 }
@@ -702,6 +722,30 @@ function chooseProc(param: WorkflowParam, id: string): void {
           <button type="button" class="sea-remove" @click="openToolWorkspace('billing', 'use')">开始请款</button>
         </div>
       </article>
+      <article class="sea-card pct-notice-workflow-card">
+        <button type="button" class="sea-open" @click="openToolWorkspace('pctNotice')">
+          <b>pct官文下载上传</b>
+          <small>大小客户双系统并行：导出未导入并集清单、删 PCT/、二次下载全量分析、两轮导入系统。</small>
+          <span class="sea-badge">双系统并行</span>
+          <em>静默预检 · 未导入并集 · 并行处理 · 两轮导入</em>
+        </button>
+        <div class="sea-actions">
+          <button type="button" class="sea-remove" @click="openToolWorkspace('pctNotice', 'guide')">流程说明</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('pctNotice', 'use')">开始使用</button>
+        </div>
+      </article>
+      <article class="sea-card fee-reduce-workflow-card">
+        <button type="button" class="sea-open" @click="openToolWorkspace('feeReduce')">
+          <b>请求费用减缓</b>
+          <small>按我方文号检索处理状态：递交中/完成跳过，撰写中自动创建费用减缴递交、XML 转档并提交初核。</small>
+          <span class="sea-badge">工作流</span>
+          <em>文号检索 · 状态判定 · XML 转档 · 提交初核</em>
+        </button>
+        <div class="sea-actions">
+          <button type="button" class="sea-remove" @click="openToolWorkspace('feeReduce', 'guide')">流程说明</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('feeReduce', 'use')">开始使用</button>
+        </div>
+      </article>
       <button type="button" class="sea-card sea-add" @click="openOcean">
         <b>从知识海洋加一条</b>
         <small>把会做的事挑出来，按你点的顺序排好。</small>
@@ -945,6 +989,40 @@ function chooseProc(param: WorkflowParam, id: string): void {
       :guide="billingGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
     >
       <BillingWorkflowPage embedded :is-active="screen === 'billing' && billingView === 'use'" @back="screen = 'sea'" />
+    </WorkflowWorkspace>
+  </div>
+  <div
+    v-if="pctNoticeMounted"
+    class="workflow-pct-notice"
+    :class="{ 'is-hidden-pane': screen !== 'pctNotice' }"
+    :inert="screen !== 'pctNotice'"
+    :aria-hidden="screen !== 'pctNotice' ? 'true' : undefined"
+  >
+    <WorkflowWorkspace
+      workflow-id="pctNotice"
+      :active="screen === 'pctNotice'"
+      v-model:view="pctNoticeView" title="pct官文下载上传"
+      description="大小客户双系统同时在线：导出未导入并集清单，并并行完成删除 PCT/、全量二次分析与两轮导入系统。"
+      :guide="pctNoticeGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
+    >
+      <PctNoticeWorkflowPage embedded :is-active="screen === 'pctNotice' && pctNoticeView === 'use'" @back="screen = 'sea'" />
+    </WorkflowWorkspace>
+  </div>
+  <div
+    v-if="feeReduceMounted"
+    class="workflow-fee-reduce"
+    :class="{ 'is-hidden-pane': screen !== 'feeReduce' }"
+    :inert="screen !== 'feeReduce'"
+    :aria-hidden="screen !== 'feeReduce' ? 'true' : undefined"
+  >
+    <WorkflowWorkspace
+      workflow-id="feeReduce"
+      :active="screen === 'feeReduce'"
+      v-model:view="feeReduceView" title="请求费用减缓"
+      description="按我方文号检索「请求费用减缓」处理事项：递交中/完成自动跳过，撰写中自动转档并提交流程人员初核。"
+      :guide="feeReduceGuide" :art="bg('让重复工作变简单.png')" @back="screen = 'sea'"
+    >
+      <FeeReduceWorkflowPage embedded :is-active="screen === 'feeReduce' && feeReduceView === 'use'" @back="screen = 'sea'" />
     </WorkflowWorkspace>
   </div>
   </div>

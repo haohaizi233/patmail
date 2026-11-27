@@ -60,6 +60,8 @@ it('separates implementation explanations from usage and includes external platf
     '季华实验室-文件导入',
     '海牙新申请',
     '请款',
+    '请求费用减缓',
+    'pct官文下载上传',
   ])
   const usage = leaves(DOC_GROUPS.find(group => group.name === '使用文档')!.entries)
   expect(usage.some(entry => entry.title.includes('下载去重算法'))).toBe(false)

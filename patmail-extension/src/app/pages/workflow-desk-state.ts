@@ -5,10 +5,12 @@ const MAX_MEMORY_ENTRIES = 100
 const MAX_KEY_LENGTH = 80
 
 export interface WorkflowDeskState<T> {
-  screen: 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague' | 'billing'
+  screen: 'sea' | 'ocean' | 'flow' | 'jihua' | 'hague' | 'billing' | 'pctNotice' | 'feeReduce'
   hagueView: 'guide' | 'use'
   jihuaView: 'guide' | 'use'
   billingView: 'guide' | 'use'
+  pctNoticeView?: 'guide' | 'use'
+  feeReduceView?: 'guide' | 'use'
   flowView?: WorkflowViewTab
   workflowViews?: Record<string, WorkflowViewTab>
   selectedSteps?: Record<string, string>
@@ -76,7 +78,7 @@ export function resolveWorkflowView(input: {
 export function sanitizeWorkflowDeskState<T>(value: unknown, isValidDraft: (draft: unknown) => draft is T): WorkflowDeskState<T> | null {
   if (!value || typeof value !== 'object') return null
   const state = value as Partial<WorkflowDeskState<T>>
-  const screens = ['sea', 'ocean', 'flow', 'jihua', 'hague', 'billing']
+  const screens = ['sea', 'ocean', 'flow', 'jihua', 'hague', 'billing', 'pctNotice', 'feeReduce']
   if (!screens.includes(String(state.screen))) return null
   const draft = isValidDraft(state.draft) ? state.draft : null
   const screen = state.screen === 'flow' && !draft ? 'sea' : state.screen as WorkflowDeskState<T>['screen']
@@ -88,6 +90,8 @@ export function sanitizeWorkflowDeskState<T>(value: unknown, isValidDraft: (draf
     hagueView: state.hagueView === 'guide' ? 'guide' : 'use',
     jihuaView: state.jihuaView === 'guide' ? 'guide' : 'use',
     billingView: state.billingView === 'guide' ? 'guide' : 'use',
+    ...(state.pctNoticeView === 'guide' || state.pctNoticeView === 'use' ? { pctNoticeView: state.pctNoticeView } : {}),
+    ...(state.feeReduceView === 'guide' || state.feeReduceView === 'use' ? { feeReduceView: state.feeReduceView } : {}),
     ...(flowView ? { flowView } : {}),
     ...(Object.keys(workflowViews).length ? { workflowViews } : {}),
     ...(Object.keys(selectedSteps).length ? { selectedSteps } : {}),
