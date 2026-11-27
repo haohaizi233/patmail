@@ -69,7 +69,7 @@ async function advance(
   if (progress.phase === 'preflight' && phase === 'creating') {
     next = { phase }
   } else if (isCreated || (progress.phase === 'draft' && filingId === progress.filingId && phase !== 'creating')) {
-    next = { phase: phase === 'submitting' ? 'submitting' : 'draft', filingId: filingId! }
+    next = { phase: phase === 'submitting' ? 'submitting' : 'draft', filingId: filingId }
   } else {
     throw new Error('费减 WAL 阶段不匹配，已停止派发。')
   }

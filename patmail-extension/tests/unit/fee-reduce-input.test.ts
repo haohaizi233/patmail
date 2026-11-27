@@ -6,6 +6,14 @@ import {
 } from '../../src/workflow/fee-reduce-input'
 
 describe('fee-reduce-input', () => {
+  it('strips notes before splitting or deduplicating case references', () => {
+    const annotated = 'ZZ0000001XY（急案 尽快答复）'
+    expect(parseCaseVolumeText(`${annotated}，zz0000001xy; ZZ0000002XY (urgent, review ASAP)\nZZ0000003XY(A)`))
+      .toEqual(['ZZ0000001XY', 'ZZ0000002XY', 'ZZ0000003XY(A)'])
+    expect(extractCaseVolumesFromSheet([['我方文号'], [annotated], ['zz0000001xy']]).volumes)
+      .toEqual(['ZZ0000001XY'])
+  })
+
   it('parses pasted case volumes with mixed separators and deduplicates case-insensitively', () => {
     const parsed = parseCaseVolumeText('PE26115584CND\npe26115584cnd; PE26115585CND，PE26115586CND,  PE26115587CND ')
     expect(parsed).toEqual([

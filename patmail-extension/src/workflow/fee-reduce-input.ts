@@ -2,6 +2,13 @@ import type { FeeReduceReviewerOption, FeeReduceReviewerStrategy } from '../api/
 
 const OFFICE_VOLUME_HEADER = /我方文号|^case[_\s-]*volume$/i
 const VOLUME_HEADER = /^(?:案号|文号)$/
+const VOLUME_WITH_NOTE = /(^|[\s,，;；])([a-z][a-z0-9._/-]*\d[a-z0-9._/-]*)[^\S\r\n]*[（(]([^()（）\r\n]*)[）)](?=$|[\s,，;；])/gi
+
+function stripCaseVolumeNotes(text: string): string {
+  return text.replace(VOLUME_WITH_NOTE, (match: string, separator: string, volume: string, note: string) =>
+    /[\p{Script=Han}\s]/u.test(note.trim()) ? separator + volume : match
+  )
+}
 
 /**
  * 解析粘贴的我方文号文本（支持换行、中英文分号、中英文逗号、空白分隔），
@@ -10,7 +17,7 @@ const VOLUME_HEADER = /^(?:案号|文号)$/
 export function parseCaseVolumeText(text: string): string[] {
   const seen = new Set<string>()
   const result: string[] = []
-  for (const raw of text.split(/[\r\n;；,，\s]+/)) {
+  for (const raw of stripCaseVolumeNotes(text).split(/[\r\n;；,，\s]+/)) {
     const trimmed = raw.trim()
     if (!trimmed) continue
     const key = trimmed.toUpperCase()
@@ -61,7 +68,7 @@ export function extractCaseVolumesFromSheet(
   const seen = new Set<string>()
   const volumes: string[] = []
   for (const row of dataRows) {
-    const raw = (row[detectedColumn] ?? '').trim()
+    const raw = stripCaseVolumeNotes(row[detectedColumn] ?? '').trim()
     if (!raw) continue
     const key = raw.toUpperCase()
     if (seen.has(key)) continue

@@ -9,21 +9,29 @@ import { runWorkflowWrite, workflowWriteStep } from '../../../src/background/wor
 import { handleWorkspaceMessage, type WorkspaceHost } from '../../../src/background/workspace'
 import { EasyConnectionController, scopeFromConnection, type BrowserTabRef } from '../../../src/shared/connection'
 import { FEE_REDUCE_CHECKPOINT } from '../../../src/shared/fee-reduce-checkpoint'
-import { isContentRequest, isMessage, MessageType, workspaceForwardBlock, type AppMessage } from '../../../src/shared/message'
+import { isContentRequest, isMessage, MessageType, workspaceForwardBlock, type AppMessage, type BackgroundResponse } from '../../../src/shared/message'
 
 const OP_LARGE = '11111111-1111-4111-8111-111111111111'
 const OP_SME = '22222222-2222-4222-8222-222222222222'
 
+function responseMessage(res: BackgroundResponse): string {
+  return 'message' in res.payload && typeof res.payload.message === 'string' ? res.payload.message : ''
+}
+
 vi.mock('../../../src/background/recovery', () => ({ dispatchRecoveryRequest: vi.fn() }))
 
-function makeHost(tabs: BrowserTabRef[], sendToTab: WorkspaceHost['sendToTab']): WorkspaceHost {
+type HostWithMocks = Omit<WorkspaceHost, 'createTab' | 'focusTab'> & {
+  createTab: (url: string) => Promise<void>
+  focusTab: (tabId: number, windowId?: number) => Promise<void>
+}
+
+function makeHost(tabs: BrowserTabRef[], sendToTab: WorkspaceHost['sendToTab']): HostWithMocks {
   const connection = new EasyConnectionController()
   const data = new Map<string, unknown>()
   const area: LocalArea = {
-    get: async keys => {
-      const list = Array.isArray(keys) ? keys : typeof keys === 'string' ? [keys] : Object.keys(data)
+    get: async key => {
       const out: Record<string, unknown> = {}
-      for (const k of list) if (data.has(k)) out[k] = data.get(k)
+      if (data.has(key)) out[key] = data.get(key)
       return out
     },
     set: async items => {
@@ -77,10 +85,11 @@ describe('dual-system workspace support for pct-notice workflow', () => {
     expect(isMessage(request)).toBe(true)
     const response = await handleWorkspaceMessage(request, host)
     expect(response).toMatchObject({ payload: { ok: false, message: 'WAL offline' } })
-    expect(journal).toHaveBeenLastCalledWith(expect.objectContaining({
-      slot: 'workflow-write', scope: JSON.stringify(['new-workflow', LARGE_CUSTOMER_ORIGIN, OP_LARGE, '']),
-      payload: expect.objectContaining({ state: 'pending' })
-    }))
+    const journalEntry = journal.mock.calls.at(-1)?.[0]
+    expect(journalEntry).toMatchObject({
+      slot: 'workflow-write', scope: JSON.stringify(['new-workflow', LARGE_CUSTOMER_ORIGIN, OP_LARGE, ''])
+    })
+    expect(journalEntry?.payload).toMatchObject({ state: 'pending' })
     expect(send.mock.calls.every(([, message]) => message.type === MessageType.CheckSession)).toBe(true)
   })
 
@@ -114,10 +123,12 @@ describe('dual-system workspace support for pct-notice workflow', () => {
     journal.mockResolvedValueOnce({ revision: 0 }).mockResolvedValueOnce({ revision: 1 }).mockResolvedValueOnce({ revision: 2 })
     await expect(handleWorkspaceMessage(request, host)).resolves.toMatchObject({ payload: { ok: true } })
     expect(writes).toHaveBeenCalledTimes(1)
-    expect(journal).toHaveBeenLastCalledWith(expect.objectContaining({
+    const journalEntry = journal.mock.calls.at(-1)?.[0]
+    expect(journalEntry).toMatchObject({
       slot: 'workflow-write', scope: JSON.stringify(['pct-notice', LARGE_CUSTOMER_ORIGIN, OP_LARGE, '']),
-      expectedRevision: 1, payload: expect.objectContaining({ state: 'completed' })
-    }))
+      expectedRevision: 1
+    })
+    expect(journalEntry?.payload).toMatchObject({ state: 'completed' })
   })
 
   it('does not forward a fee reduction again when the process already has a WAL intent', async () => {
@@ -155,9 +166,9 @@ describe('dual-system workspace support for pct-notice workflow', () => {
     await expect(handleWorkspaceMessage(stale, host)).resolves.toMatchObject({ payload: { contextError: 'STALE_CONTEXT' } })
     expect(send).not.toHaveBeenCalled()
     expect(journal).not.toHaveBeenCalled()
-    await expect(handleWorkspaceMessage(request, host)).resolves.toMatchObject({
-      payload: { ok: false, message: expect.stringContaining('未确认') }
-    })
+    const denied = await handleWorkspaceMessage(request, host)
+    expect(denied).toMatchObject({ payload: { ok: false } })
+    expect(responseMessage(denied)).toContain('未确认')
     expect(send.mock.calls.every(([, message]) => message.type === MessageType.CheckSession)).toBe(true)
     expect(journal).toHaveBeenCalledExactlyOnceWith({
       op: 'get', slot: 'workflow-write', scope: JSON.stringify(['fee-reduce', LARGE_CUSTOMER_ORIGIN, OP_LARGE, procId])
@@ -198,12 +209,12 @@ describe('dual-system workspace support for pct-notice workflow', () => {
       expect(walToken).toBeTruthy()
       operations.push(resumeFilingId ? 'resume' : 'start')
       if (operations.length === 2) {
-        await expect(checkpoint(walToken!, 'creating', undefined, 999)).resolves.toMatchObject({ ok: false })
-        await expect(checkpoint(walToken!, 'creating')).resolves.toMatchObject({ ok: true })
-        await expect(checkpoint(walToken!, 'draft', filingId)).resolves.toMatchObject({ ok: true })
+        await expect(checkpoint(walToken, 'creating', undefined, 999)).resolves.toMatchObject({ ok: false })
+        await expect(checkpoint(walToken, 'creating')).resolves.toMatchObject({ ok: true })
+        await expect(checkpoint(walToken, 'draft', filingId)).resolves.toMatchObject({ ok: true })
       } else if (operations.length === 3) {
         expect(resumeFilingId).toBe(filingId)
-        await expect(checkpoint(walToken!, 'submitting', filingId)).resolves.toMatchObject({ ok: true })
+        await expect(checkpoint(walToken, 'submitting', filingId)).resolves.toMatchObject({ ok: true })
       }
       return { type: MessageType.Error, payload: { message: '模拟中断' } }
     })
@@ -225,10 +236,10 @@ describe('dual-system workspace support for pct-notice workflow', () => {
       await expect(handleWorkspaceMessage(request, host)).resolves.toMatchObject(forwardedError)
       await expect(handleWorkspaceMessage(request, host)).resolves.toMatchObject(forwardedError)
       expect(head.payload).toMatchObject({ progress: { phase: 'draft', filingId } })
-      await expect(handleWorkspaceMessage(request, host)).resolves.toMatchObject({
-        payload: { message: expect.stringContaining('最终提交结果未确认') }
-      })
-      await expect(handleWorkspaceMessage(request, host)).resolves.toMatchObject({ payload: { message: expect.stringContaining('未确认') } })
+      const recheck = await handleWorkspaceMessage(request, host)
+      expect(responseMessage(recheck)).toContain('最终提交结果未确认')
+      const deniedAgain = await handleWorkspaceMessage(request, host)
+      expect(responseMessage(deniedAgain)).toContain('未确认')
       expect(operations).toEqual(['start', 'start', 'resume'])
     } finally {
       vi.unstubAllGlobals()
@@ -250,9 +261,9 @@ describe('dual-system workspace support for pct-notice workflow', () => {
       withFeeReduceCheckpoint({ account, process, save, progress: progress!, canWrite: () => Promise.resolve(true) },
         () => Promise.resolve(reply))
     )).resolves.toEqual(reply)
-    expect(journal).toHaveBeenLastCalledWith(expect.objectContaining({
-      expectedRevision: 1, payload: expect.objectContaining({ state: 'completed', progress: { phase: 'preflight' } })
-    }))
+    const journalEntry = journal.mock.calls.at(-1)?.[0]
+    expect(journalEntry).toMatchObject({ expectedRevision: 1 })
+    expect(journalEntry?.payload).toMatchObject({ state: 'completed', progress: { phase: 'preflight' } })
   })
 
   it('checks large and sme systems silently without mutating active connection', async () => {

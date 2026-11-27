@@ -2,9 +2,9 @@ import { createApp, h, nextTick, ref, type App } from 'vue'
 import { afterEach, expect, it, vi } from 'vitest'
 import FeeReduceWorkflowPage from '../../../src/app/pages/FeeReduceWorkflowPage.vue'
 import CheckRainbow from '../../../src/app/components/CheckRainbow.vue'
-import { MessageType } from '../../../src/shared/message'
+import { MessageType, type AppMessage } from '../../../src/shared/message'
 
-const request = vi.hoisted(() => vi.fn())
+const request = vi.hoisted(() => vi.fn<(message: AppMessage) => Promise<unknown>>())
 const confirm = vi.hoisted(() => vi.fn())
 vi.mock('../../../src/app/services/full-page-bridge', () => ({ createWorkflowBridge: () => ({ request }) }))
 vi.mock('../../../src/app/composables/useWorkspace', () => ({
@@ -81,7 +81,8 @@ it('shows search, concurrent execution and retry progress in the shared header',
       data: {
         items: batch.map(caseVolume => ({
           caseVolume,
-          state: caseVolume === volumes[0] || caseVolume === volumes.at(-1) ? 'ready' : 'completed'
+          state: caseVolume === volumes[0] || caseVolume === volumes.at(-1) ? 'ready'
+            : caseVolume === volumes[7] ? 'not_found' : 'completed'
         }))
       }
     }
@@ -95,6 +96,15 @@ it('shows search, concurrent execution and retry progress in the shared header',
 
   const tableRows = () => root.querySelectorAll<HTMLTableRowElement>('.fr-table tbody tr')
   const nextPage = () => [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === '下一页')!
+  const missingFilter = root.querySelector<HTMLButtonElement>('.fr-summary button')!
+  expect(missingFilter.textContent).toContain('只看未查到（1）')
+  missingFilter.click()
+  await nextTick()
+  expect(tableRows()).toHaveLength(1)
+  expect(tableRows()[0].textContent).toContain(volumes[7])
+  expect(buttons[1].textContent).toContain('2')
+  missingFilter.click()
+  await nextTick()
   expect(tableRows()).toHaveLength(20)
   expect(tableRows()[0].textContent).toContain(volumes[0])
   nextPage().click()
@@ -120,11 +130,13 @@ it('shows search, concurrent execution and retry progress in the shared header',
   approval.resolve(true)
   await settle()
   expect(progress()?.getAttribute('aria-valuetext')).toContain('递交 0/2')
-  const sent = request.mock.calls.filter(([value]) => value.type === MessageType.SubmitFeeReduceFiling)
+  const sent = request.mock.calls.flatMap(([message]) =>
+    message.type === MessageType.SubmitFeeReduceFiling ? [message.payload] : []
+  )
   expect(sent).toHaveLength(2)
-  expect(sent.map(([value]) => value.payload.caseVolume)).toEqual([volumes[0], volumes.at(-1)])
-  for (const [value] of sent) {
-    expect(value.payload).toMatchObject({
+  expect(sent.map(payload => payload.caseVolume)).toEqual([volumes[0], volumes.at(-1)])
+  for (const payload of sent) {
+    expect(payload).toMatchObject({
       remark: '同意', expectedScope: { easyTabId: 1, operatorId: '11111111-1111-4111-8111-111111111111' }
     })
   }
@@ -185,17 +197,17 @@ it.each(['connection', 'flow status'] as const)('pauses on a shared failure and 
   let submits = 0
   request.mockReset()
   confirm.mockResolvedValue(true)
-  request.mockImplementation(({ type, payload }) => {
-    if (type === MessageType.ReadFeeReduceReviewers) {
+  request.mockImplementation(message => {
+    if (message.type === MessageType.ReadFeeReduceReviewers) {
       return Promise.resolve({ type: MessageType.ReadFeeReduceReviewersResult, payload: { ok: true, data: { reviewers: [] } } })
     }
-    if (type === MessageType.InspectFeeReduceCases) {
-      inspects.push(payload.caseVolumes)
+    if (message.type === MessageType.InspectFeeReduceCases) {
+      inspects.push(message.payload.caseVolumes)
       return Promise.resolve({ type: MessageType.InspectFeeReduceCasesResult, payload: {
         ok: true, data: { items: volumes.map(caseVolume => ({ caseVolume, state: 'ready' })) }
       } })
     }
-    if (type === MessageType.SubmitFeeReduceFiling) {
+    if (message.type === MessageType.SubmitFeeReduceFiling) {
       submits += 1
       if (submits === 1 && failure === 'flow status') {
         return Promise.resolve({ type: MessageType.SubmitFeeReduceFilingResult,
@@ -203,7 +215,7 @@ it.each(['connection', 'flow status'] as const)('pauses on a shared failure and 
       }
       return Promise.resolve({ type: MessageType.Error, payload: { message: 'EASY 连接已变化', feeBatchPause: submits === 1 ? 'verify' : 'not_sent' } })
     }
-    throw new Error(`Unexpected request: ${type}`)
+    throw new Error(`Unexpected request: ${message.type}`)
   })
   root = document.body.appendChild(document.createElement('div'))
   app = createApp(FeeReduceWorkflowPage)

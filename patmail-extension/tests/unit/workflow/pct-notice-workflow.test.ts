@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDefaultNoticeDownloadQuery, createDefaultNoticeImportQuery, createDefaultNoticeReplayQuery } from '../../../src/api/notice-params'
+import { createDefaultNoticeDownloadQuery, createDefaultNoticeImportQuery } from '../../../src/api/notice-params'
 import type { NoticeInitData } from '../../../src/api/notice-types'
 import { xlsxBytes } from '../../../src/customer/xlsx-table'
 import { MessageType, type ContentRequest, type ContentResponse, type MessageBridge } from '../../../src/shared/message'

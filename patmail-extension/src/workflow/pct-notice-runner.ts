@@ -68,6 +68,15 @@ export interface SystemPipelineProgress {
 const SEARCH_PAGE_SIZE = 200
 const ACTION_BATCH_SIZE = 50
 
+/** 原站行字段可能是字符串或数字，统一转成纯标量文本；对象等其它类型按空串处理。 */
+function fieldText(value: unknown): string {
+  return typeof value === 'string'
+    ? value
+    : typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint'
+      ? String(value)
+      : ''
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error('任务已被用户中止。')
@@ -190,9 +199,9 @@ export function partitionImportRows(rows: readonly NoticeRow[]): {
   const closedCaseRows: NoticeRow[] = []
   const normalRows: NoticeRow[] = []
   for (const row of rows) {
-    const oaId = String(row.oa_id ?? '').trim()
+    const oaId = fieldText(row.oa_id).trim()
     if (!oaId) continue
-    const volume = String(row.case_volume ?? '').trim()
+    const volume = fieldText(row.case_volume).trim()
     if (!volume) {
       nonSystemRows.push(row)
       continue
@@ -430,7 +439,7 @@ export async function runSystemParallelPipeline(options: {
       let matchedHere = 0
       for (const row of rows) {
         if (!isPctDownloadRow(row)) continue
-        const fid = String(row.fid ?? '').trim()
+        const fid = fieldText(row.fid).trim()
         if (fid) {
           pctFids.add(fid)
           matchedHere += 1
@@ -485,10 +494,10 @@ export async function runSystemParallelPipeline(options: {
       const items: Array<{ fid: string; xlh: string }> = []
       const seenFid = new Set<string>()
       for (const row of rows) {
-        const fid = String(row.fid ?? '').trim()
+        const fid = fieldText(row.fid).trim()
         if (!fid || seenFid.has(fid)) continue
         seenFid.add(fid)
-        items.push({ fid, xlh: String(row.fawenxlh ?? '').trim() })
+        items.push({ fid, xlh: fieldText(row.fawenxlh).trim() })
       }
       if (items.length === 0) {
         emit(`账号「${acc.label}」在当前条件下无二次下载记录。`)
@@ -558,7 +567,7 @@ export async function runSystemParallelPipeline(options: {
 
       let importedThisRound = 0
       const importNormal = async (targetRows: readonly NoticeRow[]): Promise<void> => {
-        const oaIds = targetRows.map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
+        const oaIds = targetRows.map(r => fieldText(r.oa_id).trim()).filter(Boolean)
         for (const batch of chunkArray(oaIds, ACTION_BATCH_SIZE)) {
           const check = await sendNoticeAction(options.bridge, { action: 'importCheck', oaIds: batch }, options.signal)
           if (check.checkWarnings?.length) {
@@ -575,7 +584,7 @@ export async function runSystemParallelPipeline(options: {
       }
 
       if (shouldSplitClosed && closedCaseRows.length > 0) {
-        const closedIds = closedCaseRows.map(r => String(r.oa_id ?? '').trim()).filter(Boolean)
+        const closedIds = closedCaseRows.map(r => fieldText(r.oa_id).trim()).filter(Boolean)
         for (const batch of chunkArray(closedIds, ACTION_BATCH_SIZE)) {
           const res = await sendNoticeAction(options.bridge, { action: 'importCloseCase', oaIds: batch }, options.signal)
           if (!res.ok) throw new Error(res.message || `第 ${round} 轮结案案件导入失败。`)

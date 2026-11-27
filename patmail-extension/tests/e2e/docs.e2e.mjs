@@ -14,11 +14,13 @@ assert.deepEqual(
     'PCT提醒.md',
     'PCT鹏城专案.md',
     'README.md',
+    'pct官文下载上传.md',
     '文件管理.md',
     '递交管理-已完成导出.md',
     '季华实验室-文件导入.md',
     '海牙新申请.md',
     '请款.md',
+    '请求费用减缓.md',
   ].sort(),
 )
 const context = await launchExtensionContext(dist, { viewport: { width: 1440, height: 1000 } })
@@ -222,6 +224,15 @@ try {
       // This guide is also embedded in its workflow, where the view tabs own navigation.
       await docs.getByRole('button', { name: '工作流总览', exact: true }).click()
     } else await docs.getByRole('link', { name: '工作流索引', exact: true }).click()
+    await docs.getByRole('heading', { name: '工作流索引', exact: true }).waitFor()
+  }
+  for (const [file, heading] of [
+    ['pct官文下载上传.md', 'pct官文下载上传'],
+    ['请求费用减缓.md', '请求费用减缓'],
+  ]) {
+    await docs.getByRole('link', { name: file, exact: true }).click()
+    await docs.getByRole('heading', { name: heading, exact: true }).waitFor()
+    await docs.getByRole('button', { name: '工作流总览', exact: true }).click()
     await docs.getByRole('heading', { name: '工作流索引', exact: true }).waitFor()
   }
   await docs.getByRole('link', { name: 'PCT提醒.md', exact: true }).click()

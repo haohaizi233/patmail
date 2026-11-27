@@ -35,8 +35,16 @@ function volumeKey(value: string): string {
   return value.replace(/\s/g, '').toUpperCase()
 }
 
+function scalarText(value: unknown): string {
+  return typeof value === 'string'
+    ? value
+    : typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint'
+      ? String(value)
+      : ''
+}
+
 function str(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim()
+  return scalarText(value).trim()
 }
 
 function clientInfo(data: unknown): { result: boolean; status: boolean; message: string } {
@@ -132,7 +140,7 @@ export class FeeReduceClient {
 
     if (fatalError) return fatalError
 
-    const items: FeeReduceCaseInspectItem[] = new Array(cleaned.length)
+    const items: FeeReduceCaseInspectItem[] = new Array<FeeReduceCaseInspectItem>(cleaned.length)
     let sessionError: ApiResult<never> | null = null
 
     await runConcurrent(cleaned, concurrency, async (volume, idx) => {
@@ -674,7 +682,7 @@ export class FeeReduceClient {
       }
       const flowSubmitParams = new URLSearchParams()
       for (const [k, v] of Object.entries(flowResult)) {
-        flowSubmitParams.set(k, v == null ? '' : String(v))
+        flowSubmitParams.set(k, v == null ? '' : scalarText(v))
       }
       flowSubmitParams.set('Call', 'GetFlowSubmit')
       flowSubmitParams.set('log_pagename', 'IhgFlow.aspx')

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { RecoveryRequest } from '../../../src/recovery/client'
+import type { RecoveryTransport } from '../../../src/recovery/client'
 import { WorkflowWal } from '../../../src/workflow/wal'
 
 class TestWorkflow extends WorkflowWal<boolean> {
@@ -8,7 +8,7 @@ class TestWorkflow extends WorkflowWal<boolean> {
 
 function ledger() {
   const records = new Map<string, { payload: unknown; revision: number }>()
-  return vi.fn(async (request: RecoveryRequest) => {
+  return vi.fn<RecoveryTransport>(async request => {
     const key = request.scope!
     const head = records.get(key) ?? { payload: null, revision: 0 }
     if (request.op === 'get') return head
@@ -20,6 +20,33 @@ function ledger() {
 }
 
 describe('workflow WAL', () => {
+  it.each([true, { state: 'unexpected' }])('refuses invalid persisted write intents (%j)', async payload => {
+    const journal = ledger().mockResolvedValueOnce({ payload, revision: 1 })
+    const send = vi.fn(() => Promise.resolve(true))
+    await expect(new TestWorkflow(journal).run('fee', true, 'submit', () => true, send)).rejects.toThrow('记录无效')
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('refuses to dispatch when the journal does not acknowledge an intent version', async () => {
+    const journal = ledger().mockResolvedValueOnce({ payload: null, revision: 0 })
+      .mockResolvedValueOnce({})
+    const send = vi.fn(() => Promise.resolve(true))
+    await expect(new TestWorkflow(journal).run('fee', true, 'submit', () => true, send)).rejects.toThrow('没有返回提交版本')
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('keeps one active dispatcher for a resumable scope and releases it on an error', async () => {
+    const journal = ledger()
+    const workflow = new TestWorkflow(journal)
+    const send = vi.fn(() => Promise.resolve(true))
+    journal.mockRejectedValueOnce(new Error('WAL unavailable'))
+    const first = workflow.run('fee', true, 'submit', () => true, send)
+    await expect(workflow.run('fee', true, 'submit', () => true, send)).rejects.toThrow('正在执行')
+    await expect(first).rejects.toThrow('WAL unavailable')
+    await expect(workflow.run('fee', true, 'submit', () => true, send)).resolves.toBe(true)
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
   it('resumes a confirmed draft after a restart and blocks an unconfirmed final submit', async () => {
     type Progress = { phase: 'preflight' | 'creating' | 'draft' | 'submitting'; filingId?: string }
     class FeeWorkflow extends WorkflowWal<boolean, Progress> {

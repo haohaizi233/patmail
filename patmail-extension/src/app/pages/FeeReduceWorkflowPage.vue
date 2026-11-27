@@ -81,11 +81,19 @@ const canRecheckPaused = computed(() => {
 })
 const resultPageSize = 20
 const resultPage = ref(1)
-const resultPageCount = computed(() => Math.max(1, Math.ceil(rows.length / resultPageSize)))
+const showMissingOnly = ref(false)
+const missingRows = computed(() => rows.filter(row => row.item.state === 'not_found'))
+const tableRows = computed(() => showMissingOnly.value ? missingRows.value : rows)
+const resultPageCount = computed(() => Math.max(1, Math.ceil(tableRows.value.length / resultPageSize)))
 const visibleRows = computed(() => {
   const start = (resultPage.value - 1) * resultPageSize
-  return rows.slice(start, start + resultPageSize)
+  return tableRows.value.slice(start, start + resultPageSize)
 })
+
+function toggleMissingOnly() {
+  showMissingOnly.value = !showMissingOnly.value
+  resultPage.value = 1
+}
 
 const concurrencyOptions = [
   { value: '6', label: '6 路并发（默认）' },
@@ -269,6 +277,7 @@ async function inspectAll(recheckPaused = false): Promise<void> {
     return
   }
   inspecting.value = true
+  showMissingOnly.value = false
   resultPage.value = 1
   rows.splice(0, rows.length)
   const updateProgress = startProgress('费减检索', volumes.length, '正在检索案件与处理状态')
@@ -629,7 +638,10 @@ onMounted(() => {
       <span>已完成（递交中/完成）：<b class="text-done">{{ counts.completed }}</b></span>
       <span>待递交（撰写中）：<b class="text-ready">{{ counts.ready }}</b></span>
       <span>已提交初核：<b class="text-done">{{ counts.submitted }}</b></span>
-      <span>其他/未找到：<b>{{ counts.other }}</b></span>
+      <span>其他状态：<b>{{ counts.other - missingRows.length }}</b></span>
+      <button v-if="missingRows.length" type="button" class="ghost" :aria-pressed="showMissingOnly" @click="toggleMissingOnly">
+        {{ showMissingOnly ? '查看全部' : `只看未查到（${missingRows.length}）` }}
+      </button>
     </div>
 
     <nav v-if="resultPageCount > 1" class="fr-pagination" aria-label="费减结果分页">

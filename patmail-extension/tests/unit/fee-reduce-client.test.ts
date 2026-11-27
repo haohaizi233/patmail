@@ -11,6 +11,12 @@ function jsonResponse(body: unknown): Response {
   })
 }
 
+/** 请求体可能被写成字符串或 URLSearchParams，统一取可检索的文本形式。 */
+function bodyText(init?: RequestInit): string {
+  const body = init?.body
+  return typeof body === 'string' ? body : body instanceof URLSearchParams ? body.toString() : ''
+}
+
 const CASE_ID_1 = '123ee97c-0791-4e98-bbc6-b62cead539a0'
 const CASE_ID_2 = '223ee97c-0791-4e98-bbc6-b62cead539a0'
 const CASE_ID_3 = '323ee97c-0791-4e98-bbc6-b62cead539a0'
@@ -29,7 +35,7 @@ describe('FeeReduceClient', () => {
   ] as const)('rechecks a completed-process refusal without starting another filing (%s, %s)', async (status, procId, skipped) => {
     const calls: string[] = []
     const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
-      const call = new URLSearchParams(String(init?.body ?? '')).get('Call') ?? ''
+      const call = new URLSearchParams(bodyText(init)).get('Call') ?? ''
       calls.push(call)
       if (call === 'CheckCtrlProc') return Promise.resolve(jsonResponse({ ClientInfo: { IsLogin: true, Result: true } }))
       if (call === 'VerificateFiling') {
@@ -48,7 +54,8 @@ describe('FeeReduceClient', () => {
     if (skipped) {
       expect(result).toMatchObject({ ok: true, data: { outcome: 'already_completed', procStatus: status, procId: PROC_ID_1 } })
     } else {
-      expect(result).toMatchObject({ ok: false, error: { message: expect.stringContaining('不能启动递交流程') } })
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error.message).toContain('不能启动递交流程')
     }
     expect(calls).toEqual(['CheckCtrlProc', 'VerificateFiling', 'GetProcList'])
     expect(checkpoint).not.toHaveBeenCalled()
@@ -56,7 +63,7 @@ describe('FeeReduceClient', () => {
 
   it('inspects cases and classifies 递交中/完成 as completed and 撰写中 as ready', async () => {
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      const body = new URLSearchParams(String(init?.body ?? ''))
+      const body = new URLSearchParams(bodyText(init))
       const call = body.get('Call')
       if (call === 'ICSearchList') {
         return jsonResponse({
@@ -105,7 +112,7 @@ describe('FeeReduceClient', () => {
     let convertPollCount = 0
 
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      const body = new URLSearchParams(String(init?.body ?? ''))
+      const body = new URLSearchParams(bodyText(init))
       const call = body.get('Call') ?? ''
       calls.push({ call, params: Object.fromEntries(body.entries()) })
 
@@ -211,9 +218,8 @@ describe('FeeReduceClient', () => {
     expect(checkpoint).toHaveBeenNthCalledWith(1, 'creating')
     expect(checkpoint).toHaveBeenNthCalledWith(2, 'draft', FILING_ID)
     if (scenario !== 'success' && scenario !== 'native empty history') {
-      expect(res).toMatchObject({ ok: false, error: { message: expect.stringContaining(
-        scenario === 'missing reviewer' ? '指定初核人' : '最后流程状态'
-      ) } })
+      expect(res.ok).toBe(false)
+      if (!res.ok) expect(res.error.message).toContain(scenario === 'missing reviewer' ? '指定初核人' : '最后流程状态')
       expect(calls.some(({ call }) => call === 'FilingSubmit')).toBe(false)
       expect(checkpoint).not.toHaveBeenCalledWith('submitting', FILING_ID)
       if (scenario !== 'missing reviewer') expect(res).toMatchObject({ error: { code: 'FLOW_STATUS_UNVERIFIED' } })
@@ -239,7 +245,7 @@ describe('FeeReduceClient', () => {
   it('skips InsertNewFiling when resumeFilingId is provided and enforces write switch in workspaceForwardBlock', async () => {
     const calls: string[] = []
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      const body = new URLSearchParams(String(init?.body ?? ''))
+      const body = new URLSearchParams(bodyText(init))
       const call = body.get('Call') ?? ''
       calls.push(call)
       if (call === 'GetCPCBusineeType') return jsonResponse({ cpcBusinessType: [] })
@@ -271,7 +277,7 @@ describe('FeeReduceClient', () => {
     expect(calls).not.toContain('InsertNewFiling')
     expect(calls).not.toContain('VerificateFiling')
 
-    setWriteSwitchOpen(false)
+    await setWriteSwitchOpen(false)
     expect(
       workspaceForwardBlock({
         type: MessageType.InspectFeeReduceCases,
@@ -294,7 +300,7 @@ describe('FeeReduceClient', () => {
   it('reads PROCE reviewers using ZERO_GUID and rejects unrelated DRD flow when PROCE is missing', async () => {
     const seenObjIds: string[] = []
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      const body = new URLSearchParams(String(init?.body ?? ''))
+      const body = new URLSearchParams(bodyText(init))
       const call = body.get('Call') ?? ''
       if (call === 'GetFlowInfo') {
         const objId = body.get('obj_id') ?? ''
@@ -365,7 +371,7 @@ describe('FeeReduceClient', () => {
     ).toBe('')
 
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      const body = new URLSearchParams(String(init?.body ?? ''))
+      const body = new URLSearchParams(bodyText(init))
       const call = body.get('Call')
       if (call === 'ICSearchList') {
         return jsonResponse({
