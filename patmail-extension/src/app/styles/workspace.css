@@ -470,16 +470,23 @@
 @media (max-width: 720px) {
   .flow-fields, .flow-param { grid-template-columns: 1fr; }
 }
-.sea { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-.sea-card { position: relative; text-align: left; border: 0; border-radius: 22px; padding: 18px 16px 16px; min-height: 148px; display: grid; align-content: start; font: inherit; color: #4a3b55; background: radial-gradient(120px 80px at 90% 0%, #fff6fb, transparent 70%), linear-gradient(180deg, #fff, #fff7fb); box-shadow: 0 10px 24px #ff8ab822; }
-.sea-open { border: 0; background: transparent; text-align: left; font: inherit; color: inherit; display: grid; align-content: start; gap: 8px; cursor: pointer; padding: 0; width: 100%; }
-.sea-card b { font-size: 18px; }
-.sea-card small { color: #8a7390; line-height: 1.45; }
-.sea-card em { font-style: normal; color: #ff5c98; font-size: 12px; font-weight: 700; }
-.sea-badge { display: inline-flex; width: fit-content; background: #ffe4ef; color: #ff3f86; border-radius: 999px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
-.sea-add { border: 2px dashed #ffb3d0; background: #fffafd; box-shadow: none; }
-.sea-actions { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
-.sea-remove { position: static; z-index: 1; border: 0; background: transparent; color: #e45b92; font: inherit; font-size: 12px; cursor: pointer; padding: 0; }
+.sea { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; align-items: stretch; }
+.sea-card { position: relative; text-align: left; border: 1px solid #f7dfeb; border-radius: 20px; padding: 18px 18px 14px; min-height: 176px; display: flex; flex-direction: column; justify-content: space-between; font: inherit; color: #4a3b55; background: radial-gradient(120px 80px at 90% 0%, #fff6fb, transparent 70%), linear-gradient(180deg, #fff, #fff7fb); box-shadow: 0 10px 24px #ff8ab822; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.sea-card:hover { transform: translateY(-2px); border-color: #f3c2d9; box-shadow: 0 14px 28px #ff8ab830; }
+.sea-open { flex: 1; border: 0; background: transparent; text-align: left; font: inherit; color: inherit; display: flex; flex-direction: column; gap: 10px; cursor: pointer; padding: 0; width: 100%; }
+.sea-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; width: 100%; }
+.sea-card b { font-size: 16px; line-height: 1.35; font-weight: 700; color: #3d2f47; }
+.sea-card small { color: #7a6884; font-size: 13px; line-height: 1.6; }
+.sea-card em { margin-top: auto; padding-top: 2px; font-style: normal; color: #d64f87; font-size: 12px; font-weight: 600; line-height: 1.45; }
+.sea-badge { flex: none; display: inline-flex; align-items: center; width: fit-content; background: #ffe8f2; color: #d93b7a; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+.sea-add { justify-content: center; align-items: center; text-align: center; gap: 8px; cursor: pointer; border: 1.5px dashed #f2b5cf; background: #fffbfd; box-shadow: none; padding: 24px 18px; }
+.sea-add:hover { border-color: #ff7ab0; background: #fff5f9; box-shadow: none; }
+.sea-add-icon { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #ffe8f2; color: #e13d80; font-size: 20px; font-weight: 700; line-height: 1; }
+.sea-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 14px; padding-top: 11px; border-top: 1px dashed #f5d8e7; }
+.sea-action-primary { border: 1px solid #f8cde0; border-radius: 999px; background: #fff0f6; color: #e13d80; font: inherit; font-size: 12px; font-weight: 600; line-height: 1.2; padding: 5px 12px; cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+.sea-action-primary:hover { background: #ff4f93; border-color: #ff4f93; color: #fff; }
+.sea-remove { position: static; z-index: 1; border: 0; background: transparent; color: #8c7594; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; padding: 2px 0; transition: color .14s ease; }
+.sea-remove:hover { color: #e13d80; }
 .tabs.workflow-view-tabs { display: inline-flex; align-items: center; gap: 6px; padding: 5px; margin-bottom: 16px; border-radius: 14px; background: #ffffffeb; border: 1px solid #f2dce8; box-shadow: 0 4px 14px #f3c8dc2e; width: fit-content; max-width: 100%; }
 .tabs.workflow-view-tabs button { height: 34px; padding: 0 16px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #5b6782; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .14s ease; }
 .tabs.workflow-view-tabs button:hover:not(.on) { background: #fff1f7; border-color: #f6cde0; color: #c44b7e; transform: translateY(-1px); box-shadow: 0 4px 10px #f6c7dc40; }

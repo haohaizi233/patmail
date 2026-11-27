@@ -89,6 +89,28 @@ const TOOL_DEFAULT_VIEWS: Record<'hague' | 'jihua' | 'billing' | 'pctNotice' | '
   feeReduce: 'use',
 }
 
+const FLOW_CARD_BADGE: Record<string, string> = {
+  'pct-reminder': '自动发文',
+  'pct-pengcheng': '自动发文',
+  [FILE_MANAGE_ID]: '自动发文',
+  [FILING_EXPORT_ID]: '数据导出',
+}
+
+const FLOW_CARD_META: Record<string, string> = {
+  'pct-reminder': '9 步 · 表格解析 · 合并发文',
+  'pct-pengcheng': '9 步 · 技术负责人主送 · 抄送 IPR',
+  [FILE_MANAGE_ID]: '8 步 · 客户配置联动 · 映射匹配',
+  [FILING_EXPORT_ID]: '5 步 · 退回脉络追溯 · Top10 图表',
+}
+
+function flowCardBadge(flow: WorkflowDefinition): string {
+  return FLOW_CARD_BADGE[flow.id] ?? (isSystemWorkflow(flow) ? '系统流程' : '自定义')
+}
+
+function flowCardMeta(flow: WorkflowDefinition): string {
+  return FLOW_CARD_META[flow.id] ?? `${flow.steps.length} 步 · 自定义流程`
+}
+
 const {
   rememberedViews,
   rememberedSteps,
@@ -677,78 +699,94 @@ function chooseProc(param: WorkflowParam, id: string): void {
     <section v-if="screen === 'sea'" class="sea">
       <article v-for="flow in catalog.workflows" :key="flow.id" class="sea-card">
         <button type="button" class="sea-open" @click="openFlow(flow)">
-          <b>{{ flow.label }}</b>
+          <div class="sea-head">
+            <b>{{ flow.label }}</b>
+            <span class="sea-badge">{{ flowCardBadge(flow) }}</span>
+          </div>
           <small>{{ flow.summary }}</small>
-          <span v-if="isSystemWorkflow(flow)" class="sea-badge">系统</span>
-          <em>{{ flow.steps.length }} 步</em>
+          <em>{{ flowCardMeta(flow) }}</em>
         </button>
         <div class="sea-actions">
+          <button v-if="canUseFlow(flow)" type="button" class="sea-action-primary" @click="openFlow(flow, 'use')">开始使用</button>
           <button v-if="flowGuideFor(flow)" type="button" class="sea-remove" @click="openFlow(flow, 'guide')">流程说明</button>
-          <button v-if="canUseFlow(flow)" type="button" class="sea-remove" @click="openFlow(flow, 'use')">开始使用</button>
           <button type="button" class="sea-remove" @click="copyFlow(flow)">复制副本</button>
           <button v-if="!isSystemWorkflow(flow)" type="button" class="sea-remove" @click="removeFlow(flow)">拿掉</button>
         </div>
       </article>
       <article class="sea-card">
         <button type="button" class="sea-open" @click="openToolWorkspace('hague')">
-          <b>海牙新申请</b><small>批量核对材料与信息，默认 6 路填写草稿并导出 Summary。</small><span class="sea-badge">批量草稿</span><em>材料核对 · 6 路并发 · Summary 导出</em>
+          <div class="sea-head">
+            <b>海牙新申请</b>
+            <span class="sea-badge">批量申报</span>
+          </div>
+          <small>批量校验申请材料与著录信息，多路并行填写草稿，并导出汇总表。</small>
+          <em>材料核对 · 6 路并行 · Summary 导出</em>
         </button>
         <div class="sea-actions">
+          <button type="button" class="sea-action-primary" @click="openToolWorkspace('hague', 'use')">开始使用</button>
           <button type="button" class="sea-remove" @click="openToolWorkspace('hague', 'guide')">流程说明</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('hague', 'use')">开始使用</button>
         </div>
       </article>
       <article class="sea-card jihua-upload-card">
         <button type="button" class="sea-open" @click="openToolWorkspace('jihua')">
-          <b>季华实验室-文件导入</b>
-          <small>按申请号整理文件，使用已登录的季华平台会话核对并上传。</small>
-          <span class="sea-badge">工作流工具</span>
-          <em>流程说明 · 六路上传 · 逐行结果</em>
+          <div class="sea-head">
+            <b>季华实验室-文件导入</b>
+            <span class="sea-badge">文件上传</span>
+          </div>
+          <small>按申请号自动归类文件，直连已登录的季华平台核对案件并批量上传。</small>
+          <em>自动归类 · 6 路上传 · 逐行回执</em>
         </button>
         <div class="sea-actions">
+          <button type="button" class="sea-action-primary" @click="openToolWorkspace('jihua', 'use')">开始使用</button>
           <button type="button" class="sea-remove" @click="openToolWorkspace('jihua', 'guide')">流程说明</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('jihua', 'use')">开始使用</button>
         </div>
       </article>
       <article class="sea-card billing-workflow-card">
         <button type="button" class="sea-open" @click="openToolWorkspace('billing')">
-          <b>请款</b>
-          <small>文件管理自动抓取海外账单并提取我方文号，无缝联动费用查询，保留 Excel 原式导出。</small>
-          <span class="sea-badge">工作流</span>
-          <em>账单抓取 · 费用联动 · 人行汇率 · 公式导出</em>
+          <div class="sea-head">
+            <b>请款</b>
+            <span class="sea-badge">费用请款</span>
+          </div>
+          <small>支持涉外与 PCT 请款：自动抓取账单联动查费，带人行汇率原式导出。</small>
+          <em>账单抓取 · 费用联动 · 原式导出</em>
         </button>
         <div class="sea-actions">
-          <button type="button" class="sea-remove" @click="openToolWorkspace('billing', 'guide')">使用说明</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('billing', 'use')">开始请款</button>
+          <button type="button" class="sea-action-primary" @click="openToolWorkspace('billing', 'use')">开始使用</button>
+          <button type="button" class="sea-remove" @click="openToolWorkspace('billing', 'guide')">流程说明</button>
         </div>
       </article>
       <article class="sea-card pct-notice-workflow-card">
         <button type="button" class="sea-open" @click="openToolWorkspace('pctNotice')">
-          <b>pct官文下载上传</b>
-          <small>大小客户双系统并行：导出未导入并集清单、删 PCT/、二次下载全量分析、两轮导入系统。</small>
-          <span class="sea-badge">双系统并行</span>
-          <em>静默预检 · 未导入并集 · 并行处理 · 两轮导入</em>
+          <div class="sea-head">
+            <b>pct官文下载上传</b>
+            <span class="sea-badge">官文同步</span>
+          </div>
+          <small>大小客户双系统并行：比对未导入官文，自动清理前缀并完成两轮回传。</small>
+          <em>双系统并行 · 增量比对 · 自动回传</em>
         </button>
         <div class="sea-actions">
+          <button type="button" class="sea-action-primary" @click="openToolWorkspace('pctNotice', 'use')">开始使用</button>
           <button type="button" class="sea-remove" @click="openToolWorkspace('pctNotice', 'guide')">流程说明</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('pctNotice', 'use')">开始使用</button>
         </div>
       </article>
       <article class="sea-card fee-reduce-workflow-card">
         <button type="button" class="sea-open" @click="openToolWorkspace('feeReduce')">
-          <b>请求费用减缓</b>
-          <small>按我方文号检索处理状态：递交中/完成跳过，撰写中自动创建费用减缴递交、XML 转档并提交初核。</small>
-          <span class="sea-badge">工作流</span>
-          <em>文号检索 · 状态判定 · XML 转档 · 提交初核</em>
+          <div class="sea-head">
+            <b>请求费用减缓</b>
+            <span class="sea-badge">费减办理</span>
+          </div>
+          <small>按我方文号识别处理状态，撰写中案件自动创建费减递交、转档并提初核。</small>
+          <em>状态筛选 · XML 转档 · 提交初核</em>
         </button>
         <div class="sea-actions">
+          <button type="button" class="sea-action-primary" @click="openToolWorkspace('feeReduce', 'use')">开始使用</button>
           <button type="button" class="sea-remove" @click="openToolWorkspace('feeReduce', 'guide')">流程说明</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('feeReduce', 'use')">开始使用</button>
         </div>
       </article>
       <button type="button" class="sea-card sea-add" @click="openOcean">
+        <span class="sea-add-icon" aria-hidden="true">+</span>
         <b>从知识海洋加一条</b>
-        <small>把会做的事挑出来，按你点的顺序排好。</small>
+        <small>自由挑选常用步骤，按业务顺序编排你的专属工作流。</small>
       </button>
     </section>
 

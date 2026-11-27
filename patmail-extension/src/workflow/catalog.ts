@@ -58,7 +58,7 @@ export function defaultPctWorkflow(): WorkflowDefinition {
   return {
     id: PCT_ID,
     label: 'PCT提醒',
-    summary: '把表格里要提醒的申请，整理成一封封准备发出的信。',
+    summary: '导入提醒表格，自动匹配发文类型与联系人，批量生成 PCT 提醒邮件。',
     system: true,
     steps: PCT_SKILLS.map(([id, skillId]) => stepFromSkill(id, skillId))
   }
@@ -115,7 +115,7 @@ export function defaultPengchengWorkflow(): WorkflowDefinition {
   return {
     id: PENGCHENG_ID,
     label: 'PCT鹏城专案',
-    summary: '收件人是技术负责人，抄送是 IPR 和商务。',
+    summary: '鹏城专案专用：按表格自动主送技术负责人，并抄送 IPR 与商务。',
     system: true,
     steps
   }
@@ -126,7 +126,7 @@ export function defaultFileManageWorkflow(): WorkflowDefinition {
   return {
     id: FILE_MANAGE_ID,
     label: '文件管理',
-    summary: '按客户已绑定的查询条件和发文方式，把文件描述对上的发文类型写成信。',
+    summary: '读取客户已绑定的查询条件与发文方式，按文件描述自动匹配类型并成信。',
     system: true,
     steps: [
       { id: 'file-customer', title: '选择客户', detail: '先选一位客户，读取这位客户保存的查询条件和发文方式。', params: [] },
@@ -146,7 +146,7 @@ export function defaultFilingExportWorkflow(): WorkflowDefinition {
   return {
     id: FILING_EXPORT_ID,
     label: '递交管理-已完成导出',
-    summary: '现场查出递交记录并勾选，整理成导出表：谁退回、退回原因、谁接手、接手人部门。',
+    summary: '勾选已完成递交记录，自动追溯退回人、原因与接手代理师，导出统计表。',
     system: true,
     steps: [
       { id: 'export-pick', title: '勾选递交记录', detail: '在查询表单里现场查出递交记录再勾选：逐行勾、全选本页、全选所有都行。结果超过 1000 条会先提醒加条件。', params: [] },

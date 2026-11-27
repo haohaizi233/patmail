@@ -332,7 +332,7 @@ describe('workflow view memory via WorkflowWorkspace', () => {
     await settle()
 
     const billingGuideBtn = [...cardFor('请款').querySelectorAll<HTMLButtonElement>('.sea-actions button')]
-      .find(btn => btn.textContent?.trim() === '使用说明')
+      .find(btn => btn.textContent?.trim() === '流程说明')
     billingGuideBtn?.click()
     await settle()
     expect(activeWorkflowTab('.workflow-billing')).toBe('流程说明')
