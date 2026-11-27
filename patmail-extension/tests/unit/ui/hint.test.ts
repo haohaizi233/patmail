@@ -130,4 +130,43 @@ describe('悬停气泡', () => {
     // 卸载后 __hintDirective 已清空，但自身有 .clip 且溢出仍走原生委托兜底；移除 DOM 验证不再依赖实例监听器
     clipEl.remove()
   })
+
+  it('1px 溢出及亚像素取整相等时仍判定为已截断并弹出气泡', () => {
+    installHintHost(document)
+    const onePx = document.createElement('span')
+    onePx.className = 'clip'
+    onePx.textContent = '美的厨房和热水事业部'
+    Object.defineProperty(onePx, 'scrollWidth', { value: 125, configurable: true })
+    Object.defineProperty(onePx, 'clientWidth', { value: 124, configurable: true })
+    document.body.appendChild(onePx)
+
+    hintDirective.mounted(onePx, { value: '美的厨房和热水事业部', modifiers: { clip: true } })
+    expect(isTextClipped(onePx)).toBe(true)
+    onePx.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    const bubble = document.body.querySelector<HTMLElement>(':scope > .patmail-hint')
+    expect(bubble?.hidden).toBe(false)
+    expect(bubble?.textContent).toBe('美的厨房和热水事业部')
+    hintDirective.unmounted(onePx)
+
+    const subPx = document.createElement('span')
+    subPx.className = 'clip'
+    subPx.style.whiteSpace = 'nowrap'
+    subPx.style.overflow = 'hidden'
+    subPx.style.textOverflow = 'ellipsis'
+    subPx.textContent = '亚像素截断示例文本'
+    Object.defineProperty(subPx, 'scrollWidth', { value: 124, configurable: true })
+    Object.defineProperty(subPx, 'clientWidth', { value: 124, configurable: true })
+    subPx.getBoundingClientRect = () => ({ width: 123.6, height: 20, top: 0, left: 0, right: 123.6, bottom: 20, x: 0, y: 0, toJSON: () => ({}) })
+    const origCreateRange = document.createRange.bind(document)
+    document.createRange = (() => ({
+      selectNodeContents: () => {},
+      getBoundingClientRect: () => ({ width: 124.4, height: 20, top: 0, left: 0, right: 124.4, bottom: 20, x: 0, y: 0, toJSON: () => ({}) })
+    })) as unknown as typeof document.createRange
+    try {
+      document.body.appendChild(subPx)
+      expect(isTextClipped(subPx)).toBe(true)
+    } finally {
+      document.createRange = origCreateRange
+    }
+  })
 })

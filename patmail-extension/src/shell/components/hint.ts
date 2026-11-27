@@ -108,18 +108,36 @@ export function visibleHint(explicit: string, content: string, clipOnly: boolean
   return tip
 }
 
-export function isTextClipped(el: HTMLElement): boolean {
-  if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) return true
-  const clipChild = el.querySelector<HTMLElement>(CLIP_SELECTOR)
-  if (clipChild && (clipChild.scrollWidth > clipChild.clientWidth + 1 || clipChild.scrollHeight > clipChild.clientHeight + 1)) {
-    return true
+function isElementClipped(el: HTMLElement): boolean {
+  if (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight) return true
+  if (typeof getComputedStyle === 'function' && typeof document !== 'undefined' && typeof document.createRange === 'function') {
+    const style = getComputedStyle(el)
+    if (
+      style.whiteSpace === 'nowrap' &&
+      (style.textOverflow === 'ellipsis' || style.overflowX === 'hidden' || style.overflow === 'hidden')
+    ) {
+      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0
+      const paddingRight = Number.parseFloat(style.paddingRight) || 0
+      const available = el.getBoundingClientRect().width - paddingLeft - paddingRight
+      if (available > 0) {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        if (range.getBoundingClientRect().width > available + 0.5) return true
+      }
+    }
   }
   return false
 }
 
+export function isTextClipped(el: HTMLElement): boolean {
+  if (isElementClipped(el)) return true
+  const clipChild = el.querySelector<HTMLElement>(CLIP_SELECTOR)
+  return Boolean(clipChild && isElementClipped(clipChild))
+}
+
 function anchorRectOf(el: HTMLElement): DOMRect {
   const clipChild = el.querySelector<HTMLElement>(CLIP_SELECTOR)
-  if (clipChild && (clipChild.scrollWidth > clipChild.clientWidth + 1 || clipChild.scrollHeight > clipChild.clientHeight + 1)) {
+  if (clipChild && isElementClipped(clipChild)) {
     return clipChild.getBoundingClientRect()
   }
   return el.getBoundingClientRect()
