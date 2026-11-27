@@ -11,6 +11,11 @@ declare module '*.css?inline' {
   export default css
 }
 
+declare module '*.glsl?raw' {
+  const glsl: string
+  export default glsl
+}
+
 declare module 'sql.js' {
   interface SqlStatement {
     run(values: unknown[]): void
