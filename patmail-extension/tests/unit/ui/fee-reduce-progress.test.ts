@@ -3,23 +3,29 @@ import { afterEach, expect, it, vi } from 'vitest'
 import FeeReduceWorkflowPage from '../../../src/app/pages/FeeReduceWorkflowPage.vue'
 import CheckRainbow from '../../../src/app/components/CheckRainbow.vue'
 import { MessageType, type AppMessage } from '../../../src/shared/message'
+import { emptyConnection } from '../../../src/shared/connection'
 
 const request = vi.hoisted(() => vi.fn<(message: AppMessage) => Promise<unknown>>())
 const confirm = vi.hoisted(() => vi.fn())
 const recoveryState = vi.hoisted(() => new Map<string, unknown>())
 const writeCheckpoint = vi.hoisted(() => vi.fn<(scope: string, value: unknown) => boolean>())
+const readCheckpoint = vi.hoisted(() => vi.fn<(scope: string) => boolean>())
+const connected = {
+  ...emptyConnection('http://183.36.43.66:88'),
+  sessionStatus: 'authenticated' as const, easyTabId: 1,
+  operatorId: '11111111-1111-4111-8111-111111111111', connectionVersion: 1
+}
+const connection = ref(connected as ReturnType<typeof emptyConnection>)
 vi.mock('../../../src/app/services/full-page-bridge', () => ({ createWorkflowBridge: () => ({ request }) }))
 vi.mock('../../../src/app/composables/useWorkspace', () => ({
-  useWorkspace: () => ({ connection: ref({
-    sessionStatus: 'authenticated', easyOrigin: 'http://183.36.43.66:88', easyTabId: 1,
-    operatorId: '11111111-1111-4111-8111-111111111111', connectionVersion: 1
-  }) })
+  useWorkspace: () => ({ connection })
 }))
 vi.mock('../../../src/settings/use-write-switch', () => ({ useWriteSwitch: () => ({ open: ref(true) }) }))
 vi.mock('../../../src/app/dialog', () => ({ confirmDialog: confirm, infoDialog: vi.fn() }))
 vi.mock('../../../src/recovery/client', () => ({
   createRecoveryClient: () => ({
-    get: (_slot: string, scope: string) => Promise.resolve(recoveryState.get(scope) ?? null),
+    get: (_slot: string, scope: string) => readCheckpoint(scope) === false
+      ? Promise.reject(new Error('测试：恢复账本读取失败')) : Promise.resolve(recoveryState.get(scope) ?? null),
     put: (_slot: string, scope: string, value: unknown) => {
       if (writeCheckpoint(scope, value) === false) return Promise.reject(new Error('测试：恢复账本写入失败'))
       recoveryState.set(scope, value)
@@ -52,6 +58,8 @@ afterEach(() => {
   root?.remove()
   recoveryState.clear()
   writeCheckpoint.mockReset()
+  readCheckpoint.mockReset()
+  connection.value = connected
 })
 
 function mountWorkbench() {
@@ -70,17 +78,53 @@ function inspectResponse(volumes: string[]) {
   } } }
 }
 
-it('restores the last committed inspection page and missing-case filter after refresh', async () => {
+it('shows account verification on refresh and retries a failed WAL read in the same connection', async () => {
+  const scope = JSON.stringify(['fee-reduce-batch', connected.easyOrigin, connected.operatorId])
+  recoveryState.set(scope, {
+    kind: 'fee-reduce-batch-v1', id: 'reopen', entries: [{ caseVolume: 'CASE-1' }, { caseVolume: 'CASE-2' }]
+  })
+  recoveryState.set(`${scope}:cursor:reopen`, { nextIndex: 1 })
+  let available = false
+  readCheckpoint.mockImplementation(() => available)
+  request.mockReset()
+  request.mockResolvedValue({ type: MessageType.ReadFeeReduceReviewersResult, payload: { ok: true, data: { reviewers: [] } } })
+  connection.value = emptyConnection(connected.easyOrigin)
+  mountWorkbench()
+  await settle()
+  expect(root.textContent).toContain('确认 EASY 登录后恢复上次费减进度')
+  expect(readCheckpoint).not.toHaveBeenCalled()
+
+  connection.value = connected
+  await settle()
+  const retry = [...root.querySelectorAll('button')].find(button => button.textContent?.includes('重新读取恢复进度'))
+  expect(retry).toBeDefined()
+  expect(root.textContent).toContain('读取上次费减进度失败')
+  expect(root.querySelector<HTMLButtonElement>('.fr-actions button')?.disabled).toBe(true)
+
+  available = true
+  retry?.click()
+  await settle()
+  expect(root.textContent).toContain('已恢复上次费减批次')
+  expect(root.textContent).toContain('待核对 1 件，未派发 1 件')
+  expect(progress()?.classList.contains('is-hold')).toBe(true)
+  expect(root.textContent).not.toContain('读取上次费减进度失败')
+  expect(request.mock.calls.every(([message]) => message.type === MessageType.ReadFeeReduceReviewers)).toBe(true)
+})
+
+it('automatically resumes from the durable page and keeps recovered results read-only', async () => {
   const volumes = Array.from({ length: 49 }, (_, index) => `CASE-${index + 1}`)
-  const nextPage = deferred()
+  const interrupted = deferred()
+  const resumed = deferred()
+  const remaining: string[][] = []
   request.mockReset()
   request.mockImplementation(message => {
     if (message.type === MessageType.ReadFeeReduceReviewers) {
       return Promise.resolve({ type: MessageType.ReadFeeReduceReviewersResult, payload: { ok: true, data: { reviewers: [] } } })
     }
     if (message.type !== MessageType.InspectFeeReduceCases) throw new Error('Recovery must avoid writes')
-    return message.payload.caseVolumes.length === 48
-      ? Promise.resolve(inspectResponse(message.payload.caseVolumes)) : nextPage.promise
+    if (message.payload.caseVolumes.length === 48) return Promise.resolve(inspectResponse(message.payload.caseVolumes))
+    remaining.push(message.payload.caseVolumes)
+    return remaining.length === 1 ? interrupted.promise : resumed.promise
   })
   mountWorkbench()
   await settle()
@@ -97,11 +141,11 @@ it('restores the last committed inspection page and missing-case filter after re
   app?.unmount()
   root.remove()
   mountWorkbench()
-  nextPage.resolve(inspectResponse(volumes.slice(48)))
+  interrupted.resolve(inspectResponse(volumes.slice(48)))
   await settle()
   expect(progress()?.getAttribute('aria-valuetext')).toContain('检索 48/49')
-  expect(progress()?.classList.contains('is-hold')).toBe(true)
-  expect(root.textContent).toContain('上次检索已中断')
+  expect(progress()?.classList.contains('is-run')).toBe(true)
+  expect(progress()?.getAttribute('aria-valuetext')).toContain('从检查点继续检索')
   expect(root.querySelector('textarea')?.value).toBe(volumes.join('\n'))
   const toggle = root.querySelector<HTMLButtonElement>('.fr-summary button')!
   expect(toggle.textContent).toContain('只看未查到（1）')
@@ -111,7 +155,58 @@ it('restores the last committed inspection page and missing-case filter after re
   expect(root.querySelector('.fr-table tbody tr')?.textContent).toContain('CASE-2')
   const submit = [...root.querySelectorAll('button')].find(button => button.textContent?.includes('递交已勾选'))
   expect(submit?.disabled).toBe(true)
-  expect(request.mock.calls.filter(([message]) => message.type === MessageType.InspectFeeReduceCases)).toHaveLength(2)
+  expect(remaining).toEqual([volumes.slice(48), volumes.slice(48)])
+  expect(request.mock.calls.filter(([message]) => message.type === MessageType.InspectFeeReduceCases)).toHaveLength(3)
+
+  resumed.resolve(inspectResponse(volumes.slice(48)))
+  await settle()
+  expect(progress()?.getAttribute('aria-valuetext')).toContain('检索 49/49')
+  expect(progress()?.classList.contains('is-done')).toBe(true)
+  expect(submit?.disabled).toBe(true)
+  expect(request.mock.calls.some(([message]) => message.type === MessageType.SubmitFeeReduceFiling)).toBe(false)
+})
+
+it('reconnects to the original account and resumes its read-only recheck without resending a submission', async () => {
+  const volumes = Array.from({ length: 49 }, (_, index) => `CASE-${index + 1}`)
+  const scope = JSON.stringify(['fee-reduce-batch', connected.easyOrigin, connected.operatorId])
+  const inspection = `${scope}:inspection`
+  recoveryState.set(scope, {
+    kind: 'fee-reduce-batch-v1', id: 'pending-submission',
+    entries: volumes.map(caseVolume => ({ caseVolume }))
+  })
+  recoveryState.set(`${scope}:cursor:pending-submission`, { nextIndex: 1 })
+  recoveryState.set(inspection, { id: 'partial', volumes, reviewVolumes: ['CASE-1'], recheckBatchId: 'pending-submission' })
+  recoveryState.set(`${inspection}:partial:progress`, { nextPage: 1, state: 'running' })
+  recoveryState.set(`${inspection}:partial:0`, inspectResponse(volumes.slice(0, 48)).payload.data.items)
+  const requested: string[][] = []
+  request.mockReset()
+  request.mockImplementation(message => {
+    if (message.type === MessageType.ReadFeeReduceReviewers) {
+      return Promise.resolve({ type: MessageType.ReadFeeReduceReviewersResult, payload: { ok: true, data: { reviewers: [] } } })
+    }
+    if (message.type !== MessageType.InspectFeeReduceCases) throw new Error('Auto-resume must only send reads')
+    requested.push(message.payload.caseVolumes)
+    return Promise.resolve(requested.length === 1
+      ? { type: MessageType.InspectFeeReduceCasesResult, payload: { ok: false,
+        error: { code: 'SESSION_EXPIRED', message: 'EASY 登录已过期' } } }
+      : inspectResponse(message.payload.caseVolumes))
+  })
+  mountWorkbench()
+  await settle()
+  expect(progress()?.classList.contains('is-hold')).toBe(true)
+  expect(root.textContent).toContain('确认原 EASY 账号后自动继续')
+  expect(requested).toEqual([volumes.slice(48)])
+  expect(recoveryState.get(scope)).toBeDefined()
+
+  connection.value = emptyConnection(connected.easyOrigin)
+  await settle()
+  connection.value = { ...connected, easyTabId: 2, connectionVersion: 2 }
+  await settle()
+  expect(requested).toEqual([volumes.slice(48), volumes.slice(48)])
+  expect(progress()?.getAttribute('aria-valuetext')).toContain('检索 49/49')
+  expect(root.querySelector('.fr-table tbody tr')?.textContent).toContain('待核对')
+  expect(root.querySelector('.fr-table tbody tr input')?.getAttribute('disabled')).not.toBeNull()
+  expect(request.mock.calls.some(([message]) => message.type === MessageType.SubmitFeeReduceFiling)).toBe(false)
 })
 
 it('restores pending work after refresh and only preselects cases beyond the durable cursor', async () => {

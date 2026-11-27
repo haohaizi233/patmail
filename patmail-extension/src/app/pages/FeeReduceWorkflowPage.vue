@@ -12,7 +12,7 @@ import { MessageType } from '../../shared/message'
 import { isRecord } from '../../shared/guards'
 import { accountScopeMatches, sameOperatorId, scopeFromConnection, type ExpectedAccountScope } from '../../shared/connection'
 import { useWorkspace } from '../composables/useWorkspace'
-import { feeInspectionJournal } from '../../workflow/fee-reduce-inspection-recovery'
+import { FEE_INSPECTION_CHUNK_SIZE, feeInspectionJournal, type FeeInspectionSnapshot } from '../../workflow/fee-reduce-inspection-recovery'
 import type {
   FeeReduceCaseInspectItem,
   FeeReduceReviewerOption,
@@ -66,6 +66,8 @@ const loadingReviewers = ref(false)
 const executing = ref(false)
 const restoring = ref(false)
 const restoredInspection = ref(false)
+const restoreFailure = ref('')
+const currentAccount = computed(() => scopeFromConnection(connection.value))
 let disposed = false
 let reviewVolumes = new Set<string>()
 onBeforeUnmount(() => { disposed = true })
@@ -86,7 +88,7 @@ const concurrency = ref('6')
 
 const rows = reactive<FeeReduceRowState[]>([])
 const pausedBatch = ref<{ account: ExpectedAccountScope; rows: FeeReduceRowState[]; journalId: string } | null>(null)
-const actionsLocked = computed(() => inspecting.value || executing.value || restoring.value)
+const actionsLocked = computed(() => !currentAccount.value || !!restoreFailure.value || inspecting.value || executing.value || restoring.value)
 const selectionLocked = computed(() => actionsLocked.value || restoredInspection.value || !!pausedBatch.value)
 const recoveryScope = (account: ExpectedAccountScope) => JSON.stringify(['fee-reduce-batch', account.easyOrigin, account.operatorId.trim().toLowerCase()])
 const cursorScope = (scope: string, id: string) => `${scope}:cursor:${id}`
@@ -327,11 +329,46 @@ function startProgress(label: string, total: number, detail: string) {
   return update
 }
 
-async function inspectAll(recheckPaused = false): Promise<void> {
-  if (restoring.value || inspecting.value || executing.value) return
+async function inspectAll(recheckPaused = false, resume?: FeeInspectionSnapshot): Promise<void> {
+  if (actionsLocked.value) return
   if (pausedBatch.value && (!recheckPaused || !canRecheckPaused.value)) return
+  const account = currentAccount.value
+  if (!account) return
+  inspecting.value = true
+  const run = async () => {
+    if (disposed || !accountScopeMatches(connection.value, account)) return
+    if (!resume) {
+      await runInspection(account, recheckPaused)
+      return
+    }
+    const latest = await inspectionJournal(account).refresh(resume)
+    if (disposed || !accountScopeMatches(connection.value, account)) return
+    if (!latest || latest.id !== resume.id) throw new Error('检索检查点已变化，请重新打开费减工作台。')
+    if (latest !== resume) showSavedInspection(latest, account)
+    if (latest.state !== 'running') return
+    const expected = Math.min(latest.nextPage * FEE_INSPECTION_CHUNK_SIZE, latest.volumes.length)
+    if (latest.rows.length !== expected) throw new Error('检索检查点的结果数不一致，请重新检索。')
+    await runInspection(account, recheckPaused, latest)
+  }
+  try {
+    if (navigator.locks) {
+      await navigator.locks.request(`patmail:${recoveryScope(account)}:inspection`, { ifAvailable: true }, async lock => {
+        if (lock) await run()
+        else statusNotice.value = '另一工作台正在检索该账号的案件。请在原工作台查看进度。'
+      })
+    } else {
+      await run()
+    }
+  } catch (error) {
+    if (!disposed) errorNotice.value = error instanceof Error ? error.message : '无法继续费减检索。'
+  } finally {
+    inspecting.value = false
+  }
+}
+
+async function runInspection(account: ExpectedAccountScope, recheckPaused: boolean, resume?: FeeInspectionSnapshot): Promise<void> {
   errorNotice.value = ''
-  statusNotice.value = ''
+  statusNotice.value = resume ? `已恢复 ${resume.rows.length}/${resume.volumes.length} 件，从检查点继续检索。` : ''
   const recoveryBatch = recheckPaused ? pausedBatch.value : null
   const priorRows = recoveryBatch?.rows
   const overrides = new Map(priorRows?.map(row => [row.item.caseVolume.toUpperCase(), row.overrideReviewerId]))
@@ -339,33 +376,36 @@ async function inspectAll(recheckPaused = false): Promise<void> {
   for (const row of priorRows ?? []) {
     if (row.execStatus === 'unconfirmed') uncertain.add(row.item.caseVolume.toUpperCase())
   }
-  const volumes = priorRows ? priorRows.map(row => row.item.caseVolume) : parsedVolumes.value
+  for (const item of resume?.rows ?? []) {
+    if (item.state === 'completed') uncertain.delete(item.caseVolume.toUpperCase())
+  }
+  const volumes = resume?.volumes ?? (priorRows ? priorRows.map(row => row.item.caseVolume) : parsedVolumes.value)
   if (!volumes.length) {
     errorNotice.value = '请先输入或导入至少一个我方文号。'
     return
   }
-  const account = scopeFromConnection(connection.value)
-  if (!account) {
-    errorNotice.value = '请先连接已登录的 EASY 账号。'
-    return
+  const needsFreshReview = Boolean(resume?.rows.length)
+  restoredInspection.value = needsFreshReview
+  if (!resume) {
+    showMissingOnly.value = false
+    resultPage.value = 1
+    rows.splice(0, rows.length)
   }
-  inspecting.value = true
-  restoredInspection.value = false
-  showMissingOnly.value = false
-  resultPage.value = 1
-  rows.splice(0, rows.length)
-  const updateProgress = startProgress('费减检索', volumes.length, '正在检索案件与处理状态')
+  const detail = resume ? '正在从检查点继续检索' : '正在检索案件与处理状态'
+  const updateProgress = startProgress('费减检索', volumes.length, detail)
   const journal = inspectionJournal(account)
-  let batch: Awaited<ReturnType<typeof journal.begin>> | undefined
-  let nextPage = 0
-  let done = 0
+  let batch: Awaited<ReturnType<typeof journal.begin>> | undefined = resume ? { plan: resume, previous: null } : undefined
+  let nextPage = resume?.nextPage ?? 0
+  let done = resume?.rows.length ?? 0
+  let sessionExpired = false
+  updateProgress(done, 'run')
   try {
-    batch = await journal.begin(volumes, [...uncertain])
+    batch ??= await journal.begin(volumes, [...uncertain], recoveryBatch?.journalId)
     if (!reviewers.value.length || !reviewerAccount.value || !accountScopeMatches(connection.value, reviewerAccount.value)) {
       await loadReviewers()
     }
-    const chunkSize = 48
-    for (let i = 0; i < volumes.length; i += chunkSize) {
+    const chunkSize = FEE_INSPECTION_CHUNK_SIZE
+    for (let i = done; i < volumes.length; i += chunkSize) {
       if (disposed) return
       if (!accountScopeMatches(connection.value, account)) throw new Error('EASY 账号已切换，请重新检索。')
       const chunk = volumes.slice(i, i + chunkSize)
@@ -388,7 +428,7 @@ async function inspectAll(recheckPaused = false): Promise<void> {
             const needsReview = uncertain.has(key)
             return {
               item,
-              checked: item.state === 'ready' && !needsReview,
+              checked: !needsFreshReview && item.state === 'ready' && !needsReview,
               overrideReviewerId: overrides.get(key) ?? '',
               execStatus: needsReview ? 'unconfirmed' : 'idle',
               execMessage: needsReview ? '上次递交回执未确认，请先到 EASY 核对。' : '',
@@ -401,6 +441,7 @@ async function inspectAll(recheckPaused = false): Promise<void> {
         done += chunk.length
         updateProgress(done, 'run')
       } else if (res.type === MessageType.InspectFeeReduceCasesResult && !res.payload.ok) {
+        sessionExpired = res.payload.error.code === 'SESSION_EXPIRED'
         throw new Error(res.payload.error.message)
       } else if (res.type === MessageType.Error) {
         throw new Error(res.payload.message)
@@ -414,16 +455,23 @@ async function inspectAll(recheckPaused = false): Promise<void> {
     reviewVolumes = uncertain
     pausedBatch.value = null
     statusNotice.value = `检索完成：共 ${counts.value.total} 件，已完成 ${counts.value.completed} 件，待递交（撰写中）${counts.value.ready} 件。`
+    if (needsFreshReview) statusNotice.value += '已合并恢复结果，重新检索后可递交。'
     updateProgress(done, 'done', `已完成 ${counts.value.completed} 件，待递交 ${counts.value.ready} 件`)
   } catch (err) {
     if (disposed) return
+    if (batch && (sessionExpired || !accountScopeMatches(connection.value, account))) {
+      restoredScope = ''
+      restoredInspection.value = true
+      statusNotice.value = '检索进度已保留，确认原 EASY 账号后自动继续。'
+      updateProgress(done, 'hold', statusNotice.value)
+      return
+    }
     if (batch) await journal.finish(batch.plan, nextPage, 'failed').catch(() => undefined)
     restoredInspection.value = true
     errorNotice.value = err instanceof Error ? err.message : '检索失败。'
     updateProgress(done, 'fail', errorNotice.value)
   } finally {
-    if (batch?.previous) void journal.prune(batch.previous).catch(() => undefined)
-    inspecting.value = false
+    if (batch?.previous) await journal.prune(batch.previous).catch(() => undefined)
   }
 }
 
@@ -490,7 +538,7 @@ async function runSingleRow(row: FeeReduceRowState, payload: FeeReduceSubmitRequ
 }
 
 async function executeSelected(): Promise<void> {
-  if (disposed || restoring.value || restoredInspection.value || pausedBatch.value || inspecting.value || executing.value) return
+  if (disposed || selectionLocked.value) return
   if (!writeOpen.value) {
     await infoDialog({
       title: '写开关未开启',
@@ -521,7 +569,7 @@ async function executeSelected(): Promise<void> {
     message: `将对已勾选的 ${targets.length} 件「撰写中」案件按 ${workerCount} 路并发执行：校验 → 创建费用减缴请求递交单 → XML 转档 → 提交至「${reviewerNodeName.value}」（默认：${defaultLabel}）。确认继续？`,
     confirmLabel: '开始递交'
   })
-  if (!confirmed || disposed || restoring.value || restoredInspection.value || pausedBatch.value || inspecting.value || executing.value) return
+  if (!confirmed || disposed || selectionLocked.value) return
   if (targets.some(({ row }) => !rows.includes(row) || !accountScopeMatches(connection.value, row.account))) {
     errorNotice.value = '案件列表或 EASY 账号已变化，请重新确认。'
     return
@@ -610,7 +658,7 @@ async function executeSelected(): Promise<void> {
 }
 
 async function retryRow(row: FeeReduceRowState): Promise<void> {
-  if (disposed || restoring.value || restoredInspection.value || pausedBatch.value) return
+  if (disposed || selectionLocked.value) return
   if (!writeOpen.value) {
     await infoDialog({
       title: '写开关未开启',
@@ -647,7 +695,7 @@ async function retryRow(row: FeeReduceRowState): Promise<void> {
 }
 
 function toggleAllReady(checked: boolean): void {
-  if (restoring.value || restoredInspection.value || pausedBatch.value || inspecting.value || executing.value) return
+  if (selectionLocked.value) return
   for (const row of rows) {
     if (row.item.state === 'ready' && row.execStatus !== 'submitted' && row.execStatus !== 'unconfirmed') {
       row.checked = checked
@@ -662,7 +710,8 @@ async function restoreBatch(account: ExpectedAccountScope, inspectionStartedAt =
     if (!isRecord(saved) || saved.kind !== 'fee-reduce-batch-v1' || typeof saved.id !== 'string' ||
         !Array.isArray(saved.entries)) return false
     const cursor = await recovery.get('workflow-desk', cursorScope(scope, saved.id))
-    if (disposed || pausedBatch.value || inspecting.value || executing.value || !accountScopeMatches(connection.value, account)) return false
+    if (disposed || (pausedBatch.value && !restoring.value) || inspecting.value || executing.value ||
+        !accountScopeMatches(connection.value, account)) return false
     const nextIndex = isRecord(cursor) && typeof cursor.nextIndex === 'number' &&
       Number.isSafeInteger(cursor.nextIndex) && cursor.nextIndex >= 0 ? cursor.nextIndex : saved.entries.length
     const codes = isRecord(cursor) && typeof cursor.outcomes === 'string' ? cursor.outcomes : ''
@@ -700,6 +749,7 @@ async function restoreBatch(account: ExpectedAccountScope, inspectionStartedAt =
     volumeInput.value = restored.map(row => row.item.caseVolume).join('\n')
     return true
   } catch (error) {
+    if (restoring.value) throw error
     if (!disposed && accountScopeMatches(connection.value, account)) {
       errorNotice.value = error instanceof Error ? error.message : '无法读取费减批次账本。'
     }
@@ -707,7 +757,28 @@ async function restoreBatch(account: ExpectedAccountScope, inspectionStartedAt =
   }
 }
 
-async function restoreProgress(account: ExpectedAccountScope): Promise<void> {
+function showSavedInspection(latest: FeeInspectionSnapshot, account: ExpectedAccountScope): void {
+  reviewVolumes = new Set(latest.reviewVolumes)
+  for (const item of latest.rows) {
+    if (item.state === 'completed') reviewVolumes.delete(item.caseVolume.toUpperCase())
+  }
+  volumeInput.value = latest.volumes.join('\n')
+  rows.splice(0, rows.length, ...latest.rows.map((item): FeeReduceRowState => {
+    const needsReview = reviewVolumes.has(item.caseVolume.toUpperCase())
+    return {
+      item, checked: false, overrideReviewerId: '', execStatus: needsReview ? 'unconfirmed' : 'idle',
+      execMessage: needsReview ? '上次递交回执未确认，请先到 EASY 核对。' : '', account, filingId: '', warnings: []
+    }
+  }))
+  restoredInspection.value = true
+  const detail = `已保留 ${latest.rows.length}/${latest.volumes.length} 件检索结果。重新检索后可递交。`
+  const state = latest.state === 'running' ? 'hold' : latest.state === 'done' ? 'done' : 'fail'
+  statusNotice.value = `${state === 'hold' ? '正在准备续跑。' : state === 'done' ? '已恢复上次检索结果。' : '上次检索未完成。'}${detail}`
+  const update = startProgress('费减检索', latest.volumes.length, detail)
+  update(latest.rows.length, state, statusNotice.value)
+}
+
+async function restoreProgress(account: ExpectedAccountScope): Promise<FeeInspectionSnapshot | undefined> {
   try {
     const journal = inspectionJournal(account)
     const latest = await journal.read()
@@ -716,37 +787,30 @@ async function restoreProgress(account: ExpectedAccountScope): Promise<void> {
     for (const item of latest?.rows ?? []) {
       if (item.state === 'completed') reviewVolumes.delete(item.caseVolume.toUpperCase())
     }
-    if (await restoreBatch(account, latest?.startedAt)) return
+    const recoveredBatch = await restoreBatch(account, latest?.startedAt)
     if (!latest || disposed || !accountScopeMatches(connection.value, account)) return
-    volumeInput.value = latest.volumes.join('\n')
-    rows.splice(0, rows.length, ...latest.rows.map((item): FeeReduceRowState => {
-      const needsReview = reviewVolumes.has(item.caseVolume.toUpperCase())
-      return {
-        item, checked: false, overrideReviewerId: '', execStatus: needsReview ? 'unconfirmed' : 'idle',
-        execMessage: needsReview ? '上次递交回执未确认，请先到 EASY 核对。' : '', account, filingId: '', warnings: []
-      }
-    }))
-    restoredInspection.value = true
-    const detail = `已保留 ${latest.rows.length}/${latest.volumes.length} 件检索结果。重新检索后可递交。`
-    const state = latest.state === 'running' ? 'hold' : latest.state === 'done' ? 'done' : 'fail'
-    statusNotice.value = `${state === 'hold' ? '上次检索已中断。' : state === 'done' ? '已恢复上次检索结果。' : '上次检索未完成。'}${detail}`
-    const update = startProgress('费减检索', latest.volumes.length, detail)
-    update(latest.rows.length, state, statusNotice.value)
+    if (recoveredBatch && (latest.state !== 'running' || !latest.recheckBatchId ||
+        latest.recheckBatchId !== pausedBatch.value?.journalId)) return
+    showSavedInspection(latest, account)
+    if (latest.state === 'running') return latest
   } catch (error) {
     if (!disposed && accountScopeMatches(connection.value, account)) {
-      errorNotice.value = error instanceof Error ? error.message : '无法读取上次费减进度。'
-      await restoreBatch(account)
+      await restoreBatch(account).catch(() => undefined)
     }
+    throw error
   }
 }
 
 onMounted(() => { void loadReviewers() })
+let visibleScope = ''
+let attemptedConnection = ''
 let restoredScope = ''
-watch([() => scopeFromConnection(connection.value), inspecting, executing, restoring], async ([account, busyInspect, busyExecute, busyRestore]) => {
-  if (!account || busyInspect || busyExecute || busyRestore || disposed) return
+
+async function restoreAccount(account: ExpectedAccountScope): Promise<void> {
+  if (inspecting.value || executing.value || restoring.value || disposed) return
   const scope = recoveryScope(account)
-  if (scope === restoredScope) return
-  if (restoredScope) {
+  attemptedConnection = JSON.stringify([scope, account.easyTabId, account.connectionVersion])
+  if (visibleScope && scope !== visibleScope) {
     rows.splice(0, rows.length)
     pausedBatch.value = null
     reviewVolumes = new Set()
@@ -757,14 +821,40 @@ watch([() => scopeFromConnection(connection.value), inspecting, executing, resto
     showMissingOnly.value = false
     resultPage.value = 1
     progress.value = { ...progress.value, visible: false }
+    restoredScope = ''
   }
+  visibleScope = scope
+  restoreFailure.value = ''
   restoring.value = true
+  let resume: FeeInspectionSnapshot | undefined
   try {
-    await restoreProgress(account)
+    resume = await restoreProgress(account)
     if (accountScopeMatches(connection.value, account)) restoredScope = scope
+  } catch (error) {
+    if (!disposed && accountScopeMatches(connection.value, account)) {
+      restoreFailure.value = error instanceof Error ? error.message : '恢复账本未返回结果。'
+    }
   } finally {
     restoring.value = false
   }
+  if (resume && !disposed && accountScopeMatches(connection.value, account)) {
+    await inspectAll(Boolean(resume.recheckBatchId && pausedBatch.value), resume)
+  }
+}
+
+function retryRestore(): void {
+  if (currentAccount.value) void restoreAccount(currentAccount.value)
+}
+
+watch([currentAccount, inspecting, executing, restoring, () => props.isActive], ([account, busyInspect, busyExecute, busyRestore, active]) => {
+  if (!account) {
+    attemptedConnection = ''
+    return
+  }
+  if (!active || busyInspect || busyExecute || busyRestore || disposed) return
+  const scope = recoveryScope(account)
+  if (scope === restoredScope || JSON.stringify([scope, account.easyTabId, account.connectionVersion]) === attemptedConnection) return
+  void restoreAccount(account)
 }, { immediate: true })
 </script>
 
@@ -879,8 +969,13 @@ watch([() => scopeFromConnection(connection.value), inspecting, executing, resto
       请重新连接本批次原来的 EASY 系统和账号，再检索未完成案件。
     </p>
 
-    <p v-if="restoring" class="hint" role="status">正在读取上次费减进度…</p>
-    <p v-else-if="statusNotice" class="hint" role="status">{{ statusNotice }}</p>
+    <p v-if="!currentAccount" class="hint" role="status">确认 EASY 登录后恢复上次费减进度。</p>
+    <p v-else-if="restoring" class="hint" role="status">正在读取上次费减进度…</p>
+    <div v-else-if="restoreFailure" class="fr-error" role="alert">
+      读取上次费减进度失败。{{ restoreFailure }}
+      <button type="button" class="ghost" @click="retryRestore">重新读取恢复进度</button>
+    </div>
+    <p v-if="!restoring && statusNotice" class="hint" role="status">{{ statusNotice }}</p>
     <p v-if="errorNotice" class="fr-error">{{ errorNotice }}</p>
 
     <div v-if="rows.length" class="fr-summary">
