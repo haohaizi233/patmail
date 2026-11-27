@@ -907,8 +907,8 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
           placeholder="每行一个，也支持分号或逗号分隔&#10;例如：&#10;PE26115584CND&#10;PE26115585CND"
         />
         <div v-if="sheetHeaders.length > 1" class="fr-sheet-bar">
-          <span>已导入：{{ sheetName }}</span>
-          <label>
+          <span class="fr-sheet-name" :title="sheetName">已导入：{{ sheetName }}</span>
+          <label class="fr-sheet-col">
             文号所在列
             <ThemeSelect
               :model-value="String(sheetColumnIndex)"
@@ -1080,7 +1080,10 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
 .fr-upload-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid #f3c4da; background: #fff; color: #c44b7e; cursor: pointer; font-size: 12px; font-weight: 600; transition: background .14s ease, border-color .14s ease; }
 .fr-upload-btn:hover { background: #fff0f6; border-color: #ff8ab8; }
 .fr-upload-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-.fr-sheet-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
+.fr-sheet-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; min-width: 0; }
+.fr-sheet-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5b4d68; }
+.fr-sheet-col { display: inline-flex; align-items: center; gap: 8px; flex: none; white-space: nowrap; font-weight: 600; color: #5b4d68; }
+.fr-sheet-col > :last-child { width: 148px; }
 .fr-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
 @media (max-width: 640px) { .fr-config-grid { grid-template-columns: 1fr; } }
 .fr-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; }

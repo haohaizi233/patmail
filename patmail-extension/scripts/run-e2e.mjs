@@ -39,6 +39,7 @@ const SUITES = {
   'native-pipeline-fault': { file: 'tests/e2e/native-pipeline-fault.e2e.mjs', needs: [] },
   'resume-protocol': { file: 'tests/e2e/resume-protocol.e2e.mjs', needs: [] },
   docs: { file: 'tests/e2e/docs.e2e.mjs', needs: [] },
+  'workflow-ocean': { file: 'tests/e2e/workflow-ocean.e2e.mjs', needs: [] },
   'stream-download': { file: 'tests/e2e/stream-download.e2e.mjs', needs: ['python', 'bridge'] },
   'durable-download': { file: 'tests/e2e/durable-download.e2e.mjs', needs: ['python', 'bridge'] },
   'stream-bridge-unittest': {
@@ -65,6 +66,7 @@ const GROUPS = {
     'native-pipeline-fault',
     'resume-protocol',
     'docs',
+    'workflow-ocean',
   ],
   legacy: ['stream-download', 'durable-download', 'stream-bridge-unittest'],
 }

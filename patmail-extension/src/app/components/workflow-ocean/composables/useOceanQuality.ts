@@ -12,7 +12,7 @@ function readStoredQuality(): OceanQuality {
   } catch {
     // 忽略受限存储上下文
   }
-  return 'balanced'
+  return 'static'
 }
 
 export function useOceanQuality() {

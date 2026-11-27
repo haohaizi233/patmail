@@ -18,7 +18,7 @@ it('partitions full into disjoint runner groups and preserves failures in shard 
     mkdirSync(join(root, 'tests/e2e'), { recursive: true })
     cpSync(join(projectRoot, 'scripts/run-e2e.mjs'), join(root, 'scripts/run-e2e.mjs'))
     writeFileSync(join(root, 'dist/manifest.json'), '{}')
-    const files = ['extension', 'workspace', 'limit-query', 'download', 'native-browser-download', 'file-pages', 'download-editor', 'prewarm-pagination', 'jihua-upload', 'billing', 'browser-download-store', 'native-stream-lifetime', 'native-pipeline-fault', 'resume-protocol', 'docs']
+    const files = ['extension', 'workspace', 'limit-query', 'download', 'native-browser-download', 'file-pages', 'download-editor', 'prewarm-pagination', 'jihua-upload', 'billing', 'browser-download-store', 'native-stream-lifetime', 'native-pipeline-fault', 'resume-protocol', 'docs', 'workflow-ocean']
     for (const file of files) writeFileSync(join(root, `tests/e2e/${file}.e2e.mjs`), '')
     const run = (group: string) => {
       const result = spawnSync(process.execPath, ['scripts/run-e2e.mjs', group], { cwd: root, encoding: 'utf8' })

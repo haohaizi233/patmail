@@ -3,7 +3,7 @@
  * 严格作用域：仅当工作流处于 sea / ocean 模式时激活，绝不污染业务工作台或其他路由
  * ========================================================================== */
 
-/* Layer 0：远景知识海洋背景（仅 sea / ocean 模式激活） */
+/* Layer 0：远景知识海洋背景（仅 sea / ocean 模式激活；3D WebGL 激活时隐藏静态壁纸防止双星球重叠） */
 .workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="sea"]),
 .workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="ocean"]) {
   position: relative;
@@ -25,6 +25,21 @@
     center,
     calc(50% + var(--ocean-px, 0px) * 0.45) calc(50% + var(--ocean-py, 0px) * 0.45);
   background-repeat: no-repeat;
+}
+
+.workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="sea"] [data-ocean-3d="true"]) {
+  background-image: none;
+  background-color: #f4ddf9;
+}
+
+.ocean-webgl-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  display: block;
 }
 
 .workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="sea"]) .site-foot,
@@ -50,6 +65,8 @@
 
 .shell:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="sea"]) .sidebar,
 .shell:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root[data-ocean-mode="ocean"]) .sidebar {
+  position: relative;
+  z-index: 10;
   background: linear-gradient(
     180deg,
     rgba(255, 248, 253, 0.90) 0%,
@@ -319,17 +336,55 @@
   font-weight: 800;
 }
 
+.ocean-quality-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 10px rgba(126, 83, 164, 0.08);
+}
+
+.ocean-quality-btn {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #5c4b6e;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background var(--ocean-duration-fast) var(--ocean-ease), color var(--ocean-duration-fast) var(--ocean-ease);
+}
+
+.ocean-quality-btn:hover:not(.on) {
+  background: rgba(255, 224, 242, 0.65);
+  color: #b42562;
+}
+
+.ocean-quality-btn.on {
+  background: linear-gradient(135deg, #ff6ea9, #e84488);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 3px 8px rgba(232, 68, 136, 0.24);
+}
+
 /* 右侧为背景知识星球保留通透展示空间 */
 .ocean-hero-spacer {
   flex: 1 1 160px;
   min-width: 80px;
 }
 
-/* Layer 2B：工作流卡片网格（基于容器宽度响应式，5/4/3/2/1 列） */
+/* Layer 2B：工作流卡片网格（基于容器宽度响应式，5/4/3/2/1 列 + CSS 3D 空间透视） */
 .ocean-grid-wrap {
   position: relative;
   z-index: 2;
   container-type: inline-size;
+  perspective: 1400px;
 }
 
 .ocean-grid-wrap::after {
@@ -376,12 +431,13 @@
   }
 }
 
-/* 4 层 Glassmorphism 卡片 */
+/* 4 层 Glassmorphism + CSS 3D 卡片 */
 .ocean-card.sea-card {
   position: relative;
   isolation: isolate;
+  transform-style: preserve-3d;
   min-width: 0;
-  min-height: 204px;
+  min-height: 210px;
   padding: 16px 16px 14px;
   display: flex;
   flex-direction: column;
@@ -391,9 +447,7 @@
   color: var(--ocean-text);
   border-radius: var(--ocean-card-radius);
   border: 1px solid var(--ocean-glass-border);
-  background:
-    radial-gradient(ellipse at 10% 0%, rgba(255, 255, 255, 0.80), transparent 56%),
-    linear-gradient(148deg, var(--ocean-glass-fallback-top), var(--ocean-glass-fallback-bottom));
+  background: transparent;
   box-shadow:
     var(--ocean-shadow),
     inset 0 1px 1px rgba(255, 255, 255, 0.96);
@@ -403,8 +457,19 @@
     border-color var(--ocean-duration-normal) var(--ocean-ease);
 }
 
+.ocean-card-glass {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse at 10% 0%, rgba(255, 255, 255, 0.80), transparent 56%),
+    linear-gradient(148deg, var(--ocean-glass-fallback-top), var(--ocean-glass-fallback-bottom));
+}
+
 @supports (backdrop-filter: blur(1px)) {
-  .ocean-card.sea-card {
+  .ocean-card-glass {
     background:
       radial-gradient(ellipse at 10% 0%, rgba(255, 255, 255, 0.72), transparent 56%),
       linear-gradient(148deg, var(--ocean-glass-top), var(--ocean-glass-bottom));
@@ -412,18 +477,17 @@
   }
 }
 
-.ocean-card.sea-card::before {
+.ocean-card-glass::after {
   content: "";
   position: absolute;
   inset: 1px;
   border-radius: inherit;
   pointer-events: none;
-  background: radial-gradient(ellipse at 96% 4%, var(--card-glow, rgba(215, 182, 249, 0.22)), transparent 55%);
-  z-index: -1;
+  background: radial-gradient(ellipse at 96% 4%, var(--card-glow, rgba(215, 182, 249, 0.24)), transparent 55%);
 }
 
 .ocean-card.sea-card:hover {
-  transform: translateY(-5px) scale(1.012);
+  transform: translateY(-6px) translateZ(10px) rotateX(2deg) rotateY(-1.6deg) scale(1.012);
   border-color: var(--ocean-glass-border-hover);
   box-shadow:
     var(--ocean-shadow-hover),
@@ -444,38 +508,44 @@
   padding: 0;
   width: 100%;
   min-width: 0;
+  transform-style: preserve-3d;
 }
 
 .ocean-card-head {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
+  gap: 10px;
   width: 100%;
   min-width: 0;
+  transform-style: preserve-3d;
 }
 
 .ocean-icon-wrap {
   flex: none;
-  width: 38px;
-  height: 38px;
+  width: 52px;
+  height: 52px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.92);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.90), rgba(255, 240, 252, 0.72));
+  border: 1px solid rgba(255, 255, 255, 0.95);
   box-shadow:
-    0 6px 14px rgba(126, 83, 164, 0.12),
-    inset 0 1px 1px rgba(255, 255, 255, 0.95);
-  transition: transform var(--ocean-duration-normal) var(--ocean-ease);
+    0 8px 18px rgba(126, 83, 164, 0.16),
+    inset 0 1px 2px rgba(255, 255, 255, 0.98);
+  transform: translateZ(14px);
+  transition: transform var(--ocean-duration-normal) var(--ocean-ease), box-shadow var(--ocean-duration-normal) var(--ocean-ease);
 }
 
 .ocean-card.sea-card:hover .ocean-icon-wrap {
-  transform: translateY(-3px);
+  transform: translateY(-3px) translateZ(24px);
+  box-shadow:
+    0 12px 24px rgba(126, 83, 164, 0.22),
+    inset 0 1px 2px rgba(255, 255, 255, 1);
 }
 
 .ocean-icon-svg {
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
   display: block;
 }
 
@@ -576,7 +646,7 @@
 }
 
 .ocean-card .sea-action-primary::after {
-  content: "→";
+  content: "→" / "";
   font-weight: 700;
 }
 
@@ -633,10 +703,15 @@
 
 .ocean-add-portal {
   position: relative;
-  width: 60px;
-  height: 60px;
+  width: 68px;
+  height: 68px;
   display: grid;
   place-items: center;
+}
+
+.ocean-add-portal .ocean-icon-svg {
+  width: 38px;
+  height: 38px;
 }
 
 .ocean-add-ring {

@@ -1,4 +1,4 @@
-import { createApp, h, nextTick, ref, type App } from 'vue'
+import { createApp, defineComponent, h, nextTick, provide, ref, type App } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../src/shell/components/Bunny.vue', () => ({
@@ -13,6 +13,12 @@ import {
   buildWorkflowOceanStats,
   oceanModeForScreen
 } from '../../../src/app/components/workflow-ocean/workflow-ocean-presentation'
+import { OceanResourceManager } from '../../../src/app/components/workflow-ocean/rendering/resource-manager'
+import { buildOceanCrystalModel, OCEAN_MODEL_CATALOG } from '../../../src/app/components/workflow-ocean/rendering/model-registry'
+import { useOceanQuality } from '../../../src/app/components/workflow-ocean/composables/useOceanQuality'
+import { useOceanLifecycle } from '../../../src/app/components/workflow-ocean/composables/useOceanLifecycle'
+import type { OceanQuality } from '../../../src/app/components/workflow-ocean/rendering/render-scheduler'
+import type { WorkflowOceanIconId } from '../../../src/app/components/workflow-ocean/workflow-ocean.types'
 import { defaultWorkflowCatalog, isRunnableWorkflow, isSystemWorkflow, workflowFromSkills } from '../../../src/workflow/catalog'
 
 let app: App | undefined
@@ -25,7 +31,7 @@ afterEach(() => {
   host = undefined
 })
 
-describe('workflow-ocean presentation', () => {
+describe('workflow-ocean presentation & 2.0 engine', () => {
   it('maps all 9 built-in workflows and custom workflows into presentation DTOs', () => {
     const catalog = defaultWorkflowCatalog()
     const custom = workflowFromSkills('我的定制流', ['start', 'read-sheet'], catalog.workflows.map(w => w.id))
@@ -68,7 +74,87 @@ describe('workflow-ocean presentation', () => {
     expect(oceanModeForScreen('feeReduce')).toBe('workbench')
   })
 
-  it('renders scene with non-nested buttons, aria-hidden atmosphere, and pauses animations when inactive', async () => {
+  it('tracks and disposes all 3D crystal model resources cleanly', () => {
+    const manager = new OceanResourceManager()
+    const iconIds = Object.keys(OCEAN_MODEL_CATALOG) as WorkflowOceanIconId[]
+    expect(iconIds).toHaveLength(11)
+
+    for (const id of iconIds) {
+      const group = buildOceanCrystalModel(id, manager)
+      expect(group.children.length).toBeGreaterThan(0)
+    }
+
+    expect(manager.count).toBeGreaterThan(20)
+    manager.disposeAll()
+    expect(manager.count).toBe(0)
+  })
+
+  it('gates renderingActive on route, screen, document visibility, reduced motion, and quality', async () => {
+    const route = ref('/workflow')
+    const screenActive = ref(true)
+    const quality = ref<OceanQuality>('balanced')
+    const webglUnavailable = ref(false)
+    const sceneEl = ref<HTMLElement | null>(null)
+    let renderingActiveRef: ReturnType<typeof useOceanLifecycle>['renderingActive'] | undefined
+
+    const Child = defineComponent({
+      setup() {
+        const lifecycle = useOceanLifecycle({
+          sceneEl,
+          screenActive,
+          quality,
+          webglUnavailable
+        })
+        renderingActiveRef = lifecycle.renderingActive
+        return () => h('div')
+      }
+    })
+
+    const Harness = defineComponent({
+      setup() {
+        provide('activeRoute', route)
+        return () => h(Child)
+      }
+    })
+
+    host = document.body.appendChild(document.createElement('div'))
+    app = createApp(Harness)
+    app.mount(host)
+    await nextTick()
+
+    expect(renderingActiveRef?.value).toBe(true)
+
+    // Switch top-level route away from /workflow
+    route.value = '/'
+    await nextTick()
+    expect(renderingActiveRef?.value).toBe(false)
+
+    route.value = '/workflow'
+    await nextTick()
+    expect(renderingActiveRef?.value).toBe(true)
+
+    // Switch screen away from sea
+    screenActive.value = false
+    await nextTick()
+    expect(renderingActiveRef?.value).toBe(false)
+
+    screenActive.value = true
+    await nextTick()
+    expect(renderingActiveRef?.value).toBe(true)
+
+    // Static quality disables rendering
+    quality.value = 'static'
+    await nextTick()
+    expect(renderingActiveRef?.value).toBe(false)
+
+    // WebGL unavailable disables rendering
+    quality.value = 'cinema'
+    webglUnavailable.value = true
+    await nextTick()
+    expect(renderingActiveRef?.value).toBe(false)
+  })
+
+  it('renders scene with non-nested buttons, quality controls, and static mode removes canvas', async () => {
     const catalog = defaultWorkflowCatalog()
     const cards = buildWorkflowOceanCards(catalog.workflows, {
       isSystem: isSystemWorkflow,
@@ -79,6 +165,9 @@ describe('workflow-ocean presentation', () => {
     const active = ref(true)
     const addSpy = vi.fn()
     const removeSpy = vi.fn()
+
+    const { setQuality } = useOceanQuality()
+    setQuality('static')
 
     const origDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
     Object.defineProperty(window, 'matchMedia', {
@@ -117,13 +206,29 @@ describe('workflow-ocean presentation', () => {
 
       expect(host.querySelectorAll('.sea-card')).toHaveLength(10)
       expect(host.querySelector('.ocean-atmosphere')?.getAttribute('aria-hidden')).toBe('true')
-      expect(host.querySelector('.ocean-atmosphere')?.getAttribute('data-paused')).toBe('false')
       expect(host.querySelectorAll('button button')).toHaveLength(0)
+      expect(host.querySelector('.workflow-ocean')?.getAttribute('data-ocean-quality')).toBe('static')
+      expect(host.querySelector('[data-testid="workflow-ocean-canvas"]')).toBeNull()
+      expect(host.querySelector('.workflow-ocean')?.getAttribute('data-ocean-rendering')).toBe('false')
+
+      // Switch quality to balanced via hero button -> mounts canvas
+      host.querySelector<HTMLButtonElement>('[data-quality-option="balanced"]')?.click()
+      await nextTick()
+      expect(host.querySelector('.workflow-ocean')?.getAttribute('data-ocean-quality')).toBe('balanced')
+      expect(host.querySelector('[data-testid="workflow-ocean-canvas"]')).not.toBeNull()
+
+      // Switch quality back to static via hero button -> removes canvas & stops rendering
+      host.querySelector<HTMLButtonElement>('[data-quality-option="static"]')?.click()
+      await nextTick()
+      expect(host.querySelector('.workflow-ocean')?.getAttribute('data-ocean-quality')).toBe('static')
+      expect(host.querySelector('[data-testid="workflow-ocean-canvas"]')).toBeNull()
+      expect(host.querySelector('.workflow-ocean')?.getAttribute('data-ocean-rendering')).toBe('false')
 
       active.value = false
       await nextTick()
-      expect(host.querySelector('.ocean-atmosphere')?.getAttribute('data-paused')).toBe('true')
+      expect(host.querySelector('.workflow-ocean')?.getAttribute('data-ocean-rendering')).toBe('false')
     } finally {
+      setQuality('static')
       if (origDescriptor) {
         Object.defineProperty(window, 'matchMedia', origDescriptor)
       } else {

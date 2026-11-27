@@ -21,9 +21,10 @@ const emit = defineEmits<{
     :class="[`ocean-tone-${card.tone}`, card.cardClass]"
     :data-workflow-id="card.id"
   >
+    <div class="ocean-card-glass" aria-hidden="true" />
     <button type="button" class="sea-open" @click="emit('open', card)">
       <div class="ocean-card-head">
-        <span class="ocean-icon-wrap" aria-hidden="true">
+        <span class="ocean-icon-wrap ocean-card-visual" aria-hidden="true">
           <WorkflowOceanIcon :icon="card.icon" />
         </span>
         <div class="ocean-card-title-group">
