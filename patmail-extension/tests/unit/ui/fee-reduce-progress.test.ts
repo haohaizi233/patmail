@@ -6,6 +6,8 @@ import { MessageType, type AppMessage } from '../../../src/shared/message'
 
 const request = vi.hoisted(() => vi.fn<(message: AppMessage) => Promise<unknown>>())
 const confirm = vi.hoisted(() => vi.fn())
+const recoveryState = vi.hoisted(() => new Map<string, unknown>())
+const writeCheckpoint = vi.hoisted(() => vi.fn<(scope: string, value: unknown) => boolean>())
 vi.mock('../../../src/app/services/full-page-bridge', () => ({ createWorkflowBridge: () => ({ request }) }))
 vi.mock('../../../src/app/composables/useWorkspace', () => ({
   useWorkspace: () => ({ connection: ref({
@@ -15,6 +17,20 @@ vi.mock('../../../src/app/composables/useWorkspace', () => ({
 }))
 vi.mock('../../../src/settings/use-write-switch', () => ({ useWriteSwitch: () => ({ open: ref(true) }) }))
 vi.mock('../../../src/app/dialog', () => ({ confirmDialog: confirm, infoDialog: vi.fn() }))
+vi.mock('../../../src/recovery/client', () => ({
+  createRecoveryClient: () => ({
+    get: (_slot: string, scope: string) => Promise.resolve(recoveryState.get(scope) ?? null),
+    put: (_slot: string, scope: string, value: unknown) => {
+      if (writeCheckpoint(scope, value) === false) return Promise.reject(new Error('测试：恢复账本写入失败'))
+      recoveryState.set(scope, value)
+      return Promise.resolve()
+    },
+    forget: (_slot: string, scope: string) => {
+      recoveryState.delete(scope)
+      return Promise.resolve()
+    }
+  })
+}))
 
 let app: App | undefined
 let root: HTMLDivElement
@@ -34,6 +50,144 @@ function deferred() {
 afterEach(() => {
   app?.unmount()
   root?.remove()
+  recoveryState.clear()
+  writeCheckpoint.mockReset()
+})
+
+function mountWorkbench() {
+  root = document.body.appendChild(document.createElement('div'))
+  app = createApp({ render: () => [h(CheckRainbow), h(FeeReduceWorkflowPage, { embedded: true, isActive: true })] })
+  app.directive('hint', {})
+  app.mount(root)
+}
+
+function inspectResponse(volumes: string[]) {
+  return { type: MessageType.InspectFeeReduceCasesResult, payload: { ok: true, data: {
+    items: volumes.map((caseVolume, index) => ({
+      caseVolume, caseId: '', caseName: '', appNo: '', procId: '', procName: '', procStatus: '', reason: '',
+      state: index === 1 ? 'not_found' : 'ready'
+    }))
+  } } }
+}
+
+it('restores the last committed inspection page and missing-case filter after refresh', async () => {
+  const volumes = Array.from({ length: 49 }, (_, index) => `CASE-${index + 1}`)
+  const nextPage = deferred()
+  request.mockReset()
+  request.mockImplementation(message => {
+    if (message.type === MessageType.ReadFeeReduceReviewers) {
+      return Promise.resolve({ type: MessageType.ReadFeeReduceReviewersResult, payload: { ok: true, data: { reviewers: [] } } })
+    }
+    if (message.type !== MessageType.InspectFeeReduceCases) throw new Error('Recovery must avoid writes')
+    return message.payload.caseVolumes.length === 48
+      ? Promise.resolve(inspectResponse(message.payload.caseVolumes)) : nextPage.promise
+  })
+  mountWorkbench()
+  await settle()
+  const input = root.querySelector('textarea')!
+  input.value = volumes.join('\n')
+  input.dispatchEvent(new Event('input'))
+  await nextTick()
+  root.querySelector<HTMLButtonElement>('.fr-actions button')!.click()
+  await settle()
+  expect(progress()?.getAttribute('aria-valuetext')).toContain('检索 48/49')
+  expect(progress()?.classList.contains('is-run')).toBe(true)
+  expect(request.mock.calls.filter(([message]) => message.type === MessageType.InspectFeeReduceCases)).toHaveLength(2)
+
+  app?.unmount()
+  root.remove()
+  mountWorkbench()
+  nextPage.resolve(inspectResponse(volumes.slice(48)))
+  await settle()
+  expect(progress()?.getAttribute('aria-valuetext')).toContain('检索 48/49')
+  expect(progress()?.classList.contains('is-hold')).toBe(true)
+  expect(root.textContent).toContain('上次检索已中断')
+  expect(root.querySelector('textarea')?.value).toBe(volumes.join('\n'))
+  const toggle = root.querySelector<HTMLButtonElement>('.fr-summary button')!
+  expect(toggle.textContent).toContain('只看未查到（1）')
+  toggle.click()
+  await nextTick()
+  expect(root.querySelectorAll('.fr-table tbody tr')).toHaveLength(1)
+  expect(root.querySelector('.fr-table tbody tr')?.textContent).toContain('CASE-2')
+  const submit = [...root.querySelectorAll('button')].find(button => button.textContent?.includes('递交已勾选'))
+  expect(submit?.disabled).toBe(true)
+  expect(request.mock.calls.filter(([message]) => message.type === MessageType.InspectFeeReduceCases)).toHaveLength(2)
+})
+
+it('restores pending work after refresh and only preselects cases beyond the durable cursor', async () => {
+  const scope = JSON.stringify(['fee-reduce-batch', 'http://183.36.43.66:88', '11111111-1111-4111-8111-111111111111'])
+  recoveryState.set(scope, {
+    kind: 'fee-reduce-batch-v1', id: 'saved',
+    entries: [{ caseVolume: 'CASE-0' }, { caseVolume: 'CASE-1' }, { caseVolume: 'CASE-2' }]
+  })
+  recoveryState.set(`${scope}:cursor:saved`, { nextIndex: 2, outcomes: 's..' })
+  request.mockReset()
+  request.mockImplementation(message => {
+    if (message.type === MessageType.ReadFeeReduceReviewers) {
+      return Promise.resolve({ type: MessageType.ReadFeeReduceReviewersResult, payload: { ok: true, data: { reviewers: [] } } })
+    }
+    if (message.type !== MessageType.InspectFeeReduceCases) throw new Error('Writes cannot start during recovery')
+    const inspected = inspectResponse(message.payload.caseVolumes)
+    for (const item of inspected.payload.data.items) item.state = 'ready'
+    return Promise.resolve(inspected)
+  })
+  mountWorkbench()
+  await settle()
+  expect(root.textContent).toContain('已恢复上次费减批次')
+  expect(root.textContent).toContain('待核对 1 件，未派发 1 件')
+  expect(root.querySelectorAll('.fr-table tbody tr')).toHaveLength(3)
+  expect(root.querySelector('.fr-table tbody tr')?.textContent).toContain('已提交初核')
+  expect(progress()?.getAttribute('aria-valuetext')).toContain('递交 1/3')
+  const regularSearch = [...root.querySelectorAll('button')].find(button => button.textContent?.includes('检索案件与处理状态'))
+  expect(regularSearch?.disabled).toBe(true)
+  const recheck = [...root.querySelectorAll('button')].find(button => button.textContent?.includes('重新检索本批未完成'))!
+  recheck.click()
+  await settle()
+  const result = root.querySelectorAll('.fr-table tbody tr')
+  expect(result).toHaveLength(2)
+  expect(result[0].textContent).toContain('待核对')
+  expect(result[0].querySelector<HTMLInputElement>('input')?.checked).toBe(false)
+  expect(result[1].querySelector<HTMLInputElement>('input')?.checked).toBe(true)
+
+  app?.unmount()
+  root.remove()
+  mountWorkbench()
+  await settle()
+  expect(root.querySelector('.fr-table tbody tr')?.textContent).toContain('待核对')
+  root.querySelector<HTMLButtonElement>('.fr-actions button')!.click()
+  await settle()
+  const rechecked = root.querySelectorAll('.fr-table tbody tr')
+  expect(rechecked[0].querySelector<HTMLInputElement>('input')?.checked).toBe(false)
+  expect(rechecked[1].querySelector<HTMLInputElement>('input')?.checked).toBe(true)
+  expect(request.mock.calls.some(([message]) => message.type === MessageType.SubmitFeeReduceFiling)).toBe(false)
+})
+
+it('blocks fee writes if the first send cursor fails to persist', async () => {
+  request.mockReset()
+  confirm.mockResolvedValue(true)
+  request.mockImplementation(message => {
+    if (message.type === MessageType.ReadFeeReduceReviewers) {
+      return Promise.resolve({ type: MessageType.ReadFeeReduceReviewersResult, payload: { ok: true, data: { reviewers: [] } } })
+    }
+    if (message.type === MessageType.InspectFeeReduceCases) return Promise.resolve(inspectResponse(message.payload.caseVolumes))
+    throw new Error('A failed WAL checkpoint must prevent any fee write')
+  })
+  writeCheckpoint.mockImplementation((scope, value) => !scope.includes(':cursor:') ||
+    (value as { nextIndex: number }).nextIndex === 0)
+  mountWorkbench()
+  await settle()
+  const input = root.querySelector('textarea')!
+  input.value = 'CASE-1'
+  input.dispatchEvent(new Event('input'))
+  await nextTick()
+  const buttons = root.querySelectorAll<HTMLButtonElement>('.fr-actions button')
+  buttons[0].click()
+  await settle()
+  buttons[1].click()
+  await settle()
+  expect(request.mock.calls.some(([message]) => message.type === MessageType.SubmitFeeReduceFiling)).toBe(false)
+  expect(root.textContent).toContain('批次发出位置写入 WAL 失败')
+  expect(root.textContent).toContain('未派发 1 件')
 })
 
 it('shows search, concurrent execution and retry progress in the shared header', async () => {

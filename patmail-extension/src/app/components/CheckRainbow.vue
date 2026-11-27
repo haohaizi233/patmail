@@ -70,7 +70,7 @@ const caption = computed(() => `${percent.value} ${summary.value} ${detail.value
     </div>
     <p v-if="stateDetail" class="check-rainbow-msg" v-hint.clip="stateDetail">{{ stateDetail }}</p>
   </div>
-  <div v-else-if="view.visible" class="check-rainbow" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="view.percent" :aria-valuetext="caption">
+  <div v-else-if="view.visible" class="check-rainbow" :class="stateClass" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="view.percent" :aria-valuetext="caption">
     <div class="check-rainbow-bar">
       <div class="check-rainbow-track"><span :style="{ width: view.percent + '%' }"></span></div>
       <b class="check-rainbow-percent">{{ percent }}</b>

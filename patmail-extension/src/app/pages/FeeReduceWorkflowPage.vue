@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { createRecoveryClient } from '../../recovery/client'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { createWorkflowBridge } from '../services/full-page-bridge'
 import { confirmDialog, infoDialog } from '../dialog'
@@ -8,8 +9,10 @@ import { useTopProgress, type TopProgress } from '../composables/useTopProgress'
 import { useWriteSwitch } from '../../settings/use-write-switch'
 import { readXlsxRows } from '../../customer/xlsx-table'
 import { MessageType } from '../../shared/message'
+import { isRecord } from '../../shared/guards'
 import { accountScopeMatches, sameOperatorId, scopeFromConnection, type ExpectedAccountScope } from '../../shared/connection'
 import { useWorkspace } from '../composables/useWorkspace'
+import { feeInspectionJournal } from '../../workflow/fee-reduce-inspection-recovery'
 import type {
   FeeReduceCaseInspectItem,
   FeeReduceReviewerOption,
@@ -38,14 +41,18 @@ interface FeeReduceRowState {
   item: FeeReduceCaseInspectItem
   checked: boolean
   overrideReviewerId: string
-  execStatus: 'idle' | 'running' | 'submitted' | 'failed' | 'unconfirmed'
+  execStatus: 'idle' | 'running' | 'submitted' | 'failed' | 'unconfirmed' | 'queued' | 'skipped'
   execMessage: string
   account: ExpectedAccountScope
   filingId: string
   warnings: string[]
 }
 
+type SubmitOutcome = Awaited<ReturnType<typeof runSingleRow>>
+const outcomeCode: Record<SubmitOutcome, string> = { submitted: 's', skipped: 'k', failed: 'f', verify: 'v', not_sent: 'n' }
+
 const bridge = createWorkflowBridge('fee-reduce')
+const recovery = createRecoveryClient()
 const { connection } = useWorkspace()
 
 const volumeInput = ref('')
@@ -57,6 +64,11 @@ const sheetColumnIndex = ref(0)
 const inspecting = ref(false)
 const loadingReviewers = ref(false)
 const executing = ref(false)
+const restoring = ref(false)
+const restoredInspection = ref(false)
+let disposed = false
+let reviewVolumes = new Set<string>()
+onBeforeUnmount(() => { disposed = true })
 const statusNotice = ref('')
 const errorNotice = ref('')
 const progress = ref<TopProgress>({ visible: false, done: 0, total: 0, percent: 0, eta: '', status: 'idle', label: '', summary: '', detail: '' })
@@ -73,7 +85,60 @@ const oaName = ref('')
 const concurrency = ref('6')
 
 const rows = reactive<FeeReduceRowState[]>([])
-const pausedBatch = ref<{ account: ExpectedAccountScope; rows: FeeReduceRowState[] } | null>(null)
+const pausedBatch = ref<{ account: ExpectedAccountScope; rows: FeeReduceRowState[]; journalId: string } | null>(null)
+const actionsLocked = computed(() => inspecting.value || executing.value || restoring.value)
+const selectionLocked = computed(() => actionsLocked.value || restoredInspection.value || !!pausedBatch.value)
+const recoveryScope = (account: ExpectedAccountScope) => JSON.stringify(['fee-reduce-batch', account.easyOrigin, account.operatorId.trim().toLowerCase()])
+const cursorScope = (scope: string, id: string) => `${scope}:cursor:${id}`
+const inspectionJournal = (account: ExpectedAccountScope) => feeInspectionJournal(recovery, `${recoveryScope(account)}:inspection`)
+const recoveryPlaceholder = (caseVolume: string, account: ExpectedAccountScope, uncertain: boolean): FeeReduceRowState => ({
+  item: { caseVolume, caseId: '', caseName: '', appNo: '', procId: '', procName: '', procStatus: '', state: 'error', reason: '恢复的批次需要先重新检索。' },
+  checked: false, overrideReviewerId: '', execStatus: uncertain ? 'unconfirmed' : 'queued',
+  execMessage: uncertain ? '刷新前回执待核对，请先重新检索。' : '本件尚未派发，请先重新检索。',
+  account, filingId: '', warnings: []
+})
+
+async function beginBatch(account: ExpectedAccountScope, payloads: FeeReduceSubmitRequest[]) {
+  const scope = recoveryScope(account)
+  const previous = await recovery.get('workflow-desk', scope)
+  let oldCursor: string | undefined
+  if (previous !== null && !(isRecord(previous) && previous.forgotten === true)) {
+    if (!isRecord(previous) || previous.kind !== 'fee-reduce-batch-v1' || typeof previous.id !== 'string') {
+      throw new Error('无法识别上一次费减批次，请先核对恢复记录。')
+    }
+    oldCursor = cursorScope(scope, previous.id)
+    const last = await recovery.get('workflow-desk', oldCursor)
+    if (!isRecord(last) || !batchFinished(last, Array.isArray(previous.entries) ? previous.entries.length : 0)) {
+      throw new Error('上一次费减批次仍需重新检索，请先处理恢复记录。')
+    }
+  }
+  const id = crypto.randomUUID()
+  const cursor = cursorScope(scope, id)
+  const outcomes = Array.from({ length: payloads.length }, () => '.')
+  const persist = (nextIndex: number) =>
+    recovery.put('workflow-desk', cursor, { nextIndex, outcomes: outcomes.join('') })
+  await persist(0)
+  await recovery.put('workflow-desk', scope, {
+    kind: 'fee-reduce-batch-v1', id, startedAt: Date.now(),
+    entries: payloads.map(payload => ({ caseVolume: payload.caseVolume, overrideReviewerId: payload.overrideReviewerId ?? '' }))
+  })
+  if (oldCursor) void recovery.forget('workflow-desk', oldCursor).catch(() => undefined)
+  return { outcomes, persist, id }
+}
+
+function batchFinished(cursor: Record<string, unknown>, count: number): boolean {
+  return typeof cursor.outcomes === 'string' && cursor.outcomes.length === count && /^[skf]+$/.test(cursor.outcomes)
+}
+
+async function clearBatch(account: ExpectedAccountScope, id: string): Promise<void> {
+  const scope = recoveryScope(account)
+  const saved = await recovery.get('workflow-desk', scope)
+  if (!isRecord(saved) || saved.kind !== 'fee-reduce-batch-v1' || saved.id !== id) {
+    throw new Error('当前批次账本已变化，请重新打开费减工作台。')
+  }
+  await recovery.forget('workflow-desk', scope)
+  await recovery.forget('workflow-desk', cursorScope(scope, id)).catch(() => undefined)
+}
 const canRecheckPaused = computed(() => {
   const current = scopeFromConnection(connection.value)
   const previous = pausedBatch.value?.account
@@ -161,6 +226,8 @@ function stateBadgeText(row: FeeReduceRowState): string {
   if (row.execStatus === 'submitted') return '已提交初核'
   if (row.execStatus === 'unconfirmed') return '待核对'
   if (row.execStatus === 'failed') return '递交失败'
+  if (row.execStatus === 'queued') return '未派发'
+  if (row.execStatus === 'skipped') return '已跳过'
   switch (row.item.state) {
     case 'completed':
       return `已完成（${row.item.procStatus}）`
@@ -178,6 +245,8 @@ function stateBadgeText(row: FeeReduceRowState): string {
 }
 
 function stateBadgeClass(row: FeeReduceRowState): string {
+  if (row.execStatus === 'queued') return 'badge-muted'
+  if (row.execStatus === 'skipped') return 'badge-done'
   if (row.execStatus === 'submitted' || row.item.state === 'completed') return 'badge-done'
   if (row.execStatus === 'failed' || row.execStatus === 'unconfirmed' || row.item.state === 'error' || row.item.state === 'not_found') return 'badge-warn'
   if (row.execStatus === 'running' || row.item.state === 'ready') return 'badge-ready'
@@ -259,13 +328,17 @@ function startProgress(label: string, total: number, detail: string) {
 }
 
 async function inspectAll(recheckPaused = false): Promise<void> {
-  if (inspecting.value || executing.value) return
-  if (recheckPaused && !canRecheckPaused.value) return
+  if (restoring.value || inspecting.value || executing.value) return
+  if (pausedBatch.value && (!recheckPaused || !canRecheckPaused.value)) return
   errorNotice.value = ''
   statusNotice.value = ''
-  const priorRows = recheckPaused ? pausedBatch.value?.rows : undefined
+  const recoveryBatch = recheckPaused ? pausedBatch.value : null
+  const priorRows = recoveryBatch?.rows
   const overrides = new Map(priorRows?.map(row => [row.item.caseVolume.toUpperCase(), row.overrideReviewerId]))
-  const uncertain = new Set(priorRows?.filter(row => row.execStatus === 'unconfirmed').map(row => row.item.caseVolume.toUpperCase()))
+  const uncertain = new Set(reviewVolumes)
+  for (const row of priorRows ?? []) {
+    if (row.execStatus === 'unconfirmed') uncertain.add(row.item.caseVolume.toUpperCase())
+  }
   const volumes = priorRows ? priorRows.map(row => row.item.caseVolume) : parsedVolumes.value
   if (!volumes.length) {
     errorNotice.value = '请先输入或导入至少一个我方文号。'
@@ -277,29 +350,42 @@ async function inspectAll(recheckPaused = false): Promise<void> {
     return
   }
   inspecting.value = true
+  restoredInspection.value = false
   showMissingOnly.value = false
   resultPage.value = 1
   rows.splice(0, rows.length)
   const updateProgress = startProgress('费减检索', volumes.length, '正在检索案件与处理状态')
+  const journal = inspectionJournal(account)
+  let batch: Awaited<ReturnType<typeof journal.begin>> | undefined
+  let nextPage = 0
   let done = 0
   try {
+    batch = await journal.begin(volumes, [...uncertain])
     if (!reviewers.value.length || !reviewerAccount.value || !accountScopeMatches(connection.value, reviewerAccount.value)) {
       await loadReviewers()
     }
     const chunkSize = 48
     for (let i = 0; i < volumes.length; i += chunkSize) {
+      if (disposed) return
       if (!accountScopeMatches(connection.value, account)) throw new Error('EASY 账号已切换，请重新检索。')
       const chunk = volumes.slice(i, i + chunkSize)
       const res = await bridge.request({
         type: MessageType.InspectFeeReduceCases,
         payload: { caseVolumes: chunk, expectedScope: account }
       })
+      if (disposed) return
       if (!accountScopeMatches(connection.value, account)) throw new Error('EASY 账号已切换，请重新检索。')
       if (res.type === MessageType.InspectFeeReduceCasesResult && res.payload.ok) {
+        const items = res.payload.data.items
+        if (items.length !== chunk.length) throw new Error('费减检索返回的案件数与请求不符，请重新检索。')
+        await journal.append(batch.plan, nextPage, items)
+        nextPage++
+        if (disposed) return
         rows.push(
-          ...res.payload.data.items.map((item): FeeReduceRowState => {
+          ...items.map((item): FeeReduceRowState => {
             const key = item.caseVolume.toUpperCase()
-            const needsReview = item.state !== 'completed' && uncertain.has(key)
+            if (item.state === 'completed') uncertain.delete(key)
+            const needsReview = uncertain.has(key)
             return {
               item,
               checked: item.state === 'ready' && !needsReview,
@@ -322,13 +408,21 @@ async function inspectAll(recheckPaused = false): Promise<void> {
         throw new Error('检索未返回有效结果。')
       }
     }
+    await journal.finish(batch.plan, nextPage, 'done')
+    if (disposed) return
+    if (recoveryBatch) await clearBatch(account, recoveryBatch.journalId)
+    reviewVolumes = uncertain
     pausedBatch.value = null
     statusNotice.value = `检索完成：共 ${counts.value.total} 件，已完成 ${counts.value.completed} 件，待递交（撰写中）${counts.value.ready} 件。`
     updateProgress(done, 'done', `已完成 ${counts.value.completed} 件，待递交 ${counts.value.ready} 件`)
   } catch (err) {
+    if (disposed) return
+    if (batch) await journal.finish(batch.plan, nextPage, 'failed').catch(() => undefined)
+    restoredInspection.value = true
     errorNotice.value = err instanceof Error ? err.message : '检索失败。'
     updateProgress(done, 'fail', errorNotice.value)
   } finally {
+    if (batch?.previous) void journal.prune(batch.previous).catch(() => undefined)
     inspecting.value = false
   }
 }
@@ -396,7 +490,7 @@ async function runSingleRow(row: FeeReduceRowState, payload: FeeReduceSubmitRequ
 }
 
 async function executeSelected(): Promise<void> {
-  if (pausedBatch.value) return
+  if (disposed || restoring.value || restoredInspection.value || pausedBatch.value || inspecting.value || executing.value) return
   if (!writeOpen.value) {
     await infoDialog({
       title: '写开关未开启',
@@ -427,13 +521,24 @@ async function executeSelected(): Promise<void> {
     message: `将对已勾选的 ${targets.length} 件「撰写中」案件按 ${workerCount} 路并发执行：校验 → 创建费用减缴请求递交单 → XML 转档 → 提交至「${reviewerNodeName.value}」（默认：${defaultLabel}）。确认继续？`,
     confirmLabel: '开始递交'
   })
-  if (!confirmed || inspecting.value || executing.value) return
+  if (!confirmed || disposed || restoring.value || restoredInspection.value || pausedBatch.value || inspecting.value || executing.value) return
   if (targets.some(({ row }) => !rows.includes(row) || !accountScopeMatches(connection.value, row.account))) {
     errorNotice.value = '案件列表或 EASY 账号已变化，请重新确认。'
     return
   }
 
+  const account = targets[0].row.account
   executing.value = true
+  let journal: Awaited<ReturnType<typeof beginBatch>>
+  try {
+    journal = await beginBatch(account, targets.map(target => target.payload))
+  } catch (err) {
+    executing.value = false
+    errorNotice.value = err instanceof Error ? err.message : '批次恢复记录未能保存，未开始递交。'
+    await restoreBatch(account)
+    return
+  }
+
   errorNotice.value = ''
   const updateProgress = startProgress('费减递交', targets.length, '正在校验、XML 转档与流程提交')
   let okCount = 0
@@ -445,15 +550,34 @@ async function executeSelected(): Promise<void> {
   const unfinished = new Set(targets.map(({ row }) => row))
   try {
     async function runWorker(): Promise<void> {
-      while (!pauseReason && nextIndex < targets.length) {
+      while (!disposed && !pauseReason && nextIndex < targets.length) {
         if (!writeOpen.value || !accountScopeMatches(connection.value, targets[0].row.account)) {
           pauseReason = 'EASY 连接或写开关已变化。'
           return
         }
         const idx = nextIndex
         nextIndex += 1
+        try {
+          // Persist the queue cursor before permitting this worker to dispatch.
+          await journal.persist(nextIndex)
+        } catch {
+          pauseReason ||= '批次发出位置写入 WAL 失败，已暂停派发。'
+          return
+        }
+        if (disposed || pauseReason) return
         const { row, payload } = targets[idx]
         const outcome = await runSingleRow(row, payload)
+        journal.outcomes[idx] = outcomeCode[outcome]
+        try {
+          await journal.persist(nextIndex)
+        } catch {
+          row.execStatus = 'unconfirmed'
+          row.checked = false
+          row.execMessage = '回执未能写入恢复账本，请重新检索核对。'
+          verifyCount += 1
+          pauseReason ||= row.execMessage
+          return
+        }
         if (outcome === 'submitted' || outcome === 'skipped' || outcome === 'failed') unfinished.delete(row)
         if (outcome === 'submitted') okCount += 1
         else if (outcome === 'skipped') skippedCount += 1
@@ -462,26 +586,31 @@ async function executeSelected(): Promise<void> {
           if (outcome === 'verify') verifyCount += 1
           pauseReason ||= row.execMessage || 'EASY 连接已中断。'
         }
-        updateProgress(okCount + skippedCount + failCount + verifyCount, pauseReason ? 'hold' : 'run',
+        updateProgress(okCount + skippedCount + failCount, pauseReason ? 'hold' : 'run',
           pauseReason || `已成功 ${okCount} 件${skippedCount ? `，跳过 ${skippedCount} 件` : ''}，失败 ${failCount} 件`)
       }
     }
     await Promise.all(Array.from({ length: workerCount }, () => runWorker()))
+    if (disposed) return
     if (pauseReason) {
-      const completed = okCount + skippedCount + failCount + verifyCount
-      if (unfinished.size) pausedBatch.value = { account: targets[0].row.account, rows: [...unfinished] }
-      statusNotice.value = `批次已暂停。已提交 ${okCount} 件，跳过 ${skippedCount} 件，失败 ${failCount} 件，待核对 ${verifyCount} 件，未派发 ${targets.length - completed} 件。${pauseReason}`
+      const completed = okCount + skippedCount + failCount
+      if (unfinished.size) pausedBatch.value = { account, rows: [...unfinished], journalId: journal.id }
+      statusNotice.value = `批次已暂停。已提交 ${okCount} 件，跳过 ${skippedCount} 件，失败 ${failCount} 件，待核对 ${verifyCount} 件，未派发 ${targets.length - completed - verifyCount} 件。${pauseReason}`
       updateProgress(completed, 'hold', statusNotice.value)
       return
     }
     statusNotice.value = `执行结束：成功 ${okCount} 件${skippedCount ? `，跳过 ${skippedCount} 件` : ''}${failCount ? `，失败 ${failCount} 件，请查看各行结果` : ''}。`
     updateProgress(okCount + skippedCount + failCount, failCount ? 'fail' : 'done', statusNotice.value)
+  } catch (error) {
+    errorNotice.value = error instanceof Error ? error.message : '批次收尾记录未能保存。'
+    updateProgress(okCount + skippedCount + failCount, 'hold', errorNotice.value)
   } finally {
     executing.value = false
   }
 }
 
 async function retryRow(row: FeeReduceRowState): Promise<void> {
+  if (disposed || restoring.value || restoredInspection.value || pausedBatch.value) return
   if (!writeOpen.value) {
     await infoDialog({
       title: '写开关未开启',
@@ -493,20 +622,32 @@ async function retryRow(row: FeeReduceRowState): Promise<void> {
   executing.value = true
   const updateProgress = startProgress('费减重试', 1, '正在重新执行流程提交')
   try {
-    const outcome = await runSingleRow(row, submitRequest(row))
+    const payload = submitRequest(row)
+    const journal = await beginBatch(row.account, [payload])
+    await journal.persist(1)
+    if (disposed) return
+    const outcome = await runSingleRow(row, payload)
+    journal.outcomes[0] = outcomeCode[outcome]
+    await journal.persist(1)
+    if (disposed) return
     if (outcome === 'verify' || outcome === 'not_sent') {
-      pausedBatch.value = { account: row.account, rows: [row] }
+      pausedBatch.value = { account: row.account, rows: [row], journalId: journal.id }
       statusNotice.value = `重试已暂停。${row.execMessage}`
-      updateProgress(outcome === 'verify' ? 1 : 0, 'hold', statusNotice.value)
+      updateProgress(0, 'hold', statusNotice.value)
       return
     }
     updateProgress(1, outcome === 'failed' ? 'fail' : 'done', row.execMessage)
+  } catch (error) {
+    errorNotice.value = error instanceof Error ? error.message : '重试批次未能保存。'
+    updateProgress(0, 'hold', errorNotice.value)
   } finally {
     executing.value = false
+    if (errorNotice.value) await restoreBatch(row.account)
   }
 }
 
 function toggleAllReady(checked: boolean): void {
+  if (restoring.value || restoredInspection.value || pausedBatch.value || inspecting.value || executing.value) return
   for (const row of rows) {
     if (row.item.state === 'ready' && row.execStatus !== 'submitted' && row.execStatus !== 'unconfirmed') {
       row.checked = checked
@@ -514,9 +655,117 @@ function toggleAllReady(checked: boolean): void {
   }
 }
 
-onMounted(() => {
-  void loadReviewers()
-})
+async function restoreBatch(account: ExpectedAccountScope, inspectionStartedAt = 0): Promise<boolean> {
+  const scope = recoveryScope(account)
+  try {
+    const saved = await recovery.get('workflow-desk', scope)
+    if (!isRecord(saved) || saved.kind !== 'fee-reduce-batch-v1' || typeof saved.id !== 'string' ||
+        !Array.isArray(saved.entries)) return false
+    const cursor = await recovery.get('workflow-desk', cursorScope(scope, saved.id))
+    if (disposed || pausedBatch.value || inspecting.value || executing.value || !accountScopeMatches(connection.value, account)) return false
+    const nextIndex = isRecord(cursor) && typeof cursor.nextIndex === 'number' &&
+      Number.isSafeInteger(cursor.nextIndex) && cursor.nextIndex >= 0 ? cursor.nextIndex : saved.entries.length
+    const codes = isRecord(cursor) && typeof cursor.outcomes === 'string' ? cursor.outcomes : ''
+    const finished = isRecord(cursor) && batchFinished(cursor, saved.entries.length)
+    if (finished && typeof saved.startedAt === 'number' && saved.startedAt < inspectionStartedAt) return false
+    const pending: FeeReduceRowState[] = []
+    const totals = { submitted: 0, skipped: 0, failed: 0, unconfirmed: 0, queued: 0 }
+    const restored = saved.entries.flatMap((entry: unknown, idx) => {
+      if (!isRecord(entry) || typeof entry.caseVolume !== 'string' || !entry.caseVolume) return []
+      const code = codes[idx]
+      const row = recoveryPlaceholder(entry.caseVolume, account, code === 'v' || (code !== 'n' && idx < nextIndex))
+      row.overrideReviewerId = typeof entry.overrideReviewerId === 'string' ? entry.overrideReviewerId : ''
+      if (code === 's' || code === 'k' || code === 'f') {
+        const status = code === 's' ? 'submitted' : code === 'k' ? 'skipped' : 'failed'
+        row.execStatus = status
+        row.execMessage = code === 's' ? '已记录成功回执。' : code === 'k' ? '原站已确认跳过。' : '刷新前已记录失败回执，重新检索后可重试。'
+        totals[status]++
+      } else {
+        if (row.execStatus === 'unconfirmed') totals.unconfirmed++
+        else totals.queued++
+        pending.push(row)
+      }
+      return [row]
+    })
+    if (!restored.length) return false
+    rows.splice(0, rows.length, ...restored)
+    if (pending.length) pausedBatch.value = { account, rows: pending, journalId: saved.id }
+    restoredInspection.value = true
+    const detail = `已提交 ${totals.submitted} 件，跳过 ${totals.skipped} 件，失败 ${totals.failed} 件，待核对 ${totals.unconfirmed} 件，未派发 ${totals.queued} 件。`
+    statusNotice.value = pending.length
+      ? `已恢复上次费减批次，派发已暂停。${detail}请重新检索本批未完成案件。`
+      : `已恢复上次费减批次结果。${detail}`
+    const update = startProgress('费减递交', restored.length, detail)
+    update(totals.submitted + totals.skipped + totals.failed, pending.length ? 'hold' : totals.failed ? 'fail' : 'done', detail)
+    volumeInput.value = restored.map(row => row.item.caseVolume).join('\n')
+    return true
+  } catch (error) {
+    if (!disposed && accountScopeMatches(connection.value, account)) {
+      errorNotice.value = error instanceof Error ? error.message : '无法读取费减批次账本。'
+    }
+    return false
+  }
+}
+
+async function restoreProgress(account: ExpectedAccountScope): Promise<void> {
+  try {
+    const journal = inspectionJournal(account)
+    const latest = await journal.read()
+    if (disposed || !accountScopeMatches(connection.value, account)) return
+    reviewVolumes = new Set(latest?.reviewVolumes)
+    for (const item of latest?.rows ?? []) {
+      if (item.state === 'completed') reviewVolumes.delete(item.caseVolume.toUpperCase())
+    }
+    if (await restoreBatch(account, latest?.startedAt)) return
+    if (!latest || disposed || !accountScopeMatches(connection.value, account)) return
+    volumeInput.value = latest.volumes.join('\n')
+    rows.splice(0, rows.length, ...latest.rows.map((item): FeeReduceRowState => {
+      const needsReview = reviewVolumes.has(item.caseVolume.toUpperCase())
+      return {
+        item, checked: false, overrideReviewerId: '', execStatus: needsReview ? 'unconfirmed' : 'idle',
+        execMessage: needsReview ? '上次递交回执未确认，请先到 EASY 核对。' : '', account, filingId: '', warnings: []
+      }
+    }))
+    restoredInspection.value = true
+    const detail = `已保留 ${latest.rows.length}/${latest.volumes.length} 件检索结果。重新检索后可递交。`
+    const state = latest.state === 'running' ? 'hold' : latest.state === 'done' ? 'done' : 'fail'
+    statusNotice.value = `${state === 'hold' ? '上次检索已中断。' : state === 'done' ? '已恢复上次检索结果。' : '上次检索未完成。'}${detail}`
+    const update = startProgress('费减检索', latest.volumes.length, detail)
+    update(latest.rows.length, state, statusNotice.value)
+  } catch (error) {
+    if (!disposed && accountScopeMatches(connection.value, account)) {
+      errorNotice.value = error instanceof Error ? error.message : '无法读取上次费减进度。'
+      await restoreBatch(account)
+    }
+  }
+}
+
+onMounted(() => { void loadReviewers() })
+let restoredScope = ''
+watch([() => scopeFromConnection(connection.value), inspecting, executing, restoring], async ([account, busyInspect, busyExecute, busyRestore]) => {
+  if (!account || busyInspect || busyExecute || busyRestore || disposed) return
+  const scope = recoveryScope(account)
+  if (scope === restoredScope) return
+  if (restoredScope) {
+    rows.splice(0, rows.length)
+    pausedBatch.value = null
+    reviewVolumes = new Set()
+    volumeInput.value = ''
+    statusNotice.value = ''
+    errorNotice.value = ''
+    restoredInspection.value = false
+    showMissingOnly.value = false
+    resultPage.value = 1
+    progress.value = { ...progress.value, visible: false }
+  }
+  restoring.value = true
+  try {
+    await restoreProgress(account)
+    if (accountScopeMatches(connection.value, account)) restoredScope = scope
+  } finally {
+    restoring.value = false
+  }
+}, { immediate: true })
 </script>
 
 <template>
@@ -605,24 +854,24 @@ onMounted(() => {
     </div>
 
     <div class="fr-actions">
-      <button v-if="pausedBatch" type="button" class="solid" :disabled="!canRecheckPaused || inspecting || executing" @click="inspectAll(true)">
+      <button v-if="pausedBatch" type="button" class="solid" :disabled="!canRecheckPaused || actionsLocked" @click="inspectAll(true)">
         重新检索本批未完成（{{ pausedBatch.rows.length }}）
       </button>
-      <button type="button" class="solid" :disabled="inspecting || executing" @click="inspectAll()">
-        {{ inspecting ? '检索中…' : '检索案件与处理状态' }}
+      <button type="button" class="solid" :disabled="actionsLocked || !!pausedBatch" @click="inspectAll()">
+        {{ inspecting ? '检索中…' : restoredInspection && !pausedBatch ? '重新检索案件与处理状态' : '检索案件与处理状态' }}
       </button>
       <button
         type="button"
         class="solid"
-        :disabled="executing || inspecting || !!pausedBatch || selectedRows.length === 0"
+        :disabled="selectionLocked || selectedRows.length === 0"
         @click="executeSelected"
       >
         {{ executing ? '批量递交中…' : `递交已勾选（${selectedRows.length}）` }}
       </button>
-      <button type="button" class="ghost" :disabled="executing || !counts.ready" @click="toggleAllReady(true)">
+      <button type="button" class="ghost" :disabled="selectionLocked || !counts.ready" @click="toggleAllReady(true)">
         全选撰写中
       </button>
-      <button type="button" class="ghost" :disabled="executing || !counts.ready" @click="toggleAllReady(false)">
+      <button type="button" class="ghost" :disabled="selectionLocked || !counts.ready" @click="toggleAllReady(false)">
         取消全选
       </button>
     </div>
@@ -630,7 +879,8 @@ onMounted(() => {
       请重新连接本批次原来的 EASY 系统和账号，再检索未完成案件。
     </p>
 
-    <p v-if="statusNotice" class="hint">{{ statusNotice }}</p>
+    <p v-if="restoring" class="hint" role="status">正在读取上次费减进度…</p>
+    <p v-else-if="statusNotice" class="hint" role="status">{{ statusNotice }}</p>
     <p v-if="errorNotice" class="fr-error">{{ errorNotice }}</p>
 
     <div v-if="rows.length" class="fr-summary">
@@ -669,7 +919,7 @@ onMounted(() => {
               <input
                 v-model="row.checked"
                 type="checkbox"
-                :disabled="row.item.state !== 'ready' || row.execStatus === 'submitted' || row.execStatus === 'unconfirmed' || executing"
+                :disabled="row.item.state !== 'ready' || row.execStatus === 'submitted' || row.execStatus === 'unconfirmed' || selectionLocked"
               />
             </td>
             <td class="mono">{{ row.item.caseVolume }}</td>
@@ -682,7 +932,7 @@ onMounted(() => {
             </td>
             <td>
               <ThemeSelect
-                v-if="row.item.state === 'ready' && row.execStatus !== 'submitted'"
+                v-if="row.item.state === 'ready' && row.execStatus !== 'submitted' && !selectionLocked"
                 v-model="row.overrideReviewerId"
                 :options="[{ value: '', label: `跟随默认 (${effectiveReviewerLabel(row)})` }, ...reviewerOptions]"
               />
@@ -698,7 +948,7 @@ onMounted(() => {
                 v-if="row.execStatus === 'failed'"
                 type="button"
                 class="ghost"
-                :disabled="inspecting || executing || !!pausedBatch"
+                :disabled="selectionLocked"
                 @click="retryRow(row)"
               >
                 重试

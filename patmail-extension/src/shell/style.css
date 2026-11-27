@@ -52,7 +52,11 @@ img { max-width: 100%; }
 .check-rainbow { width: min(460px, 38vw); flex: none; margin-inline: auto; display: grid; gap: 4px; align-content: center; justify-items: center; }
 .check-rainbow-bar { width: 100%; display: flex; align-items: center; gap: 8px; }
 .check-rainbow-track { flex: 1; min-width: 0; height: 14px; border-radius: 99px; background: #fff; border: 1px solid #f6c5d8; overflow: hidden; box-shadow: 0 4px 14px #ffd6e640; }
-.check-rainbow-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #ff5d73, #ff9f43, #ffe14a, #3ddc97, #4dabff, #8b6cff, #ff5d73); background-size: 200% 100%; animation: check-rainbow 1.6s linear infinite; }
+.check-rainbow-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #ff5d73, #ff9f43, #ffe14a, #3ddc97, #4dabff, #8b6cff, #ff5d73); }
+.check-rainbow.is-run .check-rainbow-track > span { background-size: 200% 100%; animation: check-rainbow 1.6s linear infinite; }
+.check-rainbow.is-hold .check-rainbow-track > span { background: #d97706; }
+.check-rainbow.is-done .check-rainbow-track > span { background: #15803d; }
+.check-rainbow.is-fail .check-rainbow-track > span { background: #dc2626; }
 .check-rainbow-percent { flex: none; min-width: 3.6em; text-align: right; font-size: 12px; line-height: 1.2; font-weight: 800; color: #7a3e86; font-variant-numeric: tabular-nums; }
 .check-rainbow p { margin: 0; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.2; font-weight: 700; color: #7a3e86; text-align: center; }
 .check-rainbow.is-state-machine { width: min(540px, 46vw); padding: 7px 12px; gap: 4px; border-radius: 14px; border: 1px solid #f4bdd5; background: linear-gradient(180deg, #fffafd 0%, #fff3f8 100%); box-shadow: 0 4px 14px rgba(255, 79, 147, 0.12); justify-items: stretch; }
@@ -76,7 +80,7 @@ img { max-width: 100%; }
 .check-rainbow.is-state-machine.is-fail .check-rainbow-stage { background: #ffe3ea; color: #c4234e; }
 @keyframes check-state-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
 @keyframes check-rainbow { from { background-position: 0 0; } to { background-position: 200% 0; } }
-@media (prefers-reduced-motion: reduce) { .check-rainbow-track > span, .check-rainbow.is-state-machine.is-run .check-rainbow-dot { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .check-rainbow.is-run .check-rainbow-track > span, .check-rainbow.is-state-machine.is-run .check-rainbow-dot { animation: none; } }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; position: relative; }
 .top-actions:has(.check-rainbow) { flex: 1; margin-left: 16px; min-width: 0; }
 .profile { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; }
