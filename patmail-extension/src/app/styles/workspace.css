@@ -1,6 +1,26 @@
 .demo-flag { background: #fff4d6; color: #946200; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 700; }
 .route-panes,
 .workflow-page-root { position: relative; min-width: 0; }
+.workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root) {
+  background-image:
+    linear-gradient(180deg, rgba(255, 248, 252, 0.56) 0%, rgba(255, 245, 251, 0.34) 45%, rgba(255, 248, 253, 0.48) 100%),
+    url('/assets/background/workflow-bg.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  padding-left: 16px;
+}
+.workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root) .site-foot {
+  color: #5d4f6e;
+  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.85);
+}
+.workflow-page-root .page-head .page-copy h1,
+.workflow-page-root .page-head .page-copy p {
+  text-shadow: 0 1px 10px rgba(255, 255, 255, 0.9);
+}
+.workflow-page-root .page-head .page-copy p {
+  color: #5c506b;
+}
 .route-pane { min-width: 0; }
 .workspace-body > .page-head,
 .route-pane > .page-head { margin-bottom: 8px; }
@@ -471,7 +491,7 @@
   .flow-fields, .flow-param { grid-template-columns: 1fr; }
 }
 .sea { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; align-items: stretch; }
-.sea-card { position: relative; text-align: left; border: 1px solid #f7dfeb; border-radius: 20px; padding: 18px 18px 14px; min-height: 176px; display: flex; flex-direction: column; justify-content: space-between; font: inherit; color: #4a3b55; background: radial-gradient(120px 80px at 90% 0%, #fff6fb, transparent 70%), linear-gradient(180deg, #fff, #fff7fb); box-shadow: 0 10px 24px #ff8ab822; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.sea-card { position: relative; text-align: left; border: 1px solid #f7dfeb; border-radius: 20px; padding: 18px 18px 14px; min-height: 176px; display: flex; flex-direction: column; justify-content: space-between; font: inherit; color: #4a3b55; background: radial-gradient(120px 80px at 90% 0%, rgba(255, 246, 251, 0.92), transparent 70%), linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 247, 251, 0.84)); backdrop-filter: blur(10px); box-shadow: 0 10px 24px #ff8ab822; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
 .sea-card:hover { transform: translateY(-2px); border-color: #f3c2d9; box-shadow: 0 14px 28px #ff8ab830; }
 .sea-open { flex: 1; border: 0; background: transparent; text-align: left; font: inherit; color: inherit; display: flex; flex-direction: column; gap: 10px; cursor: pointer; padding: 0; width: 100%; }
 .sea-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; width: 100%; }
@@ -479,7 +499,7 @@
 .sea-card small { color: #7a6884; font-size: 13px; line-height: 1.6; }
 .sea-card em { margin-top: auto; padding-top: 2px; font-style: normal; color: #d64f87; font-size: 12px; font-weight: 600; line-height: 1.45; }
 .sea-badge { flex: none; display: inline-flex; align-items: center; width: fit-content; background: #ffe8f2; color: #d93b7a; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
-.sea-add { justify-content: center; align-items: center; text-align: center; gap: 8px; cursor: pointer; border: 1.5px dashed #f2b5cf; background: #fffbfd; box-shadow: none; padding: 24px 18px; }
+.sea-add { justify-content: center; align-items: center; text-align: center; gap: 8px; cursor: pointer; border: 1.5px dashed #f2b5cf; background: rgba(255, 251, 253, 0.78); backdrop-filter: blur(8px); box-shadow: none; padding: 24px 18px; }
 .sea-add:hover { border-color: #ff7ab0; background: #fff5f9; box-shadow: none; }
 .sea-add-icon { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #ffe8f2; color: #e13d80; font-size: 20px; font-weight: 700; line-height: 1; }
 .sea-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 14px; padding-top: 11px; border-top: 1px dashed #f5d8e7; }
