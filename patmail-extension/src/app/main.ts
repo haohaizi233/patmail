@@ -7,6 +7,8 @@ import App from './App.vue'
 import '../floating/style.css'
 import './styles/workspace.css'
 import '../shell/style.css'
+import './styles/workflow-ocean-tokens.css'
+import './styles/workflow-ocean.css'
 
 bindLimitMailRecovery({
   load: () => recallRecovery('limit-mail', 'local'),

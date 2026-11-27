@@ -12,6 +12,15 @@ import PctNoticeWorkflowPage from './PctNoticeWorkflowPage.vue'
 import FeeReduceWorkflowPage from './FeeReduceWorkflowPage.vue'
 import WorkflowWorkspace from '../components/WorkflowWorkspace.vue'
 import WorkflowMailEntry from '../components/WorkflowMailEntry.vue'
+import WorkflowOceanScene from '../components/workflow-ocean/WorkflowOceanScene.vue'
+import WorkflowOceanCard from '../components/workflow-ocean/WorkflowOceanCard.vue'
+import WorkflowOceanAddCard from '../components/workflow-ocean/WorkflowOceanAddCard.vue'
+import {
+  buildWorkflowOceanCards,
+  buildWorkflowOceanStats,
+  oceanModeForScreen
+} from '../components/workflow-ocean/workflow-ocean-presentation'
+import type { WorkflowOceanCardView } from '../components/workflow-ocean/workflow-ocean.types'
 import hagueGuide from '../../../docs/workflows/海牙新申请.md?raw'
 import jihuaGuide from '../../../docs/workflows/季华实验室-文件导入.md?raw'
 import billingGuide from '../../../docs/workflows/请款.md?raw'
@@ -89,28 +98,6 @@ const TOOL_DEFAULT_VIEWS: Record<'hague' | 'jihua' | 'billing' | 'pctNotice' | '
   feeReduce: 'use',
 }
 
-const FLOW_CARD_BADGE: Record<string, string> = {
-  'pct-reminder': '自动发文',
-  'pct-pengcheng': '自动发文',
-  [FILE_MANAGE_ID]: '自动发文',
-  [FILING_EXPORT_ID]: '数据导出',
-}
-
-const FLOW_CARD_META: Record<string, string> = {
-  'pct-reminder': '9 步 · 表格解析 · 合并发文',
-  'pct-pengcheng': '9 步 · 技术负责人主送 · 抄送 IPR',
-  [FILE_MANAGE_ID]: '8 步 · 客户配置联动 · 映射匹配',
-  [FILING_EXPORT_ID]: '5 步 · 退回脉络追溯 · Top10 图表',
-}
-
-function flowCardBadge(flow: WorkflowDefinition): string {
-  return FLOW_CARD_BADGE[flow.id] ?? (isSystemWorkflow(flow) ? '系统流程' : '自定义')
-}
-
-function flowCardMeta(flow: WorkflowDefinition): string {
-  return FLOW_CARD_META[flow.id] ?? `${flow.steps.length} 步 · 自定义流程`
-}
-
 const {
   rememberedViews,
   rememberedSteps,
@@ -138,7 +125,16 @@ watch(screen, next => {
   if (next === 'feeReduce') feeReduceMounted.value = true
 }, { immediate: true })
 const mainScreenHidden = computed(() => screen.value === 'jihua' || screen.value === 'hague' || screen.value === 'billing' || screen.value === 'pctNotice' || screen.value === 'feeReduce')
+const oceanMode = computed(() => oceanModeForScreen(screen.value))
 const catalog = ref<WorkflowCatalog>(defaultWorkflowCatalog())
+const oceanCards = computed(() =>
+  buildWorkflowOceanCards(catalog.value.workflows, {
+    isSystem: isSystemWorkflow,
+    canUse: canUseFlow,
+    hasGuide: flow => Boolean(flowGuideFor(flow))
+  })
+)
+const oceanStats = computed(() => buildWorkflowOceanStats(oceanCards.value))
 const draft = ref<WorkflowDefinition | null>(null)
 const selectedId = ref('')
 const dirty = ref(false)
@@ -679,10 +675,51 @@ function chooseProc(param: WorkflowParam, id: string): void {
   param.value = node.label
 }
 
+function catalogFlowForCard(card: WorkflowOceanCardView): WorkflowDefinition | undefined {
+  return catalog.value.workflows.find(item => item.id === card.id)
+}
+
+function handleOceanOpen(card: WorkflowOceanCardView): void {
+  if (card.kind === 'tool' && card.toolTarget) {
+    openToolWorkspace(card.toolTarget)
+    return
+  }
+  const flow = catalogFlowForCard(card)
+  if (flow) openFlow(flow)
+}
+
+function handleOceanUse(card: WorkflowOceanCardView): void {
+  if (card.kind === 'tool' && card.toolTarget) {
+    openToolWorkspace(card.toolTarget, 'use')
+    return
+  }
+  const flow = catalogFlowForCard(card)
+  if (flow) openFlow(flow, 'use')
+}
+
+function handleOceanGuide(card: WorkflowOceanCardView): void {
+  if (card.kind === 'tool' && card.toolTarget) {
+    openToolWorkspace(card.toolTarget, 'guide')
+    return
+  }
+  const flow = catalogFlowForCard(card)
+  if (flow) openFlow(flow, 'guide')
+}
+
+function handleOceanCopy(card: WorkflowOceanCardView): void {
+  const flow = catalogFlowForCard(card)
+  if (flow) void copyFlow(flow)
+}
+
+function handleOceanRemove(card: WorkflowOceanCardView): void {
+  const flow = catalogFlowForCard(card)
+  if (flow) void removeFlow(flow)
+}
+
 </script>
 
 <template>
-  <div class="workflow-page-root">
+  <div class="workflow-page-root" :data-ocean-mode="oceanMode">
   <div
     class="workflow-main"
     :class="{ 'is-hidden-pane': mainScreenHidden }"
@@ -690,107 +727,31 @@ function chooseProc(param: WorkflowParam, id: string): void {
     :aria-hidden="mainScreenHidden ? 'true' : undefined"
   >
     <PageHead
-      v-if="screen !== 'flow' || !draft"
+      v-if="screen === 'ocean'"
       title="工作流"
-      :desc="screen === 'ocean' ? '从知识海洋里挑几件会做的事，串成一条你自己的。' : '先挑一条，点开再看每一步。'"
+      desc="从知识海洋里挑几件会做的事，串成一条你自己的。"
       :art="bg('专注每一次发文，让知识更有力量.png')"
     />
 
-    <section v-if="screen === 'sea'" class="sea">
-      <article v-for="flow in catalog.workflows" :key="flow.id" class="sea-card">
-        <button type="button" class="sea-open" @click="openFlow(flow)">
-          <div class="sea-head">
-            <b>{{ flow.label }}</b>
-            <span class="sea-badge">{{ flowCardBadge(flow) }}</span>
-          </div>
-          <small>{{ flow.summary }}</small>
-          <em>{{ flowCardMeta(flow) }}</em>
-        </button>
-        <div class="sea-actions">
-          <button v-if="canUseFlow(flow)" type="button" class="sea-action-primary" @click="openFlow(flow, 'use')">开始使用</button>
-          <button v-if="flowGuideFor(flow)" type="button" class="sea-remove" @click="openFlow(flow, 'guide')">流程说明</button>
-          <button type="button" class="sea-remove" @click="copyFlow(flow)">复制副本</button>
-          <button v-if="!isSystemWorkflow(flow)" type="button" class="sea-remove" @click="removeFlow(flow)">拿掉</button>
-        </div>
-      </article>
-      <article class="sea-card">
-        <button type="button" class="sea-open" @click="openToolWorkspace('hague')">
-          <div class="sea-head">
-            <b>海牙新申请</b>
-            <span class="sea-badge">批量申报</span>
-          </div>
-          <small>批量校验申请材料与著录信息，多路并行填写草稿，并导出汇总表。</small>
-          <em>材料核对 · 6 路并行 · Summary 导出</em>
-        </button>
-        <div class="sea-actions">
-          <button type="button" class="sea-action-primary" @click="openToolWorkspace('hague', 'use')">开始使用</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('hague', 'guide')">流程说明</button>
-        </div>
-      </article>
-      <article class="sea-card jihua-upload-card">
-        <button type="button" class="sea-open" @click="openToolWorkspace('jihua')">
-          <div class="sea-head">
-            <b>季华实验室-文件导入</b>
-            <span class="sea-badge">文件上传</span>
-          </div>
-          <small>按申请号自动归类文件，直连已登录的季华平台核对案件并批量上传。</small>
-          <em>自动归类 · 6 路上传 · 逐行回执</em>
-        </button>
-        <div class="sea-actions">
-          <button type="button" class="sea-action-primary" @click="openToolWorkspace('jihua', 'use')">开始使用</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('jihua', 'guide')">流程说明</button>
-        </div>
-      </article>
-      <article class="sea-card billing-workflow-card">
-        <button type="button" class="sea-open" @click="openToolWorkspace('billing')">
-          <div class="sea-head">
-            <b>请款</b>
-            <span class="sea-badge">费用请款</span>
-          </div>
-          <small>支持涉外与 PCT 请款：自动抓取账单联动查费，带人行汇率原式导出。</small>
-          <em>账单抓取 · 费用联动 · 原式导出</em>
-        </button>
-        <div class="sea-actions">
-          <button type="button" class="sea-action-primary" @click="openToolWorkspace('billing', 'use')">开始使用</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('billing', 'guide')">流程说明</button>
-        </div>
-      </article>
-      <article class="sea-card pct-notice-workflow-card">
-        <button type="button" class="sea-open" @click="openToolWorkspace('pctNotice')">
-          <div class="sea-head">
-            <b>pct官文下载上传</b>
-            <span class="sea-badge">官文同步</span>
-          </div>
-          <small>大小客户双系统并行：比对未导入官文，自动清理前缀并完成两轮回传。</small>
-          <em>双系统并行 · 增量比对 · 自动回传</em>
-        </button>
-        <div class="sea-actions">
-          <button type="button" class="sea-action-primary" @click="openToolWorkspace('pctNotice', 'use')">开始使用</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('pctNotice', 'guide')">流程说明</button>
-        </div>
-      </article>
-      <article class="sea-card fee-reduce-workflow-card">
-        <button type="button" class="sea-open" @click="openToolWorkspace('feeReduce')">
-          <div class="sea-head">
-            <b>请求费用减缓</b>
-            <span class="sea-badge">费减办理</span>
-          </div>
-          <small>按我方文号识别处理状态，撰写中案件自动创建费减递交、转档并提初核。</small>
-          <em>状态筛选 · XML 转档 · 提交初核</em>
-        </button>
-        <div class="sea-actions">
-          <button type="button" class="sea-action-primary" @click="openToolWorkspace('feeReduce', 'use')">开始使用</button>
-          <button type="button" class="sea-remove" @click="openToolWorkspace('feeReduce', 'guide')">流程说明</button>
-        </div>
-      </article>
-      <button type="button" class="sea-card sea-add" @click="openOcean">
-        <span class="sea-add-icon" aria-hidden="true">+</span>
-        <b>从知识海洋加一条</b>
-        <small>自由挑选常用步骤，按业务顺序编排你的专属工作流。</small>
-      </button>
-    </section>
+    <WorkflowOceanScene
+      v-if="screen === 'sea'"
+      :active="screen === 'sea'"
+      :stats="oceanStats"
+    >
+      <WorkflowOceanCard
+        v-for="card in oceanCards"
+        :key="card.id"
+        :card="card"
+        @open="handleOceanOpen"
+        @use="handleOceanUse"
+        @guide="handleOceanGuide"
+        @copy="handleOceanCopy"
+        @remove="handleOceanRemove"
+      />
+      <WorkflowOceanAddCard @open="openOcean" />
+    </WorkflowOceanScene>
 
-    <section v-else-if="screen === 'ocean'" class="card ocean">
+    <section v-else-if="screen === 'ocean'" class="card ocean ocean-builder">
       <button type="button" class="workflow-back-btn" @click="screen = 'sea'">回到工作流</button>
       <p class="hint">现在会自己跑起来的，是 PCT提醒、PCT鹏城专案和文件管理。新加的会按你排的步骤保存下来。</p>
       <div class="skill-sea">

@@ -1,26 +1,6 @@
 .demo-flag { background: #fff4d6; color: #946200; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 700; }
 .route-panes,
 .workflow-page-root { position: relative; min-width: 0; }
-.workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root) {
-  background-image:
-    linear-gradient(180deg, rgba(255, 248, 252, 0.56) 0%, rgba(255, 245, 251, 0.34) 45%, rgba(255, 248, 253, 0.48) 100%),
-    url('/assets/background/workflow-bg.jpg');
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  padding-left: 16px;
-}
-.workspace:has(.route-pane:not(.is-hidden-pane) > .workflow-page-root) .site-foot {
-  color: #5d4f6e;
-  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.85);
-}
-.workflow-page-root .page-head .page-copy h1,
-.workflow-page-root .page-head .page-copy p {
-  text-shadow: 0 1px 10px rgba(255, 255, 255, 0.9);
-}
-.workflow-page-root .page-head .page-copy p {
-  color: #5c506b;
-}
 .route-pane { min-width: 0; }
 .workspace-body > .page-head,
 .route-pane > .page-head { margin-bottom: 8px; }
