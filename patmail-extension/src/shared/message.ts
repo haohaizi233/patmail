@@ -124,6 +124,7 @@ export const MessageType = {
   ReadFeeReduceReviewers: 'READ_FEE_REDUCE_REVIEWERS',
   ReadFeeReduceReviewersResult: 'READ_FEE_REDUCE_REVIEWERS_RESULT',
   SubmitFeeReduceFiling: 'SUBMIT_FEE_REDUCE_FILING',
+  ExecuteFeeReduceFiling: 'EXECUTE_FEE_REDUCE_FILING',
   SubmitFeeReduceFilingResult: 'SUBMIT_FEE_REDUCE_FILING_RESULT',
   SubmitLimitMail: 'SUBMIT_LIMIT_MAIL',
   SubmitLimitMailResult: 'SUBMIT_LIMIT_MAIL_RESULT',
@@ -270,9 +271,10 @@ export type ContentRequest =
   | Response<'NOTICE_ACTION', NoticeActionRequest>
   | Response<'EXPORT_NOTICE', NoticeExportRequest>
   | Response<'UPLOAD_NOTICE_EXCEL', NoticeExcelUploadRequest>
-  | Response<'INSPECT_FEE_REDUCE_CASES', { caseVolumes: string[] }>
+  | Response<'INSPECT_FEE_REDUCE_CASES', { caseVolumes: string[]; expectedScope?: ExpectedAccountScope }>
   | Request<'READ_FEE_REDUCE_REVIEWERS'>
   | Response<'SUBMIT_FEE_REDUCE_FILING', FeeReduceSubmitRequest>
+  | Response<'EXECUTE_FEE_REDUCE_FILING', FeeReduceSubmitRequest & { walToken: string }>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; namedBusiness?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string; addresses?: Pick<FileMailConfig, 'to' | 'cc'> }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
@@ -314,7 +316,8 @@ export type ContentRequest =
   | Response<'DIAGNOSE_EXISTING_MAIL', { mailId: string; flowType: string }>
   | Response<'RUN_READONLY_ACCEPTANCE', { call: string; expected: Record<string, string>; caseTypeId?: string; mailId?: string; flowType?: string }>
   | Response<'CALL_EASY', { handler: string; call: string; fields?: Record<string, string> }>
-export type ErrorMessage = Response<'ERROR', { message: string }>
+export type FeeBatchPause = 'not_sent' | 'verify'
+export type ErrorMessage = Response<'ERROR', { message: string; feeBatchPause?: FeeBatchPause }>
 export interface ExistingMailDiagnostic {
   mailId: string
   fileIds: string[]
@@ -434,7 +437,7 @@ export type WorkspaceAction =
   | { action: 'saveRules'; bundle: MailRuleBundle; expectedScope: ExpectedAccountScope }
   | { action: 'createTaskPlan'; files: SelectedPatentFile[]; queryTemplateVersion: number; expectedScope: ExpectedAccountScope }
   | { action: 'recordFileManageRun'; expectedScope: ExpectedAccountScope; run: FileManageRunInput }
-  | { action: 'forward'; message: ContentRequest; targetMode?: CustomerMode }
+  | { action: 'forward'; message: ContentRequest; targetMode?: CustomerMode; workflowId?: string }
   | { action: 'runAcceptance'; call: string; caseTypeId?: string; mailId?: string; flowType?: string; expectedFields?: Record<string, string> }
 
 export interface CreatedTaskResult {
@@ -462,6 +465,7 @@ export interface WorkspaceResultPayload {
   createdTask: CreatedTaskResult | null
   dualSystems?: DualSystemStatusSnapshot
   contextError?: 'STALE_CONTEXT'
+  feeBatchPause?: FeeBatchPause
   rulesSaved?: boolean
   tasksRevalidated?: boolean
   pendingRevalidation?: boolean
@@ -1092,9 +1096,15 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.UploadNoticeExcel:
       return isNoticeExcelUploadRequest(value.payload)
     case MessageType.InspectFeeReduceCases:
-      return isFeeReduceInspectPayload(value.payload)
+      return isFeeReduceInspectPayload(value.payload) &&
+        (!('expectedScope' in value.payload) || isExpectedScope(value.payload.expectedScope))
     case MessageType.SubmitFeeReduceFiling:
-      return isFeeReduceSubmitPayload(value.payload)
+      return isFeeReduceSubmitPayload(value.payload) &&
+        (value.payload.expectedScope === undefined || isExpectedScope(value.payload.expectedScope)) &&
+        !('walToken' in value.payload)
+    case MessageType.ExecuteFeeReduceFiling:
+      return isFeeReduceSubmitPayload(value.payload) && isExpectedScope(value.payload.expectedScope) &&
+        'walToken' in value.payload && typeof value.payload.walToken === 'string' && isQueryGuid(value.payload.walToken)
     case MessageType.SearchFeeCustomers:
       return isRecord(value.payload) && typeof value.payload.searchKey === 'string' && Object.keys(value.payload).length === 1
     case MessageType.LoadFeeApplicants:
@@ -1348,7 +1358,8 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.AgentChatResult:
       return isAgentChatResult(value.payload)
     case MessageType.Error:
-      return isRecord(value.payload) && typeof value.payload.message === 'string'
+      return isRecord(value.payload) && typeof value.payload.message === 'string' &&
+        (value.payload.feeBatchPause === undefined || value.payload.feeBatchPause === 'not_sent' || value.payload.feeBatchPause === 'verify')
     default:
       return false
   }
@@ -1413,7 +1424,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.SearchFee || value.type === MessageType.SearchFeeAmount || value.type === MessageType.LoadFeeInit || value.type === MessageType.SearchFeeCustomers || value.type === MessageType.LoadFeeApplicants || value.type === MessageType.FeeExportConfig || value.type === MessageType.ExportFee ||
     value.type === MessageType.SearchPatent || value.type === MessageType.LoadPatentInit || value.type === MessageType.LoadPatentCtrlProc ||
     value.type === MessageType.LoadNoticeInit || value.type === MessageType.SearchNotice || value.type === MessageType.NoticeAction || value.type === MessageType.ExportNotice || value.type === MessageType.UploadNoticeExcel || value.type === MessageType.InspectFeeReduceCases || value.type === MessageType.ReadFeeReduceReviewers || value.type === MessageType.SubmitFeeReduceFiling || value.type === MessageType.ListMailProcesses ||
-    value.type === MessageType.SubmitLimitMail ||
+    value.type === MessageType.ExecuteFeeReduceFiling || value.type === MessageType.SubmitLimitMail ||
     value.type === MessageType.SubmitFileManage ||
     value.type === MessageType.ResolveDownloadNames ||
     value.type === MessageType.DownloadFiles ||
@@ -1559,7 +1570,10 @@ function isWorkspaceAction(value: unknown): value is WorkspaceAction {
   if (value.action === 'forward') {
     const keys = Object.keys(value)
     const modeOk = value.targetMode === undefined || isCustomerMode(value.targetMode)
-    return (keys.length === 2 || (keys.length === 3 && 'targetMode' in value)) && modeOk && isWorkspaceForwardRequest(value.message)
+    const workflowOk = value.workflowId === undefined ||
+      (typeof value.workflowId === 'string' && /^[a-z0-9][a-z0-9-]{0,79}$/.test(value.workflowId))
+    return keys.every(key => ['action', 'message', 'targetMode', 'workflowId'].includes(key)) &&
+      modeOk && workflowOk && isWorkspaceForwardRequest(value.message)
   }
   return false
 }
@@ -1576,6 +1590,7 @@ function isWorkspaceResult(value: unknown): value is WorkspaceResultPayload {
   if (value.createdTask != null && !isCreatedTask(value.createdTask)) return false
   if (value.dualSystems !== undefined && !isDualSystemStatusSnapshot(value.dualSystems)) return false
   if (value.contextError !== undefined && value.contextError !== 'STALE_CONTEXT') return false
+  if (value.feeBatchPause !== undefined && value.feeBatchPause !== 'not_sent' && value.feeBatchPause !== 'verify') return false
   if (value.rulesSaved !== undefined && typeof value.rulesSaved !== 'boolean') return false
   if (value.tasksRevalidated !== undefined && typeof value.tasksRevalidated !== 'boolean') return false
   if (value.pendingRevalidation !== undefined && typeof value.pendingRevalidation !== 'boolean') return false

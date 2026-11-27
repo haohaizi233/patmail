@@ -10,7 +10,7 @@ import type { QueryTemplate } from '../query/query-types'
 import { chooseAppTab, EasyConnectionController, emptyConnection, accountScopeMatches, freezeAccount, resumeLoginChoice, sameAccountContext, sameOperatorId, tabOrigin, type AccountContextSnapshot, type BrowserTabRef, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope, type SessionObservation } from '../shared/connection'
 import { caseContactExportBlock } from '../customer/skills'
 import { appendFileManageRun, enqueueFileManageWrite, fileManageRunKey, parseFileManageRuns } from '../customer/file-manage-runs'
-import { isMessage, workspaceForwardBlock, MessageType, type AppMessage, type BackgroundResponse, type ContentRequest, type CreatedTaskResult, type DualSystemNodeStatus, type DualSystemStatusSnapshot, type FileManageRun } from '../shared/message'
+import { isMessage, workspaceForwardBlock, MessageType, type AppMessage, type BackgroundResponse, type ContentRequest, type CreatedTaskResult, type DualSystemNodeStatus, type DualSystemStatusSnapshot, type FeeBatchPause, type FileManageRun } from '../shared/message'
 import { loadAccount, deleteCustomerAccount, deleteQueryTemplateAccount, refreshStaleTasks, saveCustomerAccount, saveQueryTemplateAccount, saveRuleAccount, type LocalArea } from './account-data'
 import { observeSearchPage, resolveSelectedFiles, toQueryObservation, type QueryObservationResult } from '../automation/file-search-snapshot'
 import { rememberFileTypeTree } from '../automation/file-description-resolver'
@@ -23,6 +23,8 @@ import { createRecoveryClient } from '../recovery/client'
 import { isWriteSwitchOpen } from '../settings/write-switch'
 import { createLimitMailWriteGuard } from './limit-mail-write-guard'
 import { dispatchRecoveryRequest } from './recovery'
+import { runWorkflowWrite, workflowWriteStep } from './workflow-write'
+import { withFeeReduceCheckpoint } from './fee-reduce-checkpoint'
 
 const mailJournal = createRecoveryClient(dispatchRecoveryRequest)
 const guardLimitMail = createLimitMailWriteGuard({
@@ -45,6 +47,7 @@ export interface WorkspacePayload {
   createdTask: CreatedTaskResult | null
   dualSystems?: DualSystemStatusSnapshot
   contextError?: 'STALE_CONTEXT'
+  feeBatchPause?: FeeBatchPause
   rulesSaved?: boolean
   tasksRevalidated?: boolean
   pendingRevalidation?: boolean
@@ -66,6 +69,7 @@ export function workspaceResult(partial: Partial<WorkspacePayload> & { connectio
     createdTask: partial.createdTask ?? null,
     ...(partial.dualSystems ? { dualSystems: partial.dualSystems } : {}),
     ...(partial.contextError ? { contextError: partial.contextError } : {}),
+    ...(partial.feeBatchPause ? { feeBatchPause: partial.feeBatchPause } : {}),
     ...(partial.rulesSaved !== undefined ? { rulesSaved: partial.rulesSaved, tasksRevalidated: partial.tasksRevalidated, pendingRevalidation: partial.pendingRevalidation } : {})
   }
   return { type: MessageType.WorkspaceResult, payload }
@@ -391,7 +395,10 @@ async function resolveDualTargetTab(host: WorkspaceHost, mode: CustomerMode): Pr
   return { ok: false, message: probed.message }
 }
 
-async function forwardToTargetMode(host: WorkspaceHost, targetMode: CustomerMode, message: ContentRequest): Promise<BackgroundResponse> {
+async function forwardToTargetMode(host: WorkspaceHost, targetMode: CustomerMode, message: ContentRequest, workflowId?: string): Promise<BackgroundResponse> {
+  if (workflowId && (message.type === MessageType.SubmitLimitMail || message.type === MessageType.SubmitFileManage)) {
+    return workspaceResult({ ok: false, message: '发文必须通过已绑定的 EASY 账号派发。', connection: host.connection.context })
+  }
   const forwardBlock = workspaceForwardBlock(message)
   if (forwardBlock) {
     return workspaceResult({ ok: false, message: forwardBlock, connection: host.connection.context })
@@ -404,7 +411,22 @@ async function forwardToTargetMode(host: WorkspaceHost, targetMode: CustomerMode
     activeForwards.set(host, (activeForwards.get(host) ?? 0) + 1)
     let response: unknown
     try {
-      response = await host.sendToTab(target.tabId, stripSearchContinuation(message))
+      const send = () => host.sendToTab(target.tabId, stripSearchContinuation(message))
+      const write = workflowWriteStep(message, true, workflowId)
+      if (write) {
+        const account = dualTabCache.get(host)?.[targetMode]
+        if (!account || account.tabId !== target.tabId || !isConfirmedOperator(account.operatorId)) {
+          throw new Error('当前登录人还没确认，工作流没有发送。')
+        }
+        response = await runWorkflowWrite(write, { easyOrigin: account.origin, operatorId: account.operatorId }, async () => {
+          const observation = await observeTab(host, target.tabId)
+          return observation?.status === 'authenticated' && observation.ok &&
+            sameOperatorId(observation.userId ?? '', account.operatorId) &&
+            tabOrigin((await host.getTab(target.tabId)).url) === account.origin
+        }, send)
+      } else {
+        response = await send()
+      }
     } finally {
       activeForwards.set(host, Math.max(0, (activeForwards.get(host) ?? 0) - 1))
     }
@@ -753,11 +775,28 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     }
   }
   if (action.action === 'forward') {
+    const message = action.message
+    const feeSubmit = message.type === MessageType.SubmitFeeReduceFiling
+    const unavailable = (message: string, pause: FeeBatchPause = 'not_sent', stale = false) => workspaceResult({
+      ok: false, message, connection: host.connection.context,
+      ...(stale ? { contextError: 'STALE_CONTEXT' as const } : {}),
+      ...(feeSubmit ? { feeBatchPause: pause } : {})
+    })
+    const feeRequest = message.type === MessageType.InspectFeeReduceCases || message.type === MessageType.SubmitFeeReduceFiling
+    const feeScope = feeRequest ? message.payload.expectedScope : undefined
+    if (feeRequest && (action.targetMode || !feeScope || !accountScopeMatches(host.connection.context, feeScope))) {
+      return unavailable('原 EASY 连接已变化，请重新连接本批次的账号。', 'not_sent', true)
+    }
+    if (action.message.type === MessageType.SubmitFeeReduceFiling && action.message.payload.resumeFilingId !== undefined) {
+      return workspaceResult({ ok: false, message: '费减续办参数必须由 WAL 生成。', connection: host.connection.context })
+    }
     if (action.targetMode) {
-      return forwardToTargetMode(host, action.targetMode, action.message)
+      return forwardToTargetMode(host, action.targetMode, action.message, action.workflowId)
     }
     const initialMailAccount = action.message.type === MessageType.SubmitLimitMail
       ? freezeAccount(host.connection.context) : null
+    const workflowWrite = workflowWriteStep(action.message, false, action.workflowId)
+    const initialWorkflowAccount = workflowWrite ? freezeAccount(host.connection.context) : null
     if (action.message.type === MessageType.LoadDictionary && action.message.payload.kind === 'customerList') {
       const local = await readSmeCustomerList(action.message.payload.force)
       if (local) {
@@ -778,14 +817,17 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     if (!readBurst && action.message.type !== MessageType.CancelHagueRead && action.message.type !== MessageType.CheckSession && action.message.type !== MessageType.CancelSessionCheck) {
       const gate = await recheckBoundSession(host)
       if (gate !== 'same') {
-        return workspaceResult({ ok: false, message: gate === 'changed' ? '会话已变化，请重新检测后再继续。' : (host.connection.context.message || '尚未确认 EASY 用户。'), connection: host.connection.context })
+        return unavailable(gate === 'changed' ? '会话已变化，请重新检测后再继续。' : (host.connection.context.message || '尚未确认 EASY 用户。'))
       }
     }
     const target = await boundTab(host)
-    if (!target.ok) return workspaceResult({ ok: false, message: target.message, connection: host.connection.context })
+    if (!target.ok) return unavailable(target.message)
+    if (feeScope && (feeScope.easyTabId !== target.tabId || !accountScopeMatches(host.connection.context, feeScope))) {
+      return unavailable('原 EASY 连接已变化，请重新连接本批次的账号。', 'not_sent', true)
+    }
     const forwardBlock = workspaceForwardBlock(action.message)
     if (forwardBlock) {
-      return workspaceResult({ ok: false, message: forwardBlock, connection: host.connection.context })
+      return unavailable(forwardBlock)
     }
     let outbound = action.message
     if (outbound.type === MessageType.SubmitLimitMail || outbound.type === MessageType.SubmitFileManage) {
@@ -815,14 +857,17 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     }
     const frozen = freezeAccount(host.connection.context)
     const version = host.connection.context.connectionVersion
+    let feeSent = false
+    let feeConnectionLost = false
     try {
       let response: unknown
       activeForwards.set(host, (activeForwards.get(host) ?? 0) + 1)
       try {
-        response = outbound.type === MessageType.SubmitLimitMail && initialMailAccount
-          ? await (host.limitMailWriteGuard ?? guardLimitMail)(
+        const request = outbound
+        const send = () => request.type === MessageType.SubmitLimitMail && initialMailAccount
+          ? (host.limitMailWriteGuard ?? guardLimitMail)(
             JSON.stringify(['phase3-write', initialMailAccount.easyOrigin, initialMailAccount.operatorId.toLowerCase()]),
-            outbound.payload.items,
+            request.payload.items,
             () => sameAccountContext(host.connection.context, initialMailAccount),
             () => isWriteSwitchOpen(),
             items => host.sendToTab(target.tabId, {
@@ -838,7 +883,43 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
                 (reply.payload.data.gate === 'open' || reply.payload.data.gate === 'done')
             },
           )
-          : await host.sendToTab(target.tabId, stripSearchContinuation(outbound))
+          : host.sendToTab(target.tabId, stripSearchContinuation(request))
+        if (workflowWrite) {
+          if (!initialWorkflowAccount || initialWorkflowAccount.easyTabId !== target.tabId ||
+              !sameAccountContext(host.connection.context, initialWorkflowAccount)) return feeSubmit
+            ? unavailable('原 EASY 连接已变化，请重新连接本批次的账号。', 'not_sent', true) : staleResult(host)
+          response = await runWorkflowWrite(
+            workflowWrite, initialWorkflowAccount,
+            () => sameAccountContext(host.connection.context, initialWorkflowAccount),
+            (save, progress) => {
+              if (request.type !== MessageType.SubmitFeeReduceFiling) return send()
+              if (!progress) throw new Error('费减 WAL 进度不可用。')
+              const stillBound = () => sameAccountContext(host.connection.context, initialWorkflowAccount) && isWriteSwitchOpen()
+              return withFeeReduceCheckpoint({
+                account: initialWorkflowAccount, process: request.payload, progress, save,
+                canWrite: async () => {
+                  if (!stillBound()) {
+                    feeConnectionLost = true
+                    return false
+                  }
+                  const observed = await observeTab(host, target.tabId)
+                  const valid = observed?.ok === true && observed.status === 'authenticated' &&
+                    sameOperatorId(observed.userId ?? '', initialWorkflowAccount.operatorId) && stillBound()
+                  feeConnectionLost ||= !valid
+                  return valid
+                }
+              }, (walToken, resumeFilingId) => {
+                feeSent = true
+                return host.sendToTab(target.tabId, {
+                  type: MessageType.ExecuteFeeReduceFiling,
+                  payload: { ...request.payload, walToken, ...(resumeFilingId ? { resumeFilingId } : {}) }
+                })
+              })
+            }
+          )
+        } else {
+          response = await send()
+        }
       } finally {
         activeForwards.set(host, Math.max(0, (activeForwards.get(host) ?? 0) - 1))
       }
@@ -847,15 +928,16 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
           await readBoundSession(host)
         }
         if (!sameAccountContext(host.connection.context, frozen)) {
-          return workspaceResult({ ok: false, message: '账号已经变化，这次查询结果已丢弃。', connection: host.connection.context })
+          return unavailable('账号已经变化，这次查询结果已丢弃。', feeSent ? 'verify' : 'not_sent')
         }
       }
       if (!frozen && host.connection.context.connectionVersion !== version) {
         return workspaceResult({ ok: false, message: '连接已经变化，这次结果已丢弃。', connection: host.connection.context })
       }
       if (!isMessage(response) || response.type === MessageType.Workspace || response.type === MessageType.WorkspaceResult) {
-        return workspaceResult({ ok: false, message: 'EASY 页面没有返回可识别的结果。请刷新这个 EASY 标签页后再试。', connection: host.connection.context })
+        return unavailable('EASY 页面没有返回可识别的结果。请刷新这个 EASY 标签页后再试。', feeSent ? 'verify' : 'not_sent')
       }
+      if (feeConnectionLost) return unavailable('EASY 账号或写开关已变化，请先恢复原连接。', feeSent ? 'verify' : 'not_sent')
       let forwarded = response
       if (frozen && action.message.type === MessageType.SearchFiles) {
         const recorded = await rememberObservedSearch(frozen, action.message, response)
@@ -874,7 +956,10 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
       if (gone) {
         host.connection.detach(target.tabId)
         remember(host)
-        return workspaceResult({ ok: false, message: '绑定的 EASY 标签页已失效。', connection: host.connection.context })
+        return unavailable('绑定的 EASY 标签页已失效。', feeSent ? 'verify' : 'not_sent')
+      }
+      if (feeSubmit && (feeConnectionLost || !isWriteSwitchOpen() || (feeScope && !accountScopeMatches(host.connection.context, feeScope)))) {
+        return unavailable(text || 'EASY 连接已中断。', feeSent ? 'verify' : 'not_sent')
       }
       return workspaceResult({ ok: false, message: text || 'EASY 页面没有执行这次查询。', connection: host.connection.context })
     }

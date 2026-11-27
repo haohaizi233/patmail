@@ -33,10 +33,10 @@ function forwardTimeoutMs(message: ContentRequest): number {
         : submitWait || downloadWait || noticeLongTask || searchWait || (slow ? 70_000 : 30_000)
 }
 
-function buildBridge(targetMode?: CustomerMode): MessageBridge {
+function buildBridge(targetMode?: CustomerMode, workflowId?: string): MessageBridge {
   const bridge: MessageBridge = {
     async request(message, signal): Promise<ContentResponse> {
-      if (message.type === MessageType.DiscardDownload || message.type === MessageType.PauseDownload) {
+      if (!workflowId && (message.type === MessageType.DiscardDownload || message.type === MessageType.PauseDownload)) {
         const response = await sendToBackground(message)
         return response?.type === MessageType.DiscardDownloadResult || response?.type === MessageType.PauseDownloadResult || response?.type === MessageType.Error
           ? response : { type: MessageType.Error, payload: { message: '本机下载任务没有响应。' } }
@@ -49,16 +49,19 @@ function buildBridge(targetMode?: CustomerMode): MessageBridge {
       const response = await sendToBackground(
         {
           type: MessageType.Workspace,
-          payload: targetMode ? { action: 'forward', message, targetMode } : { action: 'forward', message }
+          payload: { action: 'forward', message, ...(targetMode ? { targetMode } : {}), ...(workflowId ? { workflowId } : {}) }
         },
         forwardTimeoutMs(message)
       )
-      if (response?.type === MessageType.Error) return response
+      const feeSubmit = message.type === MessageType.SubmitFeeReduceFiling
+      if (response?.type === MessageType.Error) return feeSubmit
+        ? { ...response, payload: { ...response.payload, feeBatchPause: 'verify' } } : response
       const forwarded = response?.type === MessageType.WorkspaceResult ? response.payload.forwarded : null
       if (forwarded && forwarded.type === MessageType.Error) return forwarded
       if (!response || response.type !== MessageType.WorkspaceResult || !forwarded || forwarded.type === MessageType.WorkspaceResult) {
         const text = response?.type === MessageType.WorkspaceResult ? response.payload.message : ''
-        return { type: MessageType.Error, payload: { message: text || 'EASY 通道没有返回结果。' } }
+        const feeBatchPause = feeSubmit ? response?.type === MessageType.WorkspaceResult ? response.payload.feeBatchPause : 'verify' : undefined
+        return { type: MessageType.Error, payload: { message: text || 'EASY 通道没有返回结果。', ...(feeBatchPause ? { feeBatchPause } : {}) } }
       }
       return forwarded as ContentResponse
     }
@@ -71,9 +74,10 @@ export function createFullPageBridge(): MessageBridge {
   return buildBridge()
 }
 
-/** 定向把请求送到指定客户系统（大客户 / 中小客户）的已登录 EASY 标签页。 */
-export function createModeBridge(targetMode: CustomerMode): MessageBridge {
-  return buildBridge(targetMode)
+/** 工作流请求在后台默认经过 WAL，只有明确的只读操作可直通。 */
+export function createWorkflowBridge(workflowId: string, targetMode?: CustomerMode): MessageBridge {
+  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(workflowId)) throw new Error('工作流标识无效。')
+  return buildBridge(targetMode, workflowId)
 }
 
 /** 后台静默检测大客户与中小客户双系统在线状态及写开关。 */

@@ -1,3 +1,8 @@
+import type { ExpectedAccountScope } from '../shared/connection'
+
+export type FeeReduceCheckpointPhase = 'creating' | 'draft' | 'submitting'
+export type FeeReduceCheckpoint = (phase: FeeReduceCheckpointPhase, filingId?: string) => Promise<void>
+
 export type FeeReduceCaseInspectState =
   | 'completed'
   | 'ready'
@@ -46,9 +51,11 @@ export interface FeeReduceSubmitRequest {
   defaultReviewerId?: string
   overrideReviewerId?: string
   resumeFilingId?: string
+  expectedScope?: ExpectedAccountScope
 }
 
-export interface FeeReduceSubmitResult {
+interface FeeReduceFiledResult {
+  outcome?: 'submitted'
   caseVolume: string
   caseId: string
   procId: string
@@ -57,5 +64,14 @@ export interface FeeReduceSubmitResult {
   reviewerName: string
   convertedFiles: string[]
   warnings: string[]
+  message: string
+}
+
+export type FeeReduceSubmitResult = FeeReduceFiledResult | {
+  outcome: 'already_completed'
+  caseVolume: string
+  caseId: string
+  procId: string
+  procStatus: '完成' | '递交中'
   message: string
 }

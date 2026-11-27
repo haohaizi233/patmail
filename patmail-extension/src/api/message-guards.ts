@@ -40,7 +40,7 @@ const QUERY_KEYS = new Set([
 const ERROR_CODES = new Set([
   'INVALID_ORIGIN', 'INVALID_QUERY', 'NETWORK_ERROR', 'REQUEST_TIMEOUT',
   'HTTP_ERROR', 'SESSION_EXPIRED', 'AUTH_UNKNOWN', 'BUSINESS_ERROR',
-  'INVALID_RESPONSE', 'UNEXPECTED_HTML', 'REQUEST_ABORTED'
+  'INVALID_RESPONSE', 'UNEXPECTED_HTML', 'REQUEST_ABORTED', 'FLOW_STATUS_UNVERIFIED'
 ])
 
 function optionalString(value: unknown): boolean {
@@ -527,7 +527,12 @@ export function isFeeReduceReviewersApiResult(value: unknown): value is ApiResul
 }
 
 function isFeeReduceSubmitResult(value: unknown): value is FeeReduceSubmitResult {
-  return isRecord(value) && typeof value.filingId === 'string' && typeof value.caseId === 'string'
+  if (!isRecord(value) || typeof value.caseId !== 'string') return false
+  if (value.outcome === 'already_completed') {
+    return typeof value.caseVolume === 'string' && typeof value.procId === 'string' &&
+      (value.procStatus === '完成' || value.procStatus === '递交中') && typeof value.message === 'string'
+  }
+  return (value.outcome === undefined || value.outcome === 'submitted') && typeof value.filingId === 'string'
 }
 
 export function isFeeReduceSubmitApiResult(value: unknown): value is ApiResult<FeeReduceSubmitResult> {

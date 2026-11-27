@@ -1,4 +1,7 @@
 import { hagueReadResponse } from '../hague/read-error'
+import { apiError } from '../api/types'
+import { isRecord } from '../shared/guards'
+import { FEE_REDUCE_CHECKPOINT } from '../shared/fee-reduce-checkpoint'
 import { isContentRequest, MessageType, type ContentResponse, type FileSearchFormField, type MessageBridge, type QuerySurfaceEntry } from '../shared/message'
 import { surfaceIdFromMenuUrl } from '../customer/query-surfaces'
 import type { ProcessOpenTarget } from '../api/mail-process'
@@ -468,10 +471,22 @@ const bridge: MessageBridge = {
           type: MessageType.ReadFeeReduceReviewersResult,
           payload: await easyRuntime.readFeeReduceReviewers()
         }
+      case MessageType.ExecuteFeeReduceFiling: {
+        const token = message.payload.walToken
+        return {
+          type: MessageType.SubmitFeeReduceFilingResult,
+          payload: await easyRuntime.submitFeeReduceFiling(message.payload, async (phase, filingId) => {
+              const reply: unknown = await chrome.runtime.sendMessage({ type: FEE_REDUCE_CHECKPOINT, token, phase, filingId })
+              if (!isRecord(reply) || reply.ok !== true) {
+                throw new Error(isRecord(reply) && typeof reply.error === 'string' ? reply.error : '费减 WAL 检查点未提交。')
+              }
+            }).catch((error: unknown) => apiError('BUSINESS_ERROR', error instanceof Error ? error.message : '费减执行中断，请核对结果。'))
+        }
+      }
       case MessageType.SubmitFeeReduceFiling:
         return {
           type: MessageType.SubmitFeeReduceFilingResult,
-          payload: await easyRuntime.submitFeeReduceFiling(message.payload)
+          payload: apiError('INVALID_QUERY', '请通过工作台的 WAL 执行费减递交。')
         }
       case MessageType.SubmitLimitMail:
         return { type: MessageType.SubmitLimitMailResult,

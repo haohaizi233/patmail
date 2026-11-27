@@ -30,6 +30,7 @@ import {
 import { NoticeClient } from './notice-client'
 import { FeeReduceClient } from './fee-reduce-client'
 import type {
+  FeeReduceCheckpoint,
   FeeReduceInspectResult,
   FeeReduceReviewersResult,
   FeeReduceSubmitRequest,
@@ -1667,14 +1668,14 @@ export class EasyRuntime {
     return result
   }
 
-  async submitFeeReduceFiling(request: FeeReduceSubmitRequest): Promise<ApiResult<FeeReduceSubmitResult>> {
+  async submitFeeReduceFiling(request: FeeReduceSubmitRequest, checkpoint: FeeReduceCheckpoint): Promise<ApiResult<FeeReduceSubmitResult>> {
     if (!isWriteSwitchOpen()) {
       return apiError('BUSINESS_ERROR', '写开关已关闭，不能提交费用减缓递交。')
     }
     if (!(await this.confirmAccountRead())) {
       return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
     }
-    const result = await this.feeReduce.submitFeeReduce(request)
+    const result = await this.feeReduce.submitFeeReduce(request, checkpoint)
     if (!result.ok && result.error.code === 'SESSION_EXPIRED') this.session.expire()
     return result
   }

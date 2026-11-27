@@ -18,8 +18,42 @@ const PROC_ID_1 = '257A47AA-5216-4B5A-A288-93285E250EB2'
 const PROC_ID_2 = '357A47AA-5216-4B5A-A288-93285E250EB2'
 const PROC_ID_3 = '457A47AA-5216-4B5A-A288-93285E250EB2'
 const FILING_ID = 'AA6845C0-03A8-4FA6-AE8B-0A56A0BB3EB8'
+const nativeEmptyFlow = { ClientInfo: { IsLogin: true, Status: true, Result: false, Message: '' }, last_status: null }
 
 describe('FeeReduceClient', () => {
+  it.each([
+    ['完成', PROC_ID_1, true],
+    ['递交中', PROC_ID_1, true],
+    ['撰写中', PROC_ID_1, false],
+    ['完成', PROC_ID_2, false]
+  ] as const)('rechecks a completed-process refusal without starting another filing (%s, %s)', async (status, procId, skipped) => {
+    const calls: string[] = []
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      const call = new URLSearchParams(String(init?.body ?? '')).get('Call') ?? ''
+      calls.push(call)
+      if (call === 'CheckCtrlProc') return Promise.resolve(jsonResponse({ ClientInfo: { IsLogin: true, Result: true } }))
+      if (call === 'VerificateFiling') {
+        return Promise.resolve(jsonResponse({ ClientInfo: {
+          IsLogin: true, Result: false, Message: '此处理事项已经完成,不能启动递交流程'
+        } }))
+      }
+      if (call === 'GetProcList') {
+        return Promise.resolve(jsonResponse({ TableRows: [{ proc_id: procId, ctrl_proc: '请求费用减缓', proc_status: status }] }))
+      }
+      throw new Error(call)
+    })
+    const client = new FeeReduceClient(new EasyTransport('http://183.36.43.66:88', { fetcher }))
+    const checkpoint = vi.fn(() => Promise.resolve())
+    const result = await client.submitFeeReduce({ caseVolume: 'A-1', caseId: CASE_ID_1, procId: PROC_ID_1 }, checkpoint)
+    if (skipped) {
+      expect(result).toMatchObject({ ok: true, data: { outcome: 'already_completed', procStatus: status, procId: PROC_ID_1 } })
+    } else {
+      expect(result).toMatchObject({ ok: false, error: { message: expect.stringContaining('不能启动递交流程') } })
+    }
+    expect(calls).toEqual(['CheckCtrlProc', 'VerificateFiling', 'GetProcList'])
+    expect(checkpoint).not.toHaveBeenCalled()
+  })
+
   it('inspects cases and classifies 递交中/完成 as completed and 撰写中 as ready', async () => {
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const body = new URLSearchParams(String(init?.body ?? ''))
@@ -66,7 +100,7 @@ describe('FeeReduceClient', () => {
     ])
   })
 
-  it('executes full fee-reduce submission sequence, tolerates CheckFirstInventor warning, and submits to PROCE', async () => {
+  it.each(['success', 'native empty history', 'missing reviewer', 'unverified status', 'explicit status error'] as const)('checks the fee-reduce submission sequence (%s)', async scenario => {
     const calls: Array<{ call: string; params: Record<string, string> }> = []
     let convertPollCount = 0
 
@@ -150,7 +184,13 @@ describe('FeeReduceClient', () => {
             UrgencyList: [{ urgency_id: '0FA8EF3F-8A5A-4E1F-BF75-DEA23292E77F', urgency_code: 'CM', urgency_name: '一般' }]
           })
         case 'GetFlowLastStatus':
-          return jsonResponse({ last_status: null })
+          if (scenario === 'native empty history') return jsonResponse(nativeEmptyFlow)
+          if (scenario === 'explicit status error') return jsonResponse({
+            ...nativeEmptyFlow, ClientInfo: { ...nativeEmptyFlow.ClientInfo, Message: '读取流程状态失败' }
+          })
+          return jsonResponse(scenario === 'unverified status'
+            ? { ClientInfo: { IsLogin: true, Result: false } }
+            : { ClientInfo: { IsLogin: true, Result: true }, last_status: null })
         default:
           return jsonResponse({})
       }
@@ -159,15 +199,30 @@ describe('FeeReduceClient', () => {
     const transport = new EasyTransport('http://183.36.43.66:88', { fetcher: fetcher as unknown as typeof fetch })
     const client = new FeeReduceClient(transport, { pollIntervalMs: 1, pollTimeoutMs: 500, sleep: async () => {} })
 
+    const checkpoint = vi.fn(() => Promise.resolve())
     const res = await client.submitFeeReduce({
       caseVolume: 'PE26115584CND',
       caseId: CASE_ID_1,
       procId: PROC_ID_1,
-      reviewerStrategy: 'first'
-    })
+      reviewerStrategy: scenario === 'missing reviewer' ? 'specific' : 'first',
+      defaultReviewerId: scenario === 'missing reviewer' ? 'missing' : undefined
+    }, checkpoint)
+
+    expect(checkpoint).toHaveBeenNthCalledWith(1, 'creating')
+    expect(checkpoint).toHaveBeenNthCalledWith(2, 'draft', FILING_ID)
+    if (scenario !== 'success' && scenario !== 'native empty history') {
+      expect(res).toMatchObject({ ok: false, error: { message: expect.stringContaining(
+        scenario === 'missing reviewer' ? '指定初核人' : '最后流程状态'
+      ) } })
+      expect(calls.some(({ call }) => call === 'FilingSubmit')).toBe(false)
+      expect(checkpoint).not.toHaveBeenCalledWith('submitting', FILING_ID)
+      if (scenario !== 'missing reviewer') expect(res).toMatchObject({ error: { code: 'FLOW_STATUS_UNVERIFIED' } })
+      return
+    }
+    expect(checkpoint).toHaveBeenLastCalledWith('submitting', FILING_ID)
 
     expect(res.ok).toBe(true)
-    if (!res.ok) return
+    if (!res.ok || res.data.outcome === 'already_completed') return
     expect(res.data.filingId).toBe(FILING_ID)
     expect(res.data.reviewerName).toBe('邓锐(26)')
     expect(res.data.warnings).toContain('第一发明人国别信息未填写!')
@@ -200,6 +255,7 @@ describe('FeeReduceClient', () => {
       }
       if (call === 'GetPicProcessCount') return jsonResponse({ Result: [{ user_id: 'u1', count: 5, cn_name: '邓锐' }] })
       if (call === 'GetUrgencyList') return jsonResponse({ UrgencyList: [{ urgency_id: 'urg1', urgency_code: 'CM' }] })
+      if (call === 'GetFlowLastStatus') return jsonResponse(nativeEmptyFlow)
       return jsonResponse({ ClientInfo: { IsLogin: true, Status: true, Result: true } })
     })
 
@@ -213,6 +269,7 @@ describe('FeeReduceClient', () => {
     })
     expect(res.ok).toBe(true)
     expect(calls).not.toContain('InsertNewFiling')
+    expect(calls).not.toContain('VerificateFiling')
 
     setWriteSwitchOpen(false)
     expect(

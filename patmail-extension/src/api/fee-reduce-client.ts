@@ -2,11 +2,13 @@ import { buildIcSearchParams, icCasesFromBody, type IcCaseHit } from './ic-searc
 import { isRecord } from './response-guards'
 import type { EasyTransport } from './transport'
 import { apiError, type ApiResult } from './types'
+import { readLastStatus, versionAgrees } from '../workflow/contracts'
+import { pickFeeReduceReviewer } from '../workflow/fee-reduce-input'
 import type {
+  FeeReduceCheckpoint,
   FeeReduceCaseInspectItem,
   FeeReduceInspectResult,
   FeeReduceReviewerOption,
-  FeeReduceReviewerStrategy,
   FeeReduceReviewersResult,
   FeeReduceSubmitRequest,
   FeeReduceSubmitResult
@@ -68,32 +70,6 @@ async function runConcurrent<T>(
     }
   }
   await Promise.all(Array.from({ length: limit }, () => runWorker()))
-}
-
-function selectReviewer(
-  candidates: FeeReduceReviewerOption[],
-  strategy: FeeReduceReviewerStrategy,
-  defaultReviewerId?: string,
-  overrideReviewerId?: string
-): FeeReduceReviewerOption | null {
-  if (!candidates.length) return null
-  if (overrideReviewerId) {
-    const matched = candidates.find(item => item.userId.toLowerCase() === overrideReviewerId.toLowerCase())
-    if (matched) return matched
-  }
-  if (strategy === 'specific' && defaultReviewerId) {
-    const matched = candidates.find(item => item.userId.toLowerCase() === defaultReviewerId.toLowerCase())
-    if (matched) return matched
-  }
-  if (strategy === 'least_busy') {
-    const sorted = [...candidates].sort((a, b) => {
-      const ca = a.count ?? Number.MAX_SAFE_INTEGER
-      const cb = b.count ?? Number.MAX_SAFE_INTEGER
-      return ca - cb
-    })
-    return sorted[0] ?? candidates[0]
-  }
-  return candidates[0]
 }
 
 export class FeeReduceClient {
@@ -191,15 +167,7 @@ export class FeeReduceClient {
         return
       }
 
-      const procListParams = new URLSearchParams([
-        ['Call', 'GetProcList'],
-        ['case_id', hit.caseId],
-        ['pageSize', '50'],
-        ['pageIndex', '1'],
-        ['_PK', 'proc_id'],
-        ['log_pagename', 'CaseManage.aspx']
-      ])
-      const procListRes = await this.transport.post('getProcList', procListParams)
+      const procListRes = await this.readCaseProcesses(hit.caseId)
       if (!procListRes.ok) {
         if (procListRes.error.code === 'SESSION_EXPIRED') {
           sessionError = procListRes
@@ -219,11 +187,7 @@ export class FeeReduceClient {
         return
       }
 
-      const procRows =
-        isRecord(procListRes.data) && Array.isArray(procListRes.data.TableRows)
-          ? procListRes.data.TableRows.filter(isRecord)
-          : []
-      const feeReduceRows = procRows.filter(row => str(row.ctrl_proc) === FEE_REDUCE_PROC_NAME)
+      const feeReduceRows = procListRes.data.filter(row => str(row.ctrl_proc) === FEE_REDUCE_PROC_NAME)
       const matched =
         feeReduceRows.find(row => str(row.proc_status) === '撰写中') ??
         feeReduceRows[feeReduceRows.length - 1]
@@ -304,7 +268,7 @@ export class FeeReduceClient {
     }
   }
 
-  async submitFeeReduce(request: FeeReduceSubmitRequest): Promise<ApiResult<FeeReduceSubmitResult>> {
+  async submitFeeReduce(request: FeeReduceSubmitRequest, checkpoint?: FeeReduceCheckpoint): Promise<ApiResult<FeeReduceSubmitResult>> {
     const warnings: string[] = []
 
     const checkCtrlRes = await this.transport.post(
@@ -318,28 +282,31 @@ export class FeeReduceClient {
     if (!checkCtrlRes.ok) return checkCtrlRes
     const ctrlInfo = clientInfo(checkCtrlRes.data)
     if (!ctrlInfo.result) {
-      return apiError('BUSINESS_ERROR', ctrlInfo.message || 'CheckCtrlProc 校验未通过，无法发起递交。')
+      return this.recheckFilingRejection(request, ctrlInfo.message || 'CheckCtrlProc 校验未通过，无法发起递交。')
     }
 
-    const verificateRes = await this.transport.post(
-      'verificateFiling',
-      new URLSearchParams([
+    let filingId = str(request.resumeFilingId)
+    if (!filingId) {
+      const verificateRes = await this.transport.post('verificateFiling', new URLSearchParams([
         ['Call', 'VerificateFiling'],
         ['case_id', request.caseId],
         ['proc_id', request.procId],
         ['log_pagename', 'CaseManage.aspx']
-      ])
-    )
-    if (!verificateRes.ok) return verificateRes
-    const verificateInfo = clientInfo(verificateRes.data)
-    if (!verificateInfo.result) {
-      return apiError('BUSINESS_ERROR', verificateInfo.message || 'VerificateFiling 校验未通过，无法发起递交。')
+      ]))
+      if (!verificateRes.ok) return verificateRes
+      const verificateInfo = clientInfo(verificateRes.data)
+      if (!verificateInfo.result) {
+        return this.recheckFilingRejection(request, verificateInfo.message || 'VerificateFiling 校验未通过，无法发起递交。')
+      }
+    } else {
+      const last = await this.readLastFilingStatus(filingId)
+      if (!last.ok) return last
+      if (last.data.present) return apiError('BUSINESS_ERROR', '该递交单已有流程记录，请在 EASY 核对后再处理。')
     }
 
     const { levelOne, levelTwo } = await this.resolveFeeReduceTypeIds()
-
-    let filingId = str(request.resumeFilingId)
     if (!filingId) {
+      await checkpoint?.('creating')
       const insertRes = await this.transport.post(
         'insertNewFiling',
         new URLSearchParams([
@@ -361,6 +328,7 @@ export class FeeReduceClient {
         return apiError('BUSINESS_ERROR', insertInfo.message || '创建递交单（InsertNewFiling）失败。')
       }
     }
+    await checkpoint?.('draft', filingId)
 
     const saveCpcRes = await this.transport.post(
       'saveCpcType',
@@ -379,6 +347,7 @@ export class FeeReduceClient {
       return apiError('BUSINESS_ERROR', saveCpcInfo.message || '保存 CPC 业务类型失败。')
     }
 
+    await checkpoint?.('draft', filingId)
     const saveTypeRes = await this.transport.post(
       'saveFilingType',
       new URLSearchParams([
@@ -396,6 +365,7 @@ export class FeeReduceClient {
       return apiError('BUSINESS_ERROR', saveTypeInfo.message || '保存递交文件类型失败。')
     }
 
+    await checkpoint?.('draft', filingId)
     const saveFeeReduceRes = await this.transport.post(
       'saveFeeReduceRspInfo',
       new URLSearchParams([
@@ -426,6 +396,7 @@ export class FeeReduceClient {
       }
     }
 
+    await checkpoint?.('draft', filingId)
     const convertRes = await this.transport.post(
       'convertSubmit',
       new URLSearchParams([
@@ -469,14 +440,16 @@ export class FeeReduceClient {
     const flowCtx = await this.loadProceContext(filingId)
     if (!flowCtx.ok) return flowCtx
 
-    const picked = selectReviewer(
+    const picked = pickFeeReduceReviewer(
       flowCtx.data.candidates,
       request.reviewerStrategy ?? 'first',
       request.defaultReviewerId,
       request.overrideReviewerId
     )
     if (!picked) {
-      return apiError('BUSINESS_ERROR', '未找到可用的「流程人员初核」审核人。')
+      return apiError('BUSINESS_ERROR', request.overrideReviewerId || request.reviewerStrategy === 'specific'
+        ? '指定初核人不在当前递交单的候选列表中，请重新选择。'
+        : '未找到可用的「流程人员初核」审核人。')
     }
 
     const urgencyRes = await this.transport.post(
@@ -486,22 +459,19 @@ export class FeeReduceClient {
         ['log_pagename', 'IhgFlow.aspx']
       ])
     )
-    let urgencyId = '0FA8EF3F-8A5A-4E1F-BF75-DEA23292E77F'
-    if (urgencyRes.ok && isRecord(urgencyRes.data) && Array.isArray(urgencyRes.data.UrgencyList)) {
-      const items = urgencyRes.data.UrgencyList.filter(isRecord)
-      const cm = items.find(item => str(item.urgency_code) === 'CM') ?? items[0]
-      if (cm && str(cm.urgency_id)) urgencyId = str(cm.urgency_id)
-    }
+    if (!urgencyRes.ok) return urgencyRes
+    const urgencyList = isRecord(urgencyRes.data) && Array.isArray(urgencyRes.data.UrgencyList)
+      ? urgencyRes.data.UrgencyList.filter(isRecord) : []
+    const urgencyId = str(urgencyList.find(item => str(item.urgency_code) === 'CM')?.urgency_id)
+    if (!urgencyId) return apiError('INVALID_RESPONSE', '未读到 EASY 的一般紧急度，已停止提交。')
 
-    await this.transport.post(
-      'getFlowLastStatus',
-      new URLSearchParams([
-        ['Call', 'GetFlowLastStatus'],
-        ['obj_id', filingId],
-        ['flow_type', 'EF'],
-        ['log_pagename', 'IhgFlow.aspx']
-      ])
-    )
+    const last = await this.readLastFilingStatus(filingId)
+    if (!last.ok) return last
+    const { curStatus, curNodeCode, versionToken } = flowCtx.data
+    if (!/^-?\d+$/.test(curStatus) || (curStatus !== '-1' && curNodeCode !== 'FIRST') ||
+        versionAgrees(Number(curStatus), versionToken, last.data.present, last.data.token) !== 'match') {
+      return apiError('BUSINESS_ERROR', '无法确认递交单仍处于可提交的初始流程状态，请在 EASY 核对。')
+    }
 
     const nextUserName = picked.count === null ? picked.name : `${picked.name}(${picked.count})`
     const submitParams = new URLSearchParams([
@@ -539,6 +509,7 @@ export class FeeReduceClient {
       ['log_pagename', 'IhgFlow.aspx']
     ])
 
+    await checkpoint?.('submitting', filingId)
     const submitRes = await this.transport.post('filingSubmit', submitParams)
     if (!submitRes.ok) return submitRes
     const submitInfo = clientInfo(submitRes.data)
@@ -560,6 +531,60 @@ export class FeeReduceClient {
         message: `已提交至「${flowCtx.data.proceNodeName || '流程人员初核'}」（${nextUserName}）。`
       }
     }
+  }
+
+  private async readCaseProcesses(caseId: string): Promise<ApiResult<Record<string, unknown>[]>> {
+    const result = await this.transport.post('getProcList', new URLSearchParams([
+      ['Call', 'GetProcList'],
+      ['case_id', caseId],
+      ['pageSize', '50'],
+      ['pageIndex', '1'],
+      ['_PK', 'proc_id'],
+      ['log_pagename', 'CaseManage.aspx']
+    ]))
+    if (!result.ok) return result
+    return { ok: true, data: isRecord(result.data) && Array.isArray(result.data.TableRows)
+      ? result.data.TableRows.filter(isRecord) : [] }
+  }
+
+  private async recheckFilingRejection(request: FeeReduceSubmitRequest, message: string): Promise<ApiResult<FeeReduceSubmitResult>> {
+    if (!/处理事项\s*已(?:经)?完成/.test(message)) return apiError('BUSINESS_ERROR', message)
+    const processes = await this.readCaseProcesses(request.caseId)
+    if (!processes.ok) return apiError(processes.error.code, `${message}。回查失败：${processes.error.message}`)
+    const process = processes.data.find(row => str(row.proc_id).toLowerCase() === request.procId.toLowerCase() &&
+      str(row.ctrl_proc) === FEE_REDUCE_PROC_NAME)
+    const procStatus = str(process?.proc_status)
+    if (procStatus !== '完成' && procStatus !== '递交中') {
+      return apiError('BUSINESS_ERROR', `${message}。回查未能确认该处理事项已完成或递交中，请到 EASY 核对。`)
+    }
+    return { ok: true, data: {
+      outcome: 'already_completed', caseVolume: request.caseVolume, caseId: request.caseId, procId: request.procId,
+      procStatus, message: `已回查原站，处理事项为「${procStatus}」，已跳过递交。`
+    } }
+  }
+
+  private async readLastFilingStatus(filingId: string): Promise<ApiResult<{ present: boolean; token: string | null }>> {
+    const result = await this.transport.post('getFlowLastStatus', new URLSearchParams([
+      ['Call', 'GetFlowLastStatus'],
+      ['obj_id', filingId],
+      ['flow_type', 'EF'],
+      ['log_pagename', 'IhgFlow.aspx']
+    ]))
+    if (!result.ok) return result
+    const data = result.data
+    if (!isRecord(data) || !('last_status' in data) || !isRecord(data.ClientInfo)) {
+      return apiError('FLOW_STATUS_UNVERIFIED', 'EASY 未确认递交单的最后流程状态。')
+    }
+    const client = data.ClientInfo
+    if (client.IsLogin === false) return apiError('SESSION_EXPIRED', '核对递交流程时 EASY 登录已失效。')
+    // EASY answers Result=false for a draft with no history. A successful empty lookup has this exact envelope.
+    const noHistory = client.IsLogin === true && client.Status === true && data.last_status === null &&
+      (client.Message == null || (typeof client.Message === 'string' && client.Message.trim() === ''))
+    if (client.Status === false || (client.Result === false && !noHistory)) {
+      return apiError('FLOW_STATUS_UNVERIFIED', 'EASY 未确认递交单的最后流程状态。')
+    }
+    const last = readLastStatus(data)
+    return last.ok ? { ok: true, data: last } : apiError('FLOW_STATUS_UNVERIFIED', last.message)
   }
 
   private async resolveFeeReduceTypeIds(): Promise<{ levelOne: string; levelTwo: string }> {
@@ -621,6 +646,8 @@ export class FeeReduceClient {
     ApiResult<{
       flowId: string
       curStatus: string
+      curNodeCode: string
+      versionToken: string | null
       firstNodeId: string
       firstNodeName: string
       proceNodeId: string
@@ -732,7 +759,9 @@ export class FeeReduceClient {
       ok: true,
       data: {
         flowId: str(flowResult.flow_id),
-        curStatus: str(flowResult.status) || '-1',
+        curStatus: str(flowResult.status),
+        curNodeCode: str(flowResult.cur_node_code || flowResult.node_code),
+        versionToken: str(flowResult.update_time_ss) || null,
         firstNodeId: str(firstNode.node_id),
         firstNodeName: str(firstNode.node_name_zh_cn) || '启动流程',
         proceNodeId,

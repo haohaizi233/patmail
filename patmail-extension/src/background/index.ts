@@ -20,6 +20,7 @@ import { customerMode, hydrateCustomerMode, preferredModeOrigin, originMatchesMo
 import { LocalStreamDownloads } from './stream-download'
 import { trustedOrigin } from '../api/config'
 import { handleRecoveryMessage } from './recovery'
+import { handleFeeReduceCheckpoint } from './fee-reduce-checkpoint'
 import { BrowserStreamDownloads } from './browser-download'
 import { createBrowserDownloadStore } from '../browser-download/store'
 import { type BrowserFileReply } from '../browser-download/types'
@@ -289,7 +290,8 @@ const messageRegistry = createBackgroundMessageRegistry({
       ...(ctx.easyTabId == null ? {} : { easyTabId: ctx.easyTabId, connectionVersion: ctx.connectionVersion })
     }
   }),
-  handleRecovery: handleRecoveryMessage,
+  handleRecovery: (message, sender, respond, context) =>
+    handleFeeReduceCheckpoint(message, sender, respond) || handleRecoveryMessage(message, sender, respond, context),
   handleDocumentExport: (message, sender) => handleDocumentExport(message, sender, documentDownloads),
   handleHagueHttp,
   handleHagueDraft: handleHagueDraftMessage,

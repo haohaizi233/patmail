@@ -49,7 +49,7 @@ export function handleRecoveryMessage(message: unknown, sender: chrome.runtime.M
   const contentPage = connection && sender.tab?.id === connection.easyTabId && trustedOrigin(sender.url ?? '') === connection.easyOrigin &&
     rpc.slot === 'file-query' && (rpc.op === 'get' || rpc.op === 'put') && Boolean(contentScope) && typeof rpc.scope === 'string' &&
     (rpc.scope === contentScope || rpc.scope.startsWith(`${contentScope}:page:`))
-  if (sender.id !== chrome.runtime.id || rpc.slot === 'limit-mail-intent' || (!extensionPage && !contentPage)) {
+  if (sender.id !== chrome.runtime.id || rpc.slot === 'limit-mail-intent' || rpc.slot === 'workflow-write' || (!extensionPage && !contentPage)) {
     sendResponse({ ok: false, error: '恢复请求来源或账号范围无效。' }); return false
   }
   void authority.dispatch(request as RecoveryRequest).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error instanceof Error ? error.message : '恢复账本未提交。' }))
