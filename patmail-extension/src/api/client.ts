@@ -28,6 +28,13 @@ import {
   type FeeExportTemplateColumn
 } from './fee-export'
 import { NoticeClient } from './notice-client'
+import { FeeReduceClient } from './fee-reduce-client'
+import type {
+  FeeReduceInspectResult,
+  FeeReduceReviewersResult,
+  FeeReduceSubmitRequest,
+  FeeReduceSubmitResult
+} from './fee-reduce-types'
 import type {
   NoticeActionRequest,
   NoticeActionResult,
@@ -41,6 +48,11 @@ import type {
 import type { NoticeTaskStatusEvent } from '../shared/notice-status'
 import { normalizeFeeSearch } from './fee-search-normalizer'
 import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeTypeItem } from './fee-search-types'
+import { buildPatentSearchParams, type PatentSearchQuery } from './patent-search-params'
+import { normalizePatentBasicDicts, normalizePatentSearch } from './patent-search-normalizer'
+import { PATENT_CASE_TYPE_ID } from './patent-form'
+import type { PatentInitData, PatentSearchResult } from './patent-search-types'
+import type { TreeOption } from '../query/option-tree'
 import { filingFlowHistoryParams, readFilingFlowHistory, readUserInfo, userInfoParams, type FilingFlowRow, type FilingUser } from './filing-export'
 import { buildMailProcessParams, buildProcessListParams, filingNeedsCpcFlag, normalizeMailProcess, normalizeProcessList, processFormPath, type ProcessKind, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from './mail-process'
 import { isRecord } from './response-guards'
@@ -175,6 +187,8 @@ export class EasyRuntime {
   private filingSequence = 0
   private feeController: AbortController | null = null
   private feeSequence = 0
+  private patentController: AbortController | null = null
+  private patentSequence = 0
   private activeSearch: { signature: string; promise: Promise<ApiResult<FileSearchResult>> } | null = null
   private readonly history: HistoryQueryService
   private readonly dictionaries: DictionaryService
@@ -183,6 +197,7 @@ export class EasyRuntime {
   private readonly mail: MailExecutionRuntime
   private readonly workflow: WorkflowRuntime
   private readonly notice: NoticeClient
+  private readonly feeReduce: FeeReduceClient
 
   constructor(private readonly pageOrigin: string, options: RuntimeOptions = {}) {
     this.transport = new EasyTransport(pageOrigin, options)
@@ -195,6 +210,7 @@ export class EasyRuntime {
       expireSession: () => this.session.expire(),
       isWriteOpen: () => isWriteSwitchOpen()
     })
+    this.feeReduce = new FeeReduceClient(this.transport)
     this.mail = new MailExecutionRuntime(
       this.transport,
       options.mailStore ?? new ExecutionStore(chromeExecutionArea()),
@@ -977,6 +993,162 @@ export class EasyRuntime {
     this.feeController = null
   }
 
+  searchPatents(query: PatentSearchQuery, timeoutMs?: number, batch = false): Promise<ApiResult<PatentSearchResult>> {
+    const controller = new AbortController()
+    if (!batch) {
+      this.cancelPatentSearch()
+      this.patentController = controller
+    }
+    const requestNumber = batch ? 0 : ++this.patentSequence
+    return (async (): Promise<ApiResult<PatentSearchResult>> => {
+      if (!(await this.confirmAccountRead())) {
+        return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+      }
+      const params = buildPatentSearchParams(query)
+      if (!params.ok) return params
+      const response = await this.transport.post('icSearch', params.data, controller.signal, timeoutMs)
+      if (!batch && requestNumber !== this.patentSequence) return apiError('REQUEST_ABORTED', '旧查询已取消。')
+      return response.ok ? normalizePatentSearch(response.data, query) : response
+    })()
+  }
+
+  cancelPatentSearch(): void {
+    this.patentSequence++
+    this.patentController?.abort()
+    this.patentController = null
+  }
+
+  /** 专利查询页初始化字典（对齐 MyICSearchList.js 的 IPGetBasicData + GetDeptBranch + LoadDeptTree + GetTreeUser + GetTreeAgent + GetFieldColumn）。 */
+  async loadPatentInit(): Promise<ApiResult<PatentInitData>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const post = (op: Parameters<EasyTransport['post']>[0], extra: Record<string, string>) => {
+      const p = new URLSearchParams(extra)
+      p.set('log_pagename', 'ICSearch.aspx')
+      return this.transport.post(op, p)
+    }
+    const [basicRes, branchRes, deptRes, userRes, agentRes, colRes, listColRes, contractRes, customFieldRes] = await Promise.all([
+      post('basicData', { Call: 'IPGetBasicData' }),
+      post('deptBranch', { Call: 'GetDeptBranch' }),
+      post('deptTree', { Call: 'LoadDeptTree' }),
+      post('treeUser', { Call: 'GetTreeUser' }),
+      post('treeAgent', { Call: 'GetTreeAgent' }),
+      post('fieldColumn', { Call: 'GetFieldColumn' }),
+      post('listColumn', { Call: 'LoadListColumn', belong_key: 'CaseInfo.ashx_CaseList' }),
+      post('contractInit', { Call: 'InitContractStatus' }),
+      post('caseCustomField', { Call: 'GetCustomField', table_name: 'p_case_info' })
+    ])
+    if (!basicRes.ok) return basicRes
+
+    const warnings: string[] = []
+    if (!branchRes.ok) warnings.push(`分部读取失败：${branchRes.error.message}`)
+    if (!deptRes.ok) warnings.push(`部门读取失败：${deptRes.error.message}`)
+    if (!userRes.ok) warnings.push(`人员读取失败：${userRes.error.message}`)
+    if (!agentRes.ok) warnings.push(`代理机构读取失败：${agentRes.error.message}`)
+
+    const basicDicts = normalizePatentBasicDicts(basicRes.data, PATENT_CASE_TYPE_ID)
+
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+    const arr = (obj: unknown, key: string): Record<string, unknown>[] => {
+      if (!isRecord(obj)) return []
+      const raw = obj[key]
+      return Array.isArray(raw) ? raw.filter(isRecord) : []
+    }
+    const toTree = (rows: Record<string, unknown>[], valueKey: string, labelKey: string, parentKey = 'parent_id'): TreeOption[] =>
+      rows
+        .map(row => {
+          const value = str(row[valueKey] ?? row.id ?? row.value)
+          const label = str(row[labelKey] ?? row.text_zh_cn ?? row.name ?? row.label)
+          if (!value || !label) return null
+          const parent = str(row[parentKey] ?? row.pid ?? row.pId)
+          const selectable = str(row.TreeType).toLowerCase() !== 'dept' || valueKey !== 'id'
+          return {
+            value,
+            label,
+            ...(parent && parent !== '0' && parent !== '-1' ? { parent } : {}),
+            ...(selectable ? {} : { selectable: false })
+          }
+        })
+        .filter((x): x is TreeOption => x !== null)
+
+    const fieldColumns: Record<string, string> = {}
+    if (colRes.ok && isRecord(colRes.data)) {
+      for (const row of arr(colRes.data, 'fieldColumn')) {
+        const key = str(row.field_name ?? row.column_name)
+        const title = str(row.field_title ?? row.show_name ?? row.title)
+        if (key && title) fieldColumns[key] = title
+      }
+    }
+    if (customFieldRes.ok && isRecord(customFieldRes.data)) {
+      for (const row of arr(customFieldRes.data, 'column_field_list')) {
+        const key = str(row.column_id)
+        const title = str(row.column_name)
+        if (key && title) fieldColumns[key] = title
+      }
+    }
+
+    const businessCoops = contractRes.ok && isRecord(contractRes.data)
+      ? arr(contractRes.data, 'table5')
+          .map(row => {
+            const value = str(row.value)
+            const label = str(row.text_zh_cn)
+            return value && label ? { value, label } : null
+          })
+          .filter((x): x is { value: string; label: string } => x !== null)
+      : []
+
+    const savedColumns: string[] = []
+    if (listColRes.ok && isRecord(listColRes.data)) {
+      for (const row of arr(listColRes.data, 'show_column')) {
+        const col = str(row.item_value)
+        if (col) savedColumns.push(col)
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        ...basicDicts,
+        businessCoops,
+        branchDepts: branchRes.ok ? toTree(arr(branchRes.data, 'BranchList'), 'dept_id', 'dept_name') : [],
+        depts: deptRes.ok ? toTree(arr(deptRes.data, 'DeptTree'), 'id', 'name') : [],
+        users: userRes.ok ? toTree(arr(userRes.data, 'TreeUser'), 'id', 'name') : [],
+        agencies: agentRes.ok ? toTree(arr(agentRes.data, 'TreeUser'), 'id', 'name') : [],
+        savedColumns,
+        fieldColumns,
+        warnings
+      }
+    }
+  }
+
+  async loadPatentCtrlProc(countryIds: string, procType = ''): Promise<ApiResult<TreeOption[]>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const params = new URLSearchParams({
+      Call: 'LimitMonitorGetCtrlproc',
+      case_type: PATENT_CASE_TYPE_ID,
+      country: countryIds,
+      proc_type: procType,
+      log_pagename: 'ICSearch.aspx'
+    })
+    const res = await this.transport.post('limitCtrlProc', params)
+    if (!res.ok) return res
+    const body = isRecord(res.data) ? res.data : {}
+    const rows = Array.isArray(body.CtrlProc) ? body.CtrlProc.filter(isRecord) : []
+    const options: TreeOption[] = rows
+      .map(row => {
+        const value = typeof row.id === 'string' ? row.id.trim() : typeof row.ctrl_proc_id === 'string' ? row.ctrl_proc_id.trim() : ''
+        const label = typeof row.name === 'string' ? row.name.trim() : typeof row.ctrl_proc === 'string' ? row.ctrl_proc.trim() : ''
+        if (!value || !label) return null
+        const parent = typeof row.pid === 'string' ? row.pid.trim() : typeof row.parent_id === 'string' ? row.parent_id.trim() : ''
+        return { value, label, ...(parent && parent !== '0' ? { parent } : {}) }
+      })
+      .filter((x): x is TreeOption => x !== null)
+    return { ok: true, data: options }
+  }
+
   /** 费用查询页完整初始化字典（对齐 FeeSearch.js 的 FeeSearchInit + GetAencyList + ContactInit + GetProducts + LoadTechnical + GetFieldColumn）。 */
   async loadFeeInit(): Promise<ApiResult<FeeInitData>> {
     if (!(await this.confirmAccountRead())) {
@@ -1403,6 +1575,7 @@ export class EasyRuntime {
       const msg = typeof info?.Message === 'string' && info.Message.trim() ? info.Message.trim() : '原站未返回有效的导出文件地址（可能当前条件下无可导出数据）。'
       return apiError('BUSINESS_ERROR', msg)
     }
+
     return {
       ok: true,
       data: {
@@ -1476,6 +1649,36 @@ export class EasyRuntime {
     return this.notice.uploadNoticeExcel(request)
   }
 
+  async inspectFeeReduceCases(caseVolumes: string[]): Promise<ApiResult<FeeReduceInspectResult>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const result = await this.feeReduce.inspectCases(caseVolumes)
+    if (!result.ok && result.error.code === 'SESSION_EXPIRED') this.session.expire()
+    return result
+  }
+
+  async readFeeReduceReviewers(): Promise<ApiResult<FeeReduceReviewersResult>> {
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const result = await this.feeReduce.readReviewers()
+    if (!result.ok && result.error.code === 'SESSION_EXPIRED') this.session.expire()
+    return result
+  }
+
+  async submitFeeReduceFiling(request: FeeReduceSubmitRequest): Promise<ApiResult<FeeReduceSubmitResult>> {
+    if (!isWriteSwitchOpen()) {
+      return apiError('BUSINESS_ERROR', '写开关已关闭，不能提交费用减缓递交。')
+    }
+    if (!(await this.confirmAccountRead())) {
+      return apiError('SESSION_EXPIRED', '请先在 EASY 原网站登录并检测登录状态。')
+    }
+    const result = await this.feeReduce.submitFeeReduce(request)
+    if (!result.ok && result.error.code === 'SESSION_EXPIRED') this.session.expire()
+    return result
+  }
+
   cancelFileSearch(): void {
     this.searchSequence++
     this.searchController?.abort()
@@ -1488,6 +1691,8 @@ export class EasyRuntime {
     this.cancelFileSearch()
     this.cancelLimitMonitor()
     this.cancelFiling()
+    this.cancelFeeSearch()
+    this.cancelPatentSearch()
     this.history.invalidate()
     this.dictionaries.invalidate(this.historyUserKey)
     this.historyUserKey = ''

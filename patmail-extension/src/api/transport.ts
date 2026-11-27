@@ -35,6 +35,10 @@ export type EasyOperation =
   | 'noticeGetTzsList' | 'noticeProcessTzsList' | 'noticeGetCpcCertList' | 'noticeDownloadAnalyseCert'
   | 'noticeUploadExcel' | 'noticeUploadCpcChunk' | 'noticeUploadCpcNew' | 'noticeUploadCpcNewGf'
   | 'noticePublishConfig' | 'noticeUploadProcessDetail'
+  | 'getProcList' | 'getProcInfo' | 'checkCtrlProc' | 'verificateFiling'
+  | 'getCpcBusinessType' | 'insertNewFiling' | 'saveCpcType' | 'saveFilingType' | 'saveFeeReduceRspInfo'
+  | 'checkFilingResult' | 'checkSplitPdf' | 'checkFirstInventor' | 'convertSubmit' | 'getConvertStatus' | 'getConvertedFile'
+  | 'getPicProcessCount' | 'filingSubmit'
 
 export interface TransportOptions {
   fetcher?: typeof fetch
@@ -189,7 +193,24 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   noticeUploadCpcNew: { path: '/AjaxServers/UploadFile.ashx', call: 'UploadCPCFileNew' },
   noticeUploadCpcNewGf: { path: '/AjaxServers/UploadFile.ashx', call: 'UploadCPCFileNewGF' },
   noticePublishConfig: { path: '/AjaxServers/BaseInfo.ashx', call: 'GetPublishConfig' },
-  noticeUploadProcessDetail: { path: '/AjaxServers/UploadFile.ashx', call: 'GetUploadProcessDetailList' }
+  noticeUploadProcessDetail: { path: '/AjaxServers/UploadFile.ashx', call: 'GetUploadProcessDetailList' },
+  getProcList: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetProcList' },
+  getProcInfo: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetProcInfo' },
+  checkCtrlProc: { path: '/AjaxServers/CaseInfo.ashx', call: 'CheckCtrlProc' },
+  verificateFiling: { path: '/AjaxServers/CaseInfo.ashx', call: 'VerificateFiling' },
+  getCpcBusinessType: { path: '/AjaxServers/FilingApiAction.ashx', call: 'GetCPCBusineeType' },
+  insertNewFiling: { path: '/AjaxServers/FilingApiAction.ashx', call: 'InsertNewFiling' },
+  saveCpcType: { path: '/AjaxServers/FilingApiAction.ashx', call: 'SaveCPCType' },
+  saveFilingType: { path: '/AjaxServers/FilingAction.ashx', call: 'SaveFilingType' },
+  saveFeeReduceRspInfo: { path: '/AjaxServers/FilingAction.ashx', call: 'SaveFeeReduceRspInfo' },
+  checkFilingResult: { path: '/AjaxServers/FilingAction.ashx', call: 'CheckResult' },
+  checkSplitPdf: { path: '/AjaxServers/FilingAction.ashx', call: 'CheckSplitPDF' },
+  checkFirstInventor: { path: '/AjaxServers/FilingAction.ashx', call: 'CheckFirstInventor' },
+  convertSubmit: { path: '/AjaxServers/FilingAction.ashx', call: 'ConvertSubmit' },
+  getConvertStatus: { path: '/AjaxServers/FilingAction.ashx', call: 'GetConvertStatus' },
+  getConvertedFile: { path: '/AjaxServers/FilingAction.ashx', call: 'GetConvertedFile' },
+  getPicProcessCount: { path: '/AjaxServers/Common.ashx', call: 'GetPicProcessCount' },
+  filingSubmit: { path: '/AjaxServers/FilingAction.ashx', call: 'FilingSubmit' }
 }
 
 function loginRedirect(response: Response, origin: string): boolean {
@@ -230,7 +251,8 @@ const SLOW_OPERATIONS = new Set<EasyOperation>([
   'noticeGetTzsListStatus', 'noticeProcessTzsListStatus', 'noticeGetCertListStatus', 'noticeGetAnalyseCertStatus',
   'noticeImport', 'noticeImportCloseCase', 'noticeReMatch', 'noticeUpdateCaseName',
   'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf',
-  'noticePublishConfig', 'noticeUploadProcessDetail'
+  'noticePublishConfig', 'noticeUploadProcessDetail',
+  'getProcList', 'getCpcBusinessType', 'convertSubmit', 'getConvertStatus', 'getConvertedFile', 'getPicProcessCount', 'filingSubmit'
 ])
 
 const NON_RETRYABLE_OPERATIONS = new Set<EasyOperation>([
@@ -242,7 +264,8 @@ const NON_RETRYABLE_OPERATIONS = new Set<EasyOperation>([
   'noticeUpdateProcess', 'noticeChangeNolaiuto', 'noticeUpdateCaseName', 'noticeSaveDetail',
   'noticeRecoveryStatusAnalyse', 'noticeUpdateHandExcel', 'noticeDeleteOaByFids',
   'noticeGetTzsList', 'noticeProcessTzsList', 'noticeGetCpcCertList', 'noticeDownloadAnalyseCert',
-  'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf'
+  'noticeUploadExcel', 'noticeUploadCpcChunk', 'noticeUploadCpcNew', 'noticeUploadCpcNewGf',
+  'insertNewFiling', 'saveCpcType', 'saveFilingType', 'saveFeeReduceRspInfo', 'convertSubmit', 'filingSubmit'
 ])
 
 const SEARCH_TIMEOUT_OPERATIONS = new Set<EasyOperation>([

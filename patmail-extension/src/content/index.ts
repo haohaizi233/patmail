@@ -159,6 +159,87 @@ async function readFilingForm(): Promise<FileSearchFormField[]> {
   return []
 }
 
+function parseContentDispositionFileName(header: string | null): string {
+  if (!header) return ''
+  const utf8 = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1]
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8.trim().replace(/^["']|["']$/g, ''))
+    } catch {
+      return utf8.trim().replace(/^["']|["']$/g, '')
+    }
+  }
+  const plain = header.match(/filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;\r\n]+)/i)
+  const raw = (plain?.[1] ?? plain?.[2] ?? '').trim()
+  if (!raw) return ''
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return raw
+  }
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 0x8000
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const slice = bytes.subarray(offset, offset + chunkSize)
+    binary += String.fromCharCode(...slice)
+  }
+  return btoa(binary)
+}
+
+/** 仅用于工作流内联解析：同源拉取 FileHandler.ashx 导出的 Excel 字节并转 base64，不触发浏览器下载。 */
+async function fetchExportedExcelInline(
+  exported: Awaited<ReturnType<EasyRuntime['exportNoticeExcel']>>
+): Promise<Extract<ContentResponse, { type: 'EXPORT_NOTICE_RESULT' }>['payload']> {
+  if (!exported.ok) return exported
+  if (exported.data.async || !exported.data.downloadUrl) {
+    return {
+      ok: true,
+      data: {
+        status: 'server_queued',
+        async: exported.data.async,
+        message: exported.data.message
+      }
+    }
+  }
+  try {
+    const resp = await fetch(exported.data.downloadUrl, { credentials: 'include' })
+    if (!resp.ok) {
+      return {
+        ok: false,
+        error: { code: 'NETWORK_ERROR', message: `下载导出清单失败（HTTP ${resp.status}）。` }
+      }
+    }
+    const buffer = await resp.arrayBuffer()
+    const fileName = parseContentDispositionFileName(resp.headers.get('content-disposition')) || 'notice-replay-export.xls'
+    const mimeType = resp.headers.get('content-type') ?? ''
+    return {
+      ok: true,
+      data: {
+        status: 'download_completed',
+        async: false,
+        fileGuid: exported.data.fileGuid,
+        fileSize: exported.data.fileSize ?? buffer.byteLength,
+        fileBase64: arrayBufferToBase64(buffer),
+        fileName,
+        mimeType,
+        message: `已获取原站清单：${fileName}`
+      }
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: error instanceof Error ? error.message : '读取原站导出清单失败。'
+      }
+    }
+  }
+}
+
 /** 将原站生成的 Excel 导出结果交由 Chrome 下载管理器落盘（共用费用/来文 Excel 下载逻辑）。 */
 async function deliverExportedExcel(
   exported: Awaited<ReturnType<EasyRuntime['exportFees']>>,
@@ -304,6 +385,15 @@ const bridge: MessageBridge = {
       case MessageType.LoadFeeInit:
         return { type: MessageType.LoadFeeInitResult,
           payload: await easyRuntime.loadFeeInit() }
+      case MessageType.SearchPatent:
+        return { type: MessageType.SearchPatentResult,
+          payload: await easyRuntime.searchPatents(message.payload.query, message.payload.timeoutMs, message.payload.batch === true) }
+      case MessageType.LoadPatentInit:
+        return { type: MessageType.LoadPatentInitResult,
+          payload: await easyRuntime.loadPatentInit() }
+      case MessageType.LoadPatentCtrlProc:
+        return { type: MessageType.LoadPatentCtrlProcResult,
+          payload: await easyRuntime.loadPatentCtrlProc(message.payload.countryIds, message.payload.procType ?? '') }
       case MessageType.SearchFeeCustomers:
         return { type: MessageType.SearchFeeCustomersResult,
           payload: await easyRuntime.searchFeeCustomers(message.payload.searchKey) }
@@ -354,15 +444,34 @@ const bridge: MessageBridge = {
           payload: await easyRuntime.executeNoticeAction(message.payload, onStatus)
         }
       }
-      case MessageType.ExportNotice:
+      case MessageType.ExportNotice: {
+        const exported = await easyRuntime.exportNoticeExcel(message.payload)
         return {
           type: MessageType.ExportNoticeResult,
-          payload: await deliverExportedExcel(await easyRuntime.exportNoticeExcel(message.payload), '来文')
+          payload: message.payload.delivery === 'inline'
+            ? await fetchExportedExcelInline(exported)
+            : await deliverExportedExcel(exported, '来文')
         }
+      }
       case MessageType.UploadNoticeExcel:
         return {
           type: MessageType.UploadNoticeExcelResult,
           payload: await easyRuntime.uploadNoticeExcel(message.payload)
+        }
+      case MessageType.InspectFeeReduceCases:
+        return {
+          type: MessageType.InspectFeeReduceCasesResult,
+          payload: await easyRuntime.inspectFeeReduceCases(message.payload.caseVolumes)
+        }
+      case MessageType.ReadFeeReduceReviewers:
+        return {
+          type: MessageType.ReadFeeReduceReviewersResult,
+          payload: await easyRuntime.readFeeReduceReviewers()
+        }
+      case MessageType.SubmitFeeReduceFiling:
+        return {
+          type: MessageType.SubmitFeeReduceFilingResult,
+          payload: await easyRuntime.submitFeeReduceFiling(message.payload)
         }
       case MessageType.SubmitLimitMail:
         return { type: MessageType.SubmitLimitMailResult,

@@ -10,13 +10,13 @@ import type { QueryTemplate } from '../query/query-types'
 import { chooseAppTab, EasyConnectionController, emptyConnection, accountScopeMatches, freezeAccount, resumeLoginChoice, sameAccountContext, sameOperatorId, tabOrigin, type AccountContextSnapshot, type BrowserTabRef, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope, type SessionObservation } from '../shared/connection'
 import { caseContactExportBlock } from '../customer/skills'
 import { appendFileManageRun, enqueueFileManageWrite, fileManageRunKey, parseFileManageRuns } from '../customer/file-manage-runs'
-import { isMessage, workspaceForwardBlock, MessageType, type AppMessage, type BackgroundResponse, type CreatedTaskResult, type FileManageRun } from '../shared/message'
+import { isMessage, workspaceForwardBlock, MessageType, type AppMessage, type BackgroundResponse, type ContentRequest, type CreatedTaskResult, type DualSystemNodeStatus, type DualSystemStatusSnapshot, type FileManageRun } from '../shared/message'
 import { loadAccount, deleteCustomerAccount, deleteQueryTemplateAccount, refreshStaleTasks, saveCustomerAccount, saveQueryTemplateAccount, saveRuleAccount, type LocalArea } from './account-data'
 import { observeSearchPage, resolveSelectedFiles, toQueryObservation, type QueryObservationResult } from '../automation/file-search-snapshot'
 import { rememberFileTypeTree } from '../automation/file-description-resolver'
 import { isConfirmedOperator } from '../automation/operator'
 import { readSmeCustomerList } from '../customer/sme-customers'
-import { customerMode, modeLabel, preferredModeOrigin, originMatchesMode, setCustomerMode as saveCustomerMode } from '../settings/customer-mode'
+import { customerMode, modeLabel, modeOrigin, originsForMode, preferredModeOrigin, originMatchesMode, setCustomerMode as saveCustomerMode, type CustomerMode } from '../settings/customer-mode'
 import { planTrustedTask } from '../automation/task-planner'
 import type { AutomationTask } from '../automation/types'
 import { createRecoveryClient } from '../recovery/client'
@@ -43,6 +43,7 @@ export interface WorkspacePayload {
   forwarded: AppMessage | null
   appTab: { tabId: number; created: boolean } | null
   createdTask: CreatedTaskResult | null
+  dualSystems?: DualSystemStatusSnapshot
   contextError?: 'STALE_CONTEXT'
   rulesSaved?: boolean
   tasksRevalidated?: boolean
@@ -63,6 +64,7 @@ export function workspaceResult(partial: Partial<WorkspacePayload> & { connectio
     forwarded: partial.forwarded ?? null,
     appTab: partial.appTab ?? null,
     createdTask: partial.createdTask ?? null,
+    ...(partial.dualSystems ? { dualSystems: partial.dualSystems } : {}),
     ...(partial.contextError ? { contextError: partial.contextError } : {}),
     ...(partial.rulesSaved !== undefined ? { rulesSaved: partial.rulesSaved, tasksRevalidated: partial.tasksRevalidated, pendingRevalidation: partial.pendingRevalidation } : {})
   }
@@ -239,6 +241,186 @@ async function recheckTasks(host: WorkspaceHost, frozen: AccountContextSnapshot)
   await refreshStaleTasks(host.tasks, frozen.easyOrigin, frozen.operatorId, account.rules, account.customers, account.templates)
 }
 const activeForwards = new WeakMap<WorkspaceHost, number>()
+const dualTabCache = new WeakMap<
+  WorkspaceHost,
+  Partial<Record<CustomerMode, { tabId: number; origin: string; operatorId: string; displayName: string }>>
+>()
+
+function rememberDualTab(host: WorkspaceHost, mode: CustomerMode, entry: { tabId: number; origin: string; operatorId: string; displayName: string } | null): void {
+  const map = dualTabCache.get(host) ?? {}
+  if (entry) map[mode] = entry
+  else delete map[mode]
+  dualTabCache.set(host, map)
+}
+
+async function probeSystemMode(host: WorkspaceHost, mode: CustomerMode): Promise<DualSystemNodeStatus> {
+  const label = modeLabel(mode)
+  const fallbackOrigin = modeOrigin(mode)
+  const loginUrl = `${fallbackOrigin}/`
+  const candidates = host.connection.list(await host.queryTabs()).filter(tab => originMatchesMode(tab.origin, mode))
+  if (candidates.length === 0) {
+    rememberDualTab(host, mode, null)
+    return {
+      mode,
+      label,
+      ready: false,
+      tabId: null,
+      origin: fallbackOrigin,
+      loginUrl,
+      operatorId: '',
+      displayName: '',
+      reason: 'no_tab',
+      message: `未检测到已打开的${label}页面，请先打开并登录 ${loginUrl}`
+    }
+  }
+
+  const seen: Array<{ tab: EasyTabCandidate; observation: SessionObservation }> = []
+  for (const tab of candidates) {
+    const observation = await observeTab(host, tab.id)
+    if (observation) seen.push({ tab, observation })
+  }
+
+  const loggedIn = seen.filter(
+    item => item.observation.ok && item.observation.status === 'authenticated' && item.observation.userId && isConfirmedOperator(item.observation.userId)
+  )
+  const operators = new Set(loggedIn.map(item => item.observation.userId))
+  if (operators.size === 1 && loggedIn[0]) {
+    const found = loggedIn[0]
+    const operatorId = found.observation.userId ?? ''
+    const displayName = found.observation.displayName ?? ''
+    rememberDualTab(host, mode, { tabId: found.tab.id, origin: found.tab.origin, operatorId, displayName })
+    return {
+      mode,
+      label,
+      ready: true,
+      tabId: found.tab.id,
+      origin: found.tab.origin,
+      loginUrl: `${found.tab.origin}/`,
+      operatorId,
+      displayName,
+      reason: 'ready',
+      message: displayName ? `已在线（${displayName}）` : '已在线'
+    }
+  }
+
+  rememberDualTab(host, mode, null)
+  if (operators.size > 1) {
+    return {
+      mode,
+      label,
+      ready: false,
+      tabId: null,
+      origin: candidates[0].origin,
+      loginUrl: `${candidates[0].origin}/`,
+      operatorId: '',
+      displayName: '',
+      reason: 'multiple_accounts',
+      message: `${label}打开了多个不同登录账号的页面，请只保留一个已登录账号。`
+    }
+  }
+  if (seen.some(item => !item.observation.ok && item.observation.status === 'expired')) {
+    return {
+      mode,
+      label,
+      ready: false,
+      tabId: candidates[0].id,
+      origin: candidates[0].origin,
+      loginUrl: `${candidates[0].origin}/`,
+      operatorId: '',
+      displayName: '',
+      reason: 'session_expired',
+      message: `${label}登录会话已过期，请在原站页面重新登录。`
+    }
+  }
+  if (seen.length === 0) {
+    return {
+      mode,
+      label,
+      ready: false,
+      tabId: candidates[0].id,
+      origin: candidates[0].origin,
+      loginUrl: `${candidates[0].origin}/`,
+      operatorId: '',
+      displayName: '',
+      reason: 'unreachable',
+      message: `已找到${label}页面，但内容脚本未响应，请刷新该页面。`
+    }
+  }
+  return {
+    mode,
+    label,
+    ready: false,
+    tabId: candidates[0].id,
+    origin: candidates[0].origin,
+    loginUrl: `${candidates[0].origin}/`,
+    operatorId: '',
+    displayName: '',
+    reason: 'not_logged_in',
+    message: `${label}页面尚未登录，请先完成登录。`
+  }
+}
+
+async function resolveDualTargetTab(host: WorkspaceHost, mode: CustomerMode): Promise<{ ok: true; tabId: number } | { ok: false; message: string }> {
+  const cached = dualTabCache.get(host)?.[mode]
+  if (cached) {
+    try {
+      const tab = await host.getTab(cached.tabId)
+      const origin = tabOrigin(tab.url)
+      if (typeof tab.id === 'number' && origin && originMatchesMode(origin, mode)) {
+        return { ok: true, tabId: tab.id }
+      }
+    } catch {
+      rememberDualTab(host, mode, null)
+    }
+  }
+  const conn = host.connection.context
+  if (conn.easyTabId != null && conn.sessionStatus === 'authenticated' && originMatchesMode(conn.easyOrigin, mode)) {
+    try {
+      const tab = await host.getTab(conn.easyTabId)
+      const origin = tabOrigin(tab.url)
+      if (typeof tab.id === 'number' && origin && originMatchesMode(origin, mode)) {
+        rememberDualTab(host, mode, { tabId: tab.id, origin, operatorId: conn.operatorId, displayName: conn.displayName })
+        return { ok: true, tabId: tab.id }
+      }
+    } catch { /* ignore */ }
+  }
+  const probed = await probeSystemMode(host, mode)
+  if (probed.ready && probed.tabId != null) {
+    return { ok: true, tabId: probed.tabId }
+  }
+  return { ok: false, message: probed.message }
+}
+
+async function forwardToTargetMode(host: WorkspaceHost, targetMode: CustomerMode, message: ContentRequest): Promise<BackgroundResponse> {
+  const forwardBlock = workspaceForwardBlock(message)
+  if (forwardBlock) {
+    return workspaceResult({ ok: false, message: forwardBlock, connection: host.connection.context })
+  }
+  const target = await resolveDualTargetTab(host, targetMode)
+  if (!target.ok) {
+    return workspaceResult({ ok: false, message: target.message, connection: host.connection.context })
+  }
+  try {
+    activeForwards.set(host, (activeForwards.get(host) ?? 0) + 1)
+    let response: unknown
+    try {
+      response = await host.sendToTab(target.tabId, stripSearchContinuation(message))
+    } finally {
+      activeForwards.set(host, Math.max(0, (activeForwards.get(host) ?? 0) - 1))
+    }
+    if (!isMessage(response) || response.type === MessageType.Workspace || response.type === MessageType.WorkspaceResult) {
+      return workspaceResult({ ok: false, message: `${modeLabel(targetMode)}页面没有返回可识别的结果，请刷新该页面后再试。`, connection: host.connection.context })
+    }
+    return workspaceResult({ ok: true, message: '', connection: host.connection.context, forwarded: response })
+  } catch (error) {
+    const text = error instanceof Error ? error.message : ''
+    if (/no tab with id|tab was closed|receiving end does not exist|could not establish connection/i.test(text)) {
+      rememberDualTab(host, targetMode, null)
+      return workspaceResult({ ok: false, message: `${modeLabel(targetMode)}标签页已关闭或失效。`, connection: host.connection.context })
+    }
+    return workspaceResult({ ok: false, message: text || `${modeLabel(targetMode)}请求执行失败。`, connection: host.connection.context })
+  }
+}
 
 export function hasActiveForwards(host: WorkspaceHost): boolean {
   return (activeForwards.get(host) ?? 0) > 0
@@ -254,6 +436,8 @@ const READ_ONLY_FORWARD_TYPES = new Set<string>([
   MessageType.LoadDictionary,
   MessageType.ReadHagueCase,
   MessageType.ReadCaseBusFlow,
+  MessageType.InspectFeeReduceCases,
+  MessageType.ReadFeeReduceReviewers,
 ])
 
 function canRecoverTransientSessionDip(
@@ -292,6 +476,43 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
   if (action.action === 'focus') {
     const appTab = await host.openApp()
     return workspaceResult({ ok: true, message: appTab.created ? '已打开工作台。' : '已回到已打开的工作台。', connection: host.connection.context, appTab })
+  }
+  if (action.action === 'checkDualSystems') {
+    const [large, sme] = await Promise.all([probeSystemMode(host, 'large'), probeSystemMode(host, 'sme')])
+    const writeSwitchOpen = isWriteSwitchOpen()
+    const allReady = large.ready && sme.ready
+    const snapshot: DualSystemStatusSnapshot = {
+      checkedAt: new Date().toISOString(),
+      large,
+      sme,
+      writeSwitchOpen,
+      allReady
+    }
+    return workspaceResult({
+      ok: allReady,
+      message: allReady ? '大客户与中小客户系统均已在线。' : '部分系统未就绪，请按指引检查。',
+      connection: host.connection.context,
+      dualSystems: snapshot
+    })
+  }
+  if (action.action === 'openDualLogin') {
+    const allowedOrigins = originsForMode(action.mode)
+    const tabs = await host.queryTabs()
+    const existing = tabs.find(tab => {
+      if (tab.id == null) return false
+      const origin = tabOrigin(tab.url)
+      return Boolean(origin && allowedOrigins.includes(origin))
+    })
+    if (existing?.id != null) {
+      await host.focusTab(existing.id, existing.windowId)
+    } else {
+      await host.createTab(`${modeOrigin(action.mode)}/`)
+    }
+    return workspaceResult({
+      ok: true,
+      message: `已打开${modeLabel(action.mode)}登录页面，登录后请回到工作台重新检测。`,
+      connection: host.connection.context
+    })
   }
   if (action.action === 'openLogin') {
     const origin = preferredModeOrigin(customerMode(),host.connection.context.easyOrigin)
@@ -532,6 +753,9 @@ export async function handleWorkspaceMessage(message: AppMessage, host: Workspac
     }
   }
   if (action.action === 'forward') {
+    if (action.targetMode) {
+      return forwardToTargetMode(host, action.targetMode, action.message)
+    }
     const initialMailAccount = action.message.type === MessageType.SubmitLimitMail
       ? freezeAccount(host.connection.context) : null
     if (action.message.type === MessageType.LoadDictionary && action.message.payload.kind === 'customerList') {

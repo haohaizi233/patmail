@@ -12,6 +12,8 @@ import type { FilingSearchResult, FilingSearchRow } from './filing-search-types'
 import type { FilingFlowRow, FilingUser } from './filing-export'
 import type { FeeSearchResult } from './fee-search-types'
 export { isFeeSearchQuery } from './fee-search-params'
+import type { PatentSearchResult } from './patent-search-types'
+export { isPatentSearchQuery } from './patent-search-params'
 import type {
   NoticeActionRequest,
   NoticeExcelUploadRequest,
@@ -23,6 +25,12 @@ import type {
 import { isProcessKind, isProcessOpenTarget, PROCESS_SPECS, type ProcessListQuery, type ProcessListResult, type ProcessListRow } from './mail-process'
 import type { SessionSummary } from './session'
 import type { CaseContactExport } from '../case-contact/query'
+import type {
+  FeeReduceInspectResult,
+  FeeReduceReviewersResult,
+  FeeReduceSubmitRequest,
+  FeeReduceSubmitResult
+} from './fee-reduce-types'
 import type { ApiError, ApiResult } from './types'
 
 const QUERY_KEYS = new Set([
@@ -373,6 +381,14 @@ export function isFeeSearchApiResult(value: unknown): value is ApiResult<FeeSear
   return isApiResult(value, isFeeSearchResult)
 }
 
+function isPatentSearchResult(value: unknown): value is PatentSearchResult {
+  return isRecord(value) && Array.isArray(value.rows) && typeof value.total === 'number'
+}
+
+export function isPatentSearchApiResult(value: unknown): value is ApiResult<PatentSearchResult> {
+  return isApiResult(value, isPatentSearchResult)
+}
+
 const NOTICE_TABS = new Set<string>(['import', 'download', 'cert', 'replay', 'hand', 'handHis', 'nolaiuto', 'handExcel'])
 const READONLY_NOTICE_ACTIONS = new Set<string>([
   'refreshCounts',
@@ -433,8 +449,9 @@ export function isNoticeExportRequest(value: unknown): value is NoticeExportRequ
   }
   if (value.accountLabel !== undefined && (typeof value.accountLabel !== 'string' || value.accountLabel.length > 200)) return false
   if (value.timeoutMs !== undefined && fileSearchTimeoutMs(value.timeoutMs) !== value.timeoutMs) return false
+  if (value.delivery !== undefined && value.delivery !== 'download' && value.delivery !== 'inline') return false
   return Object.keys(value).every(
-    k => k === 'tab' || k === 'query' || k === 'columns' || k === 'accountLabel' || k === 'timeoutMs'
+    k => k === 'tab' || k === 'query' || k === 'columns' || k === 'accountLabel' || k === 'timeoutMs' || k === 'delivery'
   )
 }
 
@@ -459,4 +476,60 @@ function isNoticeSearchResult(value: unknown): value is NoticeSearchResult {
 
 export function isNoticeSearchApiResult(value: unknown): value is ApiResult<NoticeSearchResult> {
   return isApiResult(value, isNoticeSearchResult)
+}
+
+export function isFeeReduceInspectPayload(value: unknown): value is { caseVolumes: string[] } {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.caseVolumes) &&
+    value.caseVolumes.length > 0 &&
+    value.caseVolumes.length <= 2000 &&
+    value.caseVolumes.every(v => typeof v === 'string' && v.trim().length > 0 && v.length <= 200)
+  )
+}
+
+export function isFeeReduceSubmitPayload(value: unknown): value is FeeReduceSubmitRequest {
+  if (!isRecord(value)) return false
+  if (typeof value.caseVolume !== 'string' || !value.caseVolume.trim() || value.caseVolume.length > 80) return false
+  if (typeof value.caseId !== 'string' || !isQueryGuid(value.caseId)) return false
+  if (typeof value.procId !== 'string' || !isQueryGuid(value.procId)) return false
+  if (value.oaName !== undefined && (typeof value.oaName !== 'string' || value.oaName.length > 200)) return false
+  if (value.remark !== undefined && (typeof value.remark !== 'string' || value.remark.length > 200)) return false
+  if (value.reviewerStrategy !== undefined && value.reviewerStrategy !== 'first' && value.reviewerStrategy !== 'least_busy' && value.reviewerStrategy !== 'specific') {
+    return false
+  }
+  if (value.defaultReviewerId !== undefined && value.defaultReviewerId !== '' && (typeof value.defaultReviewerId !== 'string' || !isQueryGuid(value.defaultReviewerId))) {
+    return false
+  }
+  if (value.overrideReviewerId !== undefined && value.overrideReviewerId !== '' && (typeof value.overrideReviewerId !== 'string' || !isQueryGuid(value.overrideReviewerId))) {
+    return false
+  }
+  if (value.resumeFilingId !== undefined && value.resumeFilingId !== '' && (typeof value.resumeFilingId !== 'string' || !isQueryGuid(value.resumeFilingId))) {
+    return false
+  }
+  return true
+}
+
+function isFeeReduceInspectResult(value: unknown): value is FeeReduceInspectResult {
+  return isRecord(value) && Array.isArray(value.items)
+}
+
+export function isFeeReduceInspectApiResult(value: unknown): value is ApiResult<FeeReduceInspectResult> {
+  return isApiResult(value, isFeeReduceInspectResult)
+}
+
+function isFeeReduceReviewersResult(value: unknown): value is FeeReduceReviewersResult {
+  return isRecord(value) && Array.isArray(value.reviewers) && typeof value.nodeName === 'string'
+}
+
+export function isFeeReduceReviewersApiResult(value: unknown): value is ApiResult<FeeReduceReviewersResult> {
+  return isApiResult(value, isFeeReduceReviewersResult)
+}
+
+function isFeeReduceSubmitResult(value: unknown): value is FeeReduceSubmitResult {
+  return isRecord(value) && typeof value.filingId === 'string' && typeof value.caseId === 'string'
+}
+
+export function isFeeReduceSubmitApiResult(value: unknown): value is ApiResult<FeeReduceSubmitResult> {
+  return isApiResult(value, isFeeReduceSubmitResult)
 }

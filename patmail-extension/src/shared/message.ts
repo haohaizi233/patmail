@@ -11,11 +11,20 @@ import type { MailRuleBundle } from '../mail/types'
 import { isQueryGuid, isQueryTemplate } from '../query/query-validator'
 import type { QueryTemplate } from '../query/query-types'
 import { isEasyConnection, type EasyConnectionContext, type EasyTabCandidate, type ExpectedAccountScope } from './connection'
-import { isCaseContactResult, isDictionaryResult, isFeeSearchApiResult, isFeeSearchQuery, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isFileTempNamesResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isNoticeActionRequest, isNoticeExcelUploadRequest, isNoticeExportRequest, isNoticeSearchApiResult, isNoticeSearchRequest, isSessionResult, isVolumeList, isWriteNoticeAction } from '../api/message-guards'
+import { isCaseContactResult, isDictionaryResult, isFeeReduceInspectApiResult, isFeeReduceInspectPayload, isFeeReduceReviewersApiResult, isFeeReduceSubmitApiResult, isFeeReduceSubmitPayload, isFeeSearchApiResult, isFeeSearchQuery, isFileSearchApiResult, isFileSearchQuery, isFilingFlowApiResult, isFilingSearchApiResult, isFilingSearchQuery, isFilingUserApiResult, isFileTempNamesResult, isHistoryDeleteResult, isHistoryDetailResult, isHistoryListResult, isHistorySaveResult, isLimitMonitorApiResult, isLimitMonitorQuery, isMailProcessApiResult, isMailProcessQuery, isNoticeActionRequest, isNoticeExcelUploadRequest, isNoticeExportRequest, isNoticeSearchApiResult, isNoticeSearchRequest, isPatentSearchApiResult, isPatentSearchQuery, isSessionResult, isVolumeList, isWriteNoticeAction } from '../api/message-guards'
+import type {
+  FeeReduceInspectResult,
+  FeeReduceReviewersResult,
+  FeeReduceSubmitRequest,
+  FeeReduceSubmitResult
+} from '../api/fee-reduce-types'
 import type { FileTempNameList } from '../api/file-temp-name'
 import type { LimitMonitorQuery } from '../api/limit-monitor-params'
 import type { FilingSearchQuery } from '../api/filing-search-params'
 import type { FeeSearchQuery } from '../api/fee-search-params'
+import type { PatentSearchQuery } from '../api/patent-search-params'
+import type { PatentInitData, PatentSearchResult } from '../api/patent-search-types'
+import type { TreeOption } from '../query/option-tree'
 import { isProcessOpenTarget, type ProcessListQuery, type ProcessListResult, type ProcessOpenTarget } from '../api/mail-process'
 import type { CaseContactExport } from '../case-contact/query'
 import type { CaseDemandAsset } from '../mail/easy/case-demand'
@@ -94,6 +103,12 @@ export const MessageType = {
   FeeExportConfigResult: 'FEE_EXPORT_CONFIG_RESULT',
   ExportFee: 'EXPORT_FEE',
   ExportFeeResult: 'EXPORT_FEE_RESULT',
+  SearchPatent: 'SEARCH_PATENT',
+  SearchPatentResult: 'SEARCH_PATENT_RESULT',
+  LoadPatentInit: 'LOAD_PATENT_INIT',
+  LoadPatentInitResult: 'LOAD_PATENT_INIT_RESULT',
+  LoadPatentCtrlProc: 'LOAD_PATENT_CTRL_PROC',
+  LoadPatentCtrlProcResult: 'LOAD_PATENT_CTRL_PROC_RESULT',
   LoadNoticeInit: 'LOAD_NOTICE_INIT',
   LoadNoticeInitResult: 'LOAD_NOTICE_INIT_RESULT',
   SearchNotice: 'SEARCH_NOTICE',
@@ -104,6 +119,12 @@ export const MessageType = {
   ExportNoticeResult: 'EXPORT_NOTICE_RESULT',
   UploadNoticeExcel: 'UPLOAD_NOTICE_EXCEL',
   UploadNoticeExcelResult: 'UPLOAD_NOTICE_EXCEL_RESULT',
+  InspectFeeReduceCases: 'INSPECT_FEE_REDUCE_CASES',
+  InspectFeeReduceCasesResult: 'INSPECT_FEE_REDUCE_CASES_RESULT',
+  ReadFeeReduceReviewers: 'READ_FEE_REDUCE_REVIEWERS',
+  ReadFeeReduceReviewersResult: 'READ_FEE_REDUCE_REVIEWERS_RESULT',
+  SubmitFeeReduceFiling: 'SUBMIT_FEE_REDUCE_FILING',
+  SubmitFeeReduceFilingResult: 'SUBMIT_FEE_REDUCE_FILING_RESULT',
   SubmitLimitMail: 'SUBMIT_LIMIT_MAIL',
   SubmitLimitMailResult: 'SUBMIT_LIMIT_MAIL_RESULT',
   SubmitFileManage: 'SUBMIT_FILE_MANAGE',
@@ -241,11 +262,17 @@ export type ContentRequest =
   | Response<'LOAD_FEE_APPLICANTS', { customerIds: string }>
   | Response<'FEE_EXPORT_CONFIG', FeeExportConfigRequest>
   | Response<'EXPORT_FEE', FeeExportRequest>
+  | Response<'SEARCH_PATENT', { query: PatentSearchQuery; timeoutMs?: number; batch?: true }>
+  | Request<'LOAD_PATENT_INIT'>
+  | Response<'LOAD_PATENT_CTRL_PROC', { countryIds: string; procType?: string }>
   | Request<'LOAD_NOTICE_INIT'>
   | Response<'SEARCH_NOTICE', NoticeSearchRequest>
   | Response<'NOTICE_ACTION', NoticeActionRequest>
   | Response<'EXPORT_NOTICE', NoticeExportRequest>
   | Response<'UPLOAD_NOTICE_EXCEL', NoticeExcelUploadRequest>
+  | Response<'INSPECT_FEE_REDUCE_CASES', { caseVolumes: string[] }>
+  | Request<'READ_FEE_REDUCE_REVIEWERS'>
+  | Response<'SUBMIT_FEE_REDUCE_FILING', FeeReduceSubmitRequest>
   | Response<'SUBMIT_LIMIT_MAIL', { userId: string; items: Array<{ procId: string; procIds?: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; mode: 'ipr' | 'lead'; inventor?: boolean; customerName: string; contactName: string; iprName: string; leadName: string; contacts?: 'all'; ccName?: string; arbitrated?: true; namedBusiness?: true; hold?: 'skip'; senderId?: string; reviewerId?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE', { userId: string; items: Array<{ fileId: string; fileIds: string[]; fileNames: string[]; mailTypeId: string; mailStyle: '1' | '2'; mailId?: string; recall?: boolean; subject: string; senderId: string; senderName: string; senderEmail: string; reviewerId: string; reviewerName: string; signature: string; addresses?: Pick<FileMailConfig, 'to' | 'cc'> }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES', { fileIds: string[]; selection: FileDownloadSelection }>
@@ -266,10 +293,10 @@ export type ContentRequest =
   | Response<'READ_CUSTOMER_DIRECTORY', { customerId: string }>
   | Response<'READ_MAIL_CONTACTS', { mailId: string; customerId: string }>
   | Response<'READ_MAIL_ADDRESSES', { mailId: string }>
-  | Response<'LIST_HISTORY_QUERIES', { force: boolean; surface?: 'file' | 'limit' | 'fee' }>
-  | Response<'GET_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' | 'fee' }>
-  | Response<'SAVE_HISTORY_QUERY', { title: string; queryId: string; queryXml: string; surface?: 'file' | 'limit' | 'fee' }>
-  | Response<'DELETE_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' | 'fee' }>
+  | Response<'LIST_HISTORY_QUERIES', { force: boolean; surface?: 'file' | 'limit' | 'fee' | 'patent' }>
+  | Response<'GET_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' | 'fee' | 'patent' }>
+  | Response<'SAVE_HISTORY_QUERY', { title: string; queryId: string; queryXml: string; surface?: 'file' | 'limit' | 'fee' | 'patent' }>
+  | Response<'DELETE_HISTORY_QUERY', { queryId: string; surface?: 'file' | 'limit' | 'fee' | 'patent' }>
   | Response<'SAVE_FILE_TEMP_NAME', { tempName: string; newFilename: string; fileNameType: string }>
   | Response<'DELETE_FILE_TEMP_NAME', { tempId: string }>
   | Response<'LOAD_DICTIONARY', DictionaryLoadRequest>
@@ -365,8 +392,39 @@ export interface LeaseCommand {
   leaseVersion: number
 }
 
+export type DualSystemNodeReason =
+  | 'ready'
+  | 'no_tab'
+  | 'not_logged_in'
+  | 'session_expired'
+  | 'multiple_accounts'
+  | 'unreachable'
+
+export interface DualSystemNodeStatus {
+  mode: CustomerMode
+  label: string
+  ready: boolean
+  tabId: number | null
+  origin: string
+  loginUrl: string
+  operatorId: string
+  displayName: string
+  reason: DualSystemNodeReason
+  message: string
+}
+
+export interface DualSystemStatusSnapshot {
+  checkedAt: string
+  large: DualSystemNodeStatus
+  sme: DualSystemNodeStatus
+  writeSwitchOpen: boolean
+  allReady: boolean
+}
+
 export type WorkspaceAction =
   | { action: 'focus' } | { action: 'listTabs' } | { action: 'refreshSession' } | { action: 'openLogin' } | { action: 'load' } | { action: 'declineAccountSwitch' }
+  | { action: 'checkDualSystems' }
+  | { action: 'openDualLogin'; mode: CustomerMode }
   | { action: 'setCustomerMode'; mode: CustomerMode }
   | { action: 'bind'; tabId: number }
   | { action: 'saveCustomer'; profile: CustomerQueryProfile; expectedScope: ExpectedAccountScope; expectedRevision?: number }
@@ -376,7 +434,7 @@ export type WorkspaceAction =
   | { action: 'saveRules'; bundle: MailRuleBundle; expectedScope: ExpectedAccountScope }
   | { action: 'createTaskPlan'; files: SelectedPatentFile[]; queryTemplateVersion: number; expectedScope: ExpectedAccountScope }
   | { action: 'recordFileManageRun'; expectedScope: ExpectedAccountScope; run: FileManageRunInput }
-  | { action: 'forward'; message: ContentRequest }
+  | { action: 'forward'; message: ContentRequest; targetMode?: CustomerMode }
   | { action: 'runAcceptance'; call: string; caseTypeId?: string; mailId?: string; flowType?: string; expectedFields?: Record<string, string> }
 
 export interface CreatedTaskResult {
@@ -402,6 +460,7 @@ export interface WorkspaceResultPayload {
   forwarded: AppMessage | null
   appTab: { tabId: number; created: boolean } | null
   createdTask: CreatedTaskResult | null
+  dualSystems?: DualSystemStatusSnapshot
   contextError?: 'STALE_CONTEXT'
   rulesSaved?: boolean
   tasksRevalidated?: boolean
@@ -471,11 +530,17 @@ export type ContentResponse =
   | Response<'LOAD_FEE_APPLICANTS_RESULT', ApiResult<FeeApplicantItem[]>>
   | Response<'FEE_EXPORT_CONFIG_RESULT', ApiResult<FeeExportConfigResponse>>
   | Response<'EXPORT_FEE_RESULT', ApiResult<FeeExportResponse>>
+  | Response<'SEARCH_PATENT_RESULT', ApiResult<PatentSearchResult>>
+  | Response<'LOAD_PATENT_INIT_RESULT', ApiResult<PatentInitData>>
+  | Response<'LOAD_PATENT_CTRL_PROC_RESULT', ApiResult<TreeOption[]>>
   | Response<'LOAD_NOTICE_INIT_RESULT', ApiResult<NoticeInitData>>
   | Response<'SEARCH_NOTICE_RESULT', ApiResult<NoticeSearchResult>>
   | Response<'NOTICE_ACTION_RESULT', ApiResult<NoticeActionResult>>
   | Response<'EXPORT_NOTICE_RESULT', ApiResult<NoticeExportResult>>
   | Response<'UPLOAD_NOTICE_EXCEL_RESULT', ApiResult<NoticeExcelUploadResult>>
+  | Response<'INSPECT_FEE_REDUCE_CASES_RESULT', ApiResult<FeeReduceInspectResult>>
+  | Response<'READ_FEE_REDUCE_REVIEWERS_RESULT', ApiResult<FeeReduceReviewersResult>>
+  | Response<'SUBMIT_FEE_REDUCE_FILING_RESULT', ApiResult<FeeReduceSubmitResult>>
   | Response<'SUBMIT_LIMIT_MAIL_RESULT', { stopped: boolean; results: Array<{ procId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string; to?: string; cc?: string }> }>
   | Response<'SUBMIT_FILE_MANAGE_RESULT', { stopped: boolean; results: Array<{ fileId: string; mailId: string; state: 'submitted' | 'created' | 'unknown' | 'failed'; message: string }> }>
   | Response<'RESOLVE_DOWNLOAD_NAMES_RESULT', ApiResult<{ names: string[] }>>
@@ -843,11 +908,11 @@ export function isMessage(value: unknown): value is AppMessage {
       return value.payload === undefined
     case MessageType.ListHistoryQueries:
       return isRecord(value.payload) && (value.payload.force === true || value.payload.force === false) &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee' || value.payload.surface === 'patent') &&
         Object.keys(value.payload).every(key => key === 'force' || key === 'surface')
     case MessageType.GetHistoryQuery:
       return isRecord(value.payload) && typeof value.payload.queryId === 'string' &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee' || value.payload.surface === 'patent') &&
         Object.keys(value.payload).every(key => key === 'queryId' || key === 'surface')
     case MessageType.SaveHistoryQuery:
       return isRecord(value.payload) && typeof value.payload.title === 'string' && value.payload.title.trim().length > 0 &&
@@ -856,11 +921,11 @@ export function isMessage(value: unknown): value is AppMessage {
         typeof value.payload.queryXml === 'string' && value.payload.queryXml.length <= 200_000 &&
         value.payload.queryXml.startsWith('<xmlRoot>') && value.payload.queryXml.endsWith('</xmlRoot>') &&
         !/<!DOCTYPE|<!ENTITY/i.test(value.payload.queryXml) &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee' || value.payload.surface === 'patent') &&
         Object.keys(value.payload).every(key => key === 'title' || key === 'queryId' || key === 'queryXml' || key === 'surface')
     case MessageType.DeleteHistoryQuery:
       return isRecord(value.payload) && typeof value.payload.queryId === 'string' && isQueryGuid(value.payload.queryId) &&
-        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee') &&
+        (value.payload.surface === undefined || value.payload.surface === 'file' || value.payload.surface === 'limit' || value.payload.surface === 'fee' || value.payload.surface === 'patent') &&
         Object.keys(value.payload).every(key => key === 'queryId' || key === 'surface')
     case MessageType.SaveFileTempName: {
       if (!isRecord(value.payload) || Object.keys(value.payload).length !== 3) return false
@@ -1002,8 +1067,22 @@ export function isMessage(value: unknown): value is AppMessage {
       return keys.every(key => key === 'query' || key === 'timeoutMs')
     }
     case MessageType.LoadFeeInit:
+    case MessageType.LoadPatentInit:
     case MessageType.LoadNoticeInit:
+    case MessageType.ReadFeeReduceReviewers:
       return value.payload === undefined
+    case MessageType.SearchPatent: {
+      if (!isRecord(value.payload) || !isPatentSearchQuery(value.payload.query)) return false
+      const keys = Object.keys(value.payload)
+      if (!keys.includes('query')) return false
+      return keys.every(key => key === 'query' || key === 'timeoutMs' || key === 'batch') &&
+        (value.payload.timeoutMs === undefined || fileSearchTimeoutMs(value.payload.timeoutMs) === value.payload.timeoutMs) &&
+        (value.payload.batch === undefined || value.payload.batch === true)
+    }
+    case MessageType.LoadPatentCtrlProc:
+      return isRecord(value.payload) && typeof value.payload.countryIds === 'string' && value.payload.countryIds.length <= 4000 &&
+        (value.payload.procType === undefined || (typeof value.payload.procType === 'string' && value.payload.procType.length <= 100)) &&
+        Object.keys(value.payload).every(key => key === 'countryIds' || key === 'procType')
     case MessageType.SearchNotice:
       return isNoticeSearchRequest(value.payload)
     case MessageType.NoticeAction:
@@ -1012,6 +1091,10 @@ export function isMessage(value: unknown): value is AppMessage {
       return isNoticeExportRequest(value.payload)
     case MessageType.UploadNoticeExcel:
       return isNoticeExcelUploadRequest(value.payload)
+    case MessageType.InspectFeeReduceCases:
+      return isFeeReduceInspectPayload(value.payload)
+    case MessageType.SubmitFeeReduceFiling:
+      return isFeeReduceSubmitPayload(value.payload)
     case MessageType.SearchFeeCustomers:
       return isRecord(value.payload) && typeof value.payload.searchKey === 'string' && Object.keys(value.payload).length === 1
     case MessageType.LoadFeeApplicants:
@@ -1168,8 +1251,12 @@ export function isMessage(value: unknown): value is AppMessage {
       return isFilingSearchApiResult(value.payload)
     case MessageType.SearchFeeResult:
       return isFeeSearchApiResult(value.payload)
+    case MessageType.SearchPatentResult:
+      return isPatentSearchApiResult(value.payload)
     case MessageType.SearchFeeAmountResult:
     case MessageType.LoadFeeInitResult:
+    case MessageType.LoadPatentInitResult:
+    case MessageType.LoadPatentCtrlProcResult:
     case MessageType.SearchFeeCustomersResult:
     case MessageType.LoadFeeApplicantsResult:
     case MessageType.FeeExportConfigResult:
@@ -1179,6 +1266,12 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.ExportNoticeResult:
     case MessageType.UploadNoticeExcelResult:
       return isRecord(value.payload)
+    case MessageType.InspectFeeReduceCasesResult:
+      return isFeeReduceInspectApiResult(value.payload)
+    case MessageType.ReadFeeReduceReviewersResult:
+      return isFeeReduceReviewersApiResult(value.payload)
+    case MessageType.SubmitFeeReduceFilingResult:
+      return isFeeReduceSubmitApiResult(value.payload)
     case MessageType.SearchNoticeResult:
       return isNoticeSearchApiResult(value.payload)
     case MessageType.ExportCaseContactsResult:
@@ -1318,7 +1411,8 @@ export function isContentRequest(value: unknown): value is ContentRequest {
     value.type === MessageType.SearchFiles || value.type === MessageType.CancelFileSearch ||
     value.type === MessageType.CancelLimitMonitor ||
     value.type === MessageType.SearchLimitMonitor || value.type === MessageType.SearchFiling || value.type === MessageType.SearchFee || value.type === MessageType.SearchFeeAmount || value.type === MessageType.LoadFeeInit || value.type === MessageType.SearchFeeCustomers || value.type === MessageType.LoadFeeApplicants || value.type === MessageType.FeeExportConfig || value.type === MessageType.ExportFee ||
-    value.type === MessageType.LoadNoticeInit || value.type === MessageType.SearchNotice || value.type === MessageType.NoticeAction || value.type === MessageType.ExportNotice || value.type === MessageType.UploadNoticeExcel || value.type === MessageType.ListMailProcesses ||
+    value.type === MessageType.SearchPatent || value.type === MessageType.LoadPatentInit || value.type === MessageType.LoadPatentCtrlProc ||
+    value.type === MessageType.LoadNoticeInit || value.type === MessageType.SearchNotice || value.type === MessageType.NoticeAction || value.type === MessageType.ExportNotice || value.type === MessageType.UploadNoticeExcel || value.type === MessageType.InspectFeeReduceCases || value.type === MessageType.ReadFeeReduceReviewers || value.type === MessageType.SubmitFeeReduceFiling || value.type === MessageType.ListMailProcesses ||
     value.type === MessageType.SubmitLimitMail ||
     value.type === MessageType.SubmitFileManage ||
     value.type === MessageType.ResolveDownloadNames ||
@@ -1354,8 +1448,8 @@ export function isContentRequest(value: unknown): value is ContentRequest {
   )
 }
 
-const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'SEARCH_FEE', 'SEARCH_FEE_AMOUNT', 'LOAD_FEE_INIT', 'SEARCH_FEE_CUSTOMERS', 'LOAD_FEE_APPLICANTS', 'FEE_EXPORT_CONFIG', 'EXPORT_FEE', 'LOAD_NOTICE_INIT', 'SEARCH_NOTICE', 'EXPORT_NOTICE', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'CANCEL_HAGUE_READ', 'READ_HAGUE_CASE', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES'])
-const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SAVE_FILE_TEMP_NAME', 'DELETE_FILE_TEMP_NAME', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE', 'UPLOAD_NOTICE_EXCEL'])
+const PAGE_FORWARD = new Set(['CHECK_SESSION', 'CANCEL_SESSION_CHECK', 'SEARCH_FILES', 'CANCEL_FILE_SEARCH', 'CANCEL_LIMIT_MONITOR', 'SEARCH_LIMIT_MONITOR', 'SEARCH_FILING', 'SEARCH_FEE', 'SEARCH_FEE_AMOUNT', 'LOAD_FEE_INIT', 'SEARCH_FEE_CUSTOMERS', 'LOAD_FEE_APPLICANTS', 'FEE_EXPORT_CONFIG', 'EXPORT_FEE', 'SEARCH_PATENT', 'LOAD_PATENT_INIT', 'LOAD_PATENT_CTRL_PROC', 'LOAD_NOTICE_INIT', 'SEARCH_NOTICE', 'EXPORT_NOTICE', 'LOOKUP_IC_FLOW', 'EXPORT_CASE_CONTACTS', 'LIST_MAIL_PROCESSES', 'OPEN_EASY_FORM', 'LIST_FLOW_REVIEWERS', 'READ_CASE_DEMANDS', 'READ_CASE_BUS_FLOW', 'READ_CUSTOMER_DEMANDS', 'READ_CUSTOMER_DIRECTORY', 'READ_MAIL_CONTACTS', 'READ_MAIL_ADDRESSES', 'GET_PAGE_INFO', 'LIST_HISTORY_QUERIES', 'GET_HISTORY_QUERY', 'LOAD_DICTIONARY', 'SCAN_FILE_SEARCH_FORM', 'SCAN_FILING_FORM', 'READ_QUERY_SURFACES', 'FIND_MAIL_EXECUTION', 'INSPECT_EASY_MAIL', 'READ_WORKFLOW', 'REFRESH_WORKFLOW', 'PREVIEW_WORKFLOW', 'DIAGNOSE_EXISTING_MAIL', 'RUN_READONLY_ACCEPTANCE', 'CALL_EASY', 'CANCEL_HAGUE_READ', 'READ_HAGUE_CASE', 'READ_CASE_FIELDS', 'READ_FILING_FLOW', 'READ_USER_INFO', 'RESOLVE_DOWNLOAD_NAMES', 'DOWNLOAD_FILES', 'INSPECT_FEE_REDUCE_CASES', 'READ_FEE_REDUCE_REVIEWERS'])
+const WRITE_FORWARD = new Set(['CREATE_EASY_MAIL', 'SAVE_EASY_MAIL', 'SAVE_HISTORY_QUERY', 'DELETE_HISTORY_QUERY', 'SAVE_FILE_TEMP_NAME', 'DELETE_FILE_TEMP_NAME', 'SUBMIT_LIMIT_MAIL', 'SUBMIT_FILE_MANAGE', 'UPLOAD_NOTICE_EXCEL', 'SUBMIT_FEE_REDUCE_FILING'])
 
 /** 不允许转发时给出原因。写开关关掉时，创建、保存和查询模板写回都停在这里。 */
 export function workspaceForwardBlock(value: unknown): string {
@@ -1391,11 +1485,50 @@ function isPlanFiles(value: unknown): value is SelectedPatentFile[] {
     typeof item.fileName === 'string' && item.fileName.length <= 300)
 }
 
+function isDualSystemNodeReason(value: unknown): value is DualSystemNodeReason {
+  return (
+    value === 'ready' ||
+    value === 'no_tab' ||
+    value === 'not_logged_in' ||
+    value === 'session_expired' ||
+    value === 'multiple_accounts' ||
+    value === 'unreachable'
+  )
+}
+
+function isDualSystemNodeStatus(value: unknown): value is DualSystemNodeStatus {
+  return (
+    isRecord(value) &&
+    isCustomerMode(value.mode) &&
+    typeof value.label === 'string' &&
+    typeof value.ready === 'boolean' &&
+    (value.tabId === null || (typeof value.tabId === 'number' && Number.isInteger(value.tabId))) &&
+    typeof value.origin === 'string' &&
+    typeof value.loginUrl === 'string' &&
+    typeof value.operatorId === 'string' &&
+    typeof value.displayName === 'string' &&
+    isDualSystemNodeReason(value.reason) &&
+    typeof value.message === 'string'
+  )
+}
+
+function isDualSystemStatusSnapshot(value: unknown): value is DualSystemStatusSnapshot {
+  return (
+    isRecord(value) &&
+    typeof value.checkedAt === 'string' &&
+    isDualSystemNodeStatus(value.large) &&
+    isDualSystemNodeStatus(value.sme) &&
+    typeof value.writeSwitchOpen === 'boolean' &&
+    typeof value.allReady === 'boolean'
+  )
+}
+
 function isWorkspaceAction(value: unknown): value is WorkspaceAction {
   if (!isRecord(value) || typeof value.action !== 'string') return false
-  if (value.action === 'focus' || value.action === 'listTabs' || value.action === 'refreshSession' || value.action === 'openLogin' || value.action === 'load' || value.action === 'declineAccountSwitch') {
+  if (value.action === 'focus' || value.action === 'listTabs' || value.action === 'refreshSession' || value.action === 'openLogin' || value.action === 'load' || value.action === 'declineAccountSwitch' || value.action === 'checkDualSystems') {
     return Object.keys(value).length === 1
   }
+  if (value.action === 'openDualLogin') return isCustomerMode(value.mode) && Object.keys(value).length === 2
   if (value.action === 'setCustomerMode') return isCustomerMode(value.mode) && Object.keys(value).length === 2
   if (value.action === 'bind') return typeof value.tabId === 'number' && Number.isInteger(value.tabId) && Object.keys(value).length === 2
   if (value.action === 'saveCustomer') {
@@ -1423,7 +1556,11 @@ function isWorkspaceAction(value: unknown): value is WorkspaceAction {
     return isFileManageRunInput(value.run) && isExpectedScope(value.expectedScope) && Object.keys(value).length === 3
   }
   if (value.action === 'runAcceptance') return isAcceptanceAction(value)
-  if (value.action === 'forward') return Object.keys(value).length === 2 && isWorkspaceForwardRequest(value.message)
+  if (value.action === 'forward') {
+    const keys = Object.keys(value)
+    const modeOk = value.targetMode === undefined || isCustomerMode(value.targetMode)
+    return (keys.length === 2 || (keys.length === 3 && 'targetMode' in value)) && modeOk && isWorkspaceForwardRequest(value.message)
+  }
   return false
 }
 
@@ -1437,6 +1574,7 @@ function isWorkspaceResult(value: unknown): value is WorkspaceResultPayload {
   if (value.fileManageRuns !== undefined && (!Array.isArray(value.fileManageRuns) || !value.fileManageRuns.every(isFileManageRun))) return false
   if (!isForwardedMessage(value.forwarded)) return false
   if (value.createdTask != null && !isCreatedTask(value.createdTask)) return false
+  if (value.dualSystems !== undefined && !isDualSystemStatusSnapshot(value.dualSystems)) return false
   if (value.contextError !== undefined && value.contextError !== 'STALE_CONTEXT') return false
   if (value.rulesSaved !== undefined && typeof value.rulesSaved !== 'boolean') return false
   if (value.tasksRevalidated !== undefined && typeof value.tasksRevalidated !== 'boolean') return false

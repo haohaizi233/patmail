@@ -1,10 +1,39 @@
-import { MessageType, type ContentResponse, type MessageBridge } from '../../shared/message'
+import { MessageType, type ContentRequest, type ContentResponse, type DualSystemStatusSnapshot, type MessageBridge } from '../../shared/message'
+import type { CustomerMode } from '../../settings/customer-mode'
 import { fileSearchTimeoutMs } from '../../api/file-search-params'
 import { sendToBackground } from '../../utils/runtime'
 import { waitForDownloadJob } from '../../utils/download-job'
 
-/** 完整页面只通过后台把有类型的请求送到已绑定的 EASY 标签页。 */
-export function createFullPageBridge(): MessageBridge {
+function forwardTimeoutMs(message: ContentRequest): number {
+  const lookupFlow = message.type === MessageType.LookupIcFlow
+  const contactExport = message.type === MessageType.ExportCaseContacts
+  // 提交一封信要串完建单、联系人、保存和提交流程，并成几件的信更长。原站高峰期 30 秒不够，放宽到 3 分钟。
+  const submitWait = message.type === MessageType.SubmitLimitMail || message.type === MessageType.SubmitFileManage ? 180_000 : 0
+  // 新界面只等短受理，最终结果走独立任务消息；旧调用保留原等待预算。
+  const downloadWait = message.type === MessageType.DownloadFiles ? (message.payload.detached ? 70_000 : 1_800_000) : 0
+  const slow = contactExport || submitWait > 0 || message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor
+    || message.type === MessageType.ReadHagueCase
+    || message.type === MessageType.ListMailProcesses || message.type === MessageType.ListFlowReviewers
+    || message.type === MessageType.ReadCaseDemands
+    || message.type === MessageType.ReadCaseBusFlow
+    || message.type === MessageType.ReadCustomerDemands
+    || message.type === MessageType.ReadCustomerDirectory
+    || message.type === MessageType.ReadMailContacts
+    || message.type === MessageType.DiagnoseExistingMail
+    || message.type === MessageType.LoadDictionary || message.type === MessageType.LoadFeeInit || message.type === MessageType.LoadPatentInit || message.type === MessageType.LoadPatentCtrlProc || message.type === MessageType.LoadNoticeInit || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm || message.type === MessageType.InspectFeeReduceCases || message.type === MessageType.ReadFeeReduceReviewers
+  const noticeLongTask = message.type === MessageType.NoticeAction || message.type === MessageType.UploadNoticeExcel || message.type === MessageType.SubmitFeeReduceFiling ? 120_000 : 0
+  const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor || message.type === MessageType.SearchFiling || message.type === MessageType.SearchFee || message.type === MessageType.SearchFeeAmount || message.type === MessageType.SearchPatent || message.type === MessageType.ExportFee || message.type === MessageType.SearchNotice || message.type === MessageType.ExportNotice
+    ? fileSearchTimeoutMs(message.payload.timeoutMs) + 15_000 : 0
+  return message.type === MessageType.ReadHagueCase || message.type === MessageType.ResolveDownloadNames
+    ? 300_000
+    : lookupFlow
+      ? 300_000
+      : contactExport
+        ? 180_000
+        : submitWait || downloadWait || noticeLongTask || searchWait || (slow ? 70_000 : 30_000)
+}
+
+function buildBridge(targetMode?: CustomerMode): MessageBridge {
   const bridge: MessageBridge = {
     async request(message, signal): Promise<ContentResponse> {
       if (message.type === MessageType.DiscardDownload || message.type === MessageType.PauseDownload) {
@@ -17,26 +46,13 @@ export function createFullPageBridge(): MessageBridge {
           ...message, payload: { ...message.payload, detached: true }
         }), signal)
       }
-      const lookupFlow = message.type === MessageType.LookupIcFlow
-      const contactExport = message.type === MessageType.ExportCaseContacts
-      // 提交一封信要串完建单、联系人、保存和提交流程，并成几件的信更长。原站高峰期 30 秒不够，放宽到 3 分钟。
-      const submitWait = message.type === MessageType.SubmitLimitMail || message.type === MessageType.SubmitFileManage ? 180_000 : 0
-      // 新界面只等短受理，最终结果走独立任务消息；旧调用保留原等待预算。
-      const downloadWait = message.type === MessageType.DownloadFiles ? (message.payload.detached ? 70_000 : 1_800_000) : 0
-      const slow = contactExport || submitWait > 0 || message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor
-        || message.type === MessageType.ReadHagueCase
-        || message.type === MessageType.ListMailProcesses || message.type === MessageType.ListFlowReviewers
-        || message.type === MessageType.ReadCaseDemands
-        || message.type === MessageType.ReadCaseBusFlow
-        || message.type === MessageType.ReadCustomerDemands
-        || message.type === MessageType.ReadCustomerDirectory
-        || message.type === MessageType.ReadMailContacts
-        || message.type === MessageType.DiagnoseExistingMail
-        || message.type === MessageType.LoadDictionary || message.type === MessageType.LoadFeeInit || message.type === MessageType.LoadNoticeInit || message.type === MessageType.ScanFileSearchForm || message.type === MessageType.ScanFilingForm
-      const noticeLongTask = message.type === MessageType.NoticeAction || message.type === MessageType.UploadNoticeExcel ? 120_000 : 0
-      const searchWait = message.type === MessageType.SearchFiles || message.type === MessageType.SearchLimitMonitor || message.type === MessageType.SearchFiling || message.type === MessageType.SearchFee || message.type === MessageType.SearchFeeAmount || message.type === MessageType.ExportFee || message.type === MessageType.SearchNotice || message.type === MessageType.ExportNotice
-        ? fileSearchTimeoutMs(message.payload.timeoutMs) + 15_000 : 0
-      const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'forward', message } }, message.type === MessageType.ReadHagueCase || message.type === MessageType.ResolveDownloadNames ? 300_000 : lookupFlow ? 300_000 : contactExport ? 180_000 : submitWait || downloadWait || noticeLongTask || searchWait || (slow ? 70_000 : 30_000))
+      const response = await sendToBackground(
+        {
+          type: MessageType.Workspace,
+          payload: targetMode ? { action: 'forward', message, targetMode } : { action: 'forward', message }
+        },
+        forwardTimeoutMs(message)
+      )
       if (response?.type === MessageType.Error) return response
       const forwarded = response?.type === MessageType.WorkspaceResult ? response.payload.forwarded : null
       if (forwarded && forwarded.type === MessageType.Error) return forwarded
@@ -48,4 +64,27 @@ export function createFullPageBridge(): MessageBridge {
     }
   }
   return bridge
+}
+
+/** 完整页面只通过后台把有类型的请求送到已绑定的 EASY 标签页。 */
+export function createFullPageBridge(): MessageBridge {
+  return buildBridge()
+}
+
+/** 定向把请求送到指定客户系统（大客户 / 中小客户）的已登录 EASY 标签页。 */
+export function createModeBridge(targetMode: CustomerMode): MessageBridge {
+  return buildBridge(targetMode)
+}
+
+/** 后台静默检测大客户与中小客户双系统在线状态及写开关。 */
+export async function checkDualEasySystems(): Promise<DualSystemStatusSnapshot | null> {
+  const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'checkDualSystems' } }, 40_000)
+  if (response?.type !== MessageType.WorkspaceResult) return null
+  return response.payload.dualSystems ?? null
+}
+
+/** 打开或聚焦指定客户系统的 EASY 登录页面。 */
+export async function openDualEasyLogin(mode: CustomerMode): Promise<boolean> {
+  const response = await sendToBackground({ type: MessageType.Workspace, payload: { action: 'openDualLogin', mode } }, 15_000)
+  return response?.type === MessageType.WorkspaceResult && response.payload.ok
 }

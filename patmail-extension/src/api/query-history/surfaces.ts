@@ -1,14 +1,15 @@
 /** SearchQueryHisList 按页面区分。期限监控的破折号是 U+2014，不是普通连字符。 */
-export const HISTORY_SURFACES = ['file', 'limit', 'fee'] as const
+export const HISTORY_SURFACES = ['file', 'limit', 'fee', 'patent'] as const
 export type HistorySurface = (typeof HISTORY_SURFACES)[number]
 
 export function isHistorySurface(value: unknown): value is HistorySurface {
-  return value === 'file' || value === 'limit' || value === 'fee'
+  return value === 'file' || value === 'limit' || value === 'fee' || value === 'patent'
 }
 
 function surfaceMeta(surface: HistorySurface): { queryType: string; pageName: string } {
   if (surface === 'limit') return { queryType: 'LimitMonitor\u2014liall', pageName: 'LimitMonitor.aspx' }
   if (surface === 'fee') return { queryType: 'FeeSearch', pageName: 'FeeSearch.aspx' }
+  if (surface === 'patent') return { queryType: 'ICSearch', pageName: 'ICSearch.aspx' }
   return { queryType: 'FileSearch', pageName: 'FileSearch.aspx' }
 }
 

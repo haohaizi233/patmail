@@ -326,16 +326,30 @@ export interface NoticeActionResult {
 }
 
 export type NoticeExportTab = 'import' | 'download' | 'cert' | 'replay'
+export type NoticeExportDelivery = 'download' | 'inline'
 
 export type NoticeExportRequest =
-  | { tab: 'import'; query: NoticeImportQuery; columns?: Array<{ value: string; text: string }>; timeoutMs?: number }
-  | { tab: 'download'; query: NoticeDownloadQuery; columns?: Array<{ value: string; text: string }>; timeoutMs?: number }
+  | {
+      tab: 'import'
+      query: NoticeImportQuery
+      columns?: Array<{ value: string; text: string }>
+      timeoutMs?: number
+      delivery?: NoticeExportDelivery
+    }
+  | {
+      tab: 'download'
+      query: NoticeDownloadQuery
+      columns?: Array<{ value: string; text: string }>
+      timeoutMs?: number
+      delivery?: NoticeExportDelivery
+    }
   | {
       tab: 'cert'
       query: NoticeCertQuery
       columns?: Array<{ value: string; text: string }>
       accountLabel?: string
       timeoutMs?: number
+      delivery?: NoticeExportDelivery
     }
   | {
       tab: 'replay'
@@ -343,6 +357,7 @@ export type NoticeExportRequest =
       columns?: Array<{ value: string; text: string }>
       accountLabel?: string
       timeoutMs?: number
+      delivery?: NoticeExportDelivery
     }
 
 export type NoticeExportStatus =
@@ -362,6 +377,9 @@ export interface NoticeExportResult {
   fileGuid?: string
   fileSize?: number | null
   downloadId?: number
+  fileBase64?: string
+  fileName?: string
+  mimeType?: string
   message: string
 }
 
