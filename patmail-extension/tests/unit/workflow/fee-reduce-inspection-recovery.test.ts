@@ -26,6 +26,9 @@ it('restores only contiguous committed pages and prunes obsolete batches without
   const cursor = `scope:${plan.id}:progress`
   expect(await journal.read()).toMatchObject({ rows: [], state: 'running' })
   await journal.append(plan, 0, [item('1')])
+  const firstPage = (await journal.read())!
+  expect(firstPage.nextPage).toBe(1)
+  expect(await journal.refresh(firstPage)).toBe(firstPage)
   denyWrite = cursor
   await expect(journal.append(plan, 1, [item('2')])).rejects.toThrow('WAL unavailable')
   expect(await journal.read()).toMatchObject({ rows: [item('1')], state: 'running' })
@@ -35,6 +38,7 @@ it('restores only contiguous committed pages and prunes obsolete batches without
   await journal.append(plan, 1, [item('2')])
   await journal.finish(plan, 2, 'done')
   expect(await journal.read()).toMatchObject({ rows: [item('1'), item('2')], state: 'done' })
+  expect(await journal.refresh(firstPage)).toMatchObject({ rows: [item('1'), item('2')], nextPage: 2, state: 'done' })
   const secondPage = `scope:${plan.id}:1`
   store.set(secondPage, [{ caseVolume: 'bad result' }])
   expect(await journal.read()).toMatchObject({ rows: [item('1')], state: 'running' })
@@ -49,4 +53,5 @@ it('restores only contiguous committed pages and prunes obsolete batches without
   expect(store.has(cursor)).toBe(false)
   expect(store.has(secondPage)).toBe(false)
   expect(await journal.read()).toMatchObject({ id: replacement.plan.id, volumes: ['3'], rows: [] })
+  expect(await journal.refresh(firstPage)).toMatchObject({ id: replacement.plan.id, nextPage: 0 })
 })

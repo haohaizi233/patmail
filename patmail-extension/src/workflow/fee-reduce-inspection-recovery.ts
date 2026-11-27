@@ -4,11 +4,14 @@ import { isRecord } from '../shared/guards'
 
 type Journal = Pick<ReturnType<typeof createRecoveryClient>, 'get' | 'put' | 'forget'>
 
+export const FEE_INSPECTION_CHUNK_SIZE = 48
+
 interface InspectionPlan {
   id: string
   startedAt: number
   volumes: string[]
   reviewVolumes: string[]
+  recheckBatchId?: string
 }
 
 interface InspectionProgress {
@@ -16,12 +19,17 @@ interface InspectionProgress {
   state: 'running' | 'done' | 'failed'
 }
 
+export interface FeeInspectionSnapshot extends InspectionPlan, InspectionProgress {
+  rows: FeeReduceCaseInspectItem[]
+}
+
 function readPlan(value: unknown): InspectionPlan | null {
   if (!isRecord(value) || typeof value.id !== 'string' || !Array.isArray(value.volumes) ||
       !value.volumes.length || !value.volumes.every((volume: unknown): volume is string => typeof volume === 'string')) return null
   const reviewVolumes = Array.isArray(value.reviewVolumes)
     ? value.reviewVolumes.filter((volume: unknown): volume is string => typeof volume === 'string') : []
-  return { id: value.id, volumes: value.volumes, reviewVolumes, startedAt: typeof value.startedAt === 'number' ? value.startedAt : 0 }
+  return { id: value.id, volumes: value.volumes, reviewVolumes, startedAt: typeof value.startedAt === 'number' ? value.startedAt : 0,
+    recheckBatchId: typeof value.recheckBatchId === 'string' ? value.recheckBatchId : undefined }
 }
 
 function readItems(value: unknown): FeeReduceCaseInspectItem[] | null {
@@ -50,10 +58,27 @@ export function feeInspectionJournal(journal: Journal, scope: string) {
     return { nextPage: 0, state: 'running' }
   }
 
+  async function read(plan?: InspectionPlan, progress?: InspectionProgress): Promise<FeeInspectionSnapshot | null> {
+    plan ??= readPlan(await get(scope)) ?? undefined
+    if (!plan) return null
+    progress ??= await readProgress(plan)
+    const pages = await Promise.all(Array.from({ length: progress.nextPage }, (_, page) => get(pageKey(plan.id, page))))
+    const rows: FeeReduceCaseInspectItem[] = []
+    let nextPage = 0
+    for (const page of pages) {
+      const items = readItems(page)
+      if (!items || rows.length + items.length > plan.volumes.length) break
+      rows.push(...items)
+      nextPage++
+    }
+    const state = progress.state === 'done' && rows.length !== plan.volumes.length ? 'running' : progress.state
+    return { ...plan, rows, nextPage, state }
+  }
+
   return {
-    async begin(volumes: string[], reviewVolumes: string[] = []) {
+    async begin(volumes: string[], reviewVolumes: string[] = [], recheckBatchId?: string) {
       const previous = readPlan(await get(scope))
-      const plan = { id: crypto.randomUUID(), startedAt: Date.now(), volumes, reviewVolumes }
+      const plan: InspectionPlan = { id: crypto.randomUUID(), startedAt: Date.now(), volumes, reviewVolumes, recheckBatchId }
       await put(progressKey(plan.id), { nextPage: 0, state: 'running' })
       await put(scope, plan)
       return { plan, previous }
@@ -70,19 +95,13 @@ export function feeInspectionJournal(journal: Journal, scope: string) {
       for (let page = 0; page < nextPage; page++) await forget(pageKey(plan.id, page))
       await forget(progressKey(plan.id))
     },
-    async read() {
+    read: () => read(),
+    async refresh(snapshot: FeeInspectionSnapshot): Promise<FeeInspectionSnapshot | null> {
       const plan = readPlan(await get(scope))
       if (!plan) return null
       const progress = await readProgress(plan)
-      const pages = await Promise.all(Array.from({ length: progress.nextPage }, (_, page) => get(pageKey(plan.id, page))))
-      const rows: FeeReduceCaseInspectItem[] = []
-      for (const page of pages) {
-        const items = readItems(page)
-        if (!items || rows.length + items.length > plan.volumes.length) break
-        rows.push(...items)
-      }
-      const state = progress.state === 'done' && rows.length !== plan.volumes.length ? 'running' : progress.state
-      return { ...plan, rows, state }
+      if (plan.id === snapshot.id && progress.nextPage === snapshot.nextPage && progress.state === snapshot.state) return snapshot
+      return read(plan, progress)
     }
   }
 }
