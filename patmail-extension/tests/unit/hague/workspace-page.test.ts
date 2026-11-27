@@ -61,6 +61,37 @@ it('reactively displays canonical checkpoints newer than the workspace snapshot 
  expect(root.textContent).toContain('已恢复 2 件材料及工作台')
  expect(mocks.verify).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled()
 })
+it('exports the review JSON with a UTF-8 signature and intact Chinese text', async () => {
+ setup()
+ const snapshot = await mocks.get()
+ mocks.get.mockResolvedValue({ ...snapshot!, activeBatch: undefined })
+ const root = mount()
+ await vi.waitFor(() => expect(root.textContent).toContain('已恢复 2 件材料及工作台'))
+ const createUrl = vi.spyOn(URL, 'createObjectURL')
+ const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+ try {
+  const button = [...root.querySelectorAll('button')].find(item => item.textContent?.trim() === '导出核对结果')!
+  button.click()
+  expect(click.mock.instances[0]).toHaveProperty('download', '海牙申请核对结果.json')
+  const blob = createUrl.mock.calls[0][0]
+  if (!(blob instanceof Blob)) throw new Error('Expected a JSON download blob')
+  expect(blob.type).toBe('application/json;charset=utf-8')
+  const bytes = await new Promise<Uint8Array>((resolve, reject) => {
+   const reader = new FileReader()
+   reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer))
+   reader.onerror = () => reject(new Error('Failed to read export blob'))
+   reader.readAsArrayBuffer(blob)
+  })
+  expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+  expect(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))).toMatchObject([
+   { caseVolume: 'PO1HAGUE', status: '待核对结果' },
+   { caseVolume: 'PO2HAGUE', status: '待核对结果' }
+  ])
+ } finally {
+  createUrl.mockRestore()
+  click.mockRestore()
+ }
+})
 it('leaves the batch untouched when another extension page owns the run lock',async()=>{
  const {send}=setup()
  vi.stubGlobal('navigator',{locks:{request:async(_name:unknown,_options:unknown,callback:(lock:null)=>Promise<void>)=>callback(null)}})

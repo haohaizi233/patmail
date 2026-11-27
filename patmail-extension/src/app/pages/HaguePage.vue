@@ -495,7 +495,8 @@ function rowStatus(row: Row): string {
 }
 function exportData(): void {
   const data = rows.value.map(r => ({ path: r.folder.path, caseVolume: r.folder.caseVolume, state: r.state, status: STATE_LABELS[r.state], issues: issues(r), error: r.error, confirmed: r.confirmed, requiresPriorityReview: r.decision?.priorities.some(p => p.requiresReview) ?? false, notices: r.folder.notices, filing: r.filing, decision: r.decision, draft:r.draft, images: r.folder.images.map(f => ({ name: f.name, number: imageNumber(f) })) }))
-  downloadNamedBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), '海牙申请核对结果.json')
+  // This local review file is opened directly in Windows editors that detect UTF-8 from the BOM.
+  downloadNamedBlob(new Blob(['\uFEFF', JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' }), '海牙申请核对结果.json')
 }
 </script>
 
