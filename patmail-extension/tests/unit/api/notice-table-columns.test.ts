@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  NOTICE_DEFAULT_EXPORT_COLUMNS,
   NOTICE_IMPORT_COMPLETED_COLUMNS,
   NOTICE_TABLE_COLUMNS,
   noticeCellRaw
@@ -50,6 +51,36 @@ describe('notice table columns & field aliases', () => {
     const keys = NOTICE_TABLE_COLUMNS.download.map(col => col.key)
     expect(keys).not.toContain('download_time')
     expect(keys).not.toContain('remark')
+  })
+
+  it('replay 页面列移除序号/账号/备注且 famingczmc 表头为案件名称，同时保留原站导出栏位', () => {
+    const keys = NOTICE_TABLE_COLUMNS.replay.map(col => col.key)
+    expect(keys).toEqual([
+      'tongzhismc',
+      'fawenxlh',
+      'dianzifwrq',
+      'cnApplicationnumber',
+      'famingczmc',
+      'status'
+    ])
+    expect(keys).not.toContain('sn')
+    expect(keys).not.toContain('account')
+    expect(keys).not.toContain('remark')
+    expect(NOTICE_TABLE_COLUMNS.replay.find(col => col.key === 'famingczmc')?.label).toBe('案件名称')
+    expect(NOTICE_DEFAULT_EXPORT_COLUMNS.replay.find(col => col.value === 'famingczmc')?.text).toBe('发明创造名称')
+    expect(NOTICE_DEFAULT_EXPORT_COLUMNS.replay.some(col => col.value === 'account')).toBe(true)
+  })
+
+  it('hand 异常来文列移除序号且首列为 oa_name', () => {
+    const keys = NOTICE_TABLE_COLUMNS.hand.map(col => col.key)
+    expect(keys).not.toContain('sn')
+    expect(keys[0]).toBe('oa_name')
+  })
+
+  it('handExcel 电子申请清单对比列移除序号', () => {
+    const keys = NOTICE_TABLE_COLUMNS.handExcel.map(col => col.key)
+    expect(keys).not.toContain('sn')
+    expect(keys[0]).toBe('app_no')
   })
 
   it('import 与 completed 每列均配置显式 width，避免 fixed 布局被压成 0px', () => {

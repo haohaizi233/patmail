@@ -184,27 +184,23 @@ export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColum
     { key: 'status', label: '状态', width: '110px' }
   ],
   replay: [
-    { key: 'sn', label: '序号', width: '56px' },
-    { key: 'tongzhismc', label: '来文名称' },
-    { key: 'fawenxlh', label: '发文序列号', width: '150px' },
-    { key: 'dianzifwrq', label: '官方发文日', width: '110px' },
-    { key: 'cnApplicationnumber', label: '申请号', width: '140px' },
-    { key: 'famingczmc', label: '发明创造名称' },
-    { key: 'account', label: '账号', width: '120px' },
-    { key: 'status', label: '状态', width: '110px' },
-    { key: 'remark', label: '备注' }
+    { key: 'tongzhismc', label: '来文名称', width: '170px' },
+    { key: 'fawenxlh', label: '发文序列号', width: '130px' },
+    { key: 'dianzifwrq', label: '官方发文日', width: '92px' },
+    { key: 'cnApplicationnumber', label: '申请号', width: '124px' },
+    { key: 'famingczmc', label: '案件名称', width: '320px' },
+    { key: 'status', label: '状态', width: '84px' }
   ],
   hand: [
-    { key: 'sn', label: '序号', width: '56px' },
-    { key: 'oa_name', label: '来文名称', clickable: true },
-    { key: 'oa_code', label: '来文编号', width: '100px' },
-    { key: 'FaWenRQ', label: '官方发文日', width: '110px' },
+    { key: 'oa_name', label: '来文名称', width: '180px', clickable: true },
+    { key: 'oa_code', label: '来文编号', width: '96px' },
+    { key: 'FaWenRQ', label: '官方发文日', width: '104px' },
     { key: 'customer_name', label: '客户名称' },
-    { key: 'ShenQingH', label: '申请号', width: '140px', clickableAppNo: true },
-    { key: 'case_volume', label: '我方文号', width: '130px' },
+    { key: 'ShenQingH', label: '申请号', width: '136px', clickableAppNo: true },
+    { key: 'case_volume', label: '我方文号', width: '124px' },
     { key: 'case_name', label: '案件名称' },
-    { key: 'customer_status', label: '客户状态', width: '96px' },
-    { key: 'assayer', label: '分析人', width: '84px' },
+    { key: 'customer_status', label: '客户状态', width: '88px' },
+    { key: 'assayer', label: '分析人', width: '80px' },
     { key: 'oa_error_msg', label: '异常原因' }
   ],
   handHis: [
@@ -231,7 +227,6 @@ export const NOTICE_TABLE_COLUMNS: Record<NoticeTabId, readonly NoticeTableColum
     { key: 'update_time', label: '处理时间', width: '140px' }
   ],
   handExcel: [
-    { key: 'sn', label: '序号', width: '56px' },
     { key: 'app_no', label: '申请号/不受理编号', width: '150px' },
     { key: 'notice_name', label: '通知书名称' },
     { key: 'case_name', label: '发明创造名称' },
