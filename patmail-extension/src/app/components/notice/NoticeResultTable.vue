@@ -93,7 +93,7 @@ const columns = computed(() =>
 )
 const CHECK_COL_WEIGHT = 28
 const ACTION_COL_WEIGHT = 48
-const showActionCol = computed(() => props.tab !== 'cert')
+const showActionCol = computed(() => props.tab !== 'cert' && props.tab !== 'replay' && props.tab !== 'handExcel')
 
 function colWeight(width?: string): number {
   return Number.parseInt(width ?? '', 10) || 150
@@ -518,6 +518,18 @@ function canInspectRow(row: NoticeRow): boolean {
 
 .notice-table-card table.grid {
   font-size: 12.5px;
+}
+
+.notice-table-card table.grid button.go.clip {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .notice-table-card table.grid th,

@@ -670,6 +670,15 @@
   gap: 10px 22px;
   align-items: start;
 }
+.notice-form-3col {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 18px;
+  align-items: start;
+}
+.notice-form-3col .notice-field {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
 .notice-span-full { grid-column: 1 / -1; }
 .notice-field {
   display: grid;
@@ -1004,10 +1013,12 @@ tr.is-upload-failed > td {
 }
 
 @media (max-width: 960px) {
-  .notice-form-2col { grid-template-columns: minmax(0, 1fr); }
+  .notice-form-2col,
+  .notice-form-3col { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 640px) {
-  .notice-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .notice-field,
+  .notice-form-3col .notice-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .notice-field-label { justify-content: flex-start; text-align: left; }
 }

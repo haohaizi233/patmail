@@ -823,7 +823,7 @@ defineExpose({ clearPickedExcel })
       </div>
       <p v-if="excelPickWarning" class="notice-status-inline-warn">{{ excelPickWarning }}</p>
 
-      <div class="notice-form-2col">
+      <div class="notice-form-3col">
         <label class="notice-field">
           <span class="notice-field-label">是否导入</span>
           <ThemeSelect

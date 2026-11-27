@@ -271,7 +271,7 @@ button.home-tool-btn:disabled { opacity: .5; cursor: not-allowed; }
 .fit-table table.grid col.check { width: 7%; }
 .fit-table table.grid th.check,
 .fit-table table.grid td.check { padding-left: 6px; padding-right: 4px; }
-.fit-table table.grid .clip { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-table table.grid .clip { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fit-table .theme-select { display: block; width: 100%; max-width: 100%; min-width: 0; }
 .fit-table .theme-select-trigger { min-width: 0; height: 31px; }
 /* 期限表、工作表、递交表列宽由 column-fit 按文字测量后写到 col 上。这里只负责放不下时省略。 */
