@@ -107,7 +107,7 @@ export function createKnowledgePlanet(resources: OceanResourceManager): Knowledg
       roughness: 0.25
     })
   )
-  const nodesMesh = new InstancedMesh(nodeGeo, nodeMat, uniqueVerts.length)
+  const nodesMesh = resources.track(new InstancedMesh(nodeGeo, nodeMat, uniqueVerts.length))
   const dummy = new Object3D()
   uniqueVerts.forEach((v, idx) => {
     dummy.position.copy(v)

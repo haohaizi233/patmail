@@ -31,8 +31,8 @@ function createSoftGlowTexture(resources: OceanResourceManager): CanvasTexture |
   return resources.track(tex)
 }
 
-function buildParticleGeometry(resources: OceanResourceManager, count: number): BufferGeometry {
-  const geo = resources.track(new BufferGeometry())
+function buildParticleGeometry(count: number): BufferGeometry {
+  const geo = new BufferGeometry()
   const positions = new Float32Array(count * 3)
   for (let i = 0; i < count; i++) {
     // 确定性伪随机分布，避免每次闪烁跳变
@@ -65,16 +65,18 @@ export function createOceanParticles(
     })
   )
 
-  let geometry = buildParticleGeometry(resources, initialCount)
+  let currentCount = initialCount
+  let geometry = resources.track(buildParticleGeometry(initialCount))
   const points = new Points(geometry, material)
 
   return {
     points,
     rebuild(count: number) {
-      const next = buildParticleGeometry(resources, count)
+      if (count === currentCount) return
+      currentCount = count
+      const next = buildParticleGeometry(count)
       points.geometry = next
-      geometry.dispose()
-      geometry = next
+      geometry = resources.replace(geometry, next)
     },
     update(elapsedSeconds: number) {
       points.position.y = Math.sin(elapsedSeconds * 0.55) * 0.18

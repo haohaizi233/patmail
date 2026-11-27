@@ -1,10 +1,10 @@
 import { onBeforeUnmount, watch, type Ref } from 'vue'
 
 /**
- * 统一的容器级指针视差调度：
- * 1. 使用 ResizeObserver 缓存容器矩形尺寸，绝不在 pointermove 中读取 getBoundingClientRect()；
- * 2. 使用 requestAnimationFrame 合并高频更新，直接写入 CSS 自定义属性；
- * 3. 失活或卸载时立刻注销监听器与 RAF。
+ * 统一的容器级指针视差与卡片方向性光照调度：
+ * 1. 使用 ResizeObserver + 被动 scroll/resize 缓存容器矩形，绝不在 pointermove 热路径调用 getBoundingClientRect()；
+ * 2. 使用 requestAnimationFrame 合并高频更新，同步写入场景节点与 .workspace 祖先的 CSS 自定义属性；
+ * 3. 为悬停卡片写入受控角度（±3°）与高光坐标，失活或卸载时严格对称注销监听器与 RAF。
  */
 export function useOceanCamera(options: {
   sceneEl: Ref<HTMLElement | null>
@@ -19,8 +19,14 @@ export function useOceanCamera(options: {
   let rafId = 0
   let pendingX = 0
   let pendingY = 0
+  let pendingClientX = 0
+  let pendingClientY = 0
+  let hasPointerClient = false
   let attachedEl: HTMLElement | null = null
+  let scrollHostEl: HTMLElement | null = null
   let resizeObserver: ResizeObserver | null = null
+  let finePointerMql: MediaQueryList | null = null
+  let activeCardEl: HTMLElement | null = null
 
   function isFinePointer(): boolean {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
@@ -37,13 +43,45 @@ export function useOceanCamera(options: {
     cachedHeight = rect.height
   }
 
+  function clearActiveCard(): void {
+    if (!activeCardEl) return
+    activeCardEl.style.removeProperty('--card-rx')
+    activeCardEl.style.removeProperty('--card-ry')
+    activeCardEl.style.removeProperty('--card-lx')
+    activeCardEl.style.removeProperty('--card-ly')
+    activeCardEl = null
+  }
+
+  function setParallaxVars(px: string, py: string): void {
+    const el = options.sceneEl.value
+    if (!el) return
+    el.style.setProperty('--ocean-px', px)
+    el.style.setProperty('--ocean-py', py)
+    const workspace = el.closest<HTMLElement>('.workspace')
+    if (workspace) {
+      workspace.style.setProperty('--ocean-px', px)
+      workspace.style.setProperty('--ocean-py', py)
+    }
+  }
+
   function flush(): void {
     rafId = 0
     const el = options.sceneEl.value
     if (!el) return
-    el.style.setProperty('--ocean-px', `${(pendingX * 10).toFixed(2)}px`)
-    el.style.setProperty('--ocean-py', `${(pendingY * 8).toFixed(2)}px`)
+    setParallaxVars(`${(pendingX * 10).toFixed(2)}px`, `${(pendingY * 8).toFixed(2)}px`)
     options.onPointerTarget?.(pendingX, pendingY)
+
+    if (hasPointerClient && activeCardEl) {
+      const rect = activeCardEl.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) {
+        const cx = Math.max(-0.5, Math.min(0.5, (pendingClientX - rect.left) / rect.width - 0.5)) * 2
+        const cy = Math.max(-0.5, Math.min(0.5, (pendingClientY - rect.top) / rect.height - 0.5)) * 2
+        activeCardEl.style.setProperty('--card-rx', `${(-cy * 3).toFixed(2)}deg`)
+        activeCardEl.style.setProperty('--card-ry', `${(cx * 3).toFixed(2)}deg`)
+        activeCardEl.style.setProperty('--card-lx', `${((cx * 0.5 + 0.5) * 100).toFixed(1)}%`)
+        activeCardEl.style.setProperty('--card-ly', `${((cy * 0.5 + 0.5) * 100).toFixed(1)}%`)
+      }
+    }
   }
 
   function schedule(nx: number, ny: number): void {
@@ -58,13 +96,35 @@ export function useOceanCamera(options: {
     if (!options.active.value || options.reducedMotion.value) return
     if (!cachedWidth || !cachedHeight) updateRectCache()
     if (!cachedWidth || !cachedHeight) return
+
+    const target = event.target instanceof Element ? event.target.closest<HTMLElement>('.ocean-card') : null
+    if (target !== activeCardEl) {
+      clearActiveCard()
+      activeCardEl = target
+    }
+    pendingClientX = event.clientX
+    pendingClientY = event.clientY
+    hasPointerClient = true
+
     const nx = Math.max(-0.5, Math.min(0.5, (event.clientX - cachedLeft) / cachedWidth - 0.5)) * 2
     const ny = Math.max(-0.5, Math.min(0.5, (event.clientY - cachedTop) / cachedHeight - 0.5)) * 2
     schedule(nx, ny)
   }
 
   const onPointerLeave = () => {
+    hasPointerClient = false
+    clearActiveCard()
     schedule(0, 0)
+  }
+
+  const onViewportChange = () => {
+    updateRectCache()
+  }
+
+  const onFinePointerChange = () => {
+    if (!isFinePointer()) {
+      detach()
+    }
   }
 
   function detach(): void {
@@ -73,17 +133,26 @@ export function useOceanCamera(options: {
       attachedEl.removeEventListener('pointerleave', onPointerLeave)
       attachedEl = null
     }
+    if (scrollHostEl) {
+      scrollHostEl.removeEventListener('scroll', onViewportChange)
+      scrollHostEl = null
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', onViewportChange)
+    }
+    if (finePointerMql && typeof finePointerMql.removeEventListener === 'function') {
+      finePointerMql.removeEventListener('change', onFinePointerChange)
+      finePointerMql = null
+    }
     resizeObserver?.disconnect()
     resizeObserver = null
     if (rafId && typeof cancelAnimationFrame === 'function') {
       cancelAnimationFrame(rafId)
       rafId = 0
     }
-    const el = options.sceneEl.value
-    if (el) {
-      el.style.setProperty('--ocean-px', '0px')
-      el.style.setProperty('--ocean-py', '0px')
-    }
+    hasPointerClient = false
+    clearActiveCard()
+    setParallaxVars('0px', '0px')
     options.onPointerTarget?.(0, 0)
   }
 
@@ -94,7 +163,10 @@ export function useOceanCamera(options: {
         detach()
         return
       }
-      if (attachedEl === el) return
+      if (attachedEl === el) {
+        updateRectCache()
+        return
+      }
       detach()
       updateRectCache()
       if (typeof ResizeObserver !== 'undefined') {
@@ -102,6 +174,20 @@ export function useOceanCamera(options: {
           updateRectCache()
         })
         resizeObserver.observe(el)
+      }
+      const workspace = el.closest<HTMLElement>('.workspace')
+      if (workspace) {
+        workspace.addEventListener('scroll', onViewportChange, { passive: true })
+        scrollHostEl = workspace
+      }
+      if (typeof window !== 'undefined') {
+        window.addEventListener('resize', onViewportChange, { passive: true })
+        if (typeof window.matchMedia === 'function') {
+          finePointerMql = window.matchMedia('(pointer: fine)')
+          if (typeof finePointerMql.addEventListener === 'function') {
+            finePointerMql.addEventListener('change', onFinePointerChange)
+          }
+        }
       }
       el.addEventListener('pointermove', onPointerMove, { passive: true })
       el.addEventListener('pointerleave', onPointerLeave, { passive: true })

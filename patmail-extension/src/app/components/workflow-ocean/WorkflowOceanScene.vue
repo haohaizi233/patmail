@@ -19,7 +19,17 @@ const sceneRef = ref<HTMLElement | null>(null)
 const canvasComponentRef = ref<InstanceType<typeof WorkflowOceanCanvas> | null>(null)
 const canvasEl = computed(() => canvasComponentRef.value?.canvasRef ?? null)
 
-const { quality, webglUnavailable, setQuality, markWebglUnavailable } = useOceanQuality()
+const {
+  quality,
+  effectiveQuality,
+  fallbackReason: qualityFallbackReason,
+  webglUnavailable,
+  setQuality,
+  setEffectiveOverride,
+  markWebglUnavailable,
+  resetForRetry
+} = useOceanQuality()
+
 const { renderingActive, reducedMotion } = useOceanLifecycle({
   sceneEl: sceneRef,
   screenActive: computed(() => props.active),
@@ -27,11 +37,22 @@ const { renderingActive, reducedMotion } = useOceanLifecycle({
   webglUnavailable
 })
 
-const { webglActive, setPointerTarget } = useOceanRenderer({
+const {
+  rendererState,
+  canShowCanvas,
+  fallbackReason: rendererFallbackReason,
+  setPointerTarget,
+  retry3D
+} = useOceanRenderer({
   canvasEl,
   quality,
   renderingActive,
-  onWebglUnavailable: markWebglUnavailable
+  onWebglUnavailable: reason => markWebglUnavailable(reason),
+  onEffectiveQualityChange: (effective, reason) => {
+    if (reason) {
+      setEffectiveOverride(effective, reason)
+    }
+  }
 })
 
 useOceanCamera({
@@ -41,8 +62,20 @@ useOceanCamera({
   onPointerTarget: setPointerTarget
 })
 
+const mergedFallbackReason = computed(
+  () => rendererFallbackReason.value ?? qualityFallbackReason.value
+)
+
 function handleSelectQuality(next: OceanQuality): void {
+  if (next !== 'static' && webglUnavailable.value) {
+    resetForRetry()
+  }
   setQuality(next)
+}
+
+function handleRetry3D(): void {
+  resetForRetry()
+  retry3D()
 }
 </script>
 
@@ -52,19 +85,24 @@ function handleSelectQuality(next: OceanQuality): void {
     class="workflow-ocean"
     data-testid="workflow-ocean-scene"
     :data-ocean-quality="quality"
-    :data-ocean-3d="webglActive ? 'true' : 'false'"
+    :data-ocean-effective-quality="effectiveQuality"
+    :data-ocean-state="rendererState"
+    :data-ocean-3d="canShowCanvas ? 'true' : 'false'"
     :data-ocean-rendering="renderingActive ? 'true' : 'false'"
   >
     <WorkflowOceanCanvas
       v-if="quality !== 'static' && !webglUnavailable"
       ref="canvasComponentRef"
+      :class="{ 'is-ready': canShowCanvas }"
     />
     <WorkflowOceanAtmosphere :active="renderingActive" />
     <WorkflowOceanHero
       :stats="stats"
       :quality="quality"
-      :webgl-active="webglActive"
+      :effective-quality="effectiveQuality"
+      :fallback-reason="mergedFallbackReason"
       @update:quality="handleSelectQuality"
+      @retry3d="handleRetry3D"
     />
     <div class="ocean-grid-wrap">
       <section class="sea ocean-grid" aria-label="工作流列表">

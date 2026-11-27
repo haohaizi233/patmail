@@ -1,16 +1,54 @@
 <script setup lang="ts">
-import { useId } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import type { WorkflowOceanIconId } from './workflow-ocean.types'
 
-defineProps<{
+const props = defineProps<{
   icon: WorkflowOceanIconId
 }>()
 
 const uid = useId()
+const imgFailed = ref(false)
+
+const KNOWN_3D_ICONS = new Set<WorkflowOceanIconId>([
+  'pct-bell',
+  'pct-layers',
+  'file-folder',
+  'filing-export',
+  'hague-globe',
+  'jihua-flask',
+  'billing-coins',
+  'pct-cloud',
+  'fee-shield',
+  'ocean-add',
+  'custom-crystal'
+])
+
+const assetSrc = computed(() =>
+  KNOWN_3D_ICONS.has(props.icon) ? `/assets/workflow-ocean/${props.icon}.webp` : ''
+)
+
+watch(
+  () => props.icon,
+  () => {
+    imgFailed.value = false
+  }
+)
 </script>
 
 <template>
+  <img
+    v-if="assetSrc && !imgFailed"
+    class="ocean-icon-img"
+    :src="assetSrc"
+    alt=""
+    width="52"
+    height="52"
+    decoding="async"
+    aria-hidden="true"
+    @error="imgFailed = true"
+  />
   <svg
+    v-else
     class="ocean-icon-svg"
     viewBox="0 0 48 48"
     fill="none"

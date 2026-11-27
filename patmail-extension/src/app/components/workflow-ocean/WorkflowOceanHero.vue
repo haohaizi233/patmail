@@ -5,19 +5,21 @@ import type { WorkflowOceanHeroStats } from './workflow-ocean.types'
 
 defineProps<{
   stats: WorkflowOceanHeroStats
-  quality?: OceanQuality
-  webglActive?: boolean
+  quality: OceanQuality
+  effectiveQuality: OceanQuality
+  fallbackReason: string | null
 }>()
 
 const emit = defineEmits<{
-  'update:quality': [quality: OceanQuality]
+  'update:quality': [value: OceanQuality]
+  retry3d: []
 }>()
 
-const QUALITY_OPTIONS: ReadonlyArray<{ id: OceanQuality; label: string }> = [
-  { id: 'cinema', label: '电影' },
-  { id: 'balanced', label: '平衡' },
-  { id: 'eco', label: '节能' },
-  { id: 'static', label: '静态' }
+const QUALITY_OPTIONS: ReadonlyArray<{ value: OceanQuality; label: string }> = [
+  { value: 'cinema', label: '电影' },
+  { value: 'balanced', label: '平衡' },
+  { value: 'eco', label: '节能' },
+  { value: 'static', label: '静态' }
 ]
 </script>
 
@@ -35,26 +37,39 @@ const QUALITY_OPTIONS: ReadonlyArray<{ id: OceanQuality; label: string }> = [
           <span class="ocean-stat-pill">全部工作流 <strong>{{ stats.total }}</strong> 条</span>
           <span class="ocean-stat-pill">内置专案与工具 <strong>{{ stats.systemAndTool }}</strong> 条</span>
           <span v-if="stats.custom > 0" class="ocean-stat-pill">自定义编排 <strong>{{ stats.custom }}</strong> 条</span>
-          <div
-            v-if="quality"
-            class="ocean-quality-switch"
-            role="group"
-            aria-label="海洋渲染质量"
-          >
-            <button
-              v-for="opt in QUALITY_OPTIONS"
-              :key="opt.id"
-              type="button"
-              class="ocean-quality-btn"
-              :class="{ on: quality === opt.id }"
-              :aria-pressed="quality === opt.id"
-              :data-quality-option="opt.id"
-              @click="emit('update:quality', opt.id)"
-            >{{ opt.label }}</button>
-          </div>
         </div>
       </div>
     </div>
-    <div class="ocean-hero-spacer" aria-hidden="true" />
+    <div class="ocean-hero-controls">
+      <div class="ocean-quality-switch" role="group" aria-label="渲染画质">
+        <button
+          v-for="opt in QUALITY_OPTIONS"
+          :key="opt.value"
+          type="button"
+          class="ocean-quality-pill"
+          :class="{ 'is-active': quality === opt.value }"
+          :aria-pressed="quality === opt.value"
+          :data-quality-option="opt.value"
+          @click="emit('update:quality', opt.value)"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
+      <div
+        v-if="quality !== 'static' && effectiveQuality === 'static'"
+        class="ocean-fallback-banner"
+        data-testid="ocean-fallback-banner"
+      >
+        <span>当前已降级为静态模式{{ fallbackReason ? `（${fallbackReason}）` : '' }}</span>
+        <button
+          type="button"
+          class="ocean-retry-btn"
+          data-testid="ocean-retry-3d"
+          @click="emit('retry3d')"
+        >
+          重新启用 3D
+        </button>
+      </div>
+    </div>
   </header>
 </template>

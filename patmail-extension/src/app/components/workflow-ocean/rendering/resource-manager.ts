@@ -3,8 +3,8 @@ export interface DisposableResource {
 }
 
 /**
- * 集中追踪 Three.js Geometry / Material / Texture / RenderTarget 等显存资源，
- * 确保切换质量、失活或组件卸载时一次性彻底释放，不留泄漏。
+ * 集中追踪 Three.js Geometry / Material / Texture / InstancedMesh 等显存资源，
+ * 支持单资源精确释放、替换即回收与全量安全销毁，杜绝重复切换导致的引用堆积。
  */
 export class OceanResourceManager {
   private readonly resources = new Set<DisposableResource>()
@@ -20,18 +20,38 @@ export class OceanResourceManager {
     }
   }
 
+  release(resource: DisposableResource | null | undefined): void {
+    if (!resource || !this.resources.delete(resource)) {
+      return
+    }
+    try {
+      resource.dispose()
+    } catch {
+      // 忽略单项资源重复释放或上下文已销毁导致的异常
+    }
+  }
+
+  replace<T extends DisposableResource>(previous: T | null | undefined, next: T): T {
+    this.track(next)
+    if (previous && previous !== next) {
+      this.release(previous)
+    }
+    return next
+  }
+
   get count(): number {
     return this.resources.size
   }
 
   disposeAll(): void {
-    for (const resource of this.resources) {
+    const pending = [...this.resources]
+    this.resources.clear()
+    for (const resource of pending) {
       try {
         resource.dispose()
       } catch {
-        // 忽略重复释放
+        // 忽略单项释放异常，确保其余资源全部回收
       }
     }
-    this.resources.clear()
   }
 }

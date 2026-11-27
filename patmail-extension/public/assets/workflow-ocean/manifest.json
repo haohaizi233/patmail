@@ -1,0 +1,93 @@
+{
+  "generatedBy": "scripts/render-ocean-icons.mjs",
+  "assets": [
+    {
+      "id": "pct-bell",
+      "file": "/assets/workflow-ocean/pct-bell.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "pct-layers",
+      "file": "/assets/workflow-ocean/pct-layers.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "file-folder",
+      "file": "/assets/workflow-ocean/file-folder.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "filing-export",
+      "file": "/assets/workflow-ocean/filing-export.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "hague-globe",
+      "file": "/assets/workflow-ocean/hague-globe.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "jihua-flask",
+      "file": "/assets/workflow-ocean/jihua-flask.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "billing-coins",
+      "file": "/assets/workflow-ocean/billing-coins.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "pct-cloud",
+      "file": "/assets/workflow-ocean/pct-cloud.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "fee-shield",
+      "file": "/assets/workflow-ocean/fee-shield.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "ocean-add",
+      "file": "/assets/workflow-ocean/ocean-add.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    },
+    {
+      "id": "custom-crystal",
+      "file": "/assets/workflow-ocean/custom-crystal.webp",
+      "width": 256,
+      "height": 256,
+      "format": "webp",
+      "source": "scripts/render-ocean-icons.mjs (Three.js studio offscreen render)"
+    }
+  ]
+}

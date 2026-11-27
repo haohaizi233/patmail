@@ -30,6 +30,7 @@ export function createOceanSurface(
     })
   )
 
+  let currentSegments = initialSegments
   let geometry = resources.track(new PlaneGeometry(120, 74, initialSegments, initialSegments))
   geometry.rotateX(-Math.PI / 2)
 
@@ -41,11 +42,12 @@ export function createOceanSurface(
     mesh,
     rebuild(segments: number, detailLevel: number) {
       material.uniforms.uDetailLevel.value = detailLevel
-      const next = resources.track(new PlaneGeometry(120, 74, segments, segments))
+      if (segments === currentSegments) return
+      currentSegments = segments
+      const next = new PlaneGeometry(120, 74, segments, segments)
       next.rotateX(-Math.PI / 2)
       mesh.geometry = next
-      geometry.dispose()
-      geometry = next
+      geometry = resources.replace(geometry, next)
     },
     update(elapsedSeconds: number, waveScale = 1.0) {
       material.uniforms.uTime.value = elapsedSeconds

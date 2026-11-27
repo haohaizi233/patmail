@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { OceanQuality } from '../rendering/render-scheduler'
 
 const QUALITY_STORAGE_KEY = 'patmail.workflow.ocean-quality.v1'
@@ -16,11 +16,23 @@ function readStoredQuality(): OceanQuality {
 }
 
 export function useOceanQuality() {
-  const quality = ref<OceanQuality>(readStoredQuality())
+  const preferredQuality = ref<OceanQuality>(readStoredQuality())
+  const overrideQuality = ref<OceanQuality | null>(null)
+  const fallbackReason = ref<string | null>(null)
   const webglUnavailable = ref(false)
 
+  const effectiveQuality = computed<OceanQuality>(() => {
+    if (preferredQuality.value === 'static') return 'static'
+    if (webglUnavailable.value) return 'static'
+    return overrideQuality.value ?? preferredQuality.value
+  })
+
   function setQuality(next: OceanQuality): void {
-    quality.value = next
+    preferredQuality.value = next
+    overrideQuality.value = null
+    if (next === 'static') {
+      fallbackReason.value = null
+    }
     try {
       globalThis.localStorage?.setItem(QUALITY_STORAGE_KEY, next)
     } catch {
@@ -28,14 +40,39 @@ export function useOceanQuality() {
     }
   }
 
-  function markWebglUnavailable(): void {
+  function setEffectiveOverride(next: OceanQuality, reason: string | null): void {
+    if (preferredQuality.value === 'static') return
+    overrideQuality.value = next
+    fallbackReason.value = reason
+  }
+
+  function clearOverride(): void {
+    overrideQuality.value = null
+    fallbackReason.value = null
+  }
+
+  function markWebglUnavailable(reason = 'webgl-unavailable'): void {
     webglUnavailable.value = true
+    overrideQuality.value = 'static'
+    fallbackReason.value = reason
+  }
+
+  function resetForRetry(): void {
+    webglUnavailable.value = false
+    overrideQuality.value = null
+    fallbackReason.value = null
   }
 
   return {
-    quality,
+    quality: preferredQuality,
+    preferredQuality,
+    effectiveQuality,
+    fallbackReason,
     webglUnavailable,
     setQuality,
-    markWebglUnavailable
+    setEffectiveOverride,
+    clearOverride,
+    markWebglUnavailable,
+    resetForRetry
   }
 }

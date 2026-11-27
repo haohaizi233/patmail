@@ -29,6 +29,16 @@ export class OceanCameraRig {
     this.targetY = -cy * 0.42
   }
 
+  isSettled(epsilon = 0.002): boolean {
+    const goalX = this.basePos.x + this.targetX
+    const goalY = this.basePos.y + this.targetY
+    const posErr = Math.abs(goalX - this.camera.position.x) + Math.abs(goalY - this.camera.position.y)
+    const lookErr =
+      Math.abs(this.lookAtBase.x + this.targetX * 0.35 - this.currentLookAt.x) +
+      Math.abs(this.lookAtBase.y + this.targetY * 0.25 - this.currentLookAt.y)
+    return posErr < epsilon && lookErr < epsilon
+  }
+
   update(dtSeconds: number): void {
     const alpha = 1 - Math.exp(-this.dampingLambda * Math.max(0.001, dtSeconds))
     const goalX = this.basePos.x + this.targetX

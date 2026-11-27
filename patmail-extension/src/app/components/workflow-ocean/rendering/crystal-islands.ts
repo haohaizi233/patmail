@@ -55,7 +55,7 @@ export function createCrystalIslands(resources: OceanResourceManager): CrystalIs
     [-11.8, -1.1, -13.0, 0.9, 0.75, 0.14],
     [13.4, -1.1, -12.5, 0.85, 0.7, -0.12]
   ]
-  const spires = new InstancedMesh(spireGeo, crystalMat, spireSpecs.length)
+  const spires = resources.track(new InstancedMesh(spireGeo, crystalMat, spireSpecs.length))
   const dummy = new Object3D()
   spireSpecs.forEach(([x, y, z, sx, sy, rz], idx) => {
     dummy.position.set(x, y, z)
@@ -76,7 +76,7 @@ export function createCrystalIslands(resources: OceanResourceManager): CrystalIs
     [14.2, 1.9, -15.5, 1.05],
     [-11.5, 0.9, -10.5, 0.7]
   ]
-  const floatMesh = new InstancedMesh(floatGeo, accentMat, floatSpecs.length)
+  const floatMesh = resources.track(new InstancedMesh(floatGeo, accentMat, floatSpecs.length))
   floatSpecs.forEach(([x, y, z, s], idx) => {
     dummy.position.set(x, y, z)
     dummy.scale.setScalar(s)
@@ -93,7 +93,7 @@ export function createCrystalIslands(resources: OceanResourceManager): CrystalIs
     [6.1, 1.8, -13.8, 0.18],
     [-6.6, 1.7, -12.2, 0.22]
   ]
-  const docMesh = new InstancedMesh(docGeo, crystalMat, docSpecs.length)
+  const docMesh = resources.track(new InstancedMesh(docGeo, crystalMat, docSpecs.length))
   docSpecs.forEach(([x, y, z, rz], idx) => {
     dummy.position.set(x, y, z)
     dummy.scale.setScalar(1)
