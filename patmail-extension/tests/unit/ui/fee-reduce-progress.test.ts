@@ -147,7 +147,7 @@ it('automatically resumes from the durable page and keeps recovered results read
   expect(progress()?.classList.contains('is-run')).toBe(true)
   expect(progress()?.getAttribute('aria-valuetext')).toContain('从检查点继续检索')
   expect(root.querySelector('textarea')?.value).toBe(volumes.join('\n'))
-  const toggle = root.querySelector<HTMLButtonElement>('.fr-summary button')!
+  const toggle = root.querySelector<HTMLButtonElement>('.fr-actions button[aria-pressed]')!
   expect(toggle.textContent).toContain('只看未查到（1）')
   toggle.click()
   await nextTick()
@@ -345,7 +345,7 @@ it('shows search, concurrent execution and retry progress in the shared header',
 
   const tableRows = () => root.querySelectorAll<HTMLTableRowElement>('.fr-table tbody tr')
   const nextPage = () => [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === '下一页')!
-  const missingFilter = root.querySelector<HTMLButtonElement>('.fr-summary button')!
+  const missingFilter = root.querySelector<HTMLButtonElement>('.fr-actions button[aria-pressed]')!
   expect(missingFilter.textContent).toContain('只看未查到（1）')
   missingFilter.click()
   await nextTick()
@@ -356,21 +356,22 @@ it('shows search, concurrent execution and retry progress in the shared header',
   await nextTick()
   expect(tableRows()).toHaveLength(20)
   expect(tableRows()[0].textContent).toContain(volumes[0])
+  expect(tableRows()[1].textContent).toContain(volumes[48])
+  const lastReadyCheckbox = tableRows()[1].querySelector<HTMLInputElement>('input[type="checkbox"]')!
+  lastReadyCheckbox.click()
+  await nextTick()
+  expect(buttons[1].textContent).toContain('1')
+  lastReadyCheckbox.click()
+  await nextTick()
+  expect(buttons[1].textContent).toContain('2')
   nextPage().click()
   await nextTick()
   expect(tableRows()).toHaveLength(20)
-  expect(tableRows()[0].textContent).toContain(volumes[20])
+  expect(tableRows()[0].textContent).toContain(volumes[19])
   nextPage().click()
   await nextTick()
   expect(tableRows()).toHaveLength(9)
   expect(nextPage().disabled).toBe(true)
-  const lastCheckbox = tableRows()[8].querySelector<HTMLInputElement>('input[type="checkbox"]')!
-  lastCheckbox.click()
-  await nextTick()
-  expect(buttons[1].textContent).toContain('1')
-  lastCheckbox.click()
-  await nextTick()
-  expect(buttons[1].textContent).toContain('2')
 
   buttons[1].click()
   const remark = root.querySelector<HTMLInputElement>('input[placeholder="同意"]')!
@@ -490,4 +491,36 @@ it.each(['connection', 'flow status'] as const)('pauses on a shared failure and 
   expect(submits).toBe(6)
   expect(button('递交已勾选').textContent).toContain('11')
   expect(root.querySelector('.fr-table tbody tr')?.textContent).toContain('待核对')
+})
+
+it('automatically loads primary reviewers when EASY connection becomes authenticated after mount', async () => {
+  request.mockReset()
+  request.mockImplementation(message => {
+    if (message.type === MessageType.ReadFeeReduceReviewers) {
+      return Promise.resolve({
+        type: MessageType.ReadFeeReduceReviewersResult,
+        payload: {
+          ok: true,
+          data: {
+            nodeName: '流程人员初核',
+            reviewers: [
+              { userId: 'rev-1', name: '王初核', count: 3 },
+              { userId: 'rev-2', name: '李复核', count: 1 }
+            ],
+            message: '已读取 2 位初核人。'
+          }
+        }
+      })
+    }
+    throw new Error(`Unexpected request: ${message.type}`)
+  })
+  connection.value = emptyConnection(connected.easyOrigin)
+  mountWorkbench()
+  await settle()
+  expect(request).not.toHaveBeenCalled()
+
+  connection.value = connected
+  await settle()
+  expect(request).toHaveBeenCalledWith({ type: MessageType.ReadFeeReduceReviewers })
+  expect(root.textContent).toContain('王初核 (3)')
 })

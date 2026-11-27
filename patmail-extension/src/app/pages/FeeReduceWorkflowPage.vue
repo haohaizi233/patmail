@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { createRecoveryClient } from '../../recovery/client'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import { createWorkflowBridge } from '../services/full-page-bridge'
@@ -75,7 +75,7 @@ const statusNotice = ref('')
 const errorNotice = ref('')
 const progress = ref<TopProgress>({ visible: false, done: 0, total: 0, percent: 0, eta: '', status: 'idle', label: '', summary: '', detail: '' })
 useTopProgress(computed(() => progress.value), computed(() => props.isActive))
-const { open: writeOpen, setOpen: setWriteOpen } = useWriteSwitch()
+const { open: writeOpen } = useWriteSwitch()
 
 const reviewers = ref<FeeReduceReviewerOption[]>([])
 const reviewerAccount = ref<ExpectedAccountScope | null>(null)
@@ -150,7 +150,16 @@ const resultPageSize = 20
 const resultPage = ref(1)
 const showMissingOnly = ref(false)
 const missingRows = computed(() => rows.filter(row => row.item.state === 'not_found'))
-const tableRows = computed(() => showMissingOnly.value ? missingRows.value : rows)
+const tableRows = computed(() => {
+  if (showMissingOnly.value) return missingRows.value
+  const ready: FeeReduceRowState[] = []
+  const others: FeeReduceRowState[] = []
+  for (const row of rows) {
+    if (row.item.state === 'ready') ready.push(row)
+    else others.push(row)
+  }
+  return [...ready, ...others]
+})
 const resultPageCount = computed(() => Math.max(1, Math.ceil(tableRows.value.length / resultPageSize)))
 const visibleRows = computed(() => {
   const start = (resultPage.value - 1) * resultPageSize
@@ -266,12 +275,12 @@ async function loadReviewers(): Promise<void> {
   loadingReviewers.value = true
   try {
     const res = await bridge.request({ type: MessageType.ReadFeeReduceReviewers })
-    if (!accountScopeMatches(connection.value, account)) return
+    if (disposed || !accountScopeMatches(connection.value, account)) return
     if (res.type === MessageType.ReadFeeReduceReviewersResult && res.payload.ok) {
       reviewerAccount.value = account
       reviewers.value = res.payload.data.reviewers
       reviewerNodeName.value = res.payload.data.nodeName || '流程人员初核'
-      if (!defaultReviewerId.value && reviewers.value.length) {
+      if (reviewers.value.length > 0 && !reviewers.value.some(r => r.userId === defaultReviewerId.value)) {
         defaultReviewerId.value = reviewers.value[0].userId
       }
       if (!statusNotice.value) statusNotice.value = res.payload.data.message
@@ -542,7 +551,7 @@ async function executeSelected(): Promise<void> {
   if (!writeOpen.value) {
     await infoDialog({
       title: '写开关未开启',
-      message: '请先打开写开关，再执行费用减缓递交与流程提交。'
+      message: '请先在「系统设置」打开写开关，再递交费用减缓请求。'
     })
     return
   }
@@ -662,7 +671,7 @@ async function retryRow(row: FeeReduceRowState): Promise<void> {
   if (!writeOpen.value) {
     await infoDialog({
       title: '写开关未开启',
-      message: '请先打开写开关后再重试。'
+      message: '请先在「系统设置」打开写开关，再重试递交。'
     })
     return
   }
@@ -801,7 +810,22 @@ async function restoreProgress(account: ExpectedAccountScope): Promise<FeeInspec
   }
 }
 
-onMounted(() => { void loadReviewers() })
+let attemptedReviewerConnection = ''
+watch([currentAccount, () => props.isActive], ([account, active]) => {
+  if (!account) {
+    attemptedReviewerConnection = ''
+    return
+  }
+  if (!active || disposed) return
+  const connKey = JSON.stringify([recoveryScope(account), account.easyTabId, account.connectionVersion])
+  if (connKey === attemptedReviewerConnection) return
+  if (reviewerAccount.value && accountScopeMatches(connection.value, reviewerAccount.value) && reviewers.value.length > 0) {
+    attemptedReviewerConnection = connKey
+    return
+  }
+  attemptedReviewerConnection = connKey
+  void loadReviewers()
+}, { immediate: true })
 let visibleScope = ''
 let attemptedConnection = ''
 let restoredScope = ''
@@ -865,26 +889,13 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
       <h2>请求费用减缓</h2>
     </div>
 
-    <div class="fr-banner">
-      <div class="fr-switch-row">
-        <strong>写开关状态：</strong>
-        <span :class="writeOpen ? 'badge-done' : 'badge-warn'" class="fr-pill">
-          {{ writeOpen ? '已开启（可执行递交）' : '已关闭（仅可检索）' }}
-        </span>
-        <button type="button" class="ghost" :disabled="executing" @click="setWriteOpen(!writeOpen)">
-          {{ writeOpen ? '关闭写开关' : '打开写开关' }}
-        </button>
-      </div>
-      <div class="fr-meta">
-        <span>递交类型：手续办理 → 费用减缴请求 (100008)</span>
-        <span>下一节点：{{ reviewerNodeName }}</span>
-      </div>
-    </div>
-
     <div class="fr-grid">
       <div class="fr-input-box">
         <div class="fr-label-row">
-          <label for="fr-volumes">我方文号（支持换行、分号、逗号分隔，当前 {{ parsedVolumes.length }} 个）</label>
+          <div class="fr-label-title">
+            <label for="fr-volumes">我方文号</label>
+            <span class="fr-count-pill">{{ parsedVolumes.length }} 个</span>
+          </div>
           <label class="fr-upload-btn">
             <input type="file" accept=".xlsx" @change="onUploadSheet" />
             <span>导入 Excel</span>
@@ -893,8 +904,7 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
         <textarea
           id="fr-volumes"
           v-model="volumeInput"
-          rows="5"
-          placeholder="例如：&#10;PE26115584CND&#10;PE26115585CND"
+          placeholder="每行一个，也支持分号或逗号分隔&#10;例如：&#10;PE26115584CND&#10;PE26115585CND"
         />
         <div v-if="sheetHeaders.length > 1" class="fr-sheet-bar">
           <span>已导入：{{ sheetName }}</span>
@@ -910,35 +920,37 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
       </div>
 
       <div class="fr-config-box">
-        <div class="fr-field">
-          <label>初核人选择策略</label>
-          <ThemeSelect v-model="reviewerStrategy" :options="strategyOptions" />
-        </div>
-        <div class="fr-field">
-          <label>默认初核人（{{ reviewerNodeName }}）</label>
-          <div class="fr-inline">
-            <ThemeSelect
-              v-model="defaultReviewerId"
-              :options="reviewerOptions"
-              placeholder="选择默认初核人"
-              empty-text="请先登录 EASY 并刷新"
-            />
-            <button type="button" class="ghost" :disabled="loadingReviewers" @click="loadReviewers">
-              {{ loadingReviewers ? '读取中…' : '刷新' }}
-            </button>
+        <div class="fr-config-grid">
+          <div class="fr-field">
+            <label>初核人选择策略</label>
+            <ThemeSelect v-model="reviewerStrategy" :options="strategyOptions" />
           </div>
-        </div>
-        <div class="fr-field">
-          <label>办理意见</label>
-          <input v-model="remark" type="text" maxlength="200" placeholder="同意" />
-        </div>
-        <div class="fr-field">
-          <label>申请人或专利权人（可选，留空默认第一申请人）</label>
-          <input v-model="oaName" type="text" maxlength="200" placeholder="不填时默认为第一申请人" />
-        </div>
-        <div class="fr-field">
-          <label>执行并发数</label>
-          <ThemeSelect v-model="concurrency" :options="concurrencyOptions" />
+          <div class="fr-field">
+            <label>默认初核人（{{ reviewerNodeName }}）</label>
+            <div class="fr-inline">
+              <ThemeSelect
+                v-model="defaultReviewerId"
+                :options="reviewerOptions"
+                placeholder="选择默认初核人"
+                empty-text="请先登录 EASY 并刷新"
+              />
+              <button type="button" class="ghost" :disabled="loadingReviewers" @click="loadReviewers">
+                {{ loadingReviewers ? '读取中…' : '刷新' }}
+              </button>
+            </div>
+          </div>
+          <div class="fr-field">
+            <label>办理意见</label>
+            <input v-model="remark" type="text" maxlength="200" placeholder="同意" />
+          </div>
+          <div class="fr-field">
+            <label>执行并发数</label>
+            <ThemeSelect v-model="concurrency" :options="concurrencyOptions" />
+          </div>
+          <div class="fr-field fr-field-span">
+            <label>申请人或专利权人（可选，留空默认第一申请人）</label>
+            <input v-model="oaName" type="text" maxlength="200" placeholder="不填时默认为第一申请人" />
+          </div>
         </div>
       </div>
     </div>
@@ -964,6 +976,9 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
       <button type="button" class="ghost" :disabled="selectionLocked || !counts.ready" @click="toggleAllReady(false)">
         取消全选
       </button>
+      <button v-if="missingRows.length" type="button" class="ghost" :aria-pressed="showMissingOnly" @click="toggleMissingOnly">
+        {{ showMissingOnly ? '查看全部' : `只看未查到（${missingRows.length}）` }}
+      </button>
     </div>
     <p v-if="pausedBatch && !canRecheckPaused" class="fr-notice">
       请重新连接本批次原来的 EASY 系统和账号，再检索未完成案件。
@@ -984,9 +999,6 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
       <span>待递交（撰写中）：<b class="text-ready">{{ counts.ready }}</b></span>
       <span>已提交初核：<b class="text-done">{{ counts.submitted }}</b></span>
       <span>其他状态：<b>{{ counts.other - missingRows.length }}</b></span>
-      <button v-if="missingRows.length" type="button" class="ghost" :aria-pressed="showMissingOnly" @click="toggleMissingOnly">
-        {{ showMissingOnly ? '查看全部' : `只看未查到（${missingRows.length}）` }}
-      </button>
     </div>
 
     <nav v-if="resultPageCount > 1" class="fr-pagination" aria-label="费减结果分页">
@@ -1001,7 +1013,8 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
           <tr>
             <th style="width: 44px;">选</th>
             <th>我方文号</th>
-            <th>案件名称 / 申请号</th>
+            <th>案件名称</th>
+            <th>申请号</th>
             <th>处理状态</th>
             <th>初核人</th>
             <th>执行结果</th>
@@ -1018,10 +1031,8 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
               />
             </td>
             <td class="mono">{{ row.item.caseVolume }}</td>
-            <td>
-              <div>{{ row.item.caseName || '—' }}</div>
-              <small v-if="row.item.appNo" class="muted">{{ row.item.appNo }}</small>
-            </td>
+            <td>{{ row.item.caseName || '—' }}</td>
+            <td class="mono">{{ row.item.appNo || '—' }}</td>
             <td>
               <span class="fr-pill" :class="stateBadgeClass(row)">{{ stateBadgeText(row) }}</span>
             </td>
@@ -1059,21 +1070,26 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
 
 <style scoped>
 .fee-reduce-page { display: flex; flex-direction: column; gap: 14px; }
-.fr-banner { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--panel-soft, rgba(127,127,127,0.08)); font-size: 13px; }
-.fr-switch-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.fr-meta { display: flex; gap: 16px; flex-wrap: wrap; opacity: 0.85; }
-.fr-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px; }
-@media (max-width: 900px) { .fr-grid { grid-template-columns: 1fr; } }
-.fr-input-box, .fr-config-box { display: flex; flex-direction: column; gap: 10px; }
-.fr-label-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
-.fr-input-box textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border, #d0d7de); font-family: monospace; font-size: 13px; resize: vertical; }
-.fr-upload-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border, #d0d7de); cursor: pointer; font-size: 12px; font-weight: 500; }
+.fr-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(420px, 1.35fr); gap: 14px; align-items: stretch; }
+@media (max-width: 960px) { .fr-grid { grid-template-columns: 1fr; } }
+.fr-input-box, .fr-config-box { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 14px; background: #fffafd; border: 1px solid #f4dce8; }
+.fr-label-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 28px; }
+.fr-label-title { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: #3d2f47; }
+.fr-count-pill { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; background: #ffe8f2; color: #d93b7a; font-size: 11px; font-weight: 600; }
+.fr-input-box textarea { flex: 1; width: 100%; min-height: 156px; padding: 10px 12px; border-radius: 10px; border: 1px solid #eadff0; background: #fff; font-family: monospace; font-size: 13px; line-height: 1.55; resize: vertical; }
+.fr-upload-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid #f3c4da; background: #fff; color: #c44b7e; cursor: pointer; font-size: 12px; font-weight: 600; transition: background .14s ease, border-color .14s ease; }
+.fr-upload-btn:hover { background: #fff0f6; border-color: #ff8ab8; }
 .fr-upload-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .fr-sheet-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
-.fr-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.fr-field input { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border, #d0d7de); }
-.fr-inline { display: flex; gap: 8px; align-items: center; }
-.fr-inline > :first-child { flex: 1; }
+.fr-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+@media (max-width: 640px) { .fr-config-grid { grid-template-columns: 1fr; } }
+.fr-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; }
+.fr-field > label { font-weight: 600; color: #5b4d68; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fr-field-span { grid-column: 1 / -1; }
+.fr-field input { width: 100%; height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid #eadff0; background: #fff; font-size: 13px; }
+.fr-inline { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.fr-inline > :first-child { flex: 1; min-width: 0; }
+.fr-inline > button { flex: none; height: 36px; padding: 0 12px; }
 .fr-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .fr-summary { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; }
 .fr-error { color: #cf222e; font-size: 13px; margin: 0; }
