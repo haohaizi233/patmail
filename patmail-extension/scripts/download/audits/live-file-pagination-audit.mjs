@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
+import { EXTENSION_ROOT } from '../../shared/paths.mjs'
 import { launchExtensionContext, extensionWorker } from '../../../tests/e2e/support/browser.mjs'
 import { distDir, reportsDir, resultPath } from '../../../tests/e2e/support/paths.mjs'
 
@@ -7,7 +9,7 @@ import { distDir, reportsDir, resultPath } from '../../../tests/e2e/support/path
 assert.equal(process.env.PATMAIL_LIVE_READONLY, '1', 'Set PATMAIL_LIVE_READONLY=1 for an explicit live read-only audit')
 assert(process.env.PATMAIL_AUDIT_USER && process.env.PATMAIL_AUDIT_PASSWORD && process.env.PATMAIL_AUDIT_HAR)
 const origin = 'http://183.36.43.66:88'
-const expectedVersion = JSON.parse(await readFile(new URL('../../../package.json', import.meta.url), 'utf8')).version
+const expectedVersion = JSON.parse(await readFile(join(EXTENSION_ROOT, 'package.json'), 'utf8')).version
 const queryOnly = process.env.PATMAIL_AUDIT_QUERY_ONLY === '1'
 const har = JSON.parse(await readFile(process.env.PATMAIL_AUDIT_HAR, 'utf8'))
 const entry = har.log.entries.find(

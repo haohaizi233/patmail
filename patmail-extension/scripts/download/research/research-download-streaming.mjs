@@ -3,6 +3,9 @@ import { readFile, readdir, mkdir, writeFile, open, unlink } from 'node:fs/promi
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
+import { join, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { REPO_ROOT } from '../../shared/paths.mjs'
 import { chromium } from 'playwright'
 import { reportsDir, resultPath } from '../../../tests/e2e/support/paths.mjs'
 import { launchExtensionContext, extensionWorker } from '../../../tests/e2e/support/browser.mjs'
@@ -17,7 +20,7 @@ if (process.env.PATMAIL_AUDIT_APPEND_REPORT === '1') {
   // eslint-disable-next-line no-empty -- 存量豁免：空 catch 为有意忽略可恢复异常
   } catch {}
 }
-const harFolder = new URL('../../../../HAR/', import.meta.url)
+const harFolder = pathToFileURL(join(REPO_ROOT, 'HAR') + sep)
 const inputs = (await readdir(harFolder)).map(name => new URL(name, harFolder))
 if (process.env.PATMAIL_AUDIT_HAR) inputs.push(process.env.PATMAIL_AUDIT_HAR)
 for (const path of inputs) {
