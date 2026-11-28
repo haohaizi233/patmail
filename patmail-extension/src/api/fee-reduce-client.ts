@@ -26,6 +26,10 @@ const DEFAULT_INSPECT_CONCURRENCY = 6
 const CONVERT_POLL_INTERVAL_MS = 2000
 const CONVERT_POLL_TIMEOUT_MS = 60_000
 
+function isIgnoredFeeReduceWarning(message: string): boolean {
+  return /第一发明人国别信息未填写/.test(message)
+}
+
 export interface FeeReduceClientOptions {
   pollIntervalMs?: number
   pollTimeoutMs?: number
@@ -501,7 +505,7 @@ export class FeeReduceClient {
       )
       if (checkRes.ok) {
         const msg = clientInfo(checkRes.data).message
-        if (msg) warnings.push(msg)
+        if (msg && !isIgnoredFeeReduceWarning(msg)) warnings.push(msg)
       }
     }
 

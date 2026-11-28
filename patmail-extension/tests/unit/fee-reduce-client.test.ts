@@ -231,7 +231,7 @@ describe('FeeReduceClient', () => {
     if (!res.ok || res.data.outcome === 'already_completed') return
     expect(res.data.filingId).toBe(FILING_ID)
     expect(res.data.reviewerName).toBe('邓锐(26)')
-    expect(res.data.warnings).toContain('第一发明人国别信息未填写!')
+    expect(res.data.warnings).not.toContain('第一发明人国别信息未填写!')
     expect(res.data.convertedFiles).toEqual(['费用减缴请求书'])
 
     const submitCall = calls.find(c => c.call === 'FilingSubmit')
@@ -489,5 +489,47 @@ describe('FeeReduceClient', () => {
       ['PA21326499CN', 'error']
     ])
     expect(res.data.items[3]?.reason).toContain('多个带备注/后缀的文号')
+  })
+
+  it('ignores non-blocking first inventor nationality warning while keeping other warnings', async () => {
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = new URLSearchParams(bodyText(init))
+      const call = body.get('Call') ?? ''
+      if (call === 'CheckFirstInventor') {
+        return jsonResponse({ ClientInfo: { IsLogin: true, Status: true, Result: true, Message: '第一发明人国别信息未填写!' } })
+      }
+      if (call === 'CheckSplitPDF') {
+        return jsonResponse({ ClientInfo: { IsLogin: true, Status: true, Result: true, Message: '请核对拆分页数' } })
+      }
+      if (call === 'GetCPCBusineeType') return jsonResponse({ cpcBusinessType: [] })
+      if (call === 'GetConvertStatus') return jsonResponse({ TableRows: [{ convert_status: '1000', form_status: '1000', err_code: '' }] })
+      if (call === 'GetFlowInfo') return jsonResponse({ Result: { flow_id: 'f1', status: -1 } })
+      if (call === 'GetFlowSubmit') {
+        return jsonResponse({
+          Result: [
+            { node_code: 'FIRST', node_id: 'n1', node_name_zh_cn: '启动流程' },
+            { node_code: 'PROCE', node_id: 'n2', node_name_zh_cn: '流程人员初核', list_id: 'l1', user_list_id: 'u1', user_list_name: '邓锐' }
+          ]
+        })
+      }
+      if (call === 'GetPicProcessCount') return jsonResponse({ Result: [{ user_id: 'u1', count: 5, cn_name: '邓锐' }] })
+      if (call === 'GetUrgencyList') return jsonResponse({ UrgencyList: [{ urgency_id: 'urg1', urgency_code: 'CM' }] })
+      if (call === 'GetFlowLastStatus') return jsonResponse(nativeEmptyFlow)
+      return jsonResponse({ ClientInfo: { IsLogin: true, Status: true, Result: true } })
+    })
+
+    const transport = new EasyTransport('http://183.36.43.66:88', { fetcher: fetcher as unknown as typeof fetch })
+    const client = new FeeReduceClient(transport, { pollIntervalMs: 1, pollTimeoutMs: 500, sleep: async () => {} })
+    const res = await client.submitFeeReduce({
+      caseVolume: 'PE26115584CND',
+      caseId: CASE_ID_1,
+      procId: PROC_ID_1,
+      resumeFilingId: FILING_ID
+    })
+    expect(res.ok).toBe(true)
+    if (!res.ok || res.data.outcome === 'already_completed') {
+      throw new Error('expected submitted FeeReduceSubmitResult')
+    }
+    expect(res.data.warnings).toEqual(['请核对拆分页数'])
   })
 })

@@ -870,6 +870,10 @@ function retryRestore(): void {
   if (currentAccount.value) void restoreAccount(currentAccount.value)
 }
 
+function visibleWarnings(warnings: readonly string[]): string[] {
+  return warnings.filter(item => !/第一发明人国别信息未填写/.test(item))
+}
+
 watch([currentAccount, inspecting, executing, restoring, () => props.isActive], ([account, busyInspect, busyExecute, busyRestore, active]) => {
   if (!account) {
     attemptedConnection = ''
@@ -1047,7 +1051,7 @@ watch([currentAccount, inspecting, executing, restoring, () => props.isActive], 
             <td>
               <div>{{ row.execMessage || row.item.reason }}</div>
               <small v-if="row.filingId" class="muted mono">filing_id: {{ row.filingId }}</small>
-              <div v-for="(warn, idx) in row.warnings" :key="idx" class="fr-warn-line">提示：{{ warn }}</div>
+              <div v-for="(warn, idx) in visibleWarnings(row.warnings)" :key="idx" class="fr-warn-line">提示：{{ warn }}</div>
             </td>
             <td>
               <button
