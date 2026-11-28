@@ -133,6 +133,17 @@ try {
   await page.locator('[data-quality-option="eco"]').click()
   await page.waitForTimeout(1200)
   await page.screenshot({ path: path.join(shotsDir, 'after-eco.png') })
+  // 慢速 CI 上相机收敛可能晚于固定等待：先轮询到 RAF 真正停住（连续 3 次采样不变），再验证空闲窗口不续跑
+  await page.waitForFunction(() => {
+    const count = window.__patmailOceanDiagnostics?.()?.rafCallbacks ?? -1
+    if (count !== window.__ecoRafPrev) {
+      window.__ecoRafPrev = count
+      window.__ecoRafStable = 0
+    } else {
+      window.__ecoRafStable = (window.__ecoRafStable ?? 0) + 1
+    }
+    return count >= 0 && window.__ecoRafStable >= 3
+  }, null, { polling: 300, timeout: 20000 })
   const ecoRafBefore = await page.evaluate(() => window.__patmailOceanDiagnostics?.()?.rafCallbacks ?? -1)
   await page.waitForTimeout(900)
   const ecoRafAfter = await page.evaluate(() => window.__patmailOceanDiagnostics?.()?.rafCallbacks ?? -1)
