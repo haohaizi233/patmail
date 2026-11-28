@@ -57,6 +57,8 @@ export const PATENT_COLUMNS: PatentColumnDef[] = [
   { field: 'case_authorize_date', title: '授权日', defaultVisible: false, minWidth: 100 },
   { field: 'receiving_office', title: '国际受理局', defaultVisible: false, minWidth: 100 },
   { field: 'retrieval_unit', title: '国际检索单位', defaultVisible: false, minWidth: 110 },
+  { field: 'zl_language', title: '语种', defaultVisible: false, minWidth: 100 },
+  { field: 'zl_word_count', title: '字数', defaultVisible: false, minWidth: 90 },
   { field: 'asst_office_case_no', title: '协办所案号', defaultVisible: false, minWidth: 110 },
   { field: 'case_coefficient', title: '案件系数', defaultVisible: false, minWidth: 95 },
   { field: 'related_case_volume', title: '同日申请', defaultVisible: false, minWidth: 110 },
@@ -90,6 +92,7 @@ export const PATENT_OBJECT_FIELDS = new Set<string>([
   'user_assistant',
   'case_foreign_pic_user',
   'country',
+  'retrieval_unit',
   'p_case_info_flow_user_id',
   'business_type',
   'case_status',
@@ -199,7 +202,9 @@ export const PATENT_CHECK_FIELDS = new Set<string>([
   'proc_status_isnull',
   'back_inventor_date_isnull',
   'foreign_pic_isnull',
-  'protection_center_isnull'
+  'protection_center_isnull',
+  'wsbdz_finish_doc_date_isnull',
+  'wsbdz_finish_revise_date_isnull'
 ])
 
 /** 全部允许的文本/日期/下拉/树选字段（按原站 #table_element DOM 顺序）。 */
@@ -235,6 +240,7 @@ export const PATENT_TEXT_FIELDS = [
   'user_assistant',
   'case_foreign_pic_user',
   'country',
+  'retrieval_unit',
   'p_case_info_flow_user_id',
   'pub_no',
   'pub_date_start',
@@ -326,6 +332,10 @@ export const PATENT_TEXT_FIELDS = [
   'generation_status',
   'generation_status_date_start',
   'generation_status_date_end',
+  'zl_language',
+  'zl_word_count_start',
+  'zl_word_count_end',
+  'retrieval_unit',
   'pat_remark',
   'review_no',
   'expected_date_start',
@@ -429,7 +439,12 @@ export const PATENT_TEXT_FIELDS = [
   'protection_center',
   'customer_id',
   'related_type',
-  'proc_user_assistant'
+  'proc_user_assistant',
+  'wsbdz_revise_title',
+  'wsbdz_finish_doc_date_start',
+  'wsbdz_finish_doc_date_end',
+  'wsbdz_finish_revise_date_start',
+  'wsbdz_finish_revise_date_end'
 ] as const
 
 const PATENT_TEXT_FIELD_SET = new Set<string>(PATENT_TEXT_FIELDS)
@@ -545,6 +560,13 @@ export const PATENT_SELECTS: Record<string, PatentOptionItem[]> = {
     { value: '1', label: '一级' },
     { value: '2', label: '二级' },
     { value: '3', label: '三级' }
+  ],
+  wsbdz_revise_title: [
+    { value: '', label: '请选择' },
+    ...Array.from({ length: 12 }, (_, idx) => {
+      const label = `第${idx + 1}次看稿`
+      return { value: label, label }
+    })
   ],
   translate_orient: [
     { value: '', label: '请选择' },

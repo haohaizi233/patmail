@@ -3,7 +3,11 @@ import { EASY_PAGE_WORLD_CHANNEL, type EasyPageWorldReply } from '../shared/easy
 /** Serialized by Chrome into the requested document; it must not capture extension variables. */
 function runEasyPageWorld(action: string, id: string, title: string, path: string, origin: string): EasyPageWorldReply {
   if (location.origin !== origin) return { ok: false, message: '原网站页面已经变化，请重新读取。' }
-  const page = window as Window & { _UserMenu?: unknown; AddBusinessTab?: (id: string, title: string, path: string) => void }
+  const page = window as Window & {
+    _UserMenu?: unknown
+    AddBusinessTab?: (id: string, title: string, path: string) => void
+    $?: { dialog?: (options: Record<string, unknown>) => unknown }
+  }
   const nodes: unknown[] = Array.isArray(page._UserMenu) ? page._UserMenu : []
   const menu = nodes.filter((node): node is Record<string, unknown> => Boolean(node) && typeof node === 'object')
     .filter(node => node.is_business || node.is_page)
@@ -19,7 +23,14 @@ function runEasyPageWorld(action: string, id: string, title: string, path: strin
     if (new URL(path, location.href).origin !== origin) return { ok: false, message: '只能打开当前 EASY 系统的页面。' }
   } catch { return { ok: false, message: '原网站页面地址无效。' } }
   const bare = path.split('?')[0].toLowerCase()
-  const allowed = bare.includes('forms/faq') || menu.some(node => typeof node.menu_url === 'string' && node.menu_url.toLowerCase() === bare)
+  if (bare === 'ihgforms/downloadlist.aspx' && typeof page.$?.dialog === 'function') {
+    page.$.dialog({
+      title: '下载清单', id: 'DownloadList', content: 'url:Ihgforms/DownloadList.aspx',
+      width: 960, height: 530, lock: true, max: false, min: false, resize: false
+    })
+    return { ok: true }
+  }
+  const allowed = bare.includes('forms/faq') || bare === 'ihgforms/downloadlist.aspx' || menu.some(node => typeof node.menu_url === 'string' && node.menu_url.toLowerCase() === bare)
   if (!allowed) return { ok: false, message: '原网站菜单里没有这个页面，不能打开。' }
   page.AddBusinessTab(id, title, path)
   return { ok: true }

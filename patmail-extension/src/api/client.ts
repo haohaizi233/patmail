@@ -49,6 +49,7 @@ import type {
 import type { NoticeTaskStatusEvent } from '../shared/notice-status'
 import { normalizeFeeSearch } from './fee-search-normalizer'
 import type { FeeApplicantItem, FeeCustomerItem, FeeInitData, FeeOptionItem, FeeSearchResult, FeeTypeItem } from './fee-search-types'
+import { buildPatentExportParams } from './patent-export'
 import { buildPatentSearchParams, type PatentSearchQuery } from './patent-search-params'
 import { normalizePatentBasicDicts, normalizePatentSearch } from './patent-search-normalizer'
 import { PATENT_CASE_TYPE_ID } from './patent-form'
@@ -1029,7 +1030,7 @@ export class EasyRuntime {
       p.set('log_pagename', 'ICSearch.aspx')
       return this.transport.post(op, p)
     }
-    const [basicRes, branchRes, deptRes, userRes, agentRes, colRes, listColRes, contractRes, customFieldRes] = await Promise.all([
+    const [basicRes, branchRes, deptRes, userRes, agentRes, colRes, listColRes, contractRes, customFieldRes, zlLangRes] = await Promise.all([
       post('basicData', { Call: 'IPGetBasicData' }),
       post('deptBranch', { Call: 'GetDeptBranch' }),
       post('deptTree', { Call: 'LoadDeptTree' }),
@@ -1038,7 +1039,8 @@ export class EasyRuntime {
       post('fieldColumn', { Call: 'GetFieldColumn' }),
       post('listColumn', { Call: 'LoadListColumn', belong_key: 'CaseInfo.ashx_CaseList' }),
       post('contractInit', { Call: 'InitContractStatus' }),
-      post('caseCustomField', { Call: 'GetCustomField', table_name: 'p_case_info' })
+      post('caseCustomField', { Call: 'GetCustomField', table_name: 'p_case_info' }),
+      post('zlLanguage', { Call: 'GetZLLanguage' })
     ])
     if (!basicRes.ok) return basicRes
 
@@ -1107,10 +1109,26 @@ export class EasyRuntime {
       }
     }
 
+    const zlLanguageRows = zlLangRes.ok
+      ? Array.isArray(zlLangRes.data)
+        ? zlLangRes.data.filter(isRecord)
+        : isRecord(zlLangRes.data)
+          ? (arr(zlLangRes.data, 'Result').length ? arr(zlLangRes.data, 'Result') : arr(zlLangRes.data, 'TableRows'))
+          : []
+      : []
+    const zlLanguages = zlLanguageRows
+      .map(row => {
+        const value = str(row.dictionary_id ?? row.value ?? row.id)
+        const label = str(row.text_zh_cn ?? row.name ?? row.label)
+        return value && label ? { value, label } : null
+      })
+      .filter((x): x is { value: string; label: string } => x !== null)
+
     return {
       ok: true,
       data: {
         ...basicDicts,
+        zlLanguages,
         businessCoops,
         branchDepts: branchRes.ok ? toTree(arr(branchRes.data, 'BranchList'), 'dept_id', 'dept_name') : [],
         depts: deptRes.ok ? toTree(arr(deptRes.data, 'DeptTree'), 'id', 'name') : [],
@@ -1414,6 +1432,7 @@ export class EasyRuntime {
       if (info && info.Result === false) {
         return apiError('BUSINESS_ERROR', str(info.Message) || '删除模板失败。')
       }
+      if (request.belongKey === 'ICSearch' && info?.Result !== true) return apiError('INVALID_RESPONSE', '原站未确认删除模板。')
       let templates = readTemplates(body)
       if (templates.some(t => t.typeId === typeId)) {
         return apiError('BUSINESS_ERROR', '原站删除模板未能生效，该模板仍然存在。')
@@ -1435,7 +1454,7 @@ export class EasyRuntime {
     const cols = request.columns ?? []
     if (!cols.length) return apiError('INVALID_QUERY', '请至少选择一个导出栏位。')
     if (!modelName) return apiError('INVALID_QUERY', '请输入模板名称。')
-    const element = buildTemplateElementXml(cols)
+    const element = buildTemplateElementXml(cols, request.belongKey === 'ICSearch')
 
     if (request.action === 'add') {
       const p = new URLSearchParams({
@@ -1457,6 +1476,7 @@ export class EasyRuntime {
       if (info && info.Result === false) {
         return apiError('BUSINESS_ERROR', str(info.Message) || '保存模板失败。')
       }
+      if (request.belongKey === 'ICSearch' && info?.Result !== true) return apiError('INVALID_RESPONSE', '原站未确认保存模板。')
       let templates = readTemplates(body)
       // 若原站未直接回传最新 out_model 或未能匹配，发起只读回查验证目标模板是否存在
       const foundInBody = templates.some(t => t.typeText === modelName)
@@ -1496,6 +1516,7 @@ export class EasyRuntime {
     if (info && info.Result === false) {
       return apiError('BUSINESS_ERROR', str(info.Message) || '更新模板失败。')
     }
+    if (request.belongKey === 'ICSearch' && info?.Result !== true) return apiError('INVALID_RESPONSE', '原站未确认更新模板。')
     let templates = readTemplates(body)
     if (!templates.length) {
       const verifyResp = await this.manageFeeExportConfig({ action: 'list', belongKey: request.belongKey })
@@ -1516,11 +1537,18 @@ export class EasyRuntime {
       return apiError('INVALID_QUERY', '请至少选择一个导出栏位。')
     }
 
-    let op: 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
+    let op: 'patentExport' | 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
     let callName: string
     let p: URLSearchParams
 
-    if (request.mode === 'checked') {
+    if (request.mode === 'patent') {
+      if (!isWriteSwitchOpen()) return apiError('BUSINESS_ERROR', '写开关已关闭。')
+      const permission = await this.transport.readPatentExportPermission()
+      if (!permission.ok) return permission
+      if (!isWriteSwitchOpen()) return apiError('BUSINESS_ERROR', '写开关已关闭。')
+      op = 'patentExport'
+      p = buildPatentExportParams(request.query, permission.data, request.columns)
+    } else if (request.mode === 'checked') {
       const feeIds = (request.feeIds ?? []).map(id => id.trim()).filter(Boolean)
       if (!feeIds.length) {
         return apiError('INVALID_QUERY', '请先勾选要导出的费用记录。')
@@ -1542,8 +1570,10 @@ export class EasyRuntime {
       p.set('PageSize', String(request.query?.pageSize ?? 10))
     }
 
-    p.set('e_coulums', xml)
-    p.set('log_pagename', 'IhgAdvExport.aspx')
+    if (request.mode !== 'patent') {
+      p.set('e_coulums', xml)
+      p.set('log_pagename', 'IhgAdvExport.aspx')
+    }
 
     const response = await this.transport.post(op, p, undefined, request.timeoutMs)
     if (!response.ok) {
@@ -1559,6 +1589,9 @@ export class EasyRuntime {
     if (info && info.Result === false) {
       const msg = typeof info.Message === 'string' && info.Message.trim() ? info.Message.trim() : '原站导出失败。'
       return apiError('BUSINESS_ERROR', msg)
+    }
+    if (request.mode === 'patent' && info?.Result !== true) {
+      return apiError('INVALID_RESPONSE', '原站未确认专利清单导出。')
     }
     if (info && info.Asyn === true) {
       return {

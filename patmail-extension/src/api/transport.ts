@@ -6,7 +6,7 @@ import { apiError, type ApiResult } from './types'
 
 export type EasyOperation =
   | 'session' | 'fileSearch' | 'historyQuery' | 'historySave' | 'historyDelete'
-  | 'basicData' | 'flowDirection' | 'fileTypeTree' | 'fieldColumn' | 'listColumn' | 'mailType'
+  | 'basicData' | 'zlLanguage' | 'flowDirection' | 'fileTypeTree' | 'fieldColumn' | 'listColumn' | 'mailType'
   | 'deptTree' | 'treeUser' | 'treeAgent' | 'fileTempList' | 'fileTempSave' | 'fileTempDelete' | 'deptBranch' | 'applyTags' | 'limitInit' | 'limitCtrlProc'
   | 'mailCustomer' | 'mailInfoInit' | 'getMailInfo' | 'getMailFile' | 'getMailCase'
   | 'getMailRule' | 'getCustomerContact' | 'getRecentContact' | 'getCaseContact' | 'getSalesContact' | 'getPicsContact' | 'getCaseAgentContact' | 'getSignature' | 'getMailSet' | 'mailSignatureList' | 'signatureSet' | 'caseDemand' | 'customerPageDemand' | 'customerPageContact' | 'saveMailInfo' | 'saveMailRelatedFiles'
@@ -18,7 +18,7 @@ export type EasyOperation =
   | 'feeSearch' | 'feeSearchAmount' | 'caseFeeList'
   | 'feeSearchInit' | 'feeCustomerTree' | 'feeApplicantTree' | 'feeAgencyList' | 'feeContactInit' | 'feeProducts' | 'feeTechnical'
   | 'feeExportConfig' | 'feeExportConfigSave' | 'feeExportConfigUpdate'
-  | 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond'
+  | 'feeExportByCond' | 'feeExportByChecked' | 'feeExportCountByCond' | 'patentExport'
   | 'noticeApplyType' | 'noticeAgency' | 'noticeDirectionType' | 'noticeCountry'
   | 'noticeCpcAccount' | 'noticeCpcTzsDate' | 'noticeNolaiutoCount'
   | 'noticeCheckUserStatus' | 'noticeCpcTzsUser' | 'noticeReplayTzsStatus'
@@ -52,6 +52,7 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   historySave: { path: '/AjaxServers/CaseInfo.ashx', call: 'SearchQueryHisSave' },
   historyDelete: { path: '/AjaxServers/CaseInfo.ashx', call: 'SearchQueryHisDelete' },
   basicData: { path: '/AjaxServers/CaseInfo.ashx', call: 'IPGetBasicData' },
+  zlLanguage: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetZLLanguage' },
   flowDirection: { path: '/AjaxServers/CaseInfo.ashx', call: 'GetFlowdirection' },
   fileTypeTree: { path: '/AjaxServers/Common.ashx', call: 'LoadFileTypeByCaseType' },
   noticeDetailFileTypes: { path: '/AjaxServers/Common.ashx', call: 'LoadFileTypeByTypeID' },
@@ -133,6 +134,7 @@ const ROUTES: Record<EasyOperation, { path: string; call: string }> = {
   feeExportConfig: { path: '/AjaxServers/Common.ashx', call: 'GetQueryOutConfig' },
   feeExportConfigSave: { path: '/AjaxServers/Common.ashx', call: 'UpdateQueryOutConfig' },
   feeExportConfigUpdate: { path: '/AjaxServers/Common.ashx', call: 'UpdateQueryOutConfigNew' },
+  patentExport: { path: '/AjaxServers/CaseInfo.ashx', call: 'ICCaseSearchToExcel' },
   feeExportByCond: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListByCond' },
   feeExportByChecked: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListByChecked' },
   feeExportCountByCond: { path: '/AjaxServers/Report.ashx', call: 'ExcelFeeListCountByCond' },
@@ -258,7 +260,7 @@ const SLOW_OPERATIONS = new Set<EasyOperation>([
 const NON_RETRYABLE_OPERATIONS = new Set<EasyOperation>([
   'mailCustomer', 'saveMailInfo', 'saveMailRelatedFiles', 'historySave', 'historyDelete',
   'fileTempSave', 'fileTempDelete', 'limitMailCustomer', 'mailSubmit', 'fileDownload',
-  'feeExportConfigSave', 'feeExportConfigUpdate', 'feeExportByCond', 'feeExportByChecked', 'feeExportCountByCond',
+  'feeExportConfigSave', 'feeExportConfigUpdate', 'feeExportByCond', 'feeExportByChecked', 'feeExportCountByCond', 'patentExport',
   'noticeExportReport', 'noticeExportTzs', 'noticeExportCert', 'noticeExportReplay',
   'noticeImport', 'noticeImportCloseCase', 'noticeRecoveryProcess', 'noticeReMatch',
   'noticeUpdateProcess', 'noticeChangeNolaiuto', 'noticeUpdateCaseName', 'noticeSaveDetail',
@@ -270,7 +272,7 @@ const NON_RETRYABLE_OPERATIONS = new Set<EasyOperation>([
 
 const SEARCH_TIMEOUT_OPERATIONS = new Set<EasyOperation>([
   'fileSearch', 'limitMonitor', 'filingSearch', 'feeSearch', 'feeSearchAmount',
-  'feeExportByCond', 'feeExportByChecked', 'feeExportCountByCond',
+  'feeExportByCond', 'feeExportByChecked', 'feeExportCountByCond', 'patentExport',
   'noticeSearch', 'noticeImportList', 'noticeUnProcessTzsList', 'noticeCertList', 'noticeReplayTzsList',
   'noticeHandList', 'noticeHandHisList', 'noticeNolaiutoList', 'noticeHandExcelList',
   'noticeExportReport', 'noticeExportTzs', 'noticeExportCert', 'noticeExportReplay'
@@ -364,6 +366,25 @@ export class EasyTransport {
     }
     if (signal?.aborted) return apiError('REQUEST_ABORTED', '请求已取消。')
     return this.sendForm(route.path, params, this.waitMs(operation, timeoutMs), signal, onBytes, networkPool)
+  }
+
+  async readPatentExportPermission(): Promise<ApiResult<string>> {
+    if (!this.origin) return apiError('INVALID_ORIGIN', '当前页面不属于受信任的 EASY 站点。')
+    try {
+      const response = await this.fetcher(`${this.origin}/Forms/Patent/ICSearch.aspx`, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: AbortSignal.timeout(this.timeoutMs)
+      })
+      if (!response.ok) return apiError('NETWORK_ERROR', '无法读取原站专利查询权限。')
+      const html = await response.text()
+      const pageAuth = html.match(/\bvar\s+PageAuth\s*=\s*["']([^"'\r\n]{0,128})["']/)?.[1]
+      if (!pageAuth?.includes('E')) return apiError('BUSINESS_ERROR', '原站未授予当前账号专利清单导出权限。')
+      return { ok: true, data: pageAuth }
+    } catch {
+      return apiError('NETWORK_ERROR', '无法读取原站专利查询权限。')
+    }
   }
 
   /** DownLoad 打包后取压缩包的地址（原站把隐藏 iframe 指到这里，浏览器负责落盘）。 */

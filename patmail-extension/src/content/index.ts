@@ -406,11 +406,17 @@ const bridge: MessageBridge = {
       case MessageType.FeeExportConfig:
         return { type: MessageType.FeeExportConfigResult,
           payload: await easyRuntime.manageFeeExportConfig(message.payload) }
-      case MessageType.ExportFee:
+      case MessageType.ExportFee: {
+        const patent = message.payload.mode === 'patent'
+        const exported = await easyRuntime.exportFees(message.payload)
+        if (patent && exported.ok && exported.data.async) {
+          await openEasyTab('DownloadList', '下载清单', 'Ihgforms/DownloadList.aspx').catch(() => null)
+        }
         return {
           type: MessageType.ExportFeeResult,
-          payload: await deliverExportedExcel(await easyRuntime.exportFees(message.payload), '费用')
+          payload: await deliverExportedExcel(exported, patent ? '专利' : '费用')
         }
+      }
       case MessageType.LoadNoticeInit:
         return {
           type: MessageType.LoadNoticeInitResult,

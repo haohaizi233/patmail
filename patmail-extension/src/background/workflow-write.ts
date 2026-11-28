@@ -1,3 +1,4 @@
+import { PATENT_EXPORT_WORKFLOW_ID } from '../api/fee-export'
 import { MessageType, isMessage, type ContentRequest } from '../shared/message'
 import { isWriteSwitchOpen } from '../settings/write-switch'
 import { isRecord } from '../shared/guards'
@@ -37,6 +38,14 @@ export function workflowWriteStep(message: ContentRequest, targeted: boolean, wo
     }
     if (action === 'importCheck') return null
     if (workflowId) return { workflow: workflowId, step: action, target: '', once: false, requestType }
+  }
+  if (message.type === MessageType.FeeExportConfig && message.payload.belongKey === 'ICSearch') {
+    const { action, typeId } = message.payload
+    if (action === 'list' || action === 'detail') return null
+    return { workflow: PATENT_EXPORT_WORKFLOW_ID, step: action, target: typeId?.toLowerCase() || 'templates', once: false, requestType }
+  }
+  if (message.type === MessageType.ExportFee && message.payload.mode === 'patent') {
+    return { workflow: PATENT_EXPORT_WORKFLOW_ID, step: 'export', target: '', once: false, requestType }
   }
   if (!workflowId || READ_ONLY_WORKFLOW_REQUESTS.has(requestType)) return null
   return { workflow: workflowId, step: requestType, target: '', once: false, requestType }

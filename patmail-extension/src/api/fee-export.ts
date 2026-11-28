@@ -1,8 +1,11 @@
+import type { PatentSearchQuery } from './patent-search-types'
 import type { FeeSearchQuery } from './fee-search-params'
+
+export const PATENT_EXPORT_WORKFLOW_ID = 'patent-list-export'
 
 export type FeeExportMode = 'cond' | 'checked' | 'count'
 
-export type FeeExportBelongKey = 'FeeSearch_ExportByCond' | 'FeeSearch_ExportCountByCond' | 'NoticeInfo'
+export type FeeExportBelongKey = 'FeeSearch_ExportByCond' | 'FeeSearch_ExportCountByCond' | 'NoticeInfo' | 'ICSearch'
 
 export interface FeeExportColumn {
   value: string
@@ -42,13 +45,11 @@ export interface FeeExportConfigResponse {
   message?: string
 }
 
-export interface FeeExportRequest {
-  mode: FeeExportMode
-  query?: FeeSearchQuery
-  feeIds?: string[]
+export type FeeExportRequest = {
   columns: Array<{ value: string; text: string }>
   timeoutMs?: number
-}
+} & ({ mode: FeeExportMode; query?: FeeSearchQuery; feeIds?: string[] }
+  | { mode: 'patent'; query: PatentSearchQuery })
 
 export type FeeExportStatus =
   | 'requested'
@@ -94,13 +95,13 @@ export function isValidXmlElementName(name: string): boolean {
 }
 
 /** 清理并去重栏位列表 */
-export function sanitizeExportColumns(columns: Array<{ value: string; text: string }>): Array<{ value: string; text: string }> {
+export function sanitizeExportColumns(columns: Array<{ value: string; text: string }>, keepRepeated = false): Array<{ value: string; text: string }> {
   const result: Array<{ value: string; text: string }> = []
   const seen = new Set<string>()
   for (const col of columns || []) {
     const value = (col.value || '').trim()
     const text = (col.text || '').trim()
-    if (!value || !text || seen.has(value)) continue
+    if (!value || !text || (!keepRepeated && seen.has(value))) continue
     if (!isValidXmlElementName(value)) continue
     seen.add(value)
     result.push({ value, text })
@@ -109,16 +110,16 @@ export function sanitizeExportColumns(columns: Array<{ value: string; text: stri
 }
 
 /** 构造原站 IhgAdvExport.Submit 的 e_coulums 参数（实体编码 XML，绕过 ASP.NET 请求校验） */
-export function buildExportColumnsXml(columns: Array<{ value: string; text: string }>): string {
-  const sanitized = sanitizeExportColumns(columns)
+export function buildExportColumnsXml(columns: Array<{ value: string; text: string }>, keepRepeated = false): string {
+  const sanitized = sanitizeExportColumns(columns, keepRepeated)
   return sanitized
     .map(col => `&lt;${col.value}&gt;${escapeInnerText(col.text)}&lt;/${col.value}&gt;`)
     .join('')
 }
 
 /** 构造原站 IhgAdvExport.SaveOutItemModel / UpOutItemModel 的 element 参数 */
-export function buildTemplateElementXml(columns: Array<{ value: string; text: string }>): string {
-  const sanitized = sanitizeExportColumns(columns)
+export function buildTemplateElementXml(columns: Array<{ value: string; text: string }>, keepRepeated = false): string {
+  const sanitized = sanitizeExportColumns(columns, keepRepeated)
   return sanitized
     .map((col, idx) => (
       `&lt;item&gt;&lt;value&gt;${col.value}&lt;/value&gt;&lt;text&gt;${escapeInnerText(col.text)}&lt;/text&gt;&lt;sort&gt;${idx + 1}&lt;/sort&gt;&lt;/item&gt;`

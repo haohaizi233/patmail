@@ -8,4 +8,5 @@ export interface HistoryQueryDetail {
   id: string
   name: string
   queryXml: string
+  outXml?: string
 }

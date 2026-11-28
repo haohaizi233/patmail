@@ -51,7 +51,7 @@ export function normalizeHistorySave(data: unknown): ApiResult<{ saved: true }> 
   return apiError('INVALID_RESPONSE', '保存查询模板的响应没有成功标记。', undefined)
 }
 
-export function normalizeHistoryDetail(data: unknown, queryId: string): ApiResult<{ id: string; queryXml: string; name?: string }> {
+export function normalizeHistoryDetail(data: unknown, queryId: string): ApiResult<{ id: string; queryXml: string; outXml?: string; name?: string }> {
   if (!isRecord(data)) return apiError('INVALID_RESPONSE', '历史模板详情不是对象。')
   const auth = authFailure(data)
   if (auth) return auth
@@ -69,5 +69,5 @@ export function normalizeHistoryDetail(data: unknown, queryId: string): ApiResul
   if (!isRecord(row) || typeof row.query_xml !== 'string' || !row.query_xml.trim()) {
     return apiError('INVALID_QUERY', '未找到该历史模板。')
   }
-  return { ok: true, data: { id: queryId, ...(name ? { name } : {}), queryXml: row.query_xml } }
+  return { ok: true, data: { id: queryId, ...(name ? { name } : {}), queryXml: row.query_xml, ...(typeof row.out_xml === 'string' && row.out_xml ? { outXml: row.out_xml } : {}) } }
 }

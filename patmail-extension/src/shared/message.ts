@@ -1119,7 +1119,7 @@ export function isMessage(value: unknown): value is AppMessage {
       const p = value.payload
       if (!isRecord(p)) return false
       if (p.action !== 'list' && p.action !== 'detail' && p.action !== 'add' && p.action !== 'up' && p.action !== 'del') return false
-      if (p.belongKey !== 'FeeSearch_ExportByCond' && p.belongKey !== 'FeeSearch_ExportCountByCond' && p.belongKey !== 'NoticeInfo') return false
+      if (p.belongKey !== 'FeeSearch_ExportByCond' && p.belongKey !== 'FeeSearch_ExportCountByCond' && p.belongKey !== 'NoticeInfo' && p.belongKey !== 'ICSearch') return false
       if (p.typeId !== undefined && typeof p.typeId !== 'string') return false
       if (p.modelName !== undefined && typeof p.modelName !== 'string') return false
       if (p.columns !== undefined && (!Array.isArray(p.columns) || p.columns.length > 300 || !p.columns.every(c => isRecord(c) && typeof c.value === 'string' && typeof c.text === 'string'))) return false
@@ -1128,9 +1128,9 @@ export function isMessage(value: unknown): value is AppMessage {
     case MessageType.ExportFee: {
       const p = value.payload
       if (!isRecord(p)) return false
-      if (p.mode !== 'cond' && p.mode !== 'checked' && p.mode !== 'count') return false
+      if (p.mode !== 'cond' && p.mode !== 'checked' && p.mode !== 'count' && p.mode !== 'patent') return false
       if (!Array.isArray(p.columns) || p.columns.length === 0 || p.columns.length > 300 || !p.columns.every(c => isRecord(c) && typeof c.value === 'string' && typeof c.text === 'string')) return false
-      if (p.query !== undefined && !isFeeSearchQuery(p.query)) return false
+      if (p.mode === 'patent' ? !isPatentSearchQuery(p.query) || p.feeIds !== undefined : p.query !== undefined && !isFeeSearchQuery(p.query)) return false
       if (p.feeIds !== undefined && (!Array.isArray(p.feeIds) || p.feeIds.length > 5000 || !p.feeIds.every(id => typeof id === 'string'))) return false
       if (p.timeoutMs !== undefined && fileSearchTimeoutMs(p.timeoutMs) !== p.timeoutMs) return false
       return Object.keys(p).every(k => k === 'mode' || k === 'query' || k === 'feeIds' || k === 'columns' || k === 'timeoutMs')

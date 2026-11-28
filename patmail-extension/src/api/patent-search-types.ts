@@ -44,6 +44,7 @@ export interface PatentInitData {
   customerFroms: PatentOptionItem[]
   fromStages: TreeOption[]
   generationStatuses: PatentOptionItem[]
+  zlLanguages?: PatentOptionItem[]
   protectionCenters: PatentOptionItem[]
   applicantTypes: PatentOptionItem[]
   sourceTypes: PatentOptionItem[]

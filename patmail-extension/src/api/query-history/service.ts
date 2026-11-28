@@ -49,7 +49,7 @@ export class HistoryQueryService {
     }
     const name = detail.data.name ?? cachedName
     if (!name) return apiError('INVALID_RESPONSE', '历史模板详情没有标题。')
-    return { ok: true, data: { id, name, queryXml: detail.data.queryXml } }
+    return { ok: true, data: { id, name, queryXml: detail.data.queryXml, ...(surface === 'patent' && detail.data.outXml ? { outXml: detail.data.outXml } : {}) } }
   }
 
   async save(userKey: string, surface: HistorySurface, input: { title: string; queryId: string; queryXml: string }, signal?: AbortSignal): Promise<ApiResult<{ saved: true }>> {
