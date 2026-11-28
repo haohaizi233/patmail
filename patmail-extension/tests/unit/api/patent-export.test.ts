@@ -30,8 +30,11 @@ describe('patent list export', () => {
     let result = true
     const runtime = new EasyRuntime('http://183.36.43.66:88', {
       fetcher: async (input, init) => {
-        const path = new URL(String(input)).pathname
-        calls.push({ path, data: new URLSearchParams(String(init?.body ?? '')) })
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        const path = new URL(url).pathname
+        const body = init?.body
+        const bodyText = typeof body === 'string' ? body : body instanceof URLSearchParams ? body.toString() : ''
+        calls.push({ path, data: new URLSearchParams(bodyText) })
         if (path === '/Forms/Patent/ICSearch.aspx') return new Response(`<script>var PageAuth="${permission}"</script>`)
         return Response.json({ ClientInfo: { Result: result, Asyn: true } })
       }

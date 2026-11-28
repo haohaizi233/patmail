@@ -87,9 +87,12 @@ describe('patent export modal', () => {
       for (const [label, action] of [['保存', 'add'], ['更新', 'up'], ['删除', 'del']]) {
         button(label).click()
         await settle()
-        expect(request).toHaveBeenLastCalledWith(expect.objectContaining({
-          type: MessageType.FeeExportConfig, payload: expect.objectContaining({ action, belongKey: 'ICSearch' })
-        }))
+        const last = request.mock.lastCall?.[0]
+        expect(last?.type).toBe(MessageType.FeeExportConfig)
+        if (last?.type === MessageType.FeeExportConfig) {
+          expect(last.payload.action).toBe(action)
+          expect(last.payload.belongKey).toBe('ICSearch')
+        }
       }
       expect(picked()).toHaveLength(0)
       serial.click()
