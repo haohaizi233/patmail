@@ -65,9 +65,9 @@ pnpm cdp:stop
 在 `patmail-extension` 目录运行：
 
 ```powershell
-node scripts/cdp-observer.mjs deep-status
-node scripts/cdp-observer.mjs deep-enable --target <已授权海牙标签页的CDP-targetId>
-node scripts/cdp-observer.mjs deep-disable
+node scripts/cdp/cdp-observer.mjs deep-status
+node scripts/cdp/cdp-observer.mjs deep-enable --target <已授权海牙标签页的CDP-targetId>
+node scripts/cdp/cdp-observer.mjs deep-disable
 ```
 
 自动研究仅针对已附着的 `https://hague.wipo.int` 页面；按初始化就绪顺序启用一个目标，已有目标时保持稳定，多个就绪候选按targetId排序。手动deep/research-enable可用targetId指定目标并接管自动选择。控制接口沿用本机随机端口与认证令牌；令牌禁止粘贴到日志或报告。采集资源和请求租约只驻留内存，断线/导航会销毁；自动模式随后为新Session/页面重新建立采集。手动basic、deep-disable或research-disable关闭自动研究，在本次守护进程运行期间保持关闭；重新启动CDP服务恢复默认自动开启。浏览器提示连接授权时需用户允许，不能绕过。
@@ -81,7 +81,7 @@ Debugger 先设置 `skipAllPauses=true` 再 enable；禁止设置、删除或修
 实时CDP回流缺失时，先在本机将Observer JSONL转换为面板可接受的version1 Trace JSONL，再通过诊断面板离线回放导入：
 
 ```powershell
-node scripts/hague-diagnostics-export.mjs ../log/cdp/<日志文件>.jsonl ./test-results/hague-safe-trace.jsonl
+node scripts/hague/diagnostics/hague-diagnostics-export.mjs ../log/cdp/<日志文件>.jsonl ./test-results/hague-safe-trace.jsonl
 ```
 
 导出限32MB输入、20,000条记录；仅转换已知海牙network事件、安全应用Trace和版本化AST元数据，其余丢弃。导出不产生业务网络请求，不给CDP事件补造案件ID，关联默认为unmatched。原始源码、正文、输入值不会进入转换结果。AST只公开经过共享Schema过滤的call类型、组件/表单/process/update、参数名称、安全位置和哈希，明确为静态证据。
@@ -97,6 +97,6 @@ node scripts/hague-diagnostics-export.mjs ../log/cdp/<日志文件>.jsonl ./test
 
 ## 2026-11-14 Research Mode
 
-新增显式 `research-enable --target TARGET_ID`、`research-status`、`research-disable` 和 `basic` 命令（入口仍为 `node scripts/cdp-observer.mjs`）。按用户2026-11-14的新要求，普通start/build随CDP默认启用自动研究，附着到海牙页面后开始采集。正文仅在受控研究准入下短暂读取解析，原始正文不入日志；全局普通方法允许表仍不提供任意getResponseBody转发。详情、预算、生命周期和验收见 [全链路研究诊断](hague-full-chain-diagnostics.md)。旧deep命令继续兼容。
+新增显式 `research-enable --target TARGET_ID`、`research-status`、`research-disable` 和 `basic` 命令（入口仍为 `node scripts/cdp/cdp-observer.mjs`）。按用户2026-11-14的新要求，普通start/build随CDP默认启用自动研究，附着到海牙页面后开始采集。正文仅在受控研究准入下短暂读取解析，原始正文不入日志；全局普通方法允许表仍不提供任意getResponseBody转发。详情、预算、生命周期和验收见 [全链路研究诊断](hague-full-chain-diagnostics.md)。旧deep命令继续兼容。
 
 自动研究每个Session/URL只尝试启用一次，不因轮询不断重置预算；导航/重连后以新生命周期重新尝试。失败只影响诊断，不触发业务操作。保留单目标架构，未同时读取所有海牙标签页；页面离开白名单时停止采集。

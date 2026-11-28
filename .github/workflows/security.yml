@@ -32,9 +32,9 @@ jobs:
           fetch-depth: 0 # 历史扫描需要完整提交历史
       - uses: ./.github/actions/setup-patmail
       - name: 工作树扫描
-        run: node scripts/scan-secrets.mjs
+        run: node scripts/security/scan-secrets.mjs
       - name: Git 历史扫描（指纹登记见 ci/secret-allowlist.json）
-        run: node scripts/scan-secrets.mjs --history
+        run: node scripts/security/scan-secrets.mjs --history
       - name: 上传扫描报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -55,7 +55,7 @@ jobs:
       - name: 锁文件完整性（--frozen-lockfile 已在安装阶段校验）
         run: node -e "console.log('lockfile ok:', require('./package.json').packageManager)"
       - name: 直接依赖许可策略
-        run: node scripts/license-check.mjs
+        run: node scripts/security/license-check.mjs
       - name: 上传审计报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

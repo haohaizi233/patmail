@@ -8,9 +8,9 @@
 
 | 缺陷 | 文件 | 最小修复 |
 | --- | --- | --- |
-| FIX-01 / FIX-02：Worker 动作字段被忽略，集合比较漏掉顺序 | `scripts/hague-research-worker.mjs`、`src/hague/diagnostics/protocol/jsf-diff.mjs` / `.d.mts` | Worker 使用标准 `actionTypes`，显式标记观测有效性。比较器在同一模块内规范化旧 `expectedActions`、`observedActions`、`actionTypes` 及原有 `actions`；缺失、非法或互相冲突的动作字段不能构成相同证据。逐项保留顺序及重复次数，增加 `action_sequence_changed`。空数组与未采集明确区分。解析失败或不支持的协议为 `unresolved`。 |
+| FIX-01 / FIX-02：Worker 动作字段被忽略，集合比较漏掉顺序 | `scripts/hague/research/hague-research-worker.mjs`、`src/hague/diagnostics/protocol/jsf-diff.mjs` / `.d.mts` | Worker 使用标准 `actionTypes`，显式标记观测有效性。比较器在同一模块内规范化旧 `expectedActions`、`observedActions`、`actionTypes` 及原有 `actions`；缺失、非法或互相冲突的动作字段不能构成相同证据。逐项保留顺序及重复次数，增加 `action_sequence_changed`。空数组与未采集明确区分。解析失败或不支持的协议为 `unresolved`。 |
 | FIX-03 / FIX-04：把有指纹误当作已比较；只选首个结论 | Worker、`src/hague/diagnostics/reports.ts`、`schema.mjs`、`trace.ts` | Worker 无基线也显式输出 `baseline_missing`，以 `driftCompared` 标明有效比较。报告对所有相关观测确定性聚合，经过白名单清洗后仍保留标记。可信漂移优先；不完整比较、缺失与有效比较混合、多版本基线均不能整体输出 `no_drift`。JSON 和 Markdown 同时显示版本列表及部分结论标记。静态 AST 指纹不作为运行时比较。 |
-| FIX-05 / FIX-06：取消丢失身份，退化为全局 requestId 搜索 | `scripts/hague-research.mjs`、`src/hague/diagnostics/protocol/jsf-state-machine.mjs` / `.d.mts` | 从原请求注册表取回 Session、Target、Frame、Loader、Form，验证身份后先通知 Worker 再删除本地记录；未知请求不发送清理。状态机只删除唯一匹配的注册请求，拒绝无 Session 或非法、歧义 Scope。异步摘要计算前后校验同一请求记录和 Document 仍有效，取消后的迟到结果不能写入 ViewState 历史。 |
+| FIX-05 / FIX-06：取消丢失身份，退化为全局 requestId 搜索 | `scripts/hague/research/hague-research.mjs`、`src/hague/diagnostics/protocol/jsf-state-machine.mjs` / `.d.mts` | 从原请求注册表取回 Session、Target、Frame、Loader、Form，验证身份后先通知 Worker 再删除本地记录；未知请求不发送清理。状态机只删除唯一匹配的注册请求，拒绝无 Session 或非法、歧义 Scope。异步摘要计算前后校验同一请求记录和 Document 仍有效，取消后的迟到结果不能写入 ViewState 历史。 |
 
 报告规则：可信 `drift_detected` 优先；否则存在 `unresolved`、混合缺基线或多版本基线则为 `unresolved`；全部缺基线或没有协议观测为 `baseline_missing`；只有全部有效比较且同版本无差异才为 `no_drift`。已证明的漂移可以在部分观测不完整时保留，同时标记 `driftPartial`。
 

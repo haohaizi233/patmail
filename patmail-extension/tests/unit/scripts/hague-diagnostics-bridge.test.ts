@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest'
 import {runInNewContext} from 'node:vm'
-import {buildCdpUiBridgeExpression,allowedCdpUiBridgeCommand,CdpUiBridge} from '../../../scripts/hague-diagnostics-bridge.mjs'
+import {buildCdpUiBridgeExpression,allowedCdpUiBridgeCommand,CdpUiBridge} from '../../../scripts/hague/diagnostics/hague-diagnostics-bridge.mjs'
 const trace={version:1,source:'cdp',phase:'http.response',httpStatus:200,timestamp:'2026-11-13T00:00:00Z'}
 const target={source:'app',type:'page',sessionId:'session',url:'chrome-extension://ieobhddlnmlopeagjkgbjfolpfhncikd/app.html'}
 it('fixed bridge expression never executes payload strings and only dispatches safe records',()=>{

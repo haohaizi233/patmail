@@ -1,7 +1,7 @@
 # 质量门禁（Phase 1 / 2 / 4 / 7 / 8）
 
 统一入口：`pnpm ci:check`（依次执行下表全部步骤，任何一步失败整体非零退出）。
-GitHub Actions 按步骤拆并行 Job：`node scripts/ci-check.mjs --steps <a,b,c>`。
+GitHub Actions 按步骤拆并行 Job：`node scripts/ci/ci-check.mjs --steps <a,b,c>`。
 
 | 门禁 | 命令 | 判据 | 失败行为 |
 | --- | --- | --- | --- |
@@ -26,9 +26,9 @@ GitHub Actions 按步骤拆并行 Job：`node scripts/ci-check.mjs --steps <a,b,
 - 规则：数量**低于**基线 → 通过并提示可收紧；**高于**基线或出现基线外新规则 → 失败。基线清零后等价于全库任何 ESLint error / warning 都会让门禁失败。
 - 危险规则硬门禁 0 容忍：`@typescript-eslint/no-floating-promises`、`no-misused-promises`、`no-explicit-any`（src）、`require-await`、`no-async-promise-executor`。
 - 严禁整目录关闭规则，严禁用文件级 `/* eslint-disable */` 批量屏蔽；只允许带理由的 `eslint-disable-next-line` 逐行豁免，新增豁免必须在变更说明登记理由。
-- 调整基线必须 `node scripts/eslint-ratchet.mjs --update` 并在变更说明写明原因。
+- 调整基线必须 `node scripts/quality/eslint-ratchet.mjs --update` 并在变更说明写明原因。
 - 豁免另由 `ci/eslint-exemptions.json` 冻结：记录文件、规则、诊断和受保护代码的 SHA-256 指纹，以及现有禁用指令的作用范围。同一豁免行追加问题、改动受保护代码、扩大禁用规则或增加重复出现次数都会失败；删除豁免允许，移动未改动代码不受行号影响。
-- 正常 `pnpm lint` 和 `--update` 均不能自动接受新增豁免。确有必要时显式执行 `node scripts/eslint-ratchet.mjs --update-exemptions`，审查并提交登记差异及具体理由。缺少告警基线或豁免登记时直接失败；ESLint 异常中断不能复用旧报告。
+- 正常 `pnpm lint` 和 `--update` 均不能自动接受新增豁免。确有必要时显式执行 `node scripts/quality/eslint-ratchet.mjs --update-exemptions`，审查并提交登记差异及具体理由。缺少告警基线或豁免登记时直接失败；ESLint 异常中断不能复用旧报告。
 - 早于本次清零的块级 / 文件级历史禁用也纳入登记，保守冻结从禁用处到文件末尾的代码和 `eslint-enable` 边界；修改这部分代码需重新审查登记，不能移动或删除恢复边界来扩大旧豁免。新增代码优先真正修复问题，避免继续扩大这类历史作用域。
 - `scripts/live-*` / `scripts/research-*` 保持 Node 环境；注入回调显式使用 `globalThis.chrome` / `globalThis.document` 等，宿主顶层的裸 `window` / `document` 仍由 `no-undef` 拦截。
 
@@ -56,7 +56,7 @@ GitHub Actions 按步骤拆并行 Job：`node scripts/ci-check.mjs --steps <a,b,
 
 - Provider：`@vitest/coverage-v8`；输出 text / json / json-summary / html / lcov → `test-results/coverage/`。
 - 口径：全局（summary.total）与核心模块（`src/mail、workflow、automation、background、browser-download`）分别统计（`ci-report` 输出 core 分组）。
-- **防退化门禁**：`node scripts/ci-report.mjs --coverage-gate` 对照 `ci/coverage-baseline.json`，任一指标下降即失败；首次执行自动落盘基线。
+- **防退化门禁**：`node scripts/ci/ci-report.mjs --coverage-gate` 对照 `ci/coverage-baseline.json`，任一指标下降即失败；首次执行自动落盘基线。
 - 建议目标（不是当前硬阈值，达标后逐档启用）：全局 Lines 75% / Functions 75% / Branches 65%；核心模块 Lines 85% / Branches 75%。
 - 明确禁止：排除复杂业务模块换覆盖率数字。
 - **未自动化**：新增/变更代码（diff coverage）需要比对 PR diff，依赖远端 API，当前以人工评审 + 全局防退化替代（原因：离线可复现优先）。

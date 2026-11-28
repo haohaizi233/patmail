@@ -26,7 +26,7 @@ DownLoad 的 JSON 字节数与真正文件传输的字节数是不同的指标�
 
 ## 2026-10-28 真实站点流水实验
 
-脚本：`scripts/research-name-download-pipeline.mjs`。隔离扩展浏览器，重放 HAR 中的已有查询条件，仅取第一页 6 个文件。5 个命名生产者，每次命名 1 个（用于观察时序），有界队列容量 5，1 个消费者逐文件调用 DownLoad 和 FileHandler。产品批量仍为 40。
+脚本：`scripts/download/research/research-name-download-pipeline.mjs`。隔离扩展浏览器，重放 HAR 中的已有查询条件，仅取第一页 6 个文件。5 个命名生产者，每次命名 1 个（用于观察时序），有界队列容量 5，1 个消费者逐文件调用 DownLoad 和 FileHandler。产品批量仍为 40。
 
 无人工延迟、没有 mock 业务响应。计时从开始命名算起，不含登录、查询或启动浏览器的时间。
 
@@ -46,11 +46,11 @@ DownLoad 的 JSON 字节数与真正文件传输的字节数是不同的指标�
 
 原始指标在忽略入库的 `test-results/name-download-pipeline-research.json` 与 `name-download-pipeline-live.log`。报告不包含凭据、查询条件、名称、文件编号、GUID 或正文。
 
-复现需通过环境变量显式设置 `PATMAIL_LIVE_PIPELINE_RESEARCH=1`、`PATMAIL_AUDIT_USER`、`PATMAIL_AUDIT_PASSWORD`、`PATMAIL_AUDIT_HAR`，然后运行 `node scripts/research-name-download-pipeline.mjs`。凭据不得写入代码或经验文档。脚本存在 180 秒和总计 64 MiB 的研究护栏，不是产品的超时或大小上限。
+复现需通过环境变量显式设置 `PATMAIL_LIVE_PIPELINE_RESEARCH=1`、`PATMAIL_AUDIT_USER`、`PATMAIL_AUDIT_PASSWORD`、`PATMAIL_AUDIT_HAR`，然后运行 `node scripts/download/research/research-name-download-pipeline.mjs`。凭据不得写入代码或经验文档。脚本存在 180 秒和总计 64 MiB 的研究护栏，不是产品的超时或大小上限。
 
 ## 此前已完成的流式写包实验
 
-`scripts/research-download-streaming.mjs` 的隔离扩展 OPFS 原型，用两个真实文件执行单文件 DownLoad 和 FileHandler，把 Response.body 的块直接写入 ZIP 的 STORE 条目，最后补数据描述符、中央目录与结束记录。
+`scripts/download/research/research-download-streaming.mjs` 的隔离扩展 OPFS 原型，用两个真实文件执行单文件 DownLoad 和 FileHandler，把 Response.body 的块直接写入 ZIP 的 STORE 条目，最后补数据描述符、中央目录与结束记录。
 
 - ZIP 最终 4,883,951 字节，2 个条目。没有把完整文件或最终 ZIP 聚合成 Blob。
 - 最后一次实验首块正文写入完成于 418 毫秒；条目写入于约 2.069 和 6.022 秒完成。完整实验耗时含额外的校验复制，不作为下载性能基准。

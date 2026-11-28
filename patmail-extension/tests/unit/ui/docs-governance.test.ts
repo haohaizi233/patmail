@@ -2,8 +2,8 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { checkCatalog, inspectMarkdown } from '../../../scripts/docs-check.mjs'
-import { similarity } from '../../../scripts/docs-audit.mjs'
+import { checkCatalog, inspectMarkdown } from '../../../scripts/docs/docs-check.mjs'
+import { similarity } from '../../../scripts/docs/docs-audit.mjs'
 const directories: string[] = []
 afterEach(() => {
   for (const directory of directories.splice(0)) {

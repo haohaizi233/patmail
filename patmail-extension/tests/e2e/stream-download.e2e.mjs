@@ -153,7 +153,7 @@ const stopBridge = await ensureStreamBridge()
 let context
 try {
   const health = await fetch(streamBridgeBase + '/health').then(response => response.json())
-  assert.equal(health.protocol, 'patmail-stream-v1', '先启动scripts/start-stream-download.ps1')
+  assert.equal(health.protocol, 'patmail-stream-v1', '先启动scripts/download/bridge/start-stream-download.ps1')
   context = await chromium.launchPersistentContext('', {
     channel: 'chromium',
     headless: true,

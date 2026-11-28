@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture-check.mjs'
+import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture/architecture-check.mjs'
 
 describe('domain layer purity', () => {
   it('ensures core domain modules do not runtime-import Vue, UI, Background, Content or DOM/Chrome APIs', () => {

@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkArchitecture, evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture-check.mjs'
+import { checkArchitecture, evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture/architecture-check.mjs'
 
 describe('architecture dependency direction', () => {
   it('passes overall architecture ratchet check without hard errors or new violations', () => {

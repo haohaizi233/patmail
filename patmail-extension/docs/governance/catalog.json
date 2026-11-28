@@ -10,7 +10,7 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -24,7 +24,7 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/app/pages/HaguePage.vue",
         "patmail-extension/src/background/hague-session.ts",
         "patmail-extension/src/hague/draft-batch.ts",
@@ -43,8 +43,8 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
-        "patmail-extension/scripts/hague-research.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research.mjs",
         "patmail-extension/src/hague/draft-runner.ts",
         "patmail-extension/src/hague/http-context.ts",
         "patmail-extension/src/hague/http-driver.ts",
@@ -62,8 +62,8 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
-        "patmail-extension/scripts/hague-research.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research.mjs",
         "patmail-extension/src/hague/diagnostics/correlation/correlator.mjs",
         "patmail-extension/tests/unit/hague/research-evidence.test.ts",
         "patmail-extension/tests/unit/hague/research-jsf-parser.test.ts"
@@ -111,7 +111,7 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/diagnostics/protocol/jsf-state-machine.mjs",
         "patmail-extension/tests/unit/hague/jsf-state-machine.test.ts",
         "patmail-extension/tests/unit/hague/research-evidence.test.ts"
@@ -127,7 +127,7 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/diagnostics/protocol/jsf-diff.mjs",
         "patmail-extension/tests/unit/hague/jsf-diff.test.ts",
         "patmail-extension/tests/unit/hague/jsf-request-normalization.test.ts"
@@ -210,7 +210,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/javascript-ast.md"
@@ -225,7 +225,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/cdp-research.md"
@@ -240,7 +240,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -254,7 +254,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md"
@@ -269,7 +269,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -283,7 +283,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -297,7 +297,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -311,7 +311,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -325,7 +325,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -339,7 +339,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -353,7 +353,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/diagnostics-and-maintenance.md"
@@ -368,7 +368,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -382,7 +382,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -396,7 +396,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -410,7 +410,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/protocol-fingerprint.md"
@@ -425,7 +425,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/jsf-protocol.md"
@@ -440,7 +440,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -454,7 +454,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/correlation-evidence.md"
@@ -469,7 +469,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ],
       "canonical_path": "patmail-extension/docs/engineering/hague/viewstate-state-machine.md"
@@ -484,7 +484,7 @@
       "evidence_level": "code_verified",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -498,7 +498,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -512,7 +512,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -526,7 +526,7 @@
       "evidence_level": "design_only",
       "display": false,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -571,7 +571,7 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -585,7 +585,7 @@
       "evidence_level": "code_verified",
       "display": true,
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     },
@@ -692,7 +692,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }
@@ -705,7 +705,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }
@@ -718,7 +718,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }
@@ -731,7 +731,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }
@@ -744,7 +744,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }
@@ -757,7 +757,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }
@@ -770,7 +770,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }
@@ -783,7 +783,7 @@
       "evidence": {
         "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
         "related_sources": [
-          "patmail-extension/scripts/hague-research-worker.mjs",
+          "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
           "patmail-extension/src/hague/draft-runner.ts"
         ]
       }

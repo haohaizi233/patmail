@@ -59,7 +59,7 @@
 - 下载E2E回归通过：浏览器下载完成状态和磁盘字节一致。
 - 独立代码复核发现的取消选择复活和新布局首包来源竞态均已修复并复核。
 
-测试入口：`npm run test:e2e:files`。可重复的真实站点验收脚本为 `scripts/live-file-pagination-audit.mjs`，必须显式提供只读运行标记、HAR路径及当前进程中的账号凭据；脚本只把模板写入临时浏览器的本地存储，不写原站历史模板，报告不保留凭据、Cookie、筛选值或文件正文。该脚本不属于默认测试命令。
+测试入口：`npm run test:e2e:files`。可重复的真实站点验收脚本为 `scripts/download/audits/live-file-pagination-audit.mjs`，必须显式提供只读运行标记、HAR路径及当前进程中的账号凭据；脚本只把模板写入临时浏览器的本地存储，不写原站历史模板，报告不保留凭据、Cookie、筛选值或文件正文。该脚本不属于默认测试命令。
 
 ## 让当前 Chrome 使用新版
 

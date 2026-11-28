@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- CDP fixture mocks deliberately exercise malformed and deferred protocol inputs. */
 import { describe,it,expect } from 'vitest'
-import { HagueResearchDiagnostics } from '../../../scripts/hague-research.mjs'
-import { HagueDeepDiagnostics } from '../../../scripts/hague-diagnostics.mjs'
+import { HagueResearchDiagnostics } from '../../../scripts/hague/research/hague-research.mjs'
+import { HagueDeepDiagnostics } from '../../../scripts/hague/diagnostics/hague-diagnostics.mjs'
 const target={targetId:'target',sessionId:'session',url:'https://hague.wipo.int/HagueEFilingWeb/protected/portfolioManager.xhtml'}
 it('does not resurrect the real debugger when disabled before deep activation',async()=>{
  const commands:string[]=[]
@@ -69,7 +69,7 @@ it('cancels queued metadata on teardown without future CDP reads',async()=>{
  await research.disable();releases.forEach(r=>r());await Promise.all(done);expect(reads).toBe(2);expect(research.queue).toHaveLength(0);expect(research.status().stats.activeReads).toBe(0)
 })
 import {pathToFileURL} from 'node:url'
-import {AnalysisWorker} from '../../../scripts/hague-research-broker.mjs'
+import {AnalysisWorker} from '../../../scripts/hague/research/hague-research-broker.mjs'
 it('terminates a real stalled analysis worker on a hard deadline',async()=>{
  const worker=new AnalysisWorker({timeoutMs:60,workerUrl:pathToFileURL(process.cwd()+'/tests/fixtures/hague-stalled-worker.mjs')})
  const start=Date.now();await expect(worker.analyze('xml','fixture')).rejects.toThrow('cancelled');expect(Date.now()-start).toBeLessThan(1500);expect(worker.stats.timeouts).toBe(1);expect(worker.pending.size).toBe(0);worker.clear()

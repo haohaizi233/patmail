@@ -18,7 +18,7 @@ export async function ensureStreamBridge() {
     }
   }
   if (await ready()) return () => {}
-  const args = [join(projectRoot, 'scripts', 'stream-download-bridge.py'), '--port', String(streamBridgePort)]
+  const args = [join(projectRoot, 'scripts', 'download', 'bridge', 'stream-download-bridge.py'), '--port', String(streamBridgePort)]
   if (process.env.PATMAIL_TEST_BRIDGE_PORT) args.push('--cache-dir', await mkdtemp(tmpPath('bridge-cache-')))
   const child = spawn('python', args, { windowsHide: true, stdio: 'ignore' })
   let failed = false

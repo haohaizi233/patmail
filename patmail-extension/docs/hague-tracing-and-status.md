@@ -84,7 +84,7 @@ HTTP 200 仅证明收到响应；JSF validationFailed 可以同时意味着业�
 
 ## 原始脱敏 Observer 与离线 Fixture
 
-旧式 Observer JSONL 先通过 `node scripts/hague-diagnostics-export.mjs <input.jsonl> <output.jsonl>` 转成统一事件，再在面板导入；转换器不会猜测案件归属。CLI 输入受大小上限约束，仅处理已知事件类别，输出前再次脱敏。
+旧式 Observer JSONL 先通过 `node scripts/hague/diagnostics/hague-diagnostics-export.mjs <input.jsonl> <output.jsonl>` 转成统一事件，再在面板导入；转换器不会猜测案件归属。CLI 输入受大小上限约束，仅处理已知事件类别，输出前再次脱敏。
 
 另支持单个 JSON Fixture：`{"version":1,"kind":"html|xml|javascript|receipt","content":"人工构造片段"}`（kind取其中一个值）。每片段最多262144字符，HTML/XML仅构造脱离页面的文档，JS仅AST静态分析，回执只提取安全类别。Fixture事件标记`source=fixture`，不会冒充CDP观测；`ok=true`也不能证明生产业务成功。禁止将含真实个人材料的原始片段交付或纳入仓库。
 

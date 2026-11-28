@@ -4,10 +4,10 @@
 
 - **状态**：已采纳并执行（Commit `17ff27d`）
 - **背景（Context）**：纯人工审查无法阻止跨层隐式回退，且 MV3 + Vue SFC 混合环境包含 `<script setup>`、静态与纯类型 import，简单正则容易产生大量误报或漏报。
-- **决策（Decision）**：引入 `patmail-extension/scripts/architecture-check.mjs`，结合 TypeScript Compiler AST 与 `@vue/compiler-sfc` 建立依赖清单、跨层规则 `A..F` 与只减不增棘轮基线 `ci/architecture-baseline.json`，在 Vitest (`tests/architecture/*`) 与 GitHub Actions CI 中强制门禁。
+- **决策（Decision）**：引入 `patmail-extension/scripts/architecture/architecture-check.mjs`，结合 TypeScript Compiler AST 与 `@vue/compiler-sfc` 建立依赖清单、跨层规则 `A..F` 与只减不增棘轮基线 `ci/architecture-baseline.json`，在 Vitest (`tests/architecture/*`) 与 GitHub Actions CI 中强制门禁。
 - **备选方案（Alternatives Considered）**：引入外部依赖工具 `dependency-cruiser` —— 会增加第三方构建链与授权合规负担，且对 Vue SFC 及 Chrome API 运行时信号不够贴合。
 - **后果（Consequences）**：零新增外部依赖，CI 扫描扩展的 500+ 个源码文件并保留架构报告；代价是新增边界规则时需同步更新 `architecture-check.mjs` 清单分类。
-- **涉及代码**：`patmail-extension/scripts/architecture-check.mjs`、`patmail-extension/ci/architecture-baseline.json`、`patmail-extension/tests/architecture/*.test.ts`、`/.github/workflows/ci.yml`。
+- **涉及代码**：`patmail-extension/scripts/architecture/architecture-check.mjs`、`patmail-extension/ci/architecture-baseline.json`、`patmail-extension/tests/architecture/*.test.ts`、`/.github/workflows/ci.yml`。
 - **测试证据**：`pnpm architecture:check` 持续通过（5 个测试文件 / 11 条用例，0 硬错误，0 遗留违规，0 运行时循环）。
 
 ---

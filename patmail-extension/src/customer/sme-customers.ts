@@ -8,7 +8,7 @@ const NAME_LIMIT = 200
 const MAX_CUSTOMERS = 50_000
 const SNAPSHOT_WAIT_MS = 8_000
 
-export const SME_SNAPSHOT_MISSING = '中小客户名单快照没有读到（assets/sme-customers.json 缺失或无效）。跑一次 scripts/pull-sme-customers.py 再重新构建扩展。'
+export const SME_SNAPSHOT_MISSING = '中小客户名单快照没有读到（assets/sme-customers.json 缺失或无效）。跑一次 scripts/data/pull-sme-customers.py 再重新构建扩展。'
 
 export interface SmeCustomerSnapshot {
   /** 快照的拉取时间，ISO 格式。展示用。 */
@@ -16,7 +16,7 @@ export interface SmeCustomerSnapshot {
   customers: EasyCustomerOption[]
 }
 
-/** 解析 scripts/pull-sme-customers.py 写出的快照文件。结构不对、超量或没有一行能对上编号时，当作没有快照，明确报错。 */
+/** 解析 scripts/data/pull-sme-customers.py 写出的快照文件。结构不对、超量或没有一行能对上编号时，当作没有快照，明确报错。 */
 export function parseSmeCustomerSnapshot(data: unknown): SmeCustomerSnapshot | null {
   if (typeof data !== 'object' || data === null) return null
   const raw = data as { takenAt?: unknown; customers?: unknown }

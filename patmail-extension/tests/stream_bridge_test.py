@@ -7,7 +7,7 @@ import threading
 import unittest
 import uuid
 
-spec = importlib.util.spec_from_file_location('stream_bridge', Path(__file__).parents[1] / 'scripts' / 'stream-download-bridge.py')
+spec = importlib.util.spec_from_file_location('stream_bridge', Path(__file__).parents[1] / 'scripts' / 'download' / 'bridge' / 'stream-download-bridge.py')
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 ORIGIN = 'chrome-extension://' + 'a' * 32

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { collectExemptions } from '../../../scripts/eslint-exemptions.mjs'
+import { collectExemptions } from '../../../scripts/quality/eslint-exemptions.mjs'
 
 describe('lint gate command', () => {
   let root: string
@@ -12,9 +12,9 @@ describe('lint gate command', () => {
   beforeEach(() => {
     mkdirSync('test-results', { recursive: true })
     root = mkdtempSync(join(process.cwd(), 'test-results/lint-gate-'))
-    for (const directory of ['scripts', 'ci', 'node_modules/eslint/bin'])
+    for (const directory of ['scripts/quality', 'scripts/shared', 'ci', 'node_modules/eslint/bin'])
       mkdirSync(join(root, directory), { recursive: true })
-    for (const file of ['eslint-ratchet.mjs', 'eslint-exemptions.mjs'])
+    for (const file of ['quality/eslint-ratchet.mjs', 'quality/eslint-exemptions.mjs', 'shared/paths.mjs'])
       copyFileSync(join('scripts', file), join(root, 'scripts', file))
     sourcePath = join(root, 'scripts/example.mjs')
     inputPath = join(root, 'node_modules/eslint/bin/input.json')
@@ -48,7 +48,7 @@ describe('lint gate command', () => {
     rmSync(root, { recursive: true, force: true })
   })
   const run = (rootPath: string, ...args: string[]) =>
-    spawnSync(process.execPath, [join(rootPath, 'scripts/eslint-ratchet.mjs'), ...args], { encoding: 'utf8' })
+    spawnSync(process.execPath, [join(rootPath, 'scripts/quality/eslint-ratchet.mjs'), ...args], { encoding: 'utf8' })
   it('passes registered exemptions and rejects changed protected code even with --update', () => {
     expect(run(root).status).toBe(0)
     writeFileSync(sourcePath, code.replace('old = 1', 'old = 1, added = 2'))

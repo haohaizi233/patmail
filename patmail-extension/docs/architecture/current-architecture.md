@@ -43,7 +43,7 @@ flowchart LR
 
 ## 二、真实 AST 依赖统计对比（基线 vs 当前）
 
-统计口径来源于扩展内真实 AST 静态扫描器 `patmail-extension/scripts/architecture-check.mjs`（区分运行时依赖与 `import type` 纯类型依赖，包含 Vue SFC `<script>`/`<script setup>` 与动态 `import()`）：
+统计口径来源于扩展内真实 AST 静态扫描器 `patmail-extension/scripts/architecture/architecture-check.mjs`（区分运行时依赖与 `import type` 纯类型依赖，包含 Vue SFC `<script>`/`<script setup>` 与动态 `import()`）：
 
 | 指标 | 基线（`17ff27d` 初扫） | 复审修复后 | 变化说明 |
 | --- | --- | --- | --- |

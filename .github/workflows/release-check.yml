@@ -33,13 +33,13 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup-patmail
       - name: 测试（单元 / 集成 / 回归）
-        run: node scripts/ci-check.mjs --steps unit,integration,regression
+        run: node scripts/ci/ci-check.mjs --steps unit,integration,regression
       - name: 两次构建比对（可复现性）
-        run: node scripts/verify-reproducible.mjs
+        run: node scripts/build/verify-reproducible.mjs
       - name: Manifest 与构建产物校验
-        run: node scripts/ci-check.mjs --steps manifest,dist
+        run: node scripts/ci/ci-check.mjs --steps manifest,dist
       - name: 密钥扫描（交付前最后一次）
-        run: node scripts/scan-secrets.mjs
+        run: node scripts/security/scan-secrets.mjs
       - name: 缓存 Playwright 浏览器
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -48,7 +48,7 @@ jobs:
       - name: 安装 Chromium
         run: npx playwright install --with-deps chromium
       - name: E2E Smoke
-        run: node scripts/run-e2e.mjs smoke
+        run: node scripts/ci/run-e2e.mjs smoke
       - name: 打包源码与交付件（bsdtar 生成 zip）
         run: |
           sudo apt-get update -qq
@@ -59,7 +59,7 @@ jobs:
       - name: 发布前校验（版本 / 摘要 / SHA-256 / 产物名称）
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: node scripts/release-check.mjs --public ${RELEASE_TAG:+--tag $RELEASE_TAG}
+        run: node scripts/release/release-check.mjs --public ${RELEASE_TAG:+--tag $RELEASE_TAG}
       - name: 上传发布校验产物
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

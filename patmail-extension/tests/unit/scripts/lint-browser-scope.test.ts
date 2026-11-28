@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ESLint } from 'eslint'
-import { collectExemptions, compareExemptions } from '../../../scripts/eslint-exemptions.mjs'
+import { collectExemptions, compareExemptions } from '../../../scripts/quality/eslint-exemptions.mjs'
 import { resolve } from 'node:path'
 
 describe('Node research script lint scope', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture-check.mjs'
+import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture/architecture-check.mjs'
 
 describe('billing presentation boundaries', () => {
   it('ensures BillingWorkflowPage.vue has zero direct infrastructure or billing engine coupling', () => {

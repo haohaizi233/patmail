@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- CDP fixture mocks deliberately exercise raw protocol events and pipeline outputs. */
 import { describe, it, expect, afterEach } from 'vitest'
-import { HagueResearchDiagnostics } from '../../../scripts/hague-research.mjs'
-import { HagueDeepDiagnostics } from '../../../scripts/hague-diagnostics.mjs'
-import { AnalysisWorker } from '../../../scripts/hague-research-broker.mjs'
+import { HagueResearchDiagnostics } from '../../../scripts/hague/research/hague-research.mjs'
+import { HagueDeepDiagnostics } from '../../../scripts/hague/diagnostics/hague-diagnostics.mjs'
+import { AnalysisWorker } from '../../../scripts/hague/research/hague-research-broker.mjs'
 import { analyzeEvidence } from '../../../src/hague/diagnostics/evidence/evidence-model.mjs'
 import { buildDiagnosticReport, exportDiagnostics } from '../../../src/hague/diagnostics/reports'
 import type { ProtocolBaseline } from '../../../src/hague/diagnostics/protocol/jsf-diff.mjs'

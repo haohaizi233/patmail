@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import {chromium} from 'playwright'
-import {HagueDeepDiagnostics} from '../../scripts/hague-diagnostics.mjs'
-import {HagueResearchDiagnostics} from '../../scripts/hague-research.mjs'
-import {AnalysisWorker} from '../../scripts/hague-research-broker.mjs'
+import {HagueDeepDiagnostics} from '../../scripts/hague/diagnostics/hague-diagnostics.mjs'
+import {HagueResearchDiagnostics} from '../../scripts/hague/research/hague-research.mjs'
+import {AnalysisWorker} from '../../scripts/hague/research/hague-research-broker.mjs'
 
 // Fresh browser; every HTTP destination is fulfilled or denied before network I/O.
 const url='https://hague.wipo.int/HagueEFilingWeb/protected/page/application.xhtml'

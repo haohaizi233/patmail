@@ -1,6 +1,6 @@
 # PatMail Phase 2 自动化架构规则与泛化门禁（Architecture Rules A–K）
 
-> 实现位置：`patmail-extension/scripts/architecture-check.mjs` & `patmail-extension/tests/architecture/`
+> 实现位置：`patmail-extension/scripts/architecture/architecture-check.mjs` & `patmail-extension/tests/architecture/`
 
 ## 一、扫描器能力强化（防绕过机制）
 

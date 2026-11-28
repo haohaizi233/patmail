@@ -23,16 +23,16 @@
 
 |能力|本次实现证据|
 |---|---|
-|CDP生命周期/控制|`scripts/cdp-observer-core.mjs`：既有Session、Target、HTTP控制服务复用；调用research hooks|
-|研究模式|`scripts/hague-research.mjs:HagueResearchDiagnostics`：enable/disable/stop、单调意图票据、generation、预算及指标|
+|CDP生命周期/控制|`scripts/cdp/cdp-observer-core.mjs`：既有Session、Target、HTTP控制服务复用；调用research hooks|
+|研究模式|`scripts/hague/research/hague-research.mjs:HagueResearchDiagnostics`：enable/disable/stop、单调意图票据、generation、预算及指标|
 |AST|既有`diagnostics/ast/analyzer.mjs`：新增诊断专用callee/property位置锚点；不改执行提取器|
 |XML/请求识别|`diagnostics/protocol/jsf-partial-response.mjs`：SAX解析、请求标准字段投影、短期ViewState比较|
 |正文授权|`HagueResearchDiagnostics.bodyCommandAllowed/readBody`：活跃租约、请求归属、生命周期、大小、MIME与并发|
-|硬隔离|`scripts/hague-research-broker.mjs:AnalysisWorker`及worker：有界队列、硬超时、64+16MiB堆预算、终止与错误清理|
+|硬隔离|`scripts/hague/research/hague-research-broker.mjs:AnalysisWorker`及worker：有界队列、硬超时、64+16MiB堆预算、终止与错误清理|
 |跨层关联|`diagnostics/correlation/correlator.mjs:createSourceIndex/correlateRequest`：作用域隔离、唯一源码锚点、独立边置信度|
 |证据|`diagnostics/evidence/evidence-model.mjs:analyzeEvidence`：六层状态、缺失证据、确定性解释|
 |日志/展示|`schema.mjs`、`observer-adapter.mjs`、`store.ts`、`reports.ts`和`HagueDiagnostics.vue`|
-|输出预算|`scripts/hague-research-output.mjs:ResearchOutputBudget`：只限制新增分析输出，不限制旧basic监听|
+|输出预算|`scripts/hague/research/hague-research-output.mjs:ResearchOutputBudget`：只限制新增分析输出，不限制旧basic监听|
 
 依赖仅把现有传递依赖`saxes@6.0.0`提升为运行时直接依赖，ISC许可、Node>=12.22.7，不引入第二套AST框架。已更新锁文件；官方npm生产依赖审计0项漏洞。镜像站audit端点不支持，已明确改用官方registry审计，没有把端点失败当成安全通过。
 
@@ -110,13 +110,13 @@ sequenceDiagram
 pnpm cdp:start
 pnpm cdp:status
 pnpm cdp:stop
-node scripts/cdp-observer.mjs deep-enable --target TARGET_ID
-node scripts/cdp-observer.mjs deep-status
-node scripts/cdp-observer.mjs deep-disable
-node scripts/cdp-observer.mjs research-enable --target TARGET_ID
-node scripts/cdp-observer.mjs research-status
-node scripts/cdp-observer.mjs research-disable
-node scripts/cdp-observer.mjs basic
+node scripts/cdp/cdp-observer.mjs deep-enable --target TARGET_ID
+node scripts/cdp/cdp-observer.mjs deep-status
+node scripts/cdp/cdp-observer.mjs deep-disable
+node scripts/cdp/cdp-observer.mjs research-enable --target TARGET_ID
+node scripts/cdp/cdp-observer.mjs research-status
+node scripts/cdp/cdp-observer.mjs research-disable
+node scripts/cdp/cdp-observer.mjs basic
 ```
 
 这些命令调用既有鉴权控制接口；没有任意CDP方法转发接口，前端也不取得本机控制Token。旧deep命令保持兼容。Target ID可从已连接会话的安全Network日志定位；`cdp:status`用于检查连接和模式，不应把waiting当成现场已采集。
@@ -199,7 +199,7 @@ node tests/e2e/hague-research.e2e.mjs
 node tests/e2e/hague-diagnostics-ui.e2e.mjs
 node tests/e2e/hague-draft-ui.e2e.mjs
 node tests/e2e/hague.e2e.mjs --fixture
-node scripts/measure-hague-research.mjs
+node scripts/hague/benchmarks/measure-hague-research.mjs
 ```
 
 初次默认全量测试与浏览器/Vite并行时出现系统提交内存压力，Node/Rust分配失败并导致分片用例超时；未修改断言或跳过用例。随后限制4个Vitest worker并串行浏览器检查。第一次有界完整运行262文件/1770测试通过；最终源码结果以末尾检查记录为准。
@@ -253,13 +253,13 @@ Base `7dbca12412485ac6fdea2cdffa6fd2358f49c0e7`；分支`codex/hague-research-mo
 
 |模块|实际路径和关键函数|
 |---|---|
-|CDP|scripts/cdp-observer-core.mjs + scripts/hague-research.mjs，HagueResearchDiagnostics.enable/disable/bodyCommandAllowed/readBody|
-|AST|src/hague/diagnostics/ast/analyzer.mjs，analyzeJavaScript；scripts/hague-diagnostics.mjs，HagueDeepDiagnostics.script|
+|CDP|scripts/cdp/cdp-observer-core.mjs + scripts/hague/research/hague-research.mjs，HagueResearchDiagnostics.enable/disable/bodyCommandAllowed/readBody|
+|AST|src/hague/diagnostics/ast/analyzer.mjs，analyzeJavaScript；scripts/hague/diagnostics/hague-diagnostics.mjs，HagueDeepDiagnostics.script|
 |JSF Parser|src/hague/diagnostics/protocol/jsf-partial-response.mjs，parseJsfPartialResponse/parseJsfRequest/createJsfProtocolAnalyzer|
 |Correlation|src/hague/diagnostics/correlation/correlator.mjs，createSourceIndex/correlateRequest|
 |Evidence Model|src/hague/diagnostics/evidence/evidence-model.mjs，analyzeEvidence|
 |Diagnostics UI|src/app/components/HagueDiagnostics.vue；src/hague/diagnostics/reports.ts，buildDiagnosticReport/exportDiagnostics|
-|Privacy Protection|src/hague/diagnostics/schema.mjs，sanitizeTraceEvent；scripts/hague-research-output.mjs，safeAnalysisOutput/ResearchOutputBudget|
+|Privacy Protection|src/hague/diagnostics/schema.mjs，sanitizeTraceEvent；scripts/hague/research/hague-research-output.mjs，safeAnalysisOutput/ResearchOutputBudget|
 |Regression Tests|tests/unit/hague/research-*.test.ts、tests/unit/scripts/hague-research*.test.ts、既有hague/observer回归和tests/e2e/hague-research.e2e.mjs|
 
 ### C. 架构变化
@@ -288,7 +288,7 @@ Base `7dbca12412485ac6fdea2cdffa6fd2358f49c0e7`；分支`codex/hague-research-mo
 
 首轮资源失败日志保留在`test-results/hague-research-tests.log`，最终有效结果在`test-results/hague-research-tests-final.{json,log}`。崩溃运行即使JSON出现success=true，也没有作为有效验收；最终检查要求进程exit 0且总数与通过数一致。
 
-性能测量命令`node scripts/measure-hague-research.mjs` exit 0，64请求/8并发批次/每响应32936字节；Mock CDP+真实Worker，非实站业务基准：
+性能测量命令`node scripts/hague/benchmarks/measure-hague-research.mjs` exit 0，64请求/8并发批次/每响应32936字节；Mock CDP+真实Worker，非实站业务基准：
 
 |模式|墙钟ms|CPU user/system ms|峰值RSS MiB|Worker堆 MiB|正文读取|
 |---|---:|---:|---:|---:|---:||basic|2.588|0.0/0.0|56.52|0.00|0|
@@ -326,7 +326,7 @@ patmail-extension/docs/hague-full-chain-diagnostics.md
 
 ## 自动研究默认值变更（2026-11-14）
 
-入口为`scripts/cdp-observer-core.mjs:CdpObserverService.ensureAutomaticResearch`。initializeSession成功后及Target重扫时检查；仅选择ready、hague、page、官方Origin、当前Session/URL未尝试过的目标。一个Session/URL最多一次启用，避免每轮扫描重置源码/正文预算。context清除和重连先撤销旧权限、清空私有资源，再重新启用；手动控制先取消自动策略，旧异步enable不能覆盖手动disable。没有新增Origin、权限或业务调用。
+入口为`scripts/cdp/cdp-observer-core.mjs:CdpObserverService.ensureAutomaticResearch`。initializeSession成功后及Target重扫时检查；仅选择ready、hague、page、官方Origin、当前Session/URL未尝试过的目标。一个Session/URL最多一次启用，避免每轮扫描重置源码/正文预算。context清除和重连先撤销旧权限、清空私有资源，再重新启用；手动控制先取消自动策略，旧异步enable不能覆盖手动disable。没有新增Origin、权限或业务调用。
 
 新增回归覆盖：非海牙页面不启用、海牙初始化后启动真实research controller、第二页面不抢占、重连恢复、导航重建、鉴权CLI关闭后后续页面不重开。之前的安全预算与只读边界保持适用。
 

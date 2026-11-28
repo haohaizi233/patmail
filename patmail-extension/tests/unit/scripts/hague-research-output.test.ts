@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest'
-import {ResearchOutputBudget,safeAnalysisOutput} from '../../../scripts/hague-research-output.mjs'
+import {ResearchOutputBudget,safeAnalysisOutput} from '../../../scripts/hague/research/hague-research-output.mjs'
 it('caps analysis rate and backlog without retrying failed writes or blocking status',async()=>{
  let clock=0,writes=0,release:()=>void=()=>{}
  const budget=new ResearchOutputBudget({maxPerMinute:2,maxPending:2,now:()=>clock})

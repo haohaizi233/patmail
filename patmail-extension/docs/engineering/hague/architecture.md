@@ -23,7 +23,7 @@ flowchart TD
 
 ## 生产调用与不变量
 
-[Research 控制器](../../../scripts/hague-research.mjs)记录 session、target、frame、loader 与 request 身份；[Worker](../../../scripts/hague-research-worker.mjs)收到 ast、xml、state、lookup 消息后调用各算法。组件注册表在 XML 结果中记录已观察组件，不能凭字符串名称认定其有业务权限。
+[Research 控制器](../../../scripts/hague/research/hague-research.mjs)记录 session、target、frame、loader 与 request 身份；[Worker](../../../scripts/hague/research/hague-research-worker.mjs)收到 ast、xml、state、lookup 消息后调用各算法。组件注册表在 XML 结果中记录已观察组件，不能凭字符串名称认定其有业务权限。
 
 [HTTP context](../../../src/hague/http-context.ts)维护应用模型和 JSF 状态；[driver](../../../src/hague/http-driver.ts)核验业务表单；[runner](../../../src/hague/draft-runner.ts)写前保存不确定检查点，再发送命令。研究状态机与业务检查点是不同的数据结构，研究结果不授予重放 POST 的许可。
 

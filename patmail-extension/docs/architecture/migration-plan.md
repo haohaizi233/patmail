@@ -15,7 +15,7 @@ flowchart LR
 ## 一、分阶段实施记录（已执行）
 
 1. **Commit 1（`17ff27d`）— Phase A & B：真实依赖图审计与自动化门禁**
-   - 实现 `patmail-extension/scripts/architecture-check.mjs`，基于 TypeScript compiler AST 与 `@vue/compiler-sfc` 解析静态 import、动态 `import()`、`require`、Vue SFC 脚本块及 Chrome/DOM 全局信号；
+   - 实现 `patmail-extension/scripts/architecture/architecture-check.mjs`，基于 TypeScript compiler AST 与 `@vue/compiler-sfc` 解析静态 import、动态 `import()`、`require`、Vue SFC 脚本块及 Chrome/DOM 全局信号；
    - 生成基线 `ci/architecture-baseline.json`（锁定初始 10 条棘轮违规与 0 循环依赖），落地 5 份架构边界 Vitest 测试并在 CI `static` 阶段强制门禁。
 2. **Commit 2（`12213d3`）— Phase C：请款工作流分层重构**
    - 建立 `application/billing/ports/*`、`billing-contracts.ts`（显式 6 态 `ExportOutcome`）、`billing-validation.ts`、`billing-service.ts`、`infrastructure/billing/billing-adapters.ts` 与 `app/composables/useBillingWorkflow.ts`；

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {chromium} from 'playwright'
-import {HagueDeepDiagnostics} from '../../scripts/hague-diagnostics.mjs'
+import {HagueDeepDiagnostics} from '../../scripts/hague/diagnostics/hague-diagnostics.mjs'
 
 // Entirely synthetic origin in a fresh browser. Every HTTP request is fulfilled or denied locally.
 const browser=await chromium.launch({executablePath:process.env.HAGUE_TEST_CHROME,headless:true})
