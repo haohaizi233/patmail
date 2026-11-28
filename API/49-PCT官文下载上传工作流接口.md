@@ -38,7 +38,7 @@ sequenceDiagram
 
 第一步可单独执行，写开关可保持关闭。全流程在触发浏览器下载前先保存 `exportDispatched`，续办时跳过该次自动下载。这个字段表示下载动作已进入派发阶段，用户仍可通过单独导出取得新文件。[导出解析与去重](../patmail-extension/src/workflow/pct-notice-excel.ts) · [内联文件响应](../patmail-extension/src/content/index.ts)
 
-### FilingApiAction.ashx ExportExcelTwoTzsList
+## FilingApiAction.ashx ExportExcelTwoTzsList
 
 ```http
 POST /AjaxServers/FilingApiAction.ashx
@@ -81,7 +81,22 @@ log_pagename=IhgAdvExport.aspx
 
 导入请求带上页面保存的查询条件。常用条件为 `case_volume`、`is_fuzzy_query_case_volume`、`post_date_s/e`、`filedesc`、`apply_type`、`app_no`、`orderby`；其余客户、人员、代理机构、流向、下载/分析日期等字段见 [来文管理](47-来文管理.md)。中小客户查询对 `apply_type`、`agency_id`、`flow_direction`、`branch_dept_id`、`apply_tags_id`、`customer_country` 做同名字典映射，对 `assayer`、`sales_help` 按人员树名称映射。缺少匹配项时沿用原值。
 
-### Notice.ashx SearchNotice
+## Notice.ashx SearchNotice
+
+用途为查询当前站点未处理来文。
+
+请求示例（其余筛选项见 [47-来文管理.md](47-来文管理.md#22-导入来文searchnotice--getimportnoticelist请求参数与静态枚举)）：
+
+```http
+POST /AjaxServers/Notice.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=SearchNotice
+pageIndex=1
+pageSize=200
+status=0
+log_pagename=NoticeInfo.aspx
+```
 
 导入列表响应骨架如下。表格行保留原站字段名，扩展将总数转为数字 `total`。
 
@@ -115,7 +130,7 @@ log_pagename=IhgAdvExport.aspx
 
 二次分析的状态轮询到达上限时，来文客户端可能返回 `data.ok=true`，并在 `message` 提示原站仍在后台处理；当前 WAL 据这个规范化回执记录该批已受理。逐行状态回查为尽力同步，所以累计「已分析」不等于逐行均已完成。需要核对时，以对应系统的二次下载列表和 `GetReaplyTzsStatus` 行状态为准。[CPC 轮询与动作实现](../patmail-extension/src/api/notice-client.ts) · [工作流查询与批处理](../patmail-extension/src/workflow/pct-notice-runner.ts)
 
-### FilingApiAction.ashx ProcessTzsList
+## FilingApiAction.ashx ProcessTzsList
 
 ```http
 POST /AjaxServers/FilingApiAction.ashx
@@ -130,7 +145,7 @@ xlh=EXAMPLE-0001
 
 触发后使用同一 Handler 查询 `Call=ProcessTzsListStatus`，表单不额外带 `account` 或 `fid`。`ClientInfo.Result=true` 表示轮询完成；含「请稍等」「处理中」等文案时继续查询；遇其他非空错误消息就停止。读取状态连续失败 3 次也会停止。终态后按需用 `Call=GetReaplyTzsStatus` 带 `fids` 回查，响应取 `rows[]` 的逐行状态。
 
-### Notice.ashx ImportNotice
+## Notice.ashx ImportNotice
 
 ```http
 POST /AjaxServers/Notice.ashx
@@ -150,6 +165,201 @@ log_pagename=NoticeInfo.aspx
 ```
 
 结案专用接口改为 `Call=ImportCloseCase` 和 `ids=...`，不发送 `mail_sales` 与 `checkname`。
+
+## FilingApiAction.ashx GetUnProcessTzsList
+
+用途为查找待下载记录。下例省略为空的案件名称、申请号和日期。
+
+请求示例：
+
+```http
+POST /AjaxServers/FilingApiAction.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=GetUnProcessTzsList
+account={收文账号GUID}
+pageIndex=1
+pageSize=200
+status=unprocess
+```
+
+参数：
+
+| 参数 | 示例或取值 | 说明 |
+|---|---|---|
+| `Call` | `GetUnProcessTzsList` | 动作名 |
+| `account` | `{收文账号GUID}` | 当前站点的 CPC 收文账号 |
+| `pageIndex` | `1` | 起始页 |
+| `pageSize` | `200` | 工作流分页大小 |
+| `status` | `unprocess` | 待下载状态 |
+
+响应：
+
+读取 `TableRows[]` 与总条数，在本工作流按申请号筛选 PCT 来文并收集 `fid`。
+
+
+## FilingApiAction.ashx GetReplayTzsList
+
+用途为查询当前账号的来文二次下载记录。其余筛选条件见本章查询字段表。
+
+请求示例：
+
+```http
+POST /AjaxServers/FilingApiAction.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=GetReplayTzsList
+account={收文账号GUID}
+pageIndex=1
+pageSize=200
+applyType=2
+```
+
+参数：
+
+| 参数 | 示例或取值 | 说明 |
+|---|---|---|
+| `Call` | `GetReplayTzsList` | 动作名 |
+| `account` | `{收文账号GUID}` | 当前站点的 CPC 收文账号 |
+| `pageIndex` | `1` | 起始页 |
+| `pageSize` | `200` | 工作流分页大小 |
+| `applyType` | `2` | 页面默认申请类别 |
+
+响应：
+
+读取 `TableRows[]` 与总条数，同一账号按 `fid` 去重并保留对应的 `fawenxlh`。
+
+
+## FilingApiAction.ashx DeleteOaInfoByFids
+
+用途为按主键删除待下载记录。
+
+请求示例：
+
+```http
+POST /AjaxServers/FilingApiAction.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=DeleteOaInfoByFids
+fids={待下载记录GUID}
+```
+
+参数：
+
+| 参数 | 示例或取值 | 说明 |
+|---|---|---|
+| `Call` | `DeleteOaInfoByFids` | 动作名 |
+| `fids` | `{待下载记录GUID}` | 多条使用英文分号拼接 |
+
+响应：
+
+读取 `ClientInfo.Result`。失败原因来自 `ClientInfo.Message`。
+
+
+## FilingApiAction.ashx ProcessTzsListStatus
+
+用途为读取通知书分析进度。
+
+请求示例：
+
+```http
+POST /AjaxServers/FilingApiAction.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=ProcessTzsListStatus
+```
+
+参数：
+
+| 参数 | 示例或取值 | 说明 |
+|---|---|---|
+| `Call` | `ProcessTzsListStatus` | 动作名 |
+
+响应：
+
+检查 `ClientInfo.Result`、`IsLogin` 和 `Message`，仍在处理则续轮询。详见 [ProcessTzsList](#filingapiactionashx-processtzslist)。
+
+
+## FilingApiAction.ashx GetReaplyTzsStatus
+
+用途为二次分析后回查逐行状态。
+
+请求示例：
+
+```http
+POST /AjaxServers/FilingApiAction.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=GetReaplyTzsStatus
+fids={二次下载记录GUID}
+```
+
+参数：
+
+| 参数 | 示例或取值 | 说明 |
+|---|---|---|
+| `Call` | `GetReaplyTzsStatus` | 动作名 |
+| `fids` | `{二次下载记录GUID}` | 多条使用英文分号拼接 |
+
+响应：
+
+读取 `rows[]` 中的状态字段。回查失败不等同于下载分析失败。
+
+
+## Notice.ashx CheckImportNotice
+
+用途为导入前预检。
+
+请求示例：
+
+```http
+POST /AjaxServers/Notice.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=CheckImportNotice
+oa_ids={来文GUID}
+log_pagename=NoticeInfo.aspx
+```
+
+参数：
+
+| 参数 | 示例或取值 | 说明 |
+|---|---|---|
+| `Call` | `CheckImportNotice` | 动作名 |
+| `oa_ids` | `{来文GUID}` | 多条使用英文分号拼接 |
+| `log_pagename` | `NoticeInfo.aspx` | 来源页面 |
+
+响应：
+
+读取 `CheckNotice[]`、`SGReduce[]`，整理重复下发或费减警告。
+
+
+## Notice.ashx ImportCloseCase
+
+用途为只向结案案件导入来文文件。
+
+请求示例：
+
+```http
+POST /AjaxServers/Notice.ashx
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+Call=ImportCloseCase
+ids={来文GUID}
+log_pagename=NoticeInfo.aspx
+```
+
+参数：
+
+| 参数 | 示例或取值 | 说明 |
+|---|---|---|
+| `Call` | `ImportCloseCase` | 动作名 |
+| `ids` | `{来文GUID}` | 使用 `oa_id`，多条以英文分号拼接 |
+| `log_pagename` | `NoticeInfo.aspx` | 来源页面 |
+
+响应：
+
+读取 `ClientInfo.Result`。失败原因来自 `ClientInfo.Message`。
 
 ## 通道、身份与初始化
 
@@ -240,3 +450,10 @@ sequenceDiagram
 页面等待预算分别为：双系统检测 40 秒、来文字典 70 秒、查询及导出为查询超时档位外加 15 秒、来文动作 120 秒。页面超时或关闭时，已派发的 EASY 请求可能继续处理。恢复入口依据持久化回执决定可续办范围。
 
 [PCT 写账本](../patmail-extension/src/background/pct-notice-write.ts) · [PCT 页面批次恢复](../patmail-extension/src/app/pages/PctNoticeWorkflowPage.vue) · [通用 WorkflowWal](../patmail-extension/src/workflow/wal.ts)
+
+## 本文件接口
+
+| Handler | Call |
+|---|---|
+| `FilingApiAction.ashx` | `ExportExcelTwoTzsList`、`ProcessTzsList`、`GetUnProcessTzsList`、`GetReplayTzsList`、`DeleteOaInfoByFids`、`ProcessTzsListStatus`、`GetReaplyTzsStatus` |
+| `Notice.ashx` | `SearchNotice`、`ImportNotice`、`CheckImportNotice`、`ImportCloseCase` |

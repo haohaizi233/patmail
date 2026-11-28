@@ -16,9 +16,9 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 - [WIPO eHague：HTTP、JSF、上传与扩展 RPC 契约](external-platforms/hague.md)
 - [海牙技术算法：材料解析、并发隔离、检查点与有界容灾](../patmail-extension/docs/mechanisms/海牙接口链与容灾算法.md)
 
-按「入口 + Call」去重后，本索引共 **456** 个接口。同名但入口不同的分开计算，例如两个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
+按「入口 + Call」去重后，本索引共 **472** 个接口。同名但入口不同的分开计算，例如三个 `GetCaseInfo`。`GetPublishConfig` 有三个入口：`Common.ashx`、`BaseInfo.ashx` 与 `Bill.ashx`。
 
-表里的「骨架」链到 14–43 的响应字段，「01」到「13」链到页面怎么读这些字段。两边都有的 Call，字段骨架看抓包文档，页面含义看专题文档。
+表里的「骨架」指向原始抓包结构，数字指向对应专题。44–50 按 Handler 和 Call 提供请求、参数及回执，工作流时序仍可在各专题中查阅。
 
 ## 文档
 
@@ -69,13 +69,14 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [42-案件页读取.md](42-案件页读取.md) | 案件页 CaseManage.aspx 的权限、读取和留痕。9 个 Call |
 | [43-首页与待办.md](43-首页与待办.md) | 首页与流程待办页 ProcessNew.aspx。6 个 Call |
 | [44-费用查询.md](44-费用查询.md) | 费用查询 FeeSearch / FeeSearchTotalAmount、初始化与二级弹窗字典、历史查询条件（FeeSearch）与生产站基线 |
-| [45-高级导出与模板协议.md](45-高级导出与模板协议.md) | 通用高级导出弹窗 IhgAdvExport 模板接口（Common.ashx）与费用三大服务端 Excel 导出接口（Report.ashx）及同步/异步下载分流 |
+| [45-高级导出与模板协议.md](45-高级导出与模板协议.md) | 高级导出模板、费用导出、专利与来文导出及取件协议 |
 | [46-运行期补充接口契约.md](46-运行期补充接口契约.md) | 运行期已接入的会话探测、费用辅助树、提案流程、递交版本探测、代理所检索与 FileHandler 取件契约 |
 | [47-来文管理.md](47-来文管理.md) | 来文管理 NoticeInfo.aspx 全量 8 个页签查询、字典热加载、CPC 扫码鉴权与轮询、业务写操作、四大导出与压缩包上传 |
 | [48-费减工作流接口.md](48-费减工作流接口.md) | 按我方文号检索、读取费减事项及初核人、CPC 建单、XML 转档、提交初核 |
 | [49-PCT官文下载上传工作流接口.md](49-PCT官文下载上传工作流接口.md) | 双系统二次下载清单导出、来文查询、删档、分析轮询和两轮导入 |
+| [50-专利查询与清单导出.md](50-专利查询与清单导出.md) | 专利查询、语种字典、管控程序、导出模板与全量 Excel |
 
-14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。44–47 补齐费用查询、高级导出、运行期补充接口与来文管理全量接口。下面的入口表是去重后的 456。48–49 是按执行顺序组织的工作流专题，入口表沿用既有统计口径。
+14–30 是第一段抓包的 210 个 Call。31–40 是第二段抓包里索引原先没有的 68 个，其中 67 个是业务 Call，1 个是编辑器 `controller.ashx?action=config`。01–13 是页面专题，和抓包文档有重叠，不另加个数。41–43 是第三段抓包里索引原先没有的 39 个。44–50 涵盖费用查询、高级导出、运行期补充、来文管理、费减、PCT 官文和专利查询。48–49 的流程步骤与原站接口均可从下表定位。专利查询权限页面、下载清单页面及扩展消息在专题内记录，入口表继续按业务 Handler 与 Call 去重。
 
 ## 抓包里需要单独看的几条
 
@@ -99,8 +100,8 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 | 入口 | 接口数 |
 |---|---:|
-| [CaseInfo.ashx](#caseinfoashx) | 88 |
-| [Common.ashx](#commonashx) | 63 |
+| [CaseInfo.ashx](#caseinfoashx) | 93 |
+| [Common.ashx](#commonashx) | 64 |
 | [Customer.ashx](#customerashx) | 42 |
 | [Mail.ashx](#mailashx) | 27 |
 | [Bill.ashx](#billashx) | 23 |
@@ -110,12 +111,12 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [Notice.ashx](#noticeashx) | 34 |
 | [Login.ashx](#loginashx) | 10 |
 | [Eflow.ashx](#eflowashx) | 6 |
-| [FilingAction.ashx](#filingactionashx) | 23 |
+| [FilingAction.ashx](#filingactionashx) | 30 |
 | [Batch.ashx](#batchashx) | 5 |
 | [CRMAction.ashx](#crmactionashx) | 6 |
 | [WadeButtAction.ashx](#wadebuttactionashx) | 5 |
 | [UDAction.ashx](#udactionashx) | 4 |
-| [FilingApiAction.ashx](#filingapiactionashx) | 25 |
+| [FilingApiAction.ashx](#filingapiactionashx) | 27 |
 | [FilingTradeAction.ashx](#filingtradeactionashx) | 3 |
 | [MailAction.ashx](#mailactionashx) | 3 |
 | [AgencyEpEflow.aspx](#agencyepeflowaspx) | 2 |
@@ -129,11 +130,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | [Rule.ashx](#ruleashx) | 1 |
 | [TNotice.ashx](#tnoticeashx) | 1 |
 | [UploadFile.aspx](#uploadfileaspx) | 1 |
-| [AgencyAction.ashx](#agencyactionashx) | 1 |
+| [AgencyAction.ashx](#agencyactionashx) | 2 |
 | [FileHandler.ashx](#filehandlerashx) | 1 |
 | [UploadFile.ashx](#uploadfileashx) | 4 |
 | [Forms/MultiUPload/UploadMethod.ashx](#formsmultiuploaduploadmethodashx) | 1 |
-| 合计 | 456 |
+| 合计 | 472 |
 
 ## 全部接口
 
@@ -141,7 +142,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### CaseInfo.ashx
 
-88 个。
+93 个。
 
 | Call | 文档 |
 |---|---|
@@ -151,6 +152,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `BusinessCaseSearch` | [骨架](14-案件信息-基础与详情.md#businesscasesearch) |
 | `CaseButtonConfig` | [骨架](14-案件信息-基础与详情.md#casebuttonconfig) |
 | `CheckCaseAuthority` | [骨架](42-案件页读取.md#caseinfoashx-checkcaseauthority) |
+| `CheckCtrlProc` | [48](48-费减工作流接口.md#caseinfoashx-checkctrlproc)。递交前核对处理事项 |
 | `DeptCaseInit` | [骨架](14-案件信息-基础与详情.md#deptcaseinit) |
 | `GetAencyList` | [骨架](14-案件信息-基础与详情.md#getaencylist) · [10](10-邮件签名.md#getaencylist) |
 | `GetAgentBusinessLevel` | [骨架](14-案件信息-基础与详情.md#getagentbusinesslevel) |
@@ -179,7 +181,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetDelFileInfo` | [06](06-文件操作.md#删除)。删除前的提示，未调用 |
 | `GetDictionary` | [骨架](15-案件信息-费用流程与文件.md#getdictionary) |
 | `GetEditCustomerFieldRoles` | [骨架](15-案件信息-费用流程与文件.md#geteditcustomerfieldroles) |
-| `GetFeeListByCase` | [骨架](15-案件信息-费用流程与文件.md#getfeelistbycase) · [01](01-案件信息.md#getfeelistbycase) |
+| `GetFeeListByCase` | [骨架](15-案件信息-费用流程与文件.md#getfeelistbycase) · [01](01-案件信息.md#getfeelistbycase) · [44](44-费用查询.md#caseinfoashx-getfeelistbycase) |
 | `GetFileName` | [06](06-文件操作.md#getfilename) |
 | `GetFileNameByConfig` | [06](06-文件操作.md#getfilename)。没有配置重命名时的替代 Call，这次没单独调用 |
 | `GetFileReceiveInfo` | [06](06-文件操作.md#getfilereceiveinfo) |
@@ -197,6 +199,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetMyTsFavoriteCase` | [骨架](15-案件信息-费用流程与文件.md#getmytsfavoritecase) |
 | `GetOfficeInfoForCase` | [骨架](15-案件信息-费用流程与文件.md#getofficeinfoforcase) |
 | `GetPatentFamily` | [骨架](42-案件页读取.md#caseinfoashx-getpatentfamily) |
+| `GetProcInfo` | [48](48-费减工作流接口.md#caseinfoashx-getprocinfo)。已注册路由，业务请求及响应待核对 |
 | `GetProcList` | [12](12-案件流程图.md#getproclist)。处理事项表，没有子流程节点 |
 | `GetProcStage` | [骨架](42-案件页读取.md#caseinfoashx-getprocstage) |
 | `GetRecentCase` | [骨架](15-案件信息-费用流程与文件.md#getrecentcase) |
@@ -216,8 +219,10 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetTsProcessList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-gettsprocesslist) |
 | `GetUnFinishProc` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-getunfinishproc) |
 | `GetVoiceFile` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-getvoicefile) |
+| `GetZLLanguage` | [50](50-专利查询与清单导出.md#caseinfoashx-getzllanguage)。专利语种字典 |
 | `HasFavorite` | [骨架](42-案件页读取.md#caseinfoashx-hasfavorite) |
-| `ICSearchList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-icsearchlist) · [13](13-案件查询.md#2-icsearchlist) |
+| `ICCaseSearchToExcel` | [50](50-专利查询与清单导出.md#caseinfoashx-iccasesearchtoexcel)。按专利查询条件生成 Excel |
+| `ICSearchList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-icsearchlist) · [13](13-案件查询.md#2-icsearchlist) · [50](50-专利查询与清单导出.md#caseinfoashx-icsearchlist) |
 | `ICSearchList1` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-icsearchlist1) |
 | `IPCaseSearch` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-ipcasesearch) |
 | `IPCaseSearch2` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-ipcasesearch2) |
@@ -232,13 +237,14 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `SearchQueryHisDelete` | [03](03-历史查询条件.md#searchqueryhisdelete) |
 | `SearchQueryHisList` | [骨架](16-案件查询与基础枚举.md#caseinfoashx-searchqueryhislist) · [03](03-历史查询条件.md#searchqueryhislist) |
 | `SearchQueryHisSave` | [03](03-历史查询条件.md#searchqueryhissave) |
-| `GetIsNewCPC` | [46](46-运行期补充接口契约.md#getisnewcpccaseinfoashx)。递交流程打开表单前只读探测新旧 CPC 版本 |
+| `GetIsNewCPC` | [46](46-运行期补充接口契约.md#caseinfoashx-getisnewcpc)。递交流程打开表单前只读探测新旧 CPC 版本 |
+| `VerificateFiling` | [48](48-费减工作流接口.md#caseinfoashx-verificatefiling)。新建递交单前预检 |
 
 <a id="commonashx"></a>
 
 ### Common.ashx
 
-63 个。
+64 个。
 
 | Call | 文档 |
 |---|---|
@@ -289,22 +295,23 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `LoadDeptTree` | [02](02-公共数据.md#loaddepttree) |
 | `LoadFeeStage` | [骨架](36-公共补充.md#commonashx-loadfeestage) |
 | `LoadFileTypeByCaseType` | [骨架](18-公共-字典与列表列.md#commonashx-loadfiletypebycasetype) · [02](02-公共数据.md#loadfiletypebycasetype) |
+| `LoadFileTypeByTypeID` | [47](47-来文管理.md#commonashx-loadfiletypebytypeid)。来文详情名称树 |
 | `LoadListColumn` | [骨架](18-公共-字典与列表列.md#commonashx-loadlistcolumn) |
 | `LoadMailType` | [09](09-期限监控.md#3-从列表创建发文) |
 | `LoadOAProblem` | [骨架](18-公共-字典与列表列.md#commonashx-loadoaproblem) |
 | `LoadProcStatusNew` | [骨架](18-公共-字典与列表列.md#commonashx-loadprocstatusnew) |
-| `LoadSearchCase` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情改绑案件时按我方文号关键词联想搜索 |
+| `LoadSearchCase` | [47](47-来文管理.md#commonashx-loadsearchcase)。来文详情改绑案件时按我方文号关键词联想搜索 |
 | `LoadSentenceResult` | [骨架](18-公共-字典与列表列.md#commonashx-loadsentenceresult) |
 | `LoadTradeLaw` | [骨架](18-公共-字典与列表列.md#commonashx-loadtradelaw) |
 | `LoadTreeIndustryCls` | [骨架](18-公共-字典与列表列.md#commonashx-loadtreeindustrycls) |
 | `LoadTreeSalesUser` | [骨架](18-公共-字典与列表列.md#commonashx-loadtreesalesuser) |
 | `LoadUserRank` | [骨架](18-公共-字典与列表列.md#commonashx-loaduserrank) |
-| `GetProcessByTypeAP` | [46](46-运行期补充接口契约.md#getprocessbytypeapcommonashx)。待办中心提案流程列表 |
-| `GetQueryOutConfig` | [45](45-高级导出与模板协议.md#22-getqueryoutconfig读取模板列表--栏位明细)。高级导出模板列表与栏位明细 |
-| `LoadTechnical` | [46](46-运行期补充接口契约.md#loadtechnicalcommonashx)。费用高级查询技术领域树 |
-| `ShowUserInfo` | [46](46-运行期补充接口契约.md#showuserinfocommonashx)。办理人悬停浮窗部门与联系方式 |
-| `UpdateQueryOutConfig` | [45](45-高级导出与模板协议.md#23-updatequeryoutconfig新建--删除模板)。新建（`ud_type=add`）或删除（`ud_type=del`）导出模板 |
-| `UpdateQueryOutConfigNew` | [45](45-高级导出与模板协议.md#24-updatequeryoutconfignew更新已有模板)。更新已有导出模板（`ud_type=up`） |
+| `GetProcessByTypeAP` | [46](46-运行期补充接口契约.md#commonashx-getprocessbytypeap)。待办中心提案流程列表 |
+| `GetQueryOutConfig` | [45](45-高级导出与模板协议.md#commonashx-getqueryoutconfig)。高级导出模板列表与栏位明细 |
+| `LoadTechnical` | [46](46-运行期补充接口契约.md#commonashx-loadtechnical)。费用高级查询技术领域树 |
+| `ShowUserInfo` | [46](46-运行期补充接口契约.md#commonashx-showuserinfo)。办理人悬停浮窗部门与联系方式 |
+| `UpdateQueryOutConfig` | [45](45-高级导出与模板协议.md#commonashx-updatequeryoutconfig)。新建（`ud_type=add`）或删除（`ud_type=del`）导出模板 |
+| `UpdateQueryOutConfigNew` | [45](45-高级导出与模板协议.md#commonashx-updatequeryoutconfignew)。更新已有导出模板（`ud_type=up`） |
 
 <a id="customerashx"></a>
 
@@ -465,8 +472,8 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | Call | 文档 |
 |---|---|
 | `CustomizedInit` | [骨架](40-报表.md#reportashx-customizedinit) |
-| `FeeSearch` | [44-费用查询.md](44-费用查询.md) |
-| `FeeSearchTotalAmount` | [44-费用查询.md](44-费用查询.md) |
+| `FeeSearch` | [44](44-费用查询.md#reportashx-feesearch) |
+| `FeeSearchTotalAmount` | [44](44-费用查询.md#reportashx-feesearchtotalamount) |
 | `FlowMonitorInfo` | [09](09-期限监控.md#2-getlimitmonitorcaselist)。type=flow 时列表 Call 改成这个，响应未核对 |
 | `GetBjshBatchMailReportConfig` | [骨架](40-报表.md#reportashx-getbjshbatchmailreportconfig) |
 | `GetCommonReportList` | [骨架](40-报表.md#reportashx-getcommonreportlist) |
@@ -478,7 +485,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetLimitMonitorCaseList` | [骨架](27-期限监控列表.md#reportashx-getlimitmonitorcaselist) · [09](09-期限监控.md#2-getlimitmonitorcaselist) |
 | `GetPointInfo` | [骨架](40-报表.md#reportashx-getpointinfo) |
 | `GetPointTags` | [骨架](27-期限监控列表.md#reportashx-getpointtags) |
-| `LimitMonitorGetCtrlproc` | [骨架](27-期限监控列表.md#reportashx-limitmonitorgetctrlproc) · [09](09-期限监控.md#1-打开列表) |
+| `LimitMonitorGetCtrlproc` | [骨架](27-期限监控列表.md#reportashx-limitmonitorgetctrlproc) · [09](09-期限监控.md#1-打开列表) · [50](50-专利查询与清单导出.md#reportashx-limitmonitorgetctrlproc) |
 | `LimitMonitorGetCtrlprocNew` | [09](09-期限监控.md#4-进入邮件页)。第二段样本 CtrlProc 共 432 条 |
 | `LimitMonitorGetFeeType` | [骨架](27-期限监控列表.md#reportashx-limitmonitorgetfeetype) · [09](09-期限监控.md#1-打开列表) |
 | `LimitMonitorGetIdsCtrlproc` | [骨架](27-期限监控列表.md#reportashx-limitmonitorgetidsctrlproc) |
@@ -486,11 +493,11 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `PointSearch` | [骨架](40-报表.md#reportashx-pointsearch) |
 | `ProjectFeeSearch` | [骨架](40-报表.md#reportashx-projectfeesearch) |
 | `ReportBaseData` | [骨架](40-报表.md#reportashx-reportbasedata) |
-| `ExcelFeeListByChecked` | [45](45-高级导出与模板协议.md#32-excelfeelistbychecked导出勾选费用)。按勾选 `fee_ids` 服务端生成费用 Excel |
-| `ExcelFeeListByCond` | [45](45-高级导出与模板协议.md#31-excelfeelistbycond导出清单)。按当前查询条件服务端生成全量费用 Excel |
-| `ExcelFeeListCountByCond` | [45](45-高级导出与模板协议.md#33-excelfeelistcountbycond导出汇总数据)。按案件汇总官费/代理费/第三方费导出 Excel |
-| `GetCustomerTreeData` | [46](46-运行期补充接口契约.md#getcustomertreedatareportashx)。费用查询客户选择二级弹窗（`ShowIhgSelect`）检索 |
-| `GetTreeApplicant` | [46](46-运行期补充接口契约.md#gettreeapplicantreportashx)。费用查询按已选客户联动加载申请人树 |
+| `ExcelFeeListByChecked` | [45](45-高级导出与模板协议.md#reportashx-excelfeelistbychecked)。按勾选 `fee_ids` 服务端生成费用 Excel |
+| `ExcelFeeListByCond` | [45](45-高级导出与模板协议.md#reportashx-excelfeelistbycond)。按当前查询条件服务端生成全量费用 Excel |
+| `ExcelFeeListCountByCond` | [45](45-高级导出与模板协议.md#reportashx-excelfeelistcountbycond)。按案件汇总官费/代理费/第三方费导出 Excel |
+| `GetCustomerTreeData` | [46](46-运行期补充接口契约.md#reportashx-getcustomertreedata)。费用查询客户选择二级弹窗（`ShowIhgSelect`）检索 |
+| `GetTreeApplicant` | [46](46-运行期补充接口契约.md#reportashx-gettreeapplicant)。费用查询按已选客户联动加载申请人树 |
 
 <a id="baseinfoashx"></a>
 
@@ -520,7 +527,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetStageByProjectTypeID` | [骨架](22-基础信息.md#baseinfoashx-getstagebyprojecttypeid) |
 | `GetUserDetail` | [骨架](31-基础信息补充.md#baseinfoashx-getuserdetail) |
 | `SaveFileTepmName` | [06](06-文件操作.md#savefiletepmname)。Call 名里的 Tepm 是页面原文，2026-11-01 抓包已核对 |
-| `GetProducts` | [46](46-运行期补充接口契约.md#getproductsbaseinfoashx)。费用高级查询产品类别树 |
+| `GetProducts` | [46](46-运行期补充接口契约.md#baseinfoashx-getproducts)。费用高级查询产品类别树 |
 
 <a id="noticeashx"></a>
 
@@ -530,40 +537,40 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 | Call | 文档 |
 |---|---|
-| `ChangeNolaiuto` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。切换无需导入状态（`value=1/0`） |
-| `CheckImportNotice` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。导入前检查重复通知书或费减异常 |
+| `ChangeNolaiuto` | [47](47-来文管理.md#noticeashx-changenolaiuto)。切换无需导入状态（`value=1/0`） |
+| `CheckImportNotice` | [47](47-来文管理.md#noticeashx-checkimportnotice)。导入前检查重复通知书或费减异常 |
 | `GetAgency` | [骨架](25-官文.md#noticeashx-getagency) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
 | `GetApplyType` | [骨架](25-官文.md#noticeashx-getapplytype) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
-| `GetCasechargedept` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情选定案件后联动读取承办部门（`DeptInfo.dept_name`） |
+| `GetCasechargedept` | [47](47-来文管理.md#noticeashx-getcasechargedept)。来文详情选定案件后联动读取承办部门（`DeptInfo.dept_name`） |
 | `GetDirectionType` | [骨架](25-官文.md#noticeashx-getdirectiontype) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
 | `GethandExcelList` | [骨架](25-官文.md#noticeashx-gethandexcellist) · [47](47-来文管理.md#21-页签与接口路由总表) |
 | `GetHandHisList` | [47](47-来文管理.md#21-页签与接口路由总表)。异常处理记录页签检索 |
 | `GetHandNoticeList` | [骨架](25-官文.md#noticeashx-gethandnoticelist) · [47](47-来文管理.md#21-页签与接口路由总表) |
-| `GetImportNoticeList` | [47](47-来文管理.md#21-页签与接口路由总表)。导入来文「已完成 `status=1`」页签检索 |
+| `GetImportNoticeList` | [47](47-来文管理.md#noticeashx-getimportnoticelist)。导入来文「已完成 `status=1`」页签检索 |
 | `GetMailNoticeList` | [骨架](37-登录邮箱与官文通知.md#noticeashx-getmailnoticelist) |
 | `GetNolaiuto` | [47](47-来文管理.md#21-页签与接口路由总表)。无需导入来文页签检索 |
 | `GetNolaiutoCount` | [骨架](25-官文.md#noticeashx-getnolaiutocount) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
-| `GetNoticeCaseType` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情选定案件后联动读取案件类型（`CaseTypeInfo.case_type_id`） |
-| `GetNoticeDetail` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。读取来文详情 `NoticeInfo` |
-| `GetNoticeduibi` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情「对比文件」子表（`TableRows[]`） |
-| `GetNoticefee` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情「官费信息」子表（`TableRows[]`） |
-| `GetNoticehebo` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。来文详情「核驳信息」子表（`TableRows[]`） |
-| `ImportCloseCase` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。结案案件只导文件不建新任务 |
-| `ImportNotice` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。导入来文到系统 |
+| `GetNoticeCaseType` | [47](47-来文管理.md#noticeashx-getnoticecasetype)。来文详情选定案件后联动读取案件类型（`CaseTypeInfo.case_type_id`） |
+| `GetNoticeDetail` | [47](47-来文管理.md#noticeashx-getnoticedetail)。读取来文详情 `NoticeInfo` |
+| `GetNoticeduibi` | [47](47-来文管理.md#noticeashx-getnoticeduibi)。来文详情「对比文件」子表（`TableRows[]`） |
+| `GetNoticefee` | [47](47-来文管理.md#noticeashx-getnoticefee)。来文详情「官费信息」子表（`TableRows[]`） |
+| `GetNoticehebo` | [47](47-来文管理.md#noticeashx-getnoticehebo)。来文详情「核驳信息」子表（`TableRows[]`） |
+| `ImportCloseCase` | [47](47-来文管理.md#noticeashx-importclosecase)。结案案件只导文件不建新任务 |
+| `ImportNotice` | [47](47-来文管理.md#noticeashx-importnotice)。导入来文到系统 · [49](49-PCT官文下载上传工作流接口.md#noticeashx-importnotice) |
 | `LimitMailCustomer` | [09](09-期限监控.md#3-从列表创建发文)。Result=false 仍可成功。NeedConfirmFillAgency 要停 |
-| `MailCustomer` | [07](07-发文与邮件.md#mailcustomer) · [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。成功只看 objid |
+| `MailCustomer` | [07](07-发文与邮件.md#mailcustomer) · [47](47-来文管理.md#noticeashx-mailcustomer)。成功只看 objid |
 | `MailCustomerForProgressing` | [09](09-期限监控.md#3-从列表创建发文)。特定租户才会改用这个 Call |
 | `MailCustomerNew` | [07](07-发文与邮件.md#mailcustomer)。不提交 mailtype，打开草稿页 |
-| `RecoveryProcessstatus` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。恢复未处理状态 |
-| `RecoveryStatusAnalyse` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。恢复未处理并返还递交助手重新分析 |
-| `ReMatchNotice` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。重新匹配案件 |
+| `RecoveryProcessstatus` | [47](47-来文管理.md#noticeashx-recoveryprocessstatus)。恢复未处理状态 |
+| `RecoveryStatusAnalyse` | [47](47-来文管理.md#noticeashx-recoverystatusanalyse)。恢复未处理并返还递交助手重新分析 |
+| `ReMatchNotice` | [47](47-来文管理.md#noticeashx-rematchnotice)。重新匹配案件 |
 | `ReportNoticeExcel` | [47](47-来文管理.md#5-四大服务端-excel-导出接口ihgadvexport-协议)。导出导入来文清单 |
-| `SaveNoticeDetail` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。保存手工修正后的来文详情 |
-| `SearchNotice` | [骨架](25-官文.md#noticeashx-searchnotice) · [47](47-来文管理.md#22-导入来文searchnotice--getimportnoticelist请求参数与静态枚举) |
-| `UpdateCaseName` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。批量更新来文案件名称 |
-| `UpdateHandExcel` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。更新电子申请清单为已处理 |
-| `UpdateProcessstatus` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。更新来文处理状态为已完成 |
-| `UploadNoticeExcel` | [47](47-来文管理.md#3-noticeashx-详情业务写操作与清单上传)。上传电子申请清单 Excel 参与对比 |
+| `SaveNoticeDetail` | [47](47-来文管理.md#noticeashx-savenoticedetail)。保存手工修正后的来文详情 |
+| `SearchNotice` | [骨架](25-官文.md#noticeashx-searchnotice) · [47](47-来文管理.md#noticeashx-searchnotice) |
+| `UpdateCaseName` | [47](47-来文管理.md#noticeashx-updatecasename)。批量更新来文案件名称 |
+| `UpdateHandExcel` | [47](47-来文管理.md#noticeashx-updatehandexcel)。更新电子申请清单为已处理 |
+| `UpdateProcessstatus` | [47](47-来文管理.md#noticeashx-updateprocessstatus)。更新来文处理状态为已完成 |
+| `UploadNoticeExcel` | [47](47-来文管理.md#noticeashx-uploadnoticeexcel)。上传电子申请清单 Excel 参与对比 |
 
 <a id="loginashx"></a>
 
@@ -582,7 +589,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetMailSignatureSettingList` | [10](10-邮件签名.md#getmailsignaturesettinglist)。第二段抓包 TableRows 为 null，TableRowsCount 为字符串 0 |
 | `GetSignatureset` | [10](10-邮件签名.md#getsignatureset)。响应正文未保存 |
 | `SaveSignatureset` | [10](10-邮件签名.md#保存和删除)。未调用 |
-| `GetUserModel` | [46](46-运行期补充接口契约.md#getusermodel)。会话心跳与当前登录操作人身份探测（`Result=false` 仍可已登录，掉线可能返回短 HTML） |
+| `GetUserModel` | [46](46-运行期补充接口契约.md#loginashx-getusermodel)。会话心跳与当前登录操作人身份探测（`Result=false` 仍可已登录，掉线可能返回短 HTML） |
 
 <a id="eflowashx"></a>
 
@@ -603,18 +610,23 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### FilingAction.ashx
 
-23 个。
+30 个。
 
 | Call | 文档 |
 |---|---|
+| `CheckFirstInventor` | [48](48-费减工作流接口.md#filingactionashx-checkfirstinventor)。检查第一发明人 |
+| `CheckResult` | [48](48-费减工作流接口.md#filingactionashx-checkresult)。检查递交资料 |
+| `CheckSplitPDF` | [48](48-费减工作流接口.md#filingactionashx-checksplitpdf)。检查 PDF 拆分 |
+| `ConvertSubmit` | [48](48-费减工作流接口.md#filingactionashx-convertsubmit)。发起 XML 转档 |
+| `FilingSubmit` | [48](48-费减工作流接口.md#filingactionashx-filingsubmit)。提交流程人员初核 |
 | `GetApplicantFeeReduce` | [骨架](41-发文页读取.md#filingactionashx-getapplicantfeereduce) |
 | `GetAttachFiles` | [骨架](41-发文页读取.md#filingactionashx-getattachfiles) |
 | `GetAttached` | [骨架](41-发文页读取.md#filingactionashx-getattached) |
 | `GetCaseByFiling` | [骨架](41-发文页读取.md#filingactionashx-getcasebyfiling) |
 | `GetCaseConMail` | [骨架](41-发文页读取.md#filingactionashx-getcaseconmail)。数据在 `TableRowsS`，`TableRows` 为 null |
 | `GetCaseExpandInfo` | [骨架](41-发文页读取.md#filingactionashx-getcaseexpandinfo) |
-| `GetConvertStatus` | [骨架](41-发文页读取.md#filingactionashx-getconvertstatus) |
-| `GetConvertedFile` | [骨架](41-发文页读取.md#filingactionashx-getconvertedfile) |
+| `GetConvertStatus` | [骨架](41-发文页读取.md#filingactionashx-getconvertstatus) · [48](48-费减工作流接口.md#filingactionashx-getconvertstatus) |
+| `GetConvertedFile` | [骨架](41-发文页读取.md#filingactionashx-getconvertedfile) · [48](48-费减工作流接口.md#filingactionashx-getconvertedfile) |
 | `GetFilingFlowNode` | [骨架](23-递交.md#filingactionashx-getfilingflownode) |
 | `GetFilingInfo` | [骨架](41-发文页读取.md#filingactionashx-getfilinginfo)。顶层键随 `Code` 变 |
 | `GetFilingInfoBase` | [骨架](41-发文页读取.md#filingactionashx-getfilinginfobase) |
@@ -630,6 +642,8 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetRespInfoList` | [骨架](41-发文页读取.md#filingactionashx-getrespinfolist) |
 | `GetSelecteFile` | [骨架](41-发文页读取.md#filingactionashx-getselectefile) |
 | `InitFilingContact` | [骨架](41-发文页读取.md#filingactionashx-initfilingcontact) |
+| `SaveFeeReduceRspInfo` | [48](48-费减工作流接口.md#filingactionashx-savefeereducerspinfo)。保存费减请求表单 |
+| `SaveFilingType` | [48](48-费减工作流接口.md#filingactionashx-savefilingtype)。保存递交文件类型 |
 
 <a id="batchashx"></a>
 
@@ -691,14 +705,14 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### FilingApiAction.ashx
 
-25 个。
+27 个。
 
 | Call | 文档 |
 |---|---|
 | `CheckUserStatus` | [47](47-来文管理.md#41-cpc-账号登录态校验)。检查分支机构 CPC 账号登录状态（需扫码返回 401） |
 | `DeleteOaInfoByFids` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。按 `fids` 删除待下载通知书记录 |
 | `DownloadAndAnalyseCert` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。触发下载并解析专利电子证书 |
-| `ExportExcelTwoTzsList` | [47](47-来文管理.md#5-四大服务端-excel-导出接口ihgadvexport-协议)。导出「来文二次下载」核对清单 |
+| `ExportExcelTwoTzsList` | [47](47-来文管理.md#5-四大服务端-excel-导出接口ihgadvexport-协议)。导出「来文二次下载」核对清单 · [49](49-PCT官文下载上传工作流接口.md#filingapiactionashx-exportexceltwotzslist) |
 | `ExportExcelTzsList` | [47](47-来文管理.md#5-四大服务端-excel-导出接口ihgadvexport-协议)。导出「来文下载」清单 |
 | `GetAccountList` | [骨架](23-递交.md#filingapiactionashx-getaccountlist) |
 | `GetAnalyseCertStatus` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。轮询电子证书下载解析状态 |
@@ -706,7 +720,7 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetCertListExport` | [47](47-来文管理.md#5-四大服务端-excel-导出接口ihgadvexport-协议)。导出「专利电子证书下载」清单 |
 | `GetCertListStatus` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。轮询获取专利电子证书列表状态 |
 | `GetCheckInfo` | [骨架](41-发文页读取.md#filingapiactionashx-getcheckinfo) |
-| `GetCPCBusineeType` | [骨架](41-发文页读取.md#filingapiactionashx-getcpcbusineetype) |
+| `GetCPCBusineeType` | [骨架](41-发文页读取.md#filingapiactionashx-getcpcbusineetype) · [48](48-费减工作流接口.md#filingapiactionashx-getcpcbusineetype) |
 | `GetCpcCertList` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。触发从 CPC 拉取电子证书列表 |
 | `GetCpcNoticeAccount` | [骨架](23-递交.md#filingapiactionashx-getcpcnoticeaccount) · [47](47-来文管理.md#1-初始化字典热加载与角标计数) |
 | `GetCPCTzsDate` | [47](47-来文管理.md#1-初始化字典热加载与角标计数)。读取来文下载默认起始时间 |
@@ -718,8 +732,10 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 | `GetTzsList` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。触发从 CPC 拉取通知书列表 |
 | `GetTzsListStatus` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。轮询 CPC 通知书列表拉取状态 |
 | `GetUnProcessTzsList` | [47](47-来文管理.md#23-其余页签检索参数与静态枚举)。查询来文下载列表 |
-| `ProcessTzsList` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。触发分析下载官文通知书 |
-| `ProcessTzsListStatus` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。轮询官文通知书分析下载状态 |
+| `InsertNewFiling` | [48](48-费减工作流接口.md#filingapiactionashx-insertnewfiling)。新建递交草稿 |
+| `ProcessTzsList` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。触发分析下载官文通知书 · [49](49-PCT官文下载上传工作流接口.md#filingapiactionashx-processtzslist) |
+| `ProcessTzsListStatus` | [47](47-来文管理.md#42-异步列表拉取解析下载与删除)。轮询官文通知书分析下载状态 · [49](49-PCT官文下载上传工作流接口.md#filingapiactionashx-processtzsliststatus) |
+| `SaveCPCType` | [48](48-费减工作流接口.md#filingapiactionashx-savecpctype)。保存 CPC 业务类型 |
 
 <a id="filingtradeactionashx"></a>
 
@@ -860,11 +876,12 @@ Content-Type：`application/x-www-form-urlencoded; charset=UTF-8`
 
 ### AgencyAction.ashx
 
-1 个。
+2 个。
 
 | Call | 文档 |
 |---|---|
-| `AgencySearchCase` | [46](46-运行期补充接口契约.md#agencysearchcase)。按客户文号批量反查案件主键（实体编码 XML `Element`） |
+| `AgencySearchCase` | [46](46-运行期补充接口契约.md#agencyactionashx-agencysearchcase)。按客户文号批量反查案件主键（实体编码 XML `Element`） |
+| `GetCaseInfo` | [46](46-运行期补充接口契约.md#agencyactionashx-getcaseinfo)。按案件主键读取联系人相关信息 |
 
 <a id="filehandlerashx"></a>
 
