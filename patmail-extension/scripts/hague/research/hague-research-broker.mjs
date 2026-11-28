@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, URL } from 'node:url'
 import { SCRIPTS_ROOT } from '../../shared/paths.mjs'
 
 const DEFAULT_WORKER_URL = pathToFileURL(join(SCRIPTS_ROOT, 'hague', 'research', 'hague-research-worker.mjs'))
@@ -59,6 +60,9 @@ export class AnalysisWorker {
 
   ensureWorker() {
     if (this.worker) return this.worker
+    if (this.workerUrl instanceof URL && this.workerUrl.protocol === 'file:' && !existsSync(this.workerUrl)) {
+      throw Object.assign(Error('analysis worker file is missing'), { code: 'analysis_error' })
+    }
     this.worker = new Worker(this.workerUrl, { resourceLimits: { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16 } })
     const instance = this.worker
     this.worker.on('message', ({ id, result, error, metrics }) => {
@@ -113,8 +117,9 @@ export class AnalysisWorker {
     }
     try {
       this.ensureWorker()
-    } catch {
+    } catch (error) {
       this.stats.droppedDiagnostics++
+      if (error?.code === 'analysis_error') throw error
       throw Object.assign(Error('analysis worker unavailable'), { code: 'analysis_error' })
     }
     const result = await new Promise((resolve, reject) => {
