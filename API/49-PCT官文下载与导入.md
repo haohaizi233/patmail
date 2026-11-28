@@ -1,4 +1,4 @@
-# PCT 官文下载上传工作流接口
+# PCT 官文下载与导入
 
 本章记录 PatMail 的「PCT 官文下载上传」如何调用大客户与中小客户 EASY、如何识别成功回执，以及如何续办。接口行为以当前运行代码为依据。原站来文管理通用字段与动作另见 [来文管理接口](47-来文管理.md)。页面操作另见 [PCT 工作流使用说明](../patmail-extension/docs/workflows/pct官文下载上传.md)。
 
@@ -31,7 +31,7 @@ sequenceDiagram
 ```
 
 1. 每套系统依次处理该系统内已选的 CPC 账号，两站并行。每个账号发送一次 `EXPORT_NOTICE`。请求 `query` 传 `account`、`applyType`（页面默认 `2`）、`applyNo`、`caseName`、`noticeName`、`xlh`、`startTime`、`endTime`，并在扩展消息内提供 `pageIndex=1`、`pageSize=200`。
-2. 原站调用 `POST /AjaxServers/FilingApiAction.ashx`，`Call=ExportExcelTwoTzsList`。传上述查询字段，附 `log_pagename=IhgAdvExport.aspx` 及 `e_coulums` 列定义。该导出请求不使用消息里的分页字段。默认列依次为 `tongzhismc`、`fawenxlh`、`dianzifwrq`、`cnApplicationnumber`、`famingczmc`、`account`、`status`。[高级导出协议](45-高级导出与模板协议.md)
+2. 原站调用 `POST /AjaxServers/FilingApiAction.ashx`，`Call=ExportExcelTwoTzsList`。传上述查询字段，附 `log_pagename=IhgAdvExport.aspx` 及 `e_coulums` 列定义。该导出请求不使用消息里的分页字段。默认列依次为 `tongzhismc`、`fawenxlh`、`dianzifwrq`、`cnApplicationnumber`、`famingczmc`、`account`、`status`。[高级导出协议](45-清单导出与模板.md)
 3. 同步响应从 `file_guid`、`file_size` 生成 `GET /AjaxServers/FileHandler.ashx?guid={file_guid}&file_size={file_size}`。内容脚本同源取件，`delivery=inline` 将 `fileBase64`、`fileName`、`mimeType`、`fileGuid`、`fileSize` 等交回工作流，不逐个把原站清单保存到下载目录。
 4. `async=true` 或缺少 `fileBase64` 时不能自动合并。原站提示异步生成时可缩小日期范围再执行。当前工作流把「无可导出数据」或「未返回有效的导出文件地址」类错误记为该账号 0 条；取件 HTTP 异常或格式错误会中止本次并集生成。
 5. 从原站表格识别「是否导入系统」列并筛出未导入行。当前解析器遇到缺少状态列的表格时，会把非空行按未导入纳入。并集优先按发文序列号去重，序列号为空时按「申请号、来文名称、发文日」去重。页面生成一份并集 XLSX，并最多预览 200 行。
