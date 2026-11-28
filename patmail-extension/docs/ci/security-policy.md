@@ -9,7 +9,7 @@
 |---|---|---|
 | 依赖漏洞审计 | `pnpm audit:deps`（`pnpm audit --prod --audit-level high`） | 只审计生产依赖；high 及以上失败退出 |
 | 锁文件完整性 | `pnpm install --frozen-lockfile`（`.github/actions/setup-patmail`） | CI 不允许改写 `pnpm-lock.yaml` |
-| 许可策略 | `pnpm licenses:check`（`scripts/license-check.mjs`） | 直接依赖按 `ci/license-policy.json` 校验 |
+| 许可策略 | `pnpm licenses:check`（`scripts/security/license-check.mjs`） | 直接依赖按 `ci/license-policy.json` 校验 |
 | 依赖更新 | `.github/dependabot.yml` | npm 生态（`patmail-extension/`）+ GitHub Actions，每周一 |
 
 - 许可白名单：MIT / ISC / BSD-2/3 / Apache-2.0 / 0BSD / Unlicense / CC0-1.0 / CC-BY-3.0/4.0 / BlueOak-1.0.0 / Python-2.0。
@@ -19,7 +19,7 @@
 
 ## 2. 密钥与敏感信息扫描
 
-实现：`scripts/scan-secrets.mjs`（自研、仓库内可审计，规则按风险分层）。
+实现：`scripts/security/scan-secrets.mjs`（自研、仓库内可审计，规则按风险分层）。
 
 ```bash
 pnpm scan:secrets              # 工作树扫描（PR 门禁，快）
@@ -52,7 +52,7 @@ pnpm scan:secrets --write-baseline  # 把当前发现登记进例外表（必须
 ## 3. 业务数据泄漏防护
 
 - 差异化策略：抓包 / DOM / API / 客户名单等**不视为天然安全**，按 warn 级扫描生产凭据、客户个人信息、敏感业务响应；如需脱敏旧记录，保留字段结构、数据类型与测试价值，**未经授权不删除原始证据**。
-- E2E 证据（trace / 截图 / 日志 / 摘要）在写入报告前统一脱敏：不写 Cookie、Authorization、Session Token、邮件地址明文、客户合同原文与业务敏感请求字段（`tests/e2e/support/report.mjs` 与 `scripts/ci-report.mjs` 只输出状态码、路径与计数）。
+- E2E 证据（trace / 截图 / 日志 / 摘要）在写入报告前统一脱敏：不写 Cookie、Authorization、Session Token、邮件地址明文、客户合同原文与业务敏感请求字段（`tests/e2e/support/report.mjs` 与 `scripts/ci/ci-report.mjs` 只输出状态码、路径与计数）。
 - CI 不接触任何 Secret：所有 workflow `permissions: contents: read`，不引用 `secrets.*`，不使用 `pull_request_target`。
 
 ## 4. 测试的网络隔离（强制门禁）

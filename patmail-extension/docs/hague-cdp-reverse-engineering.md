@@ -63,7 +63,7 @@ HTTP 200只证明网络响应；JSF校验和业务回执来自应用Trace。静�
 
 排查顺序：读本机status和最近JSONL，按requestId及应用traceId关联，识别缺失证据，然后才决定是否需要用户授权现场观察。开关和重启方法见 [cdp-observer.md](cdp-observer.md)。没有CDP连接时应用执行不依赖该服务；不会因诊断失败重试业务请求。
 
-离线Observer日志可以通过 `scripts/hague-diagnostics-export.mjs` 转换为面板Trace JSONL；共享浏览器适配器为 `src/hague/diagnostics/observer-adapter.mjs`。转换不推断案件归属。逐调用AST记录为版本1 `source=cdp,phase=protocol.analyzed`，携带安全组件、调用类型及位置，仍只代表静态证据。海牙UI快照自由文本现在只保留类别，draftTexts只保留类别及数量。
+离线Observer日志可以通过 `scripts/hague/diagnostics/hague-diagnostics-export.mjs` 转换为面板Trace JSONL；共享浏览器适配器为 `src/hague/diagnostics/observer-adapter.mjs`。转换不推断案件归属。逐调用AST记录为版本1 `source=cdp,phase=protocol.analyzed`，携带安全组件、调用类型及位置，仍只代表静态证据。海牙UI快照自由文本现在只保留类别，draftTexts只保留类别及数量。
 
 归因桥已补充固定Hague Runtime binding：仅诊断开启的注入请求发出脱敏元数据，Node以应用目标的先行Trace注册表核对traceId/requestId及方法/路径/案件运行ID，再用CDP executionContext观察到的frame/target/session丰富候选。真实请求可在唯一一致证据下成为probable，多路冲突保持ambiguous。页面声明的frame/target/CDP requestId不被采信，不产生exact。应用事件与页面事件存在时序竞争，先行证据或context缺失时保留unmatched，不重试业务。此能力已有离线实际处理链Fixture验证，生产浏览器仍未授权验证。
 

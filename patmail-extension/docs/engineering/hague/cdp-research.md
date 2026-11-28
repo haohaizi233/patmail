@@ -6,7 +6,7 @@
 
 输入为获授权 Target 的 CDP 事件。Target 是页面等调试对象，Session 是连接到目标的调试会话，Frame 标识文档容器，Loader 区分导航后的文档世代；这些值不可与应用 requestId 混为一谈。输出为脱敏 TraceEvent 和统计，不是浏览器操作脚本。
 
-[Research 控制器](../../../scripts/hague-research.mjs)的请求跟踪要求当前研究目标/session 一致、POST、XHR/Fetch、明确 frameId/loaderId，排除重定向，最多 2048 个请求。请求表用 session/request 标识承接响应；送入 Worker 的状态 scope 另外包含 target/frame/loader/form，requestId 作为请求身份单独传入。
+[Research 控制器](../../../scripts/hague/research/hague-research.mjs)的请求跟踪要求当前研究目标/session 一致、POST、XHR/Fetch、明确 frameId/loaderId，排除重定向，最多 2048 个请求。请求表用 session/request 标识承接响应；送入 Worker 的状态 scope 另外包含 target/frame/loader/form，requestId 作为请求身份单独传入。
 
 ## 动态观测与静态分析
 
@@ -16,7 +16,7 @@ Network.requestWillBeSent 与 response/loading 事件证明传输发生或失败
 
 ## 生命周期与异常
 
-导航后 Loader 改变，旧文档的状态和请求关联应失效；session 失效和 clear 信号传入[Worker](../../../scripts/hague-research-worker.mjs)。重连必须重新建立研究资源，不能把旧 scriptId 当作新页面脚本。延迟返回还须检查当前目标和 generation。具体状态键见[ViewState 状态机](viewstate-state-machine.md)。
+导航后 Loader 改变，旧文档的状态和请求关联应失效；session 失效和 clear 信号传入[Worker](../../../scripts/hague/research/hague-research-worker.mjs)。重连必须重新建立研究资源，不能把旧 scriptId 当作新页面脚本。延迟返回还须检查当前目标和 generation。具体状态键见[ViewState 状态机](viewstate-state-machine.md)。
 
 ## 预算、安全和证据范围
 

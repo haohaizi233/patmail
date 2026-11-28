@@ -6,7 +6,7 @@ v1.5.0 已加入磁盘缓存、WAL 工作面恢复和真实 Range 续传；当�
 
 ## 使用
 
-1. 运行仓库根目录 `start.py`，它在构建扩展时启动本机下载桥接。也可以单独用 PowerShell 运行 `scripts/start-stream-download.ps1`；交付构建内入口是 `dist/local-download/start-stream-download.ps1`。需要本机 Python 3，不需安装额外 Python 包。
+1. 运行仓库根目录 `start.py`，它在构建扩展时启动本机下载桥接。也可以单独用 PowerShell 运行 `scripts/download/bridge/start-stream-download.ps1`；交付构建内入口是 `dist/local-download/start-stream-download.ps1`。需要本机 Python 3，不需安装额外 Python 包。
 2. Chrome 扩展管理页重新加载 `patmail-extension/dist`，刷新 EASY 来源页与工作台。
 3. 使用搜索模板查询，勾选文件后点工作台“下载已选”。ZIP 使用产生这批查询结果时的搜索模板名称；未使用模板时为 `下载文件.zip`。Windows 非法字符被替换，同名下载由浏览器自动另取名。
 

@@ -6,7 +6,7 @@
 
 [状态机](../../../src/hague/diagnostics/protocol/jsf-state-machine.mjs)按 sessionId + 可选 targetId + frameId + loaderId（缺省 default）+ 可选 formId 构造文档键。请求表再追加 requestId。session/frame 缺失时不能建立有效 scope。requestId 不进入文档身份，否则每次请求都成为孤立上下文。
 
-输入是 beginRequest、recordResponseViewState、invalidateDocument、invalidateSession 与 clear；输出为 transition/status 与有限证据。当前可核验调用在[Worker](../../../scripts/hague-research-worker.mjs) signal/xml 分支，而不是只有单元测试导入。
+输入是 beginRequest、recordResponseViewState、invalidateDocument、invalidateSession 与 clear；输出为 transition/status 与有限证据。当前可核验调用在[Worker](../../../scripts/hague/research/hague-research-worker.mjs) signal/xml 分支，而不是只有单元测试导入。
 
 ```mermaid
 stateDiagram-v2

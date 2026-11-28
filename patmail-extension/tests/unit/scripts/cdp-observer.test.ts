@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
-const corePath = resolve(process.cwd(), 'scripts/cdp-observer-core.mjs')
+const corePath = resolve(process.cwd(), 'scripts/cdp/cdp-observer-core.mjs')
 const loadedObserver: unknown = existsSync(corePath) ? await import(pathToFileURL(corePath).href) : {}
 const observer = loadedObserver as Record<string, unknown>
 
@@ -281,8 +281,8 @@ describe('CDP observer target and event filtering', () => {
   })
 
   it('does not import or connect Playwright from either service module', () => {
-    const cli = readFileSync(resolve(process.cwd(), 'scripts/cdp-observer.mjs'), 'utf8')
-    const core = readFileSync(resolve(process.cwd(), 'scripts/cdp-observer-core.mjs'), 'utf8')
+    const cli = readFileSync(resolve(process.cwd(), 'scripts/cdp/cdp-observer.mjs'), 'utf8')
+    const core = readFileSync(resolve(process.cwd(), 'scripts/cdp/cdp-observer-core.mjs'), 'utf8')
     expect(`${cli}\n${core}`).not.toMatch(/playwright|connectOverCDP/i)
   })
 

@@ -242,7 +242,7 @@ def start_stream_bridge() -> None:
 
     if healthy():
         return
-    script = EXTENSION / 'scripts' / 'stream-download-bridge.py'
+    script = EXTENSION / 'scripts' / 'download' / 'bridge' / 'stream-download-bridge.py'
     proc = subprocess.Popen([sys.executable, str(script), '--port', str(STREAM_BRIDGE_PORT)], cwd=EXTENSION,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)

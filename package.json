@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "node patmail-extension/scripts/cdp-observer.mjs start && vite build",
-    "cdp:start": "node patmail-extension/scripts/cdp-observer.mjs start",
-    "cdp:status": "node patmail-extension/scripts/cdp-observer.mjs status",
-    "cdp:stop": "node patmail-extension/scripts/cdp-observer.mjs stop",
+    "build": "node patmail-extension/scripts/cdp/cdp-observer.mjs start && vite build",
+    "cdp:start": "node patmail-extension/scripts/cdp/cdp-observer.mjs start",
+    "cdp:status": "node patmail-extension/scripts/cdp/cdp-observer.mjs status",
+    "cdp:stop": "node patmail-extension/scripts/cdp/cdp-observer.mjs stop",
     "architecture:check": "pnpm --dir patmail-extension architecture:check",
     "preview": "vite preview --host 0.0.0.0"
   },

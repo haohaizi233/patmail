@@ -26,7 +26,7 @@ file_name_type = colname;txt;colname;txt;colname
 - `tests/unit/ui/download-name-editor.test.ts`：真实查询组件选模板、五段回显、固定文本、清空、恢复、同值重选、编辑后的实际GetFileName参数、无效文本阻止下载。
 - `tests/unit/ui/bind-download-name-validation.test.ts`：无效配方禁用客户绑定，直接派发点击事件也不能保存或删除已有配方。
 - `tests/e2e/download-editor.e2e.mjs`：加载构建后的插件，从界面选模板、修改、查询、勾选、点击下载，经后台与内容脚本后核验GetFileName收到的完整配方。所有网络被夹具拦截，在打包阶段主动返回夹具错误，不下载业务文件。
-- `scripts/live-download-name-editor-audit.mjs`：显式只读登录，在隔离浏览器读取真实账号模板，验证五段、两个固定字符框、增删与清空恢复，并保存界面截图。不查询、下载业务文件，不保存原站模板。凭据只从进程环境读取，不写报告。
+- `scripts/download/audits/live-download-name-editor-audit.mjs`：显式只读登录，在隔离浏览器读取真实账号模板，验证五段、两个固定字符框、增删与清空恢复，并保存界面截图。不查询、下载业务文件，不保存原站模板。凭据只从进程环境读取，不写报告。
 
 测试和构建产物保存在忽略入库的 `test-results/download-editor-*`；真实模板界面为 `test-results/download-editor-live.png`。
 

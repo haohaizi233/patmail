@@ -67,7 +67,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }
@@ -80,7 +80,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }
@@ -93,7 +93,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }
@@ -106,7 +106,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }
@@ -119,7 +119,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }
@@ -132,7 +132,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }
@@ -145,7 +145,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }
@@ -158,7 +158,7 @@
     "evidence": {
       "baseline": "de2ee0d3deec8c2b88db31de95fabe451d7b2816",
       "related_sources": [
-        "patmail-extension/scripts/hague-research-worker.mjs",
+        "patmail-extension/scripts/hague/research/hague-research-worker.mjs",
         "patmail-extension/src/hague/draft-runner.ts"
       ]
     }

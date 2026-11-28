@@ -24,7 +24,7 @@
 
 ## 实际接入与局限
 
-[Worker](../../../scripts/hague-research-worker.mjs) xml 分支生成本次结构摘要并调用 detectProtocolDrift(options.baseline, observedMeta)，输出 driftCompared / driftStatus 等字段。存在调用不代表每次现场都有可用 baseline；baseline_missing 必须在展示和导出中保留。
+[Worker](../../../scripts/hague/research/hague-research-worker.mjs) xml 分支生成本次结构摘要并调用 detectProtocolDrift(options.baseline, observedMeta)，输出 driftCompared / driftStatus 等字段。存在调用不代表每次现场都有可用 baseline；baseline_missing 必须在展示和导出中保留。
 
 单次规范化与排序成本依 token 数而定，场景指纹与步骤序列长度相关。输入上限还受到上游 XML 与事件投影预算约束。重复哈希不可以替代原结构核对，更不能据静态 AST 调用认定线上无漂移。
 

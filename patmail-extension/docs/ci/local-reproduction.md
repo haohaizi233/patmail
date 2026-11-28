@@ -1,7 +1,7 @@
 # 本地复现（与 CI 同口径）
 
 所有命令在 `patmail-extension/` 下执行（Windows PowerShell / Linux bash 均可）。
-CI 使用的命令与本地完全一致：`.github/workflows/*.yml` 只是把 `scripts/ci-check.mjs --steps …`
+CI 使用的命令与本地完全一致：`.github/workflows/*.yml` 只是把 `scripts/ci/ci-check.mjs --steps …`
 分发到并行 Job，不在 workflow 里另写检查逻辑。
 
 ## 1. 环境要求
@@ -24,7 +24,7 @@ pnpm build                          # e2e 前必须有 dist/（run-e2e.mjs 会�
 
 ```bash
 pnpm typecheck          # vue-tsc 静态类型检查
-pnpm lint               # ESLint 基线棘轮（scripts/eslint-ratchet.mjs）
+pnpm lint               # ESLint 基线棘轮（scripts/quality/eslint-ratchet.mjs）
 pnpm lint:eslint        # ESLint 全量输出（不限基线，供治理用）
 pnpm format:check       # Prettier 检查（.prettierignore 已排除产物/数据/历史 JS）
 pnpm test:unit          # 单元测试
@@ -54,8 +54,8 @@ pnpm release:check      # 发布前校验（版本一致性 / SHA-256 / 产物�
 pnpm test:e2e:smoke     # PR 门禁：extension + limits（快、离线、稳定）
 pnpm test:e2e:full      # main/手动：smoke + workspace + 下载/ZIP/取消/续传/分页/故障注入
 pnpm test:e2e:legacy    # 旧 Python 桥接下载协议兼容 + 桥接单测（需 python）
-node scripts/run-e2e.mjs <suite>   # 单跑一个场景，如 workspace / download / browser-download
-node scripts/run-e2e.mjs smoke --bail   # 首败即停
+node scripts/ci/run-e2e.mjs <suite>   # 单跑一个场景，如 workspace / download / browser-download
+node scripts/ci/run-e2e.mjs smoke --bail   # 首败即停
 ```
 
 隔离保障（每个 `*.e2e.mjs` 独立进程）：
@@ -94,4 +94,4 @@ test-results/
 | 改坏一个断言 | `pnpm test:unit` |
 | 删除 `dist` 里 Manifest 引用的入口 | `pnpm verify:manifest` / `pnpm verify:dist` |
 | 在测试夹具放假凭据（如 `AKIA…`、`-----BEGIN RSA PRIVATE KEY-----`） | `pnpm scan:secrets` |
-| 篡改 `dist` 任一字节 | `node scripts/verify-dist.mjs --against test-results/ci/artifact-manifest.json`（与留档 SHA-256 清单比对，不一致即失败） |
+| 篡改 `dist` 任一字节 | `node scripts/build/verify-dist.mjs --against test-results/ci/artifact-manifest.json`（与留档 SHA-256 清单比对，不一致即失败） |

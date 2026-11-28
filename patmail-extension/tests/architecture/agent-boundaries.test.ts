@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture-check.mjs'
+import { evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture/architecture-check.mjs'
 import { agentToolSchemas } from '../../src/agent/tools'
 
 describe('agent layer boundaries', () => {

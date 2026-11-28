@@ -6,7 +6,7 @@ import {
   evaluateArchitecture,
   scanProjectDependencies,
   type ProjectInventory,
-} from '../../scripts/architecture-check.mjs'
+} from '../../scripts/architecture/architecture-check.mjs'
 
 function makeInventory(partial: Partial<ProjectInventory> = {}): ProjectInventory {
   return {

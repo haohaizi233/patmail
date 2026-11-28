@@ -34,11 +34,11 @@
 | 能力 | 实现 | Workflow 消费方式 |
 | --- | --- | --- |
 | 工具链安装 | `.github/actions/setup-patmail`（pnpm 锁 packageManager，Node 22，`pnpm install --frozen-lockfile`） | 所有 Job 首步 |
-| 统一门禁 | `scripts/ci-check.mjs --steps a,b,c` | 每个 Job 只跑自己的步骤，结果写 `test-results/ci/steps/<name>.json` |
-| E2E 分组 | `scripts/run-e2e.mjs smoke\|full\|legacy` | E2E Job |
-| 报告汇总 | `scripts/ci-report.mjs [--gate] [--coverage-gate]` | Gate Job / Coverage Job |
+| 统一门禁 | `scripts/ci/ci-check.mjs --steps a,b,c` | 每个 Job 只跑自己的步骤，结果写 `test-results/ci/steps/<name>.json` |
+| E2E 分组 | `scripts/ci/run-e2e.mjs smoke\|full\|legacy` | E2E Job |
+| 报告汇总 | `scripts/ci/ci-report.mjs [--gate] [--coverage-gate]` | Gate Job / Coverage Job |
 | 隔离执行 | `tests/e2e/support/paths.mjs`（mkdtemp 扩展副本 + 独立下载目录）、动态端口、`easy-mock.mjs` 路由拦截 | 全部 E2E |
-| 打包归档 | `scripts/pack-source.mjs` / `pack-delivery.mjs` / `verify-archive.mjs`（`TAR=bsdtar`） | release-check |
+| 打包归档 | `scripts/release/pack-source.mjs` / `pack-delivery.mjs` / `verify-archive.mjs`（`TAR=bsdtar`） | release-check |
 
 ## 4. 权限与安全（Action 层）
 

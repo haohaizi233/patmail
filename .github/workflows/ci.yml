@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: Typecheck / Architecture / Lint / Format
-        run: node scripts/ci-check.mjs --steps typecheck,architecture,lint,format
+        run: node scripts/ci/ci-check.mjs --steps typecheck,architecture,lint,format
       - name: Offline documentation gate
         run: pnpm docs:check
       - name: 上传静态检查报告
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: 单元 + 集成测试（JUnit 产物）
-        run: node scripts/ci-check.mjs --steps unit,integration
+        run: node scripts/ci/ci-check.mjs --steps unit,integration
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: 历史业务契约回归（JUnit 产物）
-        run: node scripts/ci-check.mjs --steps regression
+        run: node scripts/ci/ci-check.mjs --steps regression
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: 密钥扫描（工作树）+ 许可策略
-        run: node scripts/ci-check.mjs --steps secrets,licenses
+        run: node scripts/ci/ci-check.mjs --steps secrets,licenses
       - name: 上传扫描报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -113,7 +113,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: 构建 + Manifest 校验 + 产物校验
-        run: node scripts/ci-check.mjs --steps build,manifest,dist
+        run: node scripts/ci/ci-check.mjs --steps build,manifest,dist
       - name: 上传构建产物
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -155,9 +155,9 @@ jobs:
           path: patmail-extension/dist
       - name: 构建产物缺失时本地构建兜底（artifact 上传失败不再连坐）
         if: steps.dist-artifact.outcome != 'success'
-        run: node scripts/ci-check.mjs --steps build
+        run: node scripts/ci/ci-check.mjs --steps build
       - name: E2E Smoke（扩展启动 / EASY 绑定 / 文件查询 / 期限查询）
-        run: node scripts/run-e2e.mjs smoke
+        run: node scripts/ci/run-e2e.mjs smoke
       - name: 上传 E2E 报告与失败证据
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -197,7 +197,7 @@ jobs:
           if(bad.length){console.error('未通过的 Job：'+bad.map(([k,v])=>k+'='+v.result).join(', '));process.exit(1)}
           console.log('全部 Job 通过：'+Object.keys(n).join(', '))"
       - name: CI 报告与汇总门禁
-        run: node scripts/ci-report.mjs --gate
+        run: node scripts/ci/ci-report.mjs --gate
       - name: 上传最终 CI 报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

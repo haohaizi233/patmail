@@ -1,6 +1,6 @@
 # E2E 测试矩阵与分组
 
-拓扑来源：`scripts/run-e2e.mjs`（分组真值）与 `tests/e2e/*.e2e.mjs`（场景实现）。
+拓扑来源：`scripts/ci/run-e2e.mjs`（分组真值）与 `tests/e2e/*.e2e.mjs`（场景实现）。
 每个脚本 = 独立进程 + 独立扩展副本（`tests/e2e/support/paths.mjs` 的 `mkdtemp`）+ 动态端口，
 串行执行互不干扰；EASY 业务 Origin 全量由 `tests/e2e/support/easy-mock.mjs` 路由拦截。
 
@@ -12,7 +12,7 @@ CI 的 `e2e-full` 使用两片 matrix，在独立 runner 上并行，片内仍�
 生命周期夹具在打开下载导航前等待本扩展的 Service Worker 实际控制页面，连接期限使用生产默认的 15 秒。夹具在导航与重载测试页前后显式调用 `clients.claim()`，并在 `openNavigation` 派发下载 iframe 前再次执行接管，消除无头浏览器启动时 Service Worker 激活早于页面创建导致页面未受控的偶发超时。下载事件等待立即观察拒绝，清理浏览器时的次生异常不会掩盖原始失败；原 Promise 仍须成功完成，失败照常使场景退出非零。原始错误、阶段、控制状态及导航失败类型写入 `test-results/ci/native-stream-lifetime.json`，由现有 CI 产物路径上传。仍保留 72 个分块、每块间隔 5 秒、总时长超过五分钟及全部下载字节校验，未缩短或跳过长测。
 
 `fail-fast: false` 保证其中一片失败后另一片仍完成取证。每片上传独立的 `report-e2e-<group>`，JSON 文件名也包含分组名，合并报告时互不覆盖；`ci-report.mjs` 汇总两片，Full Gate 要求整个 matrix 成功。旧桥接组继续独立运行，不参与分片。
-本地 `pnpm test:e2e:full` 保持原来的完整串行入口；也可用 `node scripts/run-e2e.mjs full-functional` 或 `full-lifetime` 单跑一片。
+本地 `pnpm test:e2e:full` 保持原来的完整串行入口；也可用 `node scripts/ci/run-e2e.mjs full-functional` 或 `full-lifetime` 单跑一片。
 
 切片依据：2026-11-04 的运行 `41814222923` 中，full 共约 617 秒，生命周期长测占 362.5 秒，其余约 255 秒。两片理想测试关键路径约 363 秒，实际还取决于 runner 排队、依赖安装和构建产物下载或重建耗时。
 
@@ -24,7 +24,7 @@ CI 的 `e2e-full` 使用两片 matrix，在独立 runner 上并行，片内仍�
 | **full** | `pnpm test:e2e:full` | smoke + workspace + download、browser-download、file-pages、download-editor、prewarm-pagination、jihua-upload、billing、browser-download-store、native-stream-lifetime、resume-protocol、docs | main / 手动完整回归（e2e.yml `e2e-full`） |
 | **legacy** | `pnpm test:e2e:legacy` | stream-download、durable-download、stream-bridge-unittest | 旧 Python 桥接下载协议兼容（e2e.yml `e2e-legacy`，需 python） |
 
-单跑：`node scripts/run-e2e.mjs <suite>`；`--bail` 首败即停。产出 `test-results/ci/e2e-<group>.json`。
+单跑：`node scripts/ci/run-e2e.mjs <suite>`；`--bail` 首败即停。产出 `test-results/ci/e2e-<group>.json`。
 
 ## 2. 场景覆盖矩阵
 
@@ -68,7 +68,7 @@ CI 的 `e2e-full` 使用两片 matrix，在独立 runner 上并行，片内仍�
 - 所有 EASY 请求均由 `tests/e2e/support/easy-mock.mjs` 拦截；客户和邮件设置读取由夹具响应。
 
 本节描述当前场景契约，不再将 workspace 列为已知红。具体 checkout 的执行结果以
-`node scripts/run-e2e.mjs workspace` 或 `pnpm test:e2e:full` 的当次输出为准。
+`node scripts/ci/run-e2e.mjs workspace` 或 `pnpm test:e2e:full` 的当次输出为准。
 
 ## 5. native-pipeline-fault：当前故障注入契约
 

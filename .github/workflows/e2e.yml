@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: 构建
-        run: node scripts/ci-check.mjs --steps build,manifest,dist
+        run: node scripts/ci/ci-check.mjs --steps build,manifest,dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         continue-on-error: true
         with:
@@ -64,9 +64,9 @@ jobs:
           path: patmail-extension/dist
       - name: 构建产物缺失时本地构建兜底（artifact 上传失败不再连坐）
         if: steps.dist-artifact.outcome != 'success'
-        run: node scripts/ci-check.mjs --steps build
+        run: node scripts/ci/ci-check.mjs --steps build
       - name: 执行 Full E2E
-        run: node scripts/run-e2e.mjs ${{ matrix.group }}
+        run: node scripts/ci/run-e2e.mjs ${{ matrix.group }}
       - name: 上传报告与失败证据
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -107,9 +107,9 @@ jobs:
           path: patmail-extension/dist
       - name: 构建产物缺失时本地构建兜底（artifact 上传失败不再连坐）
         if: steps.dist-artifact.outcome != 'success'
-        run: node scripts/ci-check.mjs --steps build
+        run: node scripts/ci/ci-check.mjs --steps build
       - name: 执行 Legacy E2E + Python 桥接单测
-        run: node scripts/run-e2e.mjs legacy
+        run: node scripts/ci/run-e2e.mjs legacy
       - name: 上传报告与失败证据
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -134,7 +134,7 @@ jobs:
       - name: 全量测试 + 覆盖率
         run: pnpm test:coverage
       - name: 覆盖率防退化门禁
-        run: node scripts/ci-report.mjs --coverage-gate
+        run: node scripts/ci/ci-report.mjs --coverage-gate
       - name: 上传覆盖率
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -153,7 +153,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-patmail
       - name: 两次独立构建比对 Hash
-        run: node scripts/verify-reproducible.mjs
+        run: node scripts/build/verify-reproducible.mjs
       - name: 上传可复现性报告
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -189,7 +189,7 @@ jobs:
           if(bad.length){console.error('未通过的 Job：'+bad.map(([k,v])=>k+'='+v.result).join(', '));process.exit(1)}
           console.log('全部 Job 通过：'+Object.keys(n).join(', '))"
       - name: CI 报告与汇总门禁
-        run: node scripts/ci-report.mjs --gate
+        run: node scripts/ci/ci-report.mjs --gate
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         continue-on-error: true
         if: always()

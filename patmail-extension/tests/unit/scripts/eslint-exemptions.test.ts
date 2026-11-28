@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collectExemptions, compareExemptions } from '../../../scripts/eslint-exemptions.mjs'
+import { collectExemptions, compareExemptions } from '../../../scripts/quality/eslint-exemptions.mjs'
 
 describe('lint exemption ratchet', () => {
   it('reads Vue template comments and ignores directive-shaped script strings', () => {

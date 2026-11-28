@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { COMPOSITION_ROOTS, evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture-check.mjs'
+import { COMPOSITION_ROOTS, evaluateArchitecture, scanProjectDependencies } from '../../scripts/architecture/architecture-check.mjs'
 
 describe('MV3 and protocol runtime boundaries', () => {
   it('enforces strict isolation for MV3 runtimes, Application ports, Hague protocol kernel, unresolved imports, and composition roots', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {chromium} from 'playwright'
-import {HagueDeepDiagnostics} from '../../scripts/hague-diagnostics.mjs'
+import {HagueDeepDiagnostics} from '../../scripts/hague/diagnostics/hague-diagnostics.mjs'
 
 // Entirely synthetic origin in a fresh browser. Every HTTP request is fulfilled or denied locally.
 const browser=await chromium.launch({executablePath:process.env.HAGUE_TEST_CHROME,headless:true})
@@ -26,6 +26,6 @@ try{
  assert.ok(logs.some(e=>e.phase==='protocol.analyzed'&&e.astCallType==='PrimeFaces.ab'))
  assert.doesNotMatch(JSON.stringify(logs),/PRIVATE_FIXTURE_VALUE/)
  assert.equal(paused,0);assert.equal(external,0)
- await deep.disable();assert.deepEqual(deep.status(),{enabled:false,state:'off',scripts:0,bytes:0})
+ await deep.disable();assert.deepEqual(deep.status(),{enabled:false,state:'off',scripts:0,bytes:0,skippedAnalyses:0})
  console.log('Hague isolated CDP: non-pausing guard, bounded script AST, privacy and cleanup passed; no external requests')
 }finally{clearTimeout(evaluationTimer);await deep?.disable();await session?.detach().catch(()=>{});await context.close();await browser.close()}

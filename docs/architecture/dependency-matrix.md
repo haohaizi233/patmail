@@ -1,6 +1,6 @@
 # PatMail 模块依赖矩阵与方向收敛（Dependency Matrix）
 
-> 数据来源于真实 AST 扫描器 `patmail-extension/scripts/architecture-check.mjs` 对 `src/` 全部源码的扫描（仅统计非类型 `runtimeInternalEdges`）。
+> 数据来源于真实 AST 扫描器 `patmail-extension/scripts/architecture/architecture-check.mjs` 对 `src/` 全部源码的扫描（仅统计非类型 `runtimeInternalEdges`）。
 
 ## 一、总体依赖指标对比
 

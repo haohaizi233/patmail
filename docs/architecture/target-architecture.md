@@ -54,7 +54,7 @@ flowchart TB
 
 ## 三、自动化架构门禁（CI Enforced，Rules A–K）
 
-由 `patmail-extension/scripts/architecture-check.mjs`（含 Barrel Re-export 传递展开、Vite 资源后缀剥离、`tsconfig.paths` 解析及 `COMPOSITION_ROOTS` 白名单）与 `patmail-extension/tests/architecture/` 自动强制执行（见 `ci.yml` 与 `ci:check`）：
+由 `patmail-extension/scripts/architecture/architecture-check.mjs`（含 Barrel Re-export 传递展开、Vite 资源后缀剥离、`tsconfig.paths` 解析及 `COMPOSITION_ROOTS` 白名单）与 `patmail-extension/tests/architecture/` 自动强制执行（见 `ci.yml` 与 `ci:check`）：
 
 - **Rule A (`A-domain-purity`)**：Domain 模块（含 `hague/protocol/ast-action-parser.mjs`）零 Vue / Presentation / Background / Content / DOM / Chrome API 运行时依赖；
 - **Rule B (`B-application-no-ui`)**：`application/*` 严禁依赖 `.vue` 或 Presentation 模块；

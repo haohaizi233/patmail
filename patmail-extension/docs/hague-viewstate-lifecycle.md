@@ -15,7 +15,7 @@ JSF（JavaServer Faces）是一个基于有状态组件树的服务端框架。�
 
 ### 审计发现的关键缺口 (P0 修复)
 
-在原 `scripts/hague-research.mjs` 第 86 行，传递给 Worker 的上下文键为：
+在原 `scripts/hague/research/hague-research.mjs` 第 86 行，传递给 Worker 的上下文键为：
 ```javascript
 // 修复前：误包含了 r.requestId
 contextKey: `${r.sessionId}:${r.frameId}:${r.loaderId}:${r.requestId}`

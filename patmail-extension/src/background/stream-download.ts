@@ -67,7 +67,7 @@ export class LocalStreamDownloads {
       } catch (error) {
         const detail = error instanceof Error ? error.message : ''
         throw new Error(detail.includes('版本') || detail.includes('缓存') || detail.includes('新版') ? detail
-          : '本机流式下载桥接未就绪。请运行仓库 start.py，或 scripts/start-stream-download.ps1 后重试。')
+          : '本机流式下载桥接未就绪。请运行仓库 start.py，或 scripts/download/bridge/start-stream-download.ps1 后重试。')
       }
       const token = data.token
       const durable = data.version === 2 && typeof data.taskId === 'string'

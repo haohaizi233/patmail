@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- CDP fixture mocks deliberately exercise malformed and deferred protocol inputs. */
 import { it, expect } from 'vitest'
-import { deepCommandAllowed, safeHagueUrl, networkMetadata, correlateRequest, HagueDeepDiagnostics } from '../../../scripts/hague-diagnostics.mjs'
+import { deepCommandAllowed, safeHagueUrl, networkMetadata, correlateRequest, HagueDeepDiagnostics } from '../../../scripts/hague/diagnostics/hague-diagnostics.mjs'
 it('denies unsafe commands, foreign origins and sensitive paths',()=>{
  expect(deepCommandAllowed('Runtime.evaluate',{})).toBe(false)
  expect(deepCommandAllowed('Debugger.setSkipAllPauses',{skip:false})).toBe(false)
@@ -48,7 +48,7 @@ it('bounds source reads and discards returned raw source from persisted metadata
  expect(calls.filter(v=>v[0]==='Debugger.getScriptSource')).toHaveLength(1)
 })
 it('keeps draft alerts structural and Hague UI text category-only',async()=>{
- const {safeHagueSnapshotText,safeDraftTextSummary}=await import('../../../scripts/hague-diagnostics.mjs')
+ const {safeHagueSnapshotText,safeDraftTextSummary}=await import('../../../scripts/hague/diagnostics/hague-diagnostics.mjs')
  const secret='Applicant Alice Example WIPO123456789 alice@example.com 123 Private Road secret.pdf'
  expect(JSON.stringify(safeDraftTextSummary([secret,'草稿保存失败 '+secret]))).not.toContain('Alice')
  expect(safeDraftTextSummary([secret,'草稿保存失败 '+secret])).toMatchObject({count:2})
@@ -70,13 +70,13 @@ it('time-only evidence cannot become exact even with a unique candidate',()=>{
  expect(correlateRequest({...r,cdpRequestId:'1',sessionId:'s'},[{...r,cdpRequestId:'1',sessionId:'s',traceId:'one'}]).correlationConfidence).toBe('exact')
 })
 it('adapts only safe observer evidence into offline TraceEvents',async()=>{
- const {observerEventsToTraces}=await import('../../../scripts/hague-diagnostics.mjs')
+ const {observerEventsToTraces}=await import('../../../scripts/hague/diagnostics/hague-diagnostics.mjs')
  const result=observerEventsToTraces([{ts:'2026-11-13T00:00:00Z',kind:'network.response',source:'hague',requestId:'41.2',origin:'https://hague.wipo.int',path:'/HagueEFilingWeb/protected/page/application.xhtml',status:503,mime:'text/xml',body:'PRIVATE_SECRET'}, {ts:'2026-11-14T00:00:00Z',kind:'network.failure',source:'hague',requestId:'42.1',httpStatus:null,failureCategory:'timeout'}, {kind:'app.snapshot',draftTexts:['PRIVATE_SECRET']}])
  expect(result).toHaveLength(2);expect(result[0]).toMatchObject({version:1,source:'cdp',phase:'http.response',httpStatus:503,cdpRequestId:'41.2',errorCode:'HTTP_503',errorStage:'http'})
  expect(JSON.stringify(result)).not.toContain('PRIVATE_SECRET');expect(result[1].httpStatus).toBe(null)
 })
 it('offline network exports preserve proven candidate tree links and keep ambiguity unowned',async()=>{
- const {observerEventsToTraces}=await import('../../../scripts/hague-diagnostics.mjs')
+ const {observerEventsToTraces}=await import('../../../scripts/hague/diagnostics/hague-diagnostics.mjs')
  const raw={ts:'2026-11-14T00:00:00Z',kind:'network.response',source:'hague',requestId:'41.2',applicationRequestId:'req-one',traceId:'trace-one',caseRunId:'case-one',operation:'applicant',stepIndex:2,transportMode:'http',correlationConfidence:'exact',status:200}
  const result=observerEventsToTraces([raw,{...raw,correlationConfidence:'ambiguous'},{...raw,correlationConfidence:'probable'}])
  expect(result[0]).toMatchObject({traceId:'trace-one',caseRunId:'case-one',requestId:'req-one',cdpRequestId:'41.2',stepIndex:2,operation:'applicant',correlationConfidence:'exact'})
