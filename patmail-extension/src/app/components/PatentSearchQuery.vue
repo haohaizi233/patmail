@@ -18,6 +18,10 @@ import type { TreeOption } from '../../query/option-tree'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
 import TreeOptionSelect from '../../shell/components/TreeOptionSelect.vue'
+import { PATENT_EXPORT_WORKFLOW_ID } from '../../api/fee-export'
+import FeeExportModal from './FeeExportModal.vue'
+import { createWorkflowBridge } from '../services/full-page-bridge'
+import { infoDialog } from '../dialog'
 import WDatePicker from '../../shell/components/WDatePicker.vue'
 
 const props = defineProps<{
@@ -25,6 +29,21 @@ const props = defineProps<{
   userId: string
   canSearch: boolean
 }>()
+
+const patentExportBridge = createWorkflowBridge(PATENT_EXPORT_WORKFLOW_ID)
+const patentExportQuery = ref<PatentSearchQuery>()
+const exportMessage = ref('')
+const historyExportColumns = ref<string[]>([])
+
+function openPatentExport(): void {
+  exportMessage.value = ''
+  const query = buildQuery()
+  if (!query.is_first) {
+    void infoDialog({ title: '提示', message: '请至少输入一个查询条件！' })
+    return
+  }
+  patentExportQuery.value = query
+}
 
 const injectedBridge = inject<MessageBridge>('bridge')
 function activeBridge(): MessageBridge | undefined {
@@ -110,6 +129,10 @@ const caseCoefficientOptions = computed<PatentOptionItem[]>(() => [
 const generationStatusOptions = computed<PatentOptionItem[]>(() => [
   { value: '', label: '请选择' },
   ...(initData.value?.generationStatuses ?? [])
+])
+const zlLanguageOptions = computed<PatentOptionItem[]>(() => [
+  { value: '', label: '请选择' },
+  ...(initData.value?.zlLanguages ?? [])
 ])
 const protectionCenterOptions = computed<PatentOptionItem[]>(() => [
   { value: '', label: '请选择' },
@@ -213,6 +236,7 @@ function resolveDisplayValues(): Record<string, string> {
     translate: data?.users ?? [],
     proofread: data?.users ?? [],
     country: data?.countries ?? [],
+    retrieval_unit: data?.countries ?? [],
     from_country_id: data?.countries ?? [],
     first_applicant_country: data?.countries ?? [],
     priority_country: data?.countries ?? [],
@@ -368,6 +392,7 @@ function applyHistoryXml(queryXml: string): void {
 
 async function onSelectHistory(queryId: string): Promise<void> {
   selectedHistoryId.value = queryId
+  historyExportColumns.value = []
   historyMessage.value = ''
   if (!queryId) return
   const b = activeBridge()
@@ -378,8 +403,14 @@ async function onSelectHistory(queryId: string): Promise<void> {
       type: MessageType.GetHistoryQuery,
       payload: { queryId, surface: 'patent' }
     })
+    if (selectedHistoryId.value !== queryId) return
     if (res.type === MessageType.HistoryQueryResult && res.payload.ok) {
       applyHistoryXml(res.payload.data.queryXml)
+      const outXml = res.payload.data.outXml
+      if (outXml && !/<!DOCTYPE|<!ENTITY/i.test(outXml)) {
+        const root = new DOMParser().parseFromString(outXml, 'application/xml').documentElement
+        if (root.nodeName === 'xmlRoot') historyExportColumns.value = Array.from(root.children, col => col.nodeName)
+      }
       historyMessage.value = `已载入历史条件「${res.payload.data.name}」`
     } else if (res.type === MessageType.HistoryQueryResult && !res.payload.ok) {
       historyMessage.value = res.payload.error.message
@@ -1220,6 +1251,26 @@ onMounted(() => {
                 </span>
               </div>
             </div>
+
+            <!-- R18 (ICSearch.aspx 语种 / 字数 / 国际检索单位) -->
+            <div class="query-cell">
+              <span class="cell-title">语种</span>
+              <ThemeSelect :model-value="fieldVal('zl_language')" :options="zlLanguageOptions" @update:model-value="v => setFieldVal('zl_language', String(v))" />
+            </div>
+            <div class="query-cell">
+              <span class="cell-title">字数</span>
+              <div class="cell-stack">
+                <span class="date-pair">
+                  <input :value="fieldVal('zl_word_count_start')" type="text" placeholder="起" @input="setFieldVal('zl_word_count_start', ($event.target as HTMLInputElement).value)" />
+                  <em>到</em>
+                  <input :value="fieldVal('zl_word_count_end')" type="text" placeholder="止" @input="setFieldVal('zl_word_count_end', ($event.target as HTMLInputElement).value)" />
+                </span>
+              </div>
+            </div>
+            <div class="query-cell">
+              <span class="cell-title">国际检索单位</span>
+              <TreeOptionSelect :model-value="fieldVal('retrieval_unit')" :options="initData?.countries ?? []" @update:model-value="v => setFieldVal('retrieval_unit', v)" />
+            </div>
           </div>
         </section>
 
@@ -2020,12 +2071,42 @@ onMounted(() => {
               <span class="cell-title">事项处理人助理</span>
               <TreeOptionSelect :model-value="fieldVal('proc_user_assistant')" :options="initData?.users ?? []" @update:model-value="v => setFieldVal('proc_user_assistant', v)" />
             </div>
+            <div class="query-cell cell-spacer" aria-hidden="true" />
+            <div class="query-cell cell-spacer" aria-hidden="true" />
+
+            <!-- R105 (ICSearch.aspx 看稿次数 / 发客户日期 / 客户回复日期) -->
+            <div class="query-cell">
+              <span class="cell-title">看稿次数</span>
+              <ThemeSelect :model-value="fieldVal('wsbdz_revise_title')" :options="PATENT_SELECTS.wsbdz_revise_title" @update:model-value="v => setFieldVal('wsbdz_revise_title', String(v))" />
+            </div>
+            <div class="query-cell">
+              <span class="cell-title">发客户日期</span>
+              <div class="cell-stack">
+                <span class="date-pair">
+                  <WDatePicker :model-value="fieldVal('wsbdz_finish_doc_date_start')" :max="fieldVal('wsbdz_finish_doc_date_end')" :disabled="isChecked('wsbdz_finish_doc_date_isnull')" placeholder="起" @update:model-value="v => setFieldVal('wsbdz_finish_doc_date_start', v)" />
+                  <em>到</em>
+                  <WDatePicker :model-value="fieldVal('wsbdz_finish_doc_date_end')" :min="fieldVal('wsbdz_finish_doc_date_start')" :disabled="isChecked('wsbdz_finish_doc_date_isnull')" placeholder="止" @update:model-value="v => setFieldVal('wsbdz_finish_doc_date_end', v)" />
+                  <label class="empty-check"><input type="checkbox" :checked="isChecked('wsbdz_finish_doc_date_isnull')" @change="toggleNullCheck('wsbdz_finish_doc_date', ($event.target as HTMLInputElement).checked)" /><span>为空</span></label>
+                </span>
+              </div>
+            </div>
+            <div class="query-cell">
+              <span class="cell-title">客户回复日期</span>
+              <div class="cell-stack">
+                <span class="date-pair">
+                  <WDatePicker :model-value="fieldVal('wsbdz_finish_revise_date_start')" :max="fieldVal('wsbdz_finish_revise_date_end')" :disabled="isChecked('wsbdz_finish_revise_date_isnull')" placeholder="起" @update:model-value="v => setFieldVal('wsbdz_finish_revise_date_start', v)" />
+                  <em>到</em>
+                  <WDatePicker :model-value="fieldVal('wsbdz_finish_revise_date_end')" :min="fieldVal('wsbdz_finish_revise_date_start')" :disabled="isChecked('wsbdz_finish_revise_date_isnull')" placeholder="止" @update:model-value="v => setFieldVal('wsbdz_finish_revise_date_end', v)" />
+                  <label class="empty-check"><input type="checkbox" :checked="isChecked('wsbdz_finish_revise_date_isnull')" @change="toggleNullCheck('wsbdz_finish_revise_date', ($event.target as HTMLInputElement).checked)" /><span>为空</span></label>
+                </span>
+              </div>
+            </div>
           </div>
         </section>
       </div>
 
       <!-- 底部操作栏 -->
-      <div class="actions patent-actions">
+      <div class="patent-actions">
         <div class="patent-template-save">
           <input
             v-model="saveTitle"
@@ -2047,6 +2128,7 @@ onMounted(() => {
           </button>
         </div>
         <button type="button" class="ghost" @click="resetForm(true)">重置</button>
+        <button type="button" class="ghost" :disabled="!canSearch" @click="openPatentExport">导出清单</button>
         <button type="button" class="ghost" :disabled="!rows.length" @click="exportCsv">导出当前页 CSV</button>
         <button
           type="button"
@@ -2058,6 +2140,19 @@ onMounted(() => {
         </button>
       </div>
     </section>
+
+    <p v-if="exportMessage" class="hint" role="status">{{ exportMessage }}</p>
+    <FeeExportModal
+      v-if="patentExportQuery"
+      :open="true"
+      mode="cond"
+      :bridge="patentExportBridge"
+      :patent-query="patentExportQuery"
+      :patent-history-columns="selectedHistoryId ? historyExportColumns : undefined"
+      :timeout-ms="queryTimeoutMs"
+      @exported="exportMessage = $event"
+      @close="patentExportQuery = undefined"
+    />
 
     <!-- 查询结果卡片 -->
     <section class="card patent-results-section" aria-label="专利查询结果">
@@ -2371,9 +2466,26 @@ onMounted(() => {
 .block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .block-title { font-size: 13px; font-weight: 650; color: #c44b7e; margin: 0; padding-left: 8px; border-left: 3px solid #f5a9ca; }
 
-.patent-actions { flex-wrap: wrap; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.patent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed #f0e1eb;
+}
+.patent-actions button {
+  width: auto;
+  height: 32px;
+  padding: 0 14px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .patent-template-save {
   display: inline-flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
   margin-right: auto;

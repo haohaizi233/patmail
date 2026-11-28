@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildIcSearchParams, icCasesFromBody } from '../../../src/api/ic-search'
+import { buildPatentSearchElement } from '../../../src/api/patent-search-params'
 
 describe('案件查询', () => {
   it('客户文号补查写进客户文号栏，我方文号栏留空', () => {
@@ -61,5 +62,47 @@ describe('案件查询', () => {
       TableRows: [{ case_id: '06E2717F-6C2F-40E9-B675-34B8D947234E', case_volume: 'PA25117182CND-米茅', case_volume_customer: 'HC20251191' }]
     })).toEqual([{ caseId: '06E2717F-6C2F-40E9-B675-34B8D947234E', caseVolume: 'PA25117182CND-米茅', customerVolume: 'HC20251191' }])
     expect(icCasesFromBody({ TableRows: null })).toEqual([])
+  })
+
+  it('序列化语种、字数区间与国际检索单位（含 _text）', () => {
+    const xml = buildPatentSearchElement({
+      pageIndex: 1,
+      pageSize: 20,
+      fields: {
+        zl_language: 'lang-en',
+        zl_word_count_start: '1000',
+        zl_word_count_end: '5000',
+        retrieval_unit: 'CN'
+      },
+      displayValues: {
+        retrieval_unit: '中国'
+      }
+    })
+    expect(xml).toContain('&lt;zl_language&gt;lang-en&lt;/zl_language&gt;')
+    expect(xml).toContain('&lt;zl_word_count_start&gt;1000&lt;/zl_word_count_start&gt;')
+    expect(xml).toContain('&lt;zl_word_count_end&gt;5000&lt;/zl_word_count_end&gt;')
+    expect(xml).toContain('&lt;retrieval_unit&gt;CN&lt;/retrieval_unit&gt;')
+    expect(xml).toContain('&lt;retrieval_unit_text&gt;中国&lt;/retrieval_unit_text&gt;')
+  })
+
+  it('序列化处理事项末尾看稿次数、发客户日期与客户回复日期', () => {
+    const xml = buildPatentSearchElement({
+      pageIndex: 1,
+      pageSize: 20,
+      fields: {
+        wsbdz_revise_title: '第2次看稿',
+        wsbdz_finish_doc_date_start: '2026-01-01',
+        wsbdz_finish_doc_date_end: '2026-01-31',
+        wsbdz_finish_revise_date_start: '',
+        wsbdz_finish_revise_date_end: ''
+      },
+      checks: {
+        wsbdz_finish_revise_date_isnull: true
+      }
+    })
+    expect(xml).toContain('&lt;wsbdz_revise_title&gt;第2次看稿&lt;/wsbdz_revise_title&gt;')
+    expect(xml).toContain('&lt;wsbdz_finish_doc_date_start&gt;2026-01-01&lt;/wsbdz_finish_doc_date_start&gt;')
+    expect(xml).toContain('&lt;wsbdz_finish_doc_date_end&gt;2026-01-31&lt;/wsbdz_finish_doc_date_end&gt;')
+    expect(xml).toContain('&lt;wsbdz_finish_revise_date_isnull&gt;on&lt;/wsbdz_finish_revise_date_isnull&gt;')
   })
 })

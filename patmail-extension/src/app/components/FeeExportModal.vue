@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import {
   belongKeyForMode,
   buildFeeExportGroups,
@@ -8,6 +8,8 @@ import {
   type FeeExportMode,
   type FeeExportTemplate
 } from '../../api/fee-export'
+import { buildPatentExportGroups } from '../../api/patent-export'
+import type { PatentSearchQuery } from '../../api/patent-search-types'
 import type { FeeSearchQuery } from '../../api/fee-search-params'
 import { MessageType, type MessageBridge } from '../../shared/message'
 import ThemeSelect from '../../shell/components/ThemeSelect.vue'
@@ -22,10 +24,12 @@ const props = defineProps<{
   open: boolean
   mode: FeeExportMode
   bridge?: MessageBridge
-  query: FeeSearchQuery
-  feeIds: string[]
-  caseType: string
-  fieldColumns: Record<string, string>
+  query?: FeeSearchQuery
+  feeIds?: string[]
+  caseType?: string
+  fieldColumns?: Record<string, string>
+  patentQuery?: PatentSearchQuery
+  patentHistoryColumns?: string[]
   timeoutMs: number
 }>()
 
@@ -35,18 +39,27 @@ const emit = defineEmits<{
 }>()
 
 const groups = computed(() =>
-  buildFeeExportGroups(props.mode, {
-    caseType: props.caseType,
-    fieldColumns: props.fieldColumns
-  })
+  (props.patentQuery
+    ? buildPatentExportGroups(Boolean(props.patentQuery.is_proc))
+    : buildFeeExportGroups(props.mode, { caseType: props.caseType, fieldColumns: props.fieldColumns }))
+    .map(group => ({
+      ...group,
+      columns: group.columns.map((column, index) => ({
+        ...column, key: props.patentQuery ? `${group.id}-${index}` : column.value
+      }))
+    }))
 )
 
 const modalTitle = computed(() => exportTitleForMode(props.mode))
-const belongKey = computed(() => belongKeyForMode(props.mode))
+const belongKey = computed(() => props.patentQuery ? 'ICSearch' : belongKeyForMode(props.mode))
+type ExportColumnChoice = FeeExportColumn & { key: string }
+type SelectedColumn = SelectedExportColumn & { key: string }
+const availableColumns = computed(() => groups.value.flatMap(group => group.columns))
 
+const modal = ref<HTMLElement>()
 const collapsedGroups = ref<Record<string, boolean>>({})
 const filterKeyword = ref('')
-const selectedColumns = ref<SelectedExportColumn[]>([])
+const selectedColumns = ref<SelectedColumn[]>([])
 const activeColumnValue = ref('')
 
 // Template management state (synced with EASY Common.ashx GetQueryOutConfig / UpdateQueryOutConfig*)
@@ -64,7 +77,7 @@ const templateOptions = computed(() => [
   ...templates.value.map(t => ({ value: t.typeId, label: t.typeText }))
 ])
 
-const selectedSet = computed(() => new Set(selectedColumns.value.map(item => item.value)))
+const selectedSet = computed(() => new Set(selectedColumns.value.map(item => item.key)))
 
 const filteredGroups = computed(() => {
   const kw = filterKeyword.value.trim().toLowerCase()
@@ -80,14 +93,14 @@ const filteredGroups = computed(() => {
 })
 
 function resetToDefaultColumns(): void {
-  const defaults: SelectedExportColumn[] = []
+  const defaults: SelectedColumn[] = []
   const seen = new Set<string>()
-  for (const group of groups.value) {
-    for (const col of group.columns) {
-      if (col.defaultChecked !== false && !seen.has(col.value)) {
-        seen.add(col.value)
-        defaults.push({ value: col.value, text: col.text })
-      }
+  const history = props.patentHistoryColumns
+  for (const col of availableColumns.value) {
+    const checked = history?.length ? history.includes(col.value) : col.defaultChecked !== false
+    if (checked && !seen.has(col.key)) {
+      seen.add(col.key)
+      defaults.push({ key: col.key, value: col.value, text: col.text })
     }
   }
   selectedColumns.value = defaults
@@ -146,7 +159,9 @@ watch(
     errorText.value = ''
     resetToDefaultColumns()
     void fetchTemplates(false)
-  }
+    if (props.patentQuery) void nextTick(() => modal.value?.focus())
+  },
+  { immediate: true }
 )
 
 async function onSelectTemplate(nextId: string): Promise<void> {
@@ -171,7 +186,14 @@ async function onSelectTemplate(nextId: string): Promise<void> {
     if (currentGen !== detailGeneration || !props.open) return
     if (resp.type === MessageType.FeeExportConfigResult && resp.payload.ok) {
       const cols = resp.payload.data.columns ?? []
-      selectedColumns.value = cols.map(c => ({ value: c.value, text: c.text }))
+      const used = new Set<string>()
+      selectedColumns.value = cols.map((column, index) => {
+        const available = availableColumns.value.filter(c => c.value === column.value && !used.has(c.key))
+        const match = available.find(c => c.text === column.text) ?? available[0]
+        const key = props.patentQuery ? match?.key ?? `template-${index}` : column.value
+        used.add(key)
+        return { key, value: column.value, text: column.text }
+      })
       activeColumnValue.value = ''
       statusText.value = `已载入模板「${templateName.value}」（${cols.length} 个栏位）`
     } else if (resp.type === MessageType.FeeExportConfigResult && !resp.payload.ok) {
@@ -193,43 +215,43 @@ function toggleGroupCollapse(id: string): void {
   collapsedGroups.value[id] = !collapsedGroups.value[id]
 }
 
-function toggleColumn(col: FeeExportColumn, checked: boolean): void {
+function toggleColumn(col: ExportColumnChoice, checked: boolean): void {
   if (checked) {
-    if (!selectedSet.value.has(col.value)) {
-      selectedColumns.value = [...selectedColumns.value, { value: col.value, text: col.text }]
+    if (!selectedSet.value.has(col.key)) {
+      selectedColumns.value = [...selectedColumns.value, { key: col.key, value: col.value, text: col.text }]
     }
   } else {
-    selectedColumns.value = selectedColumns.value.filter(item => item.value !== col.value)
-    if (activeColumnValue.value === col.value) activeColumnValue.value = ''
+    selectedColumns.value = selectedColumns.value.filter(item => item.key !== col.key)
+    if (activeColumnValue.value === col.key) activeColumnValue.value = ''
   }
 }
 
-function toggleGroupColumns(cols: FeeExportColumn[], selectAll: boolean): void {
+function toggleGroupColumns(cols: ExportColumnChoice[], selectAll: boolean): void {
   if (selectAll) {
     const next = [...selectedColumns.value]
-    const existing = new Set(next.map(item => item.value))
+    const existing = new Set(next.map(item => item.key))
     for (const col of cols) {
-      if (!existing.has(col.value)) {
-        existing.add(col.value)
-        next.push({ value: col.value, text: col.text })
+      if (!existing.has(col.key)) {
+        existing.add(col.key)
+        next.push({ key: col.key, value: col.value, text: col.text })
       }
     }
     selectedColumns.value = next
   } else {
-    const drop = new Set(cols.map(col => col.value))
-    selectedColumns.value = selectedColumns.value.filter(item => !drop.has(item.value))
+    const drop = new Set(cols.map(col => col.key))
+    selectedColumns.value = selectedColumns.value.filter(item => !drop.has(item.key))
     if (drop.has(activeColumnValue.value)) activeColumnValue.value = ''
   }
 }
 
 function selectAllColumns(): void {
-  const all: SelectedExportColumn[] = []
+  const all: SelectedColumn[] = []
   const seen = new Set<string>()
   for (const group of groups.value) {
     for (const col of group.columns) {
-      if (!seen.has(col.value)) {
-        seen.add(col.value)
-        all.push({ value: col.value, text: col.text })
+      if (!seen.has(col.key)) {
+        seen.add(col.key)
+        all.push({ key: col.key, value: col.value, text: col.text })
       }
     }
   }
@@ -247,7 +269,7 @@ function clearAllColumns(): void {
 }
 
 function removeSelectedColumn(value: string): void {
-  selectedColumns.value = selectedColumns.value.filter(item => item.value !== value)
+  selectedColumns.value = selectedColumns.value.filter(item => item.key !== value)
   if (activeColumnValue.value === value) activeColumnValue.value = ''
   if (selectedColumns.value.length === 0) {
     selectedTemplateId.value = ''
@@ -256,7 +278,7 @@ function removeSelectedColumn(value: string): void {
 }
 
 function moveActiveColumn(delta: -1 | 1): void {
-  const idx = selectedColumns.value.findIndex(item => item.value === activeColumnValue.value)
+  const idx = selectedColumns.value.findIndex(item => item.key === activeColumnValue.value)
   if (idx < 0) return
   const target = idx + delta
   if (target < 0 || target >= selectedColumns.value.length) return
@@ -264,6 +286,13 @@ function moveActiveColumn(delta: -1 | 1): void {
   const [moved] = next.splice(idx, 1)
   next.splice(target, 0, moved)
   selectedColumns.value = next
+}
+
+function requestColumns(forExport = false): SelectedExportColumn[] {
+  const columns = props.patentQuery && forExport
+    ? selectedColumns.value.filter(column => availableColumns.value.some(choice => choice.key === column.key))
+    : selectedColumns.value
+  return columns.map(({ value, text }) => ({ value, text }))
 }
 
 async function saveTemplate(): Promise<void> {
@@ -288,7 +317,7 @@ async function saveTemplate(): Promise<void> {
         action: 'add',
         belongKey: belongKey.value,
         modelName: name,
-        columns: selectedColumns.value
+        columns: requestColumns()
       }
     })
     if (resp.type === MessageType.FeeExportConfigResult && resp.payload.ok) {
@@ -335,7 +364,7 @@ async function updateTemplate(): Promise<void> {
         belongKey: belongKey.value,
         typeId: selectedTemplateId.value,
         modelName: name,
-        columns: selectedColumns.value
+        columns: requestColumns()
       }
     })
     if (resp.type === MessageType.FeeExportConfigResult && resp.payload.ok) {
@@ -398,7 +427,8 @@ async function deleteTemplate(): Promise<void> {
 }
 
 async function submitExport(): Promise<void> {
-  if (!selectedColumns.value.length) {
+  const columns = requestColumns(true)
+  if (!columns.length) {
     await infoDialog({ title: '提示', message: '请至少选择一个导出栏位！' })
     return
   }
@@ -415,9 +445,10 @@ async function submitExport(): Promise<void> {
     const resp = await props.bridge.request({
       type: MessageType.ExportFee,
       payload: {
-        mode: props.mode,
-        ...(props.mode === 'checked' ? { feeIds: props.feeIds } : { query: props.query }),
-        columns: selectedColumns.value,
+        ...(props.patentQuery
+          ? { mode: 'patent' as const, query: props.patentQuery }
+          : { mode: props.mode, ...(props.mode === 'checked' ? { feeIds: props.feeIds } : { query: props.query }) }),
+        columns,
         timeoutMs: props.timeoutMs
       }
     })
@@ -457,22 +488,22 @@ async function submitExport(): Promise<void> {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape' && !exporting.value) emit('close')
+  if (e.key === 'Escape' && !exporting.value && !busyTemplate.value) emit('close')
 }
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="fee-export-backdrop" role="presentation" @click.self="!exporting && emit('close')" @keydown="onKeydown">
-      <div class="fee-export-modal" role="dialog" aria-modal="true" :aria-label="modalTitle">
+    <div v-if="open" class="fee-export-backdrop" role="presentation" @click.self="!exporting && !busyTemplate && emit('close')" @keydown="onKeydown">
+      <div ref="modal" class="fee-export-modal" role="dialog" tabindex="-1" aria-modal="true" :aria-label="modalTitle">
         <header class="export-head">
           <div class="export-head-title">
             <h3>{{ modalTitle }}</h3>
             <span class="export-mode-pill">
-              {{ mode === 'checked' ? `已勾选 ${feeIds.length} 条费用` : mode === 'count' ? '按查询条件汇总导出' : '按查询条件导出全部' }}
+              {{ mode === 'checked' ? `已勾选 ${(feeIds?.length ?? 0)} 条费用` : mode === 'count' ? '按查询条件汇总导出' : '按查询条件导出全部' }}
             </span>
           </div>
-          <button type="button" class="export-close" aria-label="关闭" :disabled="exporting" @click="emit('close')">×</button>
+          <button type="button" class="export-close" aria-label="关闭" :disabled="exporting || busyTemplate" @click="emit('close')">×</button>
         </header>
 
         <div class="export-body">
@@ -483,7 +514,7 @@ function onKeydown(e: KeyboardEvent): void {
                 v-model="filterKeyword"
                 type="text"
                 class="filter-input"
-                placeholder="快速筛选栏位名称（如：金额、发票、申请日）"
+                placeholder="筛选栏位名称"
               />
               <div class="quick-btns">
                 <button type="button" class="ghost tiny" @click="selectAllColumns">全选</button>
@@ -499,7 +530,7 @@ function onKeydown(e: KeyboardEvent): void {
                     <span class="group-caret">{{ collapsedGroups[group.id] ? '▸' : '▾' }}</span>
                     <strong>{{ group.title }}</strong>
                     <span class="group-count">
-                      {{ group.columns.filter(c => selectedSet.has(c.value)).length }} / {{ group.columns.length }}
+                      {{ group.columns.filter(c => selectedSet.has(c.key)).length }} / {{ group.columns.length }}
                     </span>
                   </button>
                   <span class="group-actions">
@@ -508,10 +539,10 @@ function onKeydown(e: KeyboardEvent): void {
                   </span>
                 </div>
                 <div v-show="!collapsedGroups[group.id]" class="group-grid">
-                  <label v-for="col in group.columns" :key="col.value" class="col-check">
+                  <label v-for="col in group.columns" :key="col.key" class="col-check">
                     <input
                       type="checkbox"
-                      :checked="selectedSet.has(col.value)"
+                      :checked="selectedSet.has(col.key)"
                       @change="toggleColumn(col, ($event.target as HTMLInputElement).checked)"
                     />
                     <span class="col-text" v-hint.clip="col.text">{{ col.text }}</span>
@@ -561,10 +592,10 @@ function onKeydown(e: KeyboardEvent): void {
                   <li v-if="!selectedColumns.length" class="empty-tip">尚未选择导出栏位</li>
                   <li
                     v-for="(item, idx) in selectedColumns"
-                    :key="item.value"
-                    :class="{ active: activeColumnValue === item.value }"
-                    @click="activeColumnValue = item.value"
-                    @dblclick="removeSelectedColumn(item.value)"
+                    :key="item.key"
+                    :class="{ active: activeColumnValue === item.key }"
+                    @click="activeColumnValue = item.key"
+                    @dblclick="removeSelectedColumn(item.key)"
                   >
                     <span class="picked-seq">{{ idx + 1 }}</span>
                     <span class="picked-name" v-hint.clip="item.text">{{ item.text }}</span>
@@ -573,7 +604,7 @@ function onKeydown(e: KeyboardEvent): void {
                       class="picked-remove"
                       v-hint="'移除该栏位'"
                       aria-label="移除"
-                      @click.stop="removeSelectedColumn(item.value)"
+                      @click.stop="removeSelectedColumn(item.key)"
                     >
                       ×
                     </button>
@@ -613,8 +644,8 @@ function onKeydown(e: KeyboardEvent): void {
             <span v-else class="foot-hint">导出将直连原站生成真实 Excel 文件，并自动同步当前原站账号下的导出模板。</span>
           </div>
           <div class="foot-actions">
-            <button type="button" class="ghost" :disabled="exporting" @click="emit('close')">取消</button>
-            <button type="button" class="solid" :disabled="exporting || !selectedColumns.length" @click="submitExport">
+            <button type="button" class="ghost" :disabled="exporting || busyTemplate" @click="emit('close')">取消</button>
+            <button type="button" class="solid" :disabled="exporting || busyTemplate || loadingTemplates || (!patentQuery && !selectedColumns.length)" @click="submitExport">
               {{ exporting ? '正在生成 Excel…' : '导出 Excel' }}
             </button>
           </div>
